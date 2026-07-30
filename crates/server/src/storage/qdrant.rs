@@ -1132,6 +1132,223 @@ mod tests {
     }
 
     #[test]
+    fn scope_with_nil_collection_member_is_rejected() {
+        // A nil collection id hidden inside an otherwise valid set must fail
+        // closed exactly like an empty set (nil would match nothing filtered
+        // server-side but must never reach the wire at all).
+        let scope = VectorScope::new(Uuid::new_v4(), [Uuid::new_v4(), Uuid::nil()]);
+        assert!(matches!(scope.validate(), Err(StorageError::MissingScope)));
+    }
+
+    fn payload_for(org_id: Uuid, collection_id: Uuid) -> ChunkPointPayload {
+        ChunkPointPayload {
+            org_id,
+            collection_id,
+            document_id: Uuid::new_v4(),
+            version_id: Uuid::new_v4(),
+            chunk_id: "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835".into(),
+            ordinal: 0,
+            is_current: true,
+            is_effective: true,
+            index_generation: 1,
+        }
+    }
+
+    fn query_response_with_payload(payload: &ChunkPointPayload) -> Value {
+        json!({
+            "result": {
+                "points": [{
+                    "id": Uuid::new_v4().to_string(),
+                    "score": 0.9,
+                    "payload": payload.to_json(),
+                }]
+            }
+        })
+    }
+
+    /// A search hit whose payload names a foreign org/collection (forged or
+    /// mis-filtered server response) must deny hard, never be silently kept.
+    #[test]
+    fn forged_search_hit_payload_denies_with_ownership_conflict() {
+        let org = Uuid::new_v4();
+        let collection = Uuid::new_v4();
+        let scope = VectorScope::new(org, [collection]);
+
+        // Sanity: an in-scope hit parses and passes enforcement.
+        let honest = parse_search_hits(&query_response_with_payload(&payload_for(org, collection)))
+            .expect("in-scope hit parses");
+        assert_eq!(honest.len(), 1);
+        enforce_hits_in_scope(&scope, &honest).expect("in-scope hit passes");
+
+        // Foreign org in the payload → OwnershipConflict.
+        let foreign_org = parse_search_hits(&query_response_with_payload(&payload_for(
+            Uuid::new_v4(),
+            collection,
+        )))
+        .expect("forged hit still parses");
+        assert!(matches!(
+            enforce_hits_in_scope(&scope, &foreign_org),
+            Err(StorageError::OwnershipConflict)
+        ));
+
+        // Same org but a collection outside the authorized set → deny too.
+        let foreign_collection = parse_search_hits(&query_response_with_payload(&payload_for(
+            org,
+            Uuid::new_v4(),
+        )))
+        .expect("forged hit still parses");
+        assert!(matches!(
+            enforce_hits_in_scope(&scope, &foreign_collection),
+            Err(StorageError::OwnershipConflict)
+        ));
+    }
+
+    /// Scrolled points re-validate payload scope inline; a forged row denies
+    /// the whole page rather than dropping/keeping rows quietly.
+    #[test]
+    fn forged_scrolled_point_payload_denies_with_ownership_conflict() {
+        let org = Uuid::new_v4();
+        let collection = Uuid::new_v4();
+        let scope = VectorScope::new(org, [collection]);
+
+        let honest_body = json!({
+            "result": {
+                "points": [{
+                    "id": Uuid::new_v4().to_string(),
+                    "payload": payload_for(org, collection).to_json(),
+                }]
+            }
+        });
+        assert_eq!(
+            parse_scrolled_points(&scope, &honest_body)
+                .expect("in-scope page parses")
+                .len(),
+            1
+        );
+
+        let forged_body = json!({
+            "result": {
+                "points": [
+                    {
+                        "id": Uuid::new_v4().to_string(),
+                        "payload": payload_for(org, collection).to_json(),
+                    },
+                    {
+                        "id": Uuid::new_v4().to_string(),
+                        "payload": payload_for(Uuid::new_v4(), collection).to_json(),
+                    }
+                ]
+            }
+        });
+        assert!(matches!(
+            parse_scrolled_points(&scope, &forged_body),
+            Err(StorageError::OwnershipConflict)
+        ));
+    }
+
+    /// Malformed payloads coming back from Qdrant must error (fail closed),
+    /// never default-fill identity fields.
+    #[test]
+    fn malformed_qdrant_payload_fails_closed() {
+        // Not an object at all.
+        assert!(matches!(
+            ChunkPointPayload::from_json(&json!("not-an-object")),
+            Err(StorageError::Backend)
+        ));
+
+        // Missing org_id.
+        let mut missing_org = payload_for(Uuid::new_v4(), Uuid::new_v4()).to_json();
+        missing_org.as_object_mut().unwrap().remove("org_id");
+        assert!(matches!(
+            ChunkPointPayload::from_json(&missing_org),
+            Err(StorageError::Backend)
+        ));
+
+        // org_id present but not a UUID.
+        let mut bad_org = payload_for(Uuid::new_v4(), Uuid::new_v4()).to_json();
+        bad_org["org_id"] = json!("not-a-uuid");
+        assert!(matches!(
+            ChunkPointPayload::from_json(&bad_org),
+            Err(StorageError::Backend)
+        ));
+
+        // index_generation overflowing u32 must not wrap.
+        let mut overflow = payload_for(Uuid::new_v4(), Uuid::new_v4()).to_json();
+        overflow["index_generation"] = json!(u64::from(u32::MAX) + 1);
+        assert!(matches!(
+            ChunkPointPayload::from_json(&overflow),
+            Err(StorageError::PreconditionFailed)
+        ));
+
+        // Numeric point ids are rejected (ours are always UUID strings).
+        assert!(matches!(
+            parse_point_id(&json!(42)),
+            Err(StorageError::Backend)
+        ));
+        assert!(matches!(
+            parse_point_id(&json!("not-a-uuid")),
+            Err(StorageError::Backend)
+        ));
+    }
+
+    /// Upserting a point whose payload names a foreign org/collection must be
+    /// denied client-side, before any network I/O. The endpoint below points
+    /// at a discard port: if enforcement regressed to "send anyway", the
+    /// error would surface as `Transport`, failing these exact-match asserts.
+    #[tokio::test]
+    async fn upsert_denies_forged_payload_scope_before_any_network() {
+        let client = QdrantClient::new("http://127.0.0.1:9").expect("client builds");
+        let collection_name = crate::services::index_signature::parse_collection_name(
+            "markhand_chunks_deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        )
+        .unwrap();
+        let org = Uuid::new_v4();
+        let collection = Uuid::new_v4();
+        let scope = VectorScope::new(org, [collection]);
+
+        let point_with = |payload: ChunkPointPayload| UpsertPoint {
+            chunk_identity: payload.chunk_id.clone(),
+            vector: vec![1.0, 0.0],
+            payload,
+        };
+
+        // Payload forged with a foreign org.
+        assert!(matches!(
+            client
+                .upsert_points(
+                    &collection_name,
+                    &scope,
+                    &[point_with(payload_for(Uuid::new_v4(), collection))],
+                )
+                .await,
+            Err(StorageError::MissingScope)
+        ));
+
+        // Payload forged with a collection outside the authorized set.
+        assert!(matches!(
+            client
+                .upsert_points(
+                    &collection_name,
+                    &scope,
+                    &[point_with(payload_for(org, Uuid::new_v4()))],
+                )
+                .await,
+            Err(StorageError::MissingScope)
+        ));
+
+        // Payload in scope but chunk_id diverging from the point identity.
+        let mut mismatched = point_with(payload_for(org, collection));
+        mismatched.chunk_identity =
+            "0000000000000000000000000000000000000000000000000000000000000000".into();
+        assert!(matches!(
+            client
+                .upsert_points(&collection_name, &scope, &[mismatched])
+                .await,
+            Err(StorageError::PreconditionFailed)
+        ));
+    }
+
+    #[test]
     fn point_id_binds_org_and_collection() {
         let identity = "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835";
         let org = Uuid::new_v4();

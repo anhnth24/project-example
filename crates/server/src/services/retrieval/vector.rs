@@ -167,6 +167,46 @@ mod tests {
         assert!(version_filter_clauses(&visibility).is_empty());
     }
 
+    /// Defense in depth after the Qdrant server-side filter: a candidate whose
+    /// payload names a collection outside the authorized scope (forged or
+    /// mis-filtered) denies the whole batch instead of being dropped quietly.
+    #[test]
+    fn forged_candidate_collection_denies_with_ownership_conflict() {
+        let org = Uuid::new_v4();
+        let allowed = Uuid::new_v4();
+        let scope = VectorScope::new(org, [allowed]);
+        let in_scope = VectorCandidate {
+            chunk_identity_sha256: "a".into(),
+            document_id: Uuid::new_v4(),
+            version_id: Uuid::new_v4(),
+            collection_id: allowed,
+            score: 0.9,
+            payload_is_current: true,
+        };
+        assert_eq!(
+            filter_candidates_in_scope(&scope, vec![in_scope.clone()]).expect("in scope"),
+            vec![in_scope.clone()]
+        );
+
+        let forged = VectorCandidate {
+            collection_id: Uuid::new_v4(),
+            ..in_scope.clone()
+        };
+        assert!(matches!(
+            filter_candidates_in_scope(&scope, vec![in_scope.clone(), forged]),
+            Err(StorageError::OwnershipConflict)
+        ));
+
+        let nil_collection = VectorCandidate {
+            collection_id: Uuid::nil(),
+            ..in_scope.clone()
+        };
+        assert!(matches!(
+            filter_candidates_in_scope(&scope, vec![nil_collection]),
+            Err(StorageError::OwnershipConflict)
+        ));
+    }
+
     #[test]
     fn suppress_non_current_drops_superseded_payload() {
         let current = VectorCandidate {

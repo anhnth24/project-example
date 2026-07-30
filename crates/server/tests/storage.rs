@@ -149,6 +149,101 @@ async fn missing_scope_rejects_without_network_side_effects() {
     ));
 }
 
+fn scoped_fixture() -> (
+    fileconv_server::services::index_signature::CollectionName,
+    VectorScope,
+    Vec<UpsertPoint>,
+) {
+    let collection = parse_collection_name(
+        "markhand_chunks_deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+    )
+    .unwrap();
+    let org = Uuid::new_v4();
+    let collection_id = Uuid::new_v4();
+    let scope = VectorScope::new(org, [collection_id]);
+    let payload = ChunkPointPayload {
+        org_id: org,
+        collection_id,
+        document_id: Uuid::new_v4(),
+        version_id: Uuid::new_v4(),
+        chunk_id: "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835".into(),
+        ordinal: 0,
+        is_current: true,
+        is_effective: true,
+        index_generation: 1,
+    };
+    let points = vec![UpsertPoint {
+        chunk_identity: payload.chunk_id.clone(),
+        vector: unit_vector(8, 0),
+        payload,
+    }];
+    (collection, scope, points)
+}
+
+/// A dead Qdrant endpoint (connection refused) must map every operation to
+/// `StorageError::Transport` — fail closed with an error, never a degraded
+/// `Ok`/empty result that would read as "no matches". No live service needed.
+#[tokio::test]
+async fn qdrant_connection_failure_fails_closed_as_transport() {
+    // Reserve a free localhost port, then drop the listener so nothing serves it.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind probe port");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
+
+    let client = QdrantClient::new(format!("http://127.0.0.1:{port}")).expect("client builds");
+    let (collection, scope, points) = scoped_fixture();
+    let vector = unit_vector(8, 0);
+
+    assert!(matches!(
+        client.search(&collection, &scope, &vector, 5).await,
+        Err(StorageError::Transport)
+    ));
+    assert!(matches!(
+        client
+            .get_points(&collection, &scope, &[Uuid::new_v4()])
+            .await,
+        Err(StorageError::Transport)
+    ));
+    // Upsert probes ownership first (`get_points`) — the dead endpoint must
+    // abort the whole upsert, not skip the ownership check.
+    assert!(matches!(
+        client.upsert_points(&collection, &scope, &points).await,
+        Err(StorageError::Transport)
+    ));
+    assert!(matches!(
+        client.delete_by_scope(&collection, &scope, &[]).await,
+        Err(StorageError::Transport)
+    ));
+}
+
+/// A Qdrant endpoint that accepts TCP but never answers must hit the client's
+/// bounded request timeout and fail closed as `Transport` (never hang and
+/// never degrade into an unfiltered/empty success). No live service needed.
+#[tokio::test]
+async fn qdrant_unresponsive_endpoint_times_out_as_transport() {
+    // Bind but never accept: the kernel backlog completes the TCP handshake,
+    // the HTTP request is written, and no response ever arrives.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind silent port");
+    let port = listener.local_addr().expect("local addr").port();
+
+    let client = QdrantClient::new(format!("http://127.0.0.1:{port}")).expect("client builds");
+    let (collection, scope, _) = scoped_fixture();
+    let vector = unit_vector(8, 0);
+
+    let started = std::time::Instant::now();
+    assert!(matches!(
+        client.search(&collection, &scope, &vector, 5).await,
+        Err(StorageError::Transport)
+    ));
+    // The client pins a 2s request timeout; leave generous slack for CI while
+    // still proving the call cannot hang unbounded.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "timeout must be bounded by the client-configured deadline"
+    );
+    drop(listener);
+}
+
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_QDRANT_URL"]
 async fn qdrant_tenant_isolation_and_deterministic_points() {
