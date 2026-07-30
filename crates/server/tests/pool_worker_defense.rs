@@ -282,7 +282,13 @@ async fn worker_role_is_rls_scoped_and_least_privilege() {
                ('{org_b}', 'worker-b', 'Worker B');
              INSERT INTO users (id, email, display_name) VALUES
                ('{org_a}', 'worker-a@example.test', 'Worker A'),
-               ('{org_b}', 'worker-b@example.test', 'Worker B');"
+               ('{org_b}', 'worker-b@example.test', 'Worker B');
+             INSERT INTO org_quotas (
+               org_id, max_storage_bytes, max_documents,
+               max_concurrent_jobs, max_monthly_tokens
+             ) VALUES
+               ('{org_a}', 1000000000, 100000, 100, 1000000000),
+               ('{org_b}', 1000000000, 100000, 100, 1000000000);"
         ))
         .await
         .expect("seed orgs/users");

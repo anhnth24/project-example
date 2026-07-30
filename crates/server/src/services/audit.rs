@@ -56,6 +56,10 @@ pub enum AuditAction {
     ConflictTriage,
     JobEnqueue,
     QuotaDeny,
+    // 1C-09 quota reconcile: background drift repair between usage_counters
+    // and ground truth (live document bytes/counts, leased-job slots).
+    // System-actor write (`record_system_in_txn`) — no human in the loop.
+    QuotaReconcile,
     ReconcileRepair,
     ReconcileObjectCleanup,
     ReconcileDeadLetterGc,
@@ -115,6 +119,7 @@ impl AuditAction {
             Self::ConflictTriage => "conflict.triage",
             Self::JobEnqueue => "job.enqueue",
             Self::QuotaDeny => "quota.deny",
+            Self::QuotaReconcile => "quota.reconcile",
             Self::ReconcileRepair => "reconcile.repair",
             Self::ReconcileObjectCleanup => "reconcile.object_cleanup",
             Self::ReconcileDeadLetterGc => "reconcile.dead_letter_gc",
@@ -162,6 +167,7 @@ impl AuditAction {
             "conflict.triage" => Ok(Self::ConflictTriage),
             "job.enqueue" => Ok(Self::JobEnqueue),
             "quota.deny" => Ok(Self::QuotaDeny),
+            "quota.reconcile" => Ok(Self::QuotaReconcile),
             "reconcile.repair" => Ok(Self::ReconcileRepair),
             "reconcile.object_cleanup" => Ok(Self::ReconcileObjectCleanup),
             "reconcile.dead_letter_gc" => Ok(Self::ReconcileDeadLetterGc),
@@ -253,6 +259,13 @@ impl AuditAction {
             Self::ConflictTriage => &["reason", "status", "conflict_id"],
             Self::JobEnqueue => &["job_id", "job_type"],
             Self::QuotaDeny => &["reason", "resource_kind", "error_class"],
+            // Numbers + resource enum only — never document/tenant content.
+            Self::QuotaReconcile => &[
+                "resource_kind",
+                "counter_value",
+                "actual_value",
+                "released_slots",
+            ],
             Self::ReconcileRepair => &[
                 "document_id",
                 "phase",
@@ -566,6 +579,38 @@ pub async fn record_in_txn(
         AuditEvent {
             org_id: ctx.org_id(),
             actor_user_id: Some(ctx.user_id()),
+            action: action.as_str(),
+            resource_type: resource.as_str(),
+            resource_id: record.resource_id,
+            outcome: record.outcome.as_str(),
+            metadata,
+            request_id: &request_id,
+        },
+    )
+    .await
+}
+
+/// Background/system audit write inside an existing org transaction.
+///
+/// Same action/resource/metadata allowlist enforcement as [`record_in_txn`],
+/// but `actor_user_id` is NULL: background maintenance (quota reconcile) runs
+/// under a synthetic tenant context whose user id has no `users` row, so a
+/// non-NULL actor would violate the FK — and would also misattribute a system
+/// action to a human.
+pub async fn record_system_in_txn(
+    txn: &Transaction<'_>,
+    org_id: Uuid,
+    record: AuditRecord<'_>,
+) -> Result<(), DbError> {
+    let action = AuditAction::parse(record.action).map_err(DbError::Config)?;
+    let resource = AuditResource::parse(record.resource_type).map_err(DbError::Config)?;
+    let request_id = require_request_uuid(record.request_id)?;
+    let metadata = sanitize_for_action(action, &record.metadata).map_err(DbError::Config)?;
+    write_audit(
+        txn,
+        AuditEvent {
+            org_id,
+            actor_user_id: None,
             action: action.as_str(),
             resource_type: resource.as_str(),
             resource_id: record.resource_id,

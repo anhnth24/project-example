@@ -300,6 +300,181 @@ pub async fn finalize_reserved_by_key(
     row.map(|row| map_reservation(&row)).transpose()
 }
 
+/// Finalize a reservation with the *measured* amount (token settlement).
+///
+/// The reservation was admitted with an estimate; the committed counter must
+/// record actual usage. The single UPDATE keeps the terminal-state idempotency
+/// contract identical to [`finalize_reserved_by_key`] — a reservation that is
+/// no longer `reserved` returns `None` and the caller inspects its status.
+pub async fn finalize_reserved_by_key_with_amount(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    reservation_key: &str,
+    actual_amount: i64,
+    observed_at: DateTime<Utc>,
+) -> Result<Option<QuotaReservation>, DbError> {
+    let row = txn
+        .query_opt(
+            "UPDATE quota_reservations
+             SET status = 'finalized', amount = $4, settled_at = $3
+             WHERE org_id = $1
+               AND reservation_key = $2
+               AND status = 'reserved'
+               AND expires_at > $3
+             RETURNING id, org_id, reservation_key, resource_kind, amount, status,
+                       expires_at, job_id, created_at, settled_at",
+            &[
+                &ctx.org_id(),
+                &reservation_key,
+                &observed_at,
+                &actual_amount,
+            ],
+        )
+        .await?;
+    row.map(|row| map_reservation(&row)).transpose()
+}
+
+/// Refund every active reservation of `kind` attached to `job_id` (slot release).
+///
+/// Used by the job terminal transitions (complete/fail/cancel/reclaim) so a
+/// concurrent-jobs slot frees exactly when the job stops running. Refund only
+/// ever *increases* available capacity, so this intentionally does not take the
+/// admission advisory lock (taking it after the job-row locks those callers
+/// already hold could deadlock against claim, which locks admission first).
+pub async fn refund_reserved_by_job(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    kind: ResourceKind,
+    observed_at: DateTime<Utc>,
+) -> Result<u64, DbError> {
+    let kind = kind.as_str();
+    let updated = txn
+        .execute(
+            "UPDATE quota_reservations
+             SET status = 'refunded', settled_at = $4
+             WHERE org_id = $1
+               AND job_id = $2
+               AND resource_kind = $3
+               AND status = 'reserved'",
+            &[&ctx.org_id(), &job_id, &kind, &observed_at],
+        )
+        .await?;
+    Ok(updated)
+}
+
+/// Extend the expiry of active reservations tied to `job_id` (heartbeat).
+///
+/// SKIP LOCKED: a terminal transition (promotion/complete/fail) refunds this
+/// row inside its own transaction and may hold the row lock until commit.
+/// The heartbeat must never queue behind that — its call timeout is a
+/// fraction of the lease, and a blocked heartbeat turns a successful commit
+/// into a spurious reconciliation. A skipped row needs no extension anyway:
+/// whoever holds it is settling the reservation.
+pub async fn extend_reserved_by_job(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    kind: ResourceKind,
+    ttl_secs: i64,
+) -> Result<u64, DbError> {
+    let kind = kind.as_str();
+    let updated = txn
+        .execute(
+            "UPDATE quota_reservations
+             SET expires_at = clock_timestamp() + ($4::bigint * interval '1 second')
+             WHERE id IN (
+                 SELECT id FROM quota_reservations
+                 WHERE org_id = $1
+                   AND job_id = $2
+                   AND resource_kind = $3
+                   AND status = 'reserved'
+                 FOR UPDATE SKIP LOCKED
+             )",
+            &[&ctx.org_id(), &job_id, &kind, &ttl_secs],
+        )
+        .await?;
+    Ok(updated)
+}
+
+/// Refund `concurrent_jobs` reservations whose job is gone or no longer leased.
+///
+/// Crash between a job's terminal transition and its slot refund leaves the
+/// reservation `reserved` until TTL expiry; reconcile releases those slots
+/// immediately instead of waiting out the TTL.
+pub async fn refund_orphaned_job_slots(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    observed_at: DateTime<Utc>,
+) -> Result<u64, DbError> {
+    let updated = txn
+        .execute(
+            "UPDATE quota_reservations qr
+             SET status = 'refunded', settled_at = $2
+             WHERE qr.org_id = $1
+               AND qr.resource_kind = 'concurrent_jobs'
+               AND qr.status = 'reserved'
+               AND (
+                    qr.job_id IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1 FROM jobs j
+                        WHERE j.org_id = qr.org_id
+                          AND j.id = qr.job_id
+                          AND j.status = 'leased'
+                    )
+               )",
+            &[&ctx.org_id(), &observed_at],
+        )
+        .await?;
+    Ok(updated)
+}
+
+/// Ground truth for the storage counter: bytes of live source versions plus
+/// live derived artifacts (documents not soft-deleted/purged).
+pub async fn actual_storage_bytes(txn: &Transaction<'_>, ctx: &OrgContext) -> Result<i64, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT
+                COALESCE((
+                    SELECT SUM(dv.byte_size)::bigint
+                    FROM document_versions dv
+                    JOIN documents d ON d.org_id = dv.org_id AND d.id = dv.document_id
+                    WHERE dv.org_id = $1
+                      AND d.deleted_at IS NULL
+                      AND d.state <> 'purged'
+                ), 0)
+              + COALESCE((
+                    SELECT SUM(da.byte_size)::bigint
+                    FROM derived_artifacts da
+                    JOIN documents d ON d.org_id = da.org_id AND d.id = da.document_id
+                    WHERE da.org_id = $1
+                      AND d.deleted_at IS NULL
+                      AND d.state <> 'purged'
+                ), 0)",
+            &[&ctx.org_id()],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
+/// Ground truth for the documents counter: live (not soft-deleted/purged) documents.
+pub async fn actual_document_count(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+) -> Result<i64, DbError> {
+    let row = txn
+        .query_one(
+            "SELECT COUNT(*)::bigint
+             FROM documents
+             WHERE org_id = $1
+               AND deleted_at IS NULL
+               AND state <> 'purged'",
+            &[&ctx.org_id()],
+        )
+        .await?;
+    Ok(row.get(0))
+}
+
 pub async fn refund_reserved_by_key(
     txn: &Transaction<'_>,
     ctx: &OrgContext,

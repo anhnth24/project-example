@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use fileconv_server::auth::context::OrgContext;
@@ -14,6 +15,7 @@ use fileconv_server::workers::delete::{DeleteWorker, DeleteWorkerConfig, DeleteW
 use fileconv_server::workers::embedding::{
     EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
 };
+use fileconv_server::workers::fairness::OrgRotation;
 use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
 use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::reconcile::{
@@ -148,10 +150,20 @@ fn run_sandbox_convert_probe(path: &Path) -> Result<(), String> {
 }
 
 async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), String> {
-    let org_id = env_uuid("MARKHAND_WORKER_ORG_ID")?;
+    // `MARKHAND_WORKER_ORG_ID` accepts one UUID (legacy single-org pin) or a
+    // comma-separated list. With several orgs, each claim cycle round-robins
+    // across them (1C-10): one org's giant backlog cannot starve the others
+    // because the rotation serves at most one job per org turn.
+    let org_ids = env_uuid_list("MARKHAND_WORKER_ORG_ID")?;
     let user_id = env_uuid("MARKHAND_WORKER_USER_ID")?;
-    let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
-        .map_err(|error| format!("invalid worker tenant context: {error}"))?;
+    let mut contexts = Vec::with_capacity(org_ids.len());
+    for org_id in org_ids {
+        contexts.push(
+            OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
+                .map_err(|error| format!("invalid worker tenant context: {error}"))?,
+        );
+    }
+    let rotation = Arc::new(OrgRotation::new(contexts)?);
     let worker_id = std::env::var("MARKHAND_WORKER_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -165,6 +177,11 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
     let oneshot = env_truthy("MARKHAND_WORKER_ONESHOT");
     if kind == "reconcile" && oneshot {
         let _ = require_oneshot_reconcile_document_id()?;
+        if rotation.len() != 1 {
+            return Err(
+                "reconcile oneshot requires exactly one MARKHAND_WORKER_ORG_ID".to_string(),
+            );
+        }
     }
     let endpoints = state.endpoints();
     let pool = create_pool(endpoints.database_url.expose())
@@ -177,7 +194,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
         "convert" => {
             let storage = MinioClient::from_config(storage_config.minio())
                 .map_err(|error| format!("storage client failed: {}", error.code()))?;
-            run_convert_worker(state, pool, storage, worker_id, ctx).await
+            run_convert_worker(state, pool, storage, worker_id, rotation).await
         }
         "index" => {
             let storage = MinioClient::from_config(storage_config.minio())
@@ -187,7 +204,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
                 storage_config.qdrant_api_key().cloned(),
             )
             .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
-            run_index_worker(state, pool, storage, qdrant, worker_id, ctx).await
+            run_index_worker(state, pool, storage, qdrant, worker_id, rotation).await
         }
         "embedding" => {
             let qdrant = QdrantClient::with_api_key(
@@ -195,7 +212,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
                 storage_config.qdrant_api_key().cloned(),
             )
             .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
-            run_embedding_worker(state, pool, qdrant, worker_id, ctx).await
+            run_embedding_worker(state, pool, qdrant, worker_id, rotation).await
         }
         "delete" => {
             let storage = MinioClient::from_config(storage_config.minio())
@@ -205,7 +222,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
                 storage_config.qdrant_api_key().cloned(),
             )
             .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
-            run_delete_worker(state, pool, storage, qdrant, worker_id, ctx).await
+            run_delete_worker(state, pool, storage, qdrant, worker_id, rotation).await
         }
         "reconcile" => {
             let storage = MinioClient::from_config(storage_config.minio())
@@ -215,7 +232,7 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
                 storage_config.qdrant_api_key().cloned(),
             )
             .map_err(|error| format!("qdrant client failed: {}", error.code()))?;
-            run_reconcile_worker(state, pool, storage, qdrant, worker_id, ctx).await
+            run_reconcile_worker(state, pool, storage, qdrant, worker_id, rotation).await
         }
         other => Err(format!("unknown MARKHAND_WORKER_KIND: {other}")),
     }
@@ -226,7 +243,7 @@ async fn run_convert_worker(
     pool: deadpool_postgres::Pool,
     storage: MinioClient,
     worker_id: String,
-    ctx: OrgContext,
+    rotation: Arc<OrgRotation>,
 ) -> Result<(), String> {
     let mut config = ConvertWorkerConfig::new(worker_id, sandbox_config_from_env()?);
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
@@ -256,25 +273,44 @@ async fn run_convert_worker(
         "convert",
         || {
             let pool = pool.clone();
-            let ctx = ctx.clone();
+            let rotation = rotation.clone();
             let worker = worker.clone();
             async move {
-                reclaim_expired_leases(&pool, &ctx).await;
                 let _ = fileconv_server::jobs::observe_queue_metrics(&pool).await;
-                worker
-                    .run_once(&ctx)
+                rotation
+                    .run_cycle(|ctx| {
+                        let pool = pool.clone();
+                        let worker = worker.clone();
+                        async move {
+                            reclaim_expired_leases(&pool, &ctx).await;
+                            let outcome = worker
+                                .run_once(&ctx)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            Ok(non_idle(outcome, |run| {
+                                matches!(
+                                    run,
+                                    fileconv_server::workers::convert::ConvertWorkerRun::NoJob
+                                )
+                            }))
+                        }
+                    })
                     .await
-                    .map_err(|error| error.to_string())
             }
         },
-        |outcome| {
-            matches!(
-                outcome,
-                fileconv_server::workers::convert::ConvertWorkerRun::NoJob
-            )
-        },
+        |outcome| outcome.is_none(),
     )
     .await
+}
+
+/// Maps a worker `run_once` outcome to the rotation contract: `None` when the
+/// org had nothing claimable, `Some(outcome)` when a job was served.
+fn non_idle<T>(outcome: T, is_idle: impl Fn(&T) -> bool) -> Option<T> {
+    if is_idle(&outcome) {
+        None
+    } else {
+        Some(outcome)
+    }
 }
 
 async fn run_index_worker(
@@ -283,7 +319,7 @@ async fn run_index_worker(
     storage: MinioClient,
     qdrant: QdrantClient,
     worker_id: String,
-    ctx: OrgContext,
+    rotation: Arc<OrgRotation>,
 ) -> Result<(), String> {
     let mut config = IndexWorkerConfig::new(worker_id);
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
@@ -322,21 +358,33 @@ async fn run_index_worker(
         "index",
         || {
             let pool = pool.clone();
-            let ctx = ctx.clone();
+            let rotation = rotation.clone();
             let worker = worker.clone();
             let sink = sink.clone();
             async move {
-                reclaim_expired_leases(&pool, &ctx).await;
-                jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                rotation
+                    .run_cycle(|ctx| {
+                        let pool = pool.clone();
+                        let worker = worker.clone();
+                        let sink = sink.clone();
+                        async move {
+                            reclaim_expired_leases(&pool, &ctx).await;
+                            jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            let outcome = worker
+                                .run_once(&ctx)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            Ok(non_idle(outcome, |run| {
+                                matches!(run, IndexWorkerRun::NoJob)
+                            }))
+                        }
+                    })
                     .await
-                    .map_err(|error| error.to_string())?;
-                worker
-                    .run_once(&ctx)
-                    .await
-                    .map_err(|error| error.to_string())
             }
         },
-        |outcome| matches!(outcome, IndexWorkerRun::NoJob),
+        |outcome| outcome.is_none(),
     )
     .await
 }
@@ -347,7 +395,7 @@ async fn run_delete_worker(
     storage: MinioClient,
     qdrant: QdrantClient,
     worker_id: String,
-    ctx: OrgContext,
+    rotation: Arc<OrgRotation>,
 ) -> Result<(), String> {
     let mut config = DeleteWorkerConfig::new(worker_id);
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
@@ -381,21 +429,33 @@ async fn run_delete_worker(
         "delete",
         || {
             let pool = pool.clone();
-            let ctx = ctx.clone();
+            let rotation = rotation.clone();
             let worker = worker.clone();
             let sink = sink.clone();
             async move {
-                reclaim_expired_leases(&pool, &ctx).await;
-                jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                rotation
+                    .run_cycle(|ctx| {
+                        let pool = pool.clone();
+                        let worker = worker.clone();
+                        let sink = sink.clone();
+                        async move {
+                            reclaim_expired_leases(&pool, &ctx).await;
+                            jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            let outcome = worker
+                                .run_once(&ctx)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            Ok(non_idle(outcome, |run| {
+                                matches!(run, DeleteWorkerRun::NoJob)
+                            }))
+                        }
+                    })
                     .await
-                    .map_err(|error| error.to_string())?;
-                worker
-                    .run_once(&ctx)
-                    .await
-                    .map_err(|error| error.to_string())
             }
         },
-        |outcome| matches!(outcome, DeleteWorkerRun::NoJob),
+        |outcome| outcome.is_none(),
     )
     .await
 }
@@ -406,7 +466,7 @@ async fn run_reconcile_worker(
     storage: MinioClient,
     qdrant: QdrantClient,
     worker_id: String,
-    ctx: OrgContext,
+    rotation: Arc<OrgRotation>,
 ) -> Result<(), String> {
     let mut config = ReconcileWorkerConfig::new(worker_id);
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
@@ -443,9 +503,14 @@ async fn run_reconcile_worker(
         let document_id = config
             .document_id
             .ok_or_else(|| "reconcile oneshot missing document id".to_string())?;
+        // run_worker already rejects oneshot with more than one org.
+        let ctx = rotation
+            .contexts()
+            .first()
+            .ok_or_else(|| "reconcile oneshot requires an org context".to_string())?;
         fileconv_server::services::reconciliation::enqueue_reconcile(
             &pool,
-            &ctx,
+            ctx,
             document_id,
             "oneshot-scope",
         )
@@ -470,21 +535,33 @@ async fn run_reconcile_worker(
         "reconcile",
         || {
             let pool = pool.clone();
-            let ctx = ctx.clone();
+            let rotation = rotation.clone();
             let worker = worker.clone();
             let sink = sink.clone();
             async move {
-                reclaim_expired_leases(&pool, &ctx).await;
-                jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                rotation
+                    .run_cycle(|ctx| {
+                        let pool = pool.clone();
+                        let worker = worker.clone();
+                        let sink = sink.clone();
+                        async move {
+                            reclaim_expired_leases(&pool, &ctx).await;
+                            jobs::relay_outbox_with_sink(&pool, &ctx, 32, &sink)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            let outcome = worker
+                                .run_once(&ctx)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            Ok(non_idle(outcome, |run| {
+                                matches!(run, ReconcileWorkerRun::NoJob)
+                            }))
+                        }
+                    })
                     .await
-                    .map_err(|error| error.to_string())?;
-                worker
-                    .run_once(&ctx)
-                    .await
-                    .map_err(|error| error.to_string())
             }
         },
-        |outcome| matches!(outcome, ReconcileWorkerRun::NoJob),
+        |outcome| outcome.is_none(),
     )
     .await
 }
@@ -494,7 +571,7 @@ async fn run_embedding_worker(
     pool: deadpool_postgres::Pool,
     qdrant: QdrantClient,
     worker_id: String,
-    ctx: OrgContext,
+    rotation: Arc<OrgRotation>,
 ) -> Result<(), String> {
     let mut config = EmbeddingWorkerConfig::new(worker_id);
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
@@ -521,18 +598,29 @@ async fn run_embedding_worker(
         "embedding",
         || {
             let pool = pool.clone();
-            let ctx = ctx.clone();
+            let rotation = rotation.clone();
             let worker = worker.clone();
             async move {
-                reclaim_expired_leases(&pool, &ctx).await;
                 let _ = fileconv_server::jobs::observe_queue_metrics(&pool).await;
-                worker
-                    .run_once(&ctx)
+                rotation
+                    .run_cycle(|ctx| {
+                        let pool = pool.clone();
+                        let worker = worker.clone();
+                        async move {
+                            reclaim_expired_leases(&pool, &ctx).await;
+                            let outcome = worker
+                                .run_once(&ctx)
+                                .await
+                                .map_err(|error| error.to_string())?;
+                            Ok(non_idle(outcome, |run| {
+                                matches!(run, EmbeddingWorkerRun::NoJob)
+                            }))
+                        }
+                    })
                     .await
-                    .map_err(|error| error.to_string())
             }
         },
-        |outcome| matches!(outcome, EmbeddingWorkerRun::NoJob),
+        |outcome| outcome.is_none(),
     )
     .await
 }
@@ -778,6 +866,30 @@ fn env_uuid(name: &str) -> Result<Uuid, String> {
     Uuid::parse_str(&raw).map_err(|_| format!("{name} must be a UUID"))
 }
 
+/// One UUID or a comma-separated list ("a,b,c"); blank segments are ignored.
+fn env_uuid_list(name: &str) -> Result<Vec<Uuid>, String> {
+    let raw = std::env::var(name).map_err(|_| format!("{name} is required"))?;
+    parse_uuid_list(name, &raw)
+}
+
+fn parse_uuid_list(name: &str, raw: &str) -> Result<Vec<Uuid>, String> {
+    let mut ids = Vec::new();
+    for part in raw.split(',') {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        ids.push(
+            Uuid::parse_str(trimmed)
+                .map_err(|_| format!("{name} must be a UUID or comma-separated UUID list"))?,
+        );
+    }
+    if ids.is_empty() {
+        return Err(format!("{name} is required"));
+    }
+    Ok(ids)
+}
+
 fn exit_with_error(error: String) -> ! {
     eprintln!("fileconv-worker: {error}");
     std::process::exit(1);
@@ -788,6 +900,23 @@ mod shutdown_tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+
+    #[test]
+    fn uuid_list_accepts_single_and_multi_and_rejects_garbage() {
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        assert_eq!(
+            parse_uuid_list("X", &a.to_string()).expect("single"),
+            vec![a]
+        );
+        assert_eq!(
+            parse_uuid_list("X", &format!(" {a} , {b} ,")).expect("multi"),
+            vec![a, b]
+        );
+        assert!(parse_uuid_list("X", "").is_err());
+        assert!(parse_uuid_list("X", "not-a-uuid").is_err());
+        assert!(parse_uuid_list("X", &format!("{a},oops")).is_err());
+    }
 
     #[test]
     fn sandbox_convert_probe_accepts_exactly_one_input() {

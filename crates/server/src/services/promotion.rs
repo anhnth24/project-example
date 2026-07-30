@@ -290,6 +290,10 @@ pub async fn promote_conversion(
                 )
                 .await?
                 .ok_or(PromotionError::LeaseLost)?;
+                // Promotion completes the job via the repo layer (complete_owned),
+                // bypassing jobs::complete_within_txn — release the concurrent-jobs
+                // slot here or a successful conversion holds it until TTL expiry.
+                crate::jobs::release_job_slot(txn, &ctx, input.job_id).await?;
                 write_job_succeeded_event(txn, &ctx, &completed).await?;
 
                 // The version/document relation is the ACL inheritance boundary: new
