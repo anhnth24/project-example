@@ -291,6 +291,18 @@ mod tests {
     }
 
     #[test]
+    fn groups_denies_without_grants() {
+        let principal = principal_with_permissions(&[PERMISSION]);
+        let collection = collection_snapshot(CollectionVisibility::Groups);
+        assert!(!allowed(
+            &principal,
+            &collection,
+            PERMISSION,
+            AccessLevel::Read
+        ));
+    }
+
+    #[test]
     fn access_level_ordering_read_write_admin() {
         assert!(AccessLevel::Read.satisfies(AccessLevel::Read));
         assert!(AccessLevel::Write.satisfies(AccessLevel::Read));

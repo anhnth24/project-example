@@ -204,6 +204,56 @@ mod tests {
     const ACCESS_LEVEL_RANK: &str =
         "CASE access_level WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END";
 
+    fn visibility_arm<'a>(sql: &'a str, collection_alias: &str, visibility: &str) -> &'a str {
+        let marker = format!("{collection_alias}.visibility = '{visibility}'");
+        let start = sql
+            .find(&marker)
+            .unwrap_or_else(|| panic!("missing visibility marker {marker:?} in:\n{sql}"));
+        let end = if visibility == "private" {
+            let groups_marker = format!("{collection_alias}.visibility = 'groups'");
+            sql[start..]
+                .find(&groups_marker)
+                .map(|offset| start + offset)
+                .unwrap_or(sql.len())
+        } else {
+            sql.len()
+        };
+        &sql[start..end]
+    }
+
+    fn assert_private_arm_isolated(sql: &str, collection_alias: &str) {
+        let arm = visibility_arm(sql, collection_alias, "private");
+        assert!(
+            arm.contains("collection_user_access"),
+            "private arm must allow direct user grants:\n{arm}"
+        );
+        for forbidden in [
+            "collection_group_access",
+            "collection_role_access",
+            "group_memberships",
+        ] {
+            assert!(
+                !arm.contains(forbidden),
+                "private arm must not reference {forbidden}:\n{arm}"
+            );
+        }
+    }
+
+    fn assert_groups_arm_has_grant_branches(sql: &str, collection_alias: &str) {
+        let arm = visibility_arm(sql, collection_alias, "groups");
+        for required in [
+            "collection_user_access",
+            "collection_group_access",
+            "collection_role_access",
+            "group_memberships",
+        ] {
+            assert!(
+                arm.contains(required),
+                "groups arm must reference {required}:\n{arm}"
+            );
+        }
+    }
+
     #[test]
     fn access_level_rank_expression_is_canonical() {
         let sql = allowed_collections_sql("$1", "$2", "$3", "$4");
@@ -273,5 +323,56 @@ mod tests {
                 "acl_predicate_sql missing required clause {expected:?} in:\n{sql}"
             );
         }
+    }
+
+    #[test]
+    fn visibility_markers_are_pinned_in_allowed_collections_sql() {
+        let sql = allowed_collections_sql("$1", "$2", "$3", "$4");
+        for marker in ["c.visibility = 'org'", "c.visibility = 'private'", "c.visibility = 'groups'"]
+        {
+            assert!(
+                sql.contains(marker),
+                "allowed_collections_sql missing visibility marker {marker:?} in:\n{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn visibility_markers_are_pinned_in_acl_predicate_sql() {
+        let sql = acl_predicate_sql("d.org_id", "d.collection_id", "$4", "$5", "$6");
+        for marker in [
+            "acl_c.visibility = 'org'",
+            "acl_c.visibility = 'private'",
+            "acl_c.visibility = 'groups'",
+        ] {
+            assert!(
+                sql.contains(marker),
+                "acl_predicate_sql missing visibility marker {marker:?} in:\n{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_collections_private_arm_has_no_group_or_role_leak() {
+        let sql = allowed_collections_sql("$1", "$2", "$3", "$4");
+        assert_private_arm_isolated(&sql, "c");
+    }
+
+    #[test]
+    fn acl_predicate_private_arm_has_no_group_or_role_leak() {
+        let sql = acl_predicate_sql("d.org_id", "d.collection_id", "$4", "$5", "$6");
+        assert_private_arm_isolated(&sql, "acl_c");
+    }
+
+    #[test]
+    fn allowed_collections_groups_arm_has_group_and_role_branches() {
+        let sql = allowed_collections_sql("$1", "$2", "$3", "$4");
+        assert_groups_arm_has_grant_branches(&sql, "c");
+    }
+
+    #[test]
+    fn acl_predicate_groups_arm_has_group_and_role_branches() {
+        let sql = acl_predicate_sql("d.org_id", "d.collection_id", "$4", "$5", "$6");
+        assert_groups_arm_has_grant_branches(&sql, "acl_c");
     }
 }
