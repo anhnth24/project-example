@@ -4,26 +4,24 @@ Parent plan: [`../../../phase-1c-multi-org-security.md`](../../../phase-1c-multi
 
 <!-- roadmap-default-status: backlog -->
 
-**Audit 2026-07-27 (đọc code, không đoán).** Con số cũ "0/13" gây hiểu nhầm: phần lớn
-**nền tảng thực thi 1C đã được xây sẵn trong Phase 1B** (RLS FORCE, ACL predicate ở
-retrieval, Qdrant mandatory filter, quota atomic, rate-limit, audit append-only) — nhưng
-**chưa issue nào đạt full acceptance**, nên không tick Done cái nào. Kết quả audit:
+**Audit 2026-07-31 (PR 1 RBAC foundation).** Substrate 1B vẫn là nền; PR 1 đóng org
+lifecycle / membership / canonical RBAC catalog với CI exact-SHA evidence. P1C.3 ACL
+semantics còn mở cho PR 2. `AR-1C-AUDIT-RETENTION` giữ POC/non-production only.
 
-- **11 In progress** — có building block thật + có test, nhưng thiếu phần định nghĩa 1C.
-- **2 Backlog** — chỉ có schema/prose, logic chính chưa viết: **1C-02** (invite/last-owner)
-  và **1C-13** (security/load gate).
-- **0 Done.**
+- **3 Done** — **1C-01**, **1C-02**, **1C-03** (CI `rust` + `web` + `rust-integration` trên
+  `a628504`, run [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)).
+- **9 In progress** — 1C-04…1C-12 (ACL/guards/denial còn mở).
+- **1 Backlog** — **1C-13** (security/load gate).
 
 > **Hai ranh giới quan trọng, áp cho MỌI issue dưới đây:**
 > 1. **Test enforcement gần như toàn bộ là `#[ignore]` DB-gated** — chỉ chạy trong job CI
 >    `rust-integration` khi có `MARKHAND_TEST_DATABASE_URL`/MinIO/Qdrant, KHÔNG chạy trong
 >    `cargo test` mặc định. Fast-unit chỉ phủ logic thuần (scope resolve, filter, HMAC).
 > 2. **`context.rs:11-12` tự ghi "full ACL resolution belongs to Phase 1C"** — substrate
->    hiện tại xây cho single-org POC (1B), chưa phải multi-org đầy đủ.
+>    hiện tại xây cho single-org POC (1B); full multi-org ACL semantics vẫn thuộc PR 2+.
 >
-> **Exit gate Phase 1C (1C-12 + 1C-13) CHƯA đạt** — cả hai deliverable "suite gắn kết" và
-> "gate có report" đều chưa tồn tại như deliverable. Và Phase 1C chỉ activate sau khi
-> **Phase 1B gate đóng** (2026-07-31 — R06 hanging soak pass); toàn phase vẫn là công việc phía trước.
+> **Exit gate Phase 1C (1C-12 + 1C-13) CHƯA đạt** — denial suite gắn kết và security/load
+> gate chưa đóng. Phase 1B gate đã đóng (2026-07-31 — R06 hanging soak pass).
 
 ## Dependency
 
@@ -36,73 +34,81 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-01 — Organization lifecycle và validated context
 
-- **Status:** In progress — nửa *validated-context* đã có + test DB-gated: resolver `auth/permissions.rs:39`, membership re-verify (JWT chỉ là hint) `auth/middleware.rs:144`, fail-closed `auth/context.rs:30`, RLS `migrations/0002`. **Nửa lifecycle đã landed phần lớn**: `GET /orgs` (chỉ org của mình), `GET /orgs/{id}` (404 đồng nhất cho "không tồn tại"/"không phải member" — không oracle), `POST /orgs/switch` (re-verify membership từ PG, mint session mới độc lập scoped target org, audit `org.switch` cả success/deny; deny với org không tồn tại thì không ghi audit để tránh FK-oracle) — routes bearer-identity-only theo tiền lệ `accept_invite`, kèm two-org resolver test DB-gated (`tests/orgs.rs`, 8 test: forged/stale/suspended deny + audit). **`POST /orgs` (create) đã landed** sau khi owner chốt thiết kế catalog toàn cục (xem 1C-03/migration `0030`): tạo org + owner membership + `provision_org_role_catalog(org_id)` trong MỘT transaction, audit `org.create`, validate slug khớp CHECK constraint, rate-limit auth-IP, 409 slug taken; test DB-gated create (happy/duplicate/unauth/audit + owner resolve đủ permission không cần seed riêng) trong `tests/orgs.rs` (12 test).
+- **Status:** Done — CI exact-SHA evidence on `a62850422dd070e7e1195bfe1d4f1dee0d73566d`
+  (run [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)):
+  `rust` [91151657403](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657403),
+  `web` [91151657388](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657388),
+  `rust-integration` [91151657399](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657399)
+  (not path-filter skip / soft pass). Integration log executed `orgs` binary tests
+  including `create_org_succeeds_and_caller_becomes_owner` and
+  `list_orgs_shows_only_the_callers_own_orgs`; job summary reports no ignored tests
+  for that binary. Validated-context + lifecycle already landed: membership
+  re-verify, fail-closed OrgContext, RLS, `GET /orgs` / `GET /orgs/{id}` /
+  `POST /orgs/switch` / `POST /orgs` with owner provision + audit.
 
 - **Plan/files:** Org create/list/detail/switch, service/repo/middleware; issue new
   context/session after verified membership.
 - **Depends:** Phase 1B auth/schema. **Acceptance/tests:** Chỉ thấy org của mình;
-  forged/stale header deny; two-org resolver/integration tests.
+  forged/stale header deny; two-org resolver/integration tests — green on CI
+  `a62850422dd070e7e1195bfe1d4f1dee0d73566d` run
+  [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)
+  (`rust`/`web`/`rust-integration`).
 - **Security/migration:** Không global org state; audit switch. **Out:** billing/OIDC.
 
 ## 1C-02 — Membership, invites và last-owner invariant
 
-- **Status:** In progress — gần Done; **đã landed đầy đủ trong #317** (đọc code xác
-  minh 2026-07-28, không phải backlog cũ ghi "Backlog"): invite create/accept/revoke/list
-  hashed single-use `routes/members.rs` E1-E5, **`PATCH /api/v1/members/{userId}`** (đổi
-  role/state, `routes/members.rs:450 patch_member`) và **`DELETE /api/v1/members/{userId}`**
-  (`routes/members.rs:551 delete_member`) đều đã có — không chỉ GET như một đợt audit
-  trước từng nêu. Last-owner invariant transactional + row-lock: `check_last_owner_invariant`
-  (pure, `services/members.rs:143`) + `guard_last_owner` (`FOR UPDATE` qua
-  `db::members::lock_owner_rows`, `services/members.rs:159`) chạy cùng transaction với
-  `change_role`/`remove_member`/`suspend_member` (`services/members.rs:476/540`); riêng
-  cả tự-hạ-role/tự-xóa của owner cuối cũng 409 (không có ngoại lệ cho "chính mình").
-  `guard_owner_tier` (`services/members.rs:176`) chặn thêm escalation: chỉ active owner
-  mới được cấp/thao tác owner khác — admin có `member.manage` không tự thăng owner hay
-  quản owner khác (403). Membership **state** (`active|suspended`, KHÔNG có "removed" —
-  remove là hard-delete có chủ đích vì FK `refresh_tokens` không có `ON DELETE`, xem
-  migration `0029_expand_org_membership_state.sql` + doc `services/members.rs:25-35`)
-  đã dùng cho suspend/reactivate; **version** cho ACL cache (1C-05) cố ý CHƯA thêm (chưa
-  có cache để invalidate). Downgrade/suspend/remove đều gọi
-  `auth::session::revoke_all_user_families` (route layer, `routes/members.rs:532/587`)
-  để refresh-token family cũ không sống quá TTL. Audit `member.role_change` (old→new
-  role/state trong metadata) và `member.remove` (old_role) ghi cùng transaction
-  (`services/audit.rs` allowlist `member.role_change`/`member.remove`). OpenAPI
-  (`openapi/openapi.yaml:1180`, `ROUTE_INVENTORY`/`BODY_TAKING_OPERATIONS` trong
-  `api/openapi.rs`) + web codegen + admin UI (`web/src/components/admin/membersApi.ts`,
-  `memberPresentation.ts`) đã có, pin-count schema vẫn 38 (không schema mới). Migration
-  MỚI không cần — `0029` đã đủ.
-  **Bổ sung trong phiên này** (worktree, chưa chạy DB-gated CI): thêm vào
-  `tests/members.rs` 4 test còn thiếu so với danh sách acceptance — last-owner 409
-  *deterministic* (không chỉ qua race) cho tự-downgrade/tự-remove/tự-suspend của owner
-  cuối cùng, 403 khi thiếu `member.manage` (kèm audit-deny), 404 cho user id chưa từng
-  tồn tại trong org (khác case cross-org RLS-hidden), và audit before/after cho
-  role-change + remove trên happy path.
-  **Còn thiếu thật** (không phải của 1C-02, thuộc issue khác): 1C-05 chưa có ACL
-  version/cache nên chưa cần cột `version`; 1C-11 vẫn chưa có endpoint đọc audit log
-  (chỉ ghi, `db::audit::list_recent` chưa có route). MVP token invite vẫn chỉ hiển thị
-  1 lần qua response body — automated email delivery vẫn out of scope như thiết kế.
+- **Status:** Done — CI exact-SHA evidence on `a62850422dd070e7e1195bfe1d4f1dee0d73566d`
+  (run [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)):
+  `rust` [91151657403](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657403),
+  `web` [91151657388](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657388),
+  `rust-integration` [91151657399](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657399)
+  (not path-filter skip / soft pass). Integration log executed `members` binary tests
+  including `concurrent_last_owner_race_exactly_one_survives`,
+  `cross_org_denial_covers_every_member_endpoint`, and
+  `member_manage_permission_required_for_patch_and_delete`; job summary reports no
+  ignored tests for that binary. Implementation landed in #317+: hashed single-use
+  invites, PATCH/DELETE members, transactional last-owner + owner-tier guards,
+  suspend/reactivate, session family revoke, audit allowlist. Membership ACL
+  `version` remains deferred to 1C-05; automated email delivery remains out of scope.
 
 - **Plan/files:** Hashed single-use invite; membership state; transactional last-owner;
   membership version (deferred to 1C-05); session revoke. MVP chưa có mail dùng invite
   URL/token hiển thị đúng một lần cho admin copy qua kênh được tổ chức phê duyệt;
-  expiry/revoke/audit bắt buộc — **tất cả đã landed**.
+  expiry/revoke/audit bắt buộc — **đã landed**.
 - **Depends:** 1C-01. **Acceptance/tests:** Không remove/downgrade last owner (kể cả tự
   thao tác chính mình); admin không quản owner; concurrent owner removal, invite
-  replay/expiry, escalation tests — **đã có trong `tests/members.rs`, DB-gated
-  `#[ignore]`, cần chạy trong CI `rust-integration` (`MARKHAND_TEST_DATABASE_URL`) để
-  đóng gate, chưa tự chạy trong `cargo test` mặc định**.
+  replay/expiry, escalation tests — green on CI
+  `a62850422dd070e7e1195bfe1d4f1dee0d73566d` run
+  [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)
+  (`tests/members.rs` in `rust-integration`).
 - **Security/migration:** Row lock (`FOR UPDATE` trên owner rows), expand/backfill
-  version (deferred, xem trên); plaintext invite không lưu DB/log (chỉ trả 1 lần trong
+  version (deferred to 1C-05); plaintext invite không lưu DB/log (chỉ trả 1 lần trong
   response). **Out:** automated email delivery/SCIM/MFA.
 
 ## 1C-03 — Canonical RBAC seed
 
-- **Status:** In progress — bảng `permissions/roles/role_permissions` + seed 4 role owner/admin/editor/viewer + matrix (`migrations/0011:38`, `is_system=true`), idempotent (`tests/schema_migrations.rs` DB-gated). **Đã thêm (migration `0030`)**: catalog toàn cục `role_catalog`/`role_catalog_permissions` làm template bất biến duy nhất (trigger chặn UPDATE/DELETE/TRUNCATE — immutable system roles), seed idempotent đúng matrix hiệu lực POC, hàm `provision_org_role_catalog(org_id)` copy per-org khi tạo org (cố ý KHÔNG trigger tự động trên `orgs` INSERT và KHÔNG đổi resolver join — per-org rows vẫn là nguồn resolve runtime để `acl_mutate` revoke containment hoạt động); test matrix + immutability + no-seed-resolve trong `tests/role_catalog.rs`. **Còn thiếu**: OpenAPI fixture cho matrix, đối chiếu UI không hard-code matrix.
+- **Status:** Done — CI exact-SHA evidence on `a62850422dd070e7e1195bfe1d4f1dee0d73566d`
+  (run [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)):
+  `rust` [91151657403](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657403),
+  `web` [91151657388](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657388),
+  `rust-integration` [91151657399](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657399)
+  (not path-filter skip / soft pass). Integration log executed `role_catalog` tests
+  including `permissions_table_contains_exactly_active_catalog_keys ... ok` and
+  `canonical_matrix_matches_builtin_role_catalog_fixture ... ok`; job summary reports
+  no ignored tests for that binary. Canonical fixture
+  `crates/server/openapi/builtin-role-catalog.json` is the sole built-in
+  active/reserved matrix; OpenAPI references it (no embedded grants); web imports it
+  for role order; DB parity tests compare exact active keys/grants. Historical
+  migration `0030` catalog + per-org provision unchanged. P1C.2 disposition: matrix
+  follows the fixture. Guard inventory for active operations remains 1C-04 / later PRs.
 
 - **Plan/files:** Permission constants + DB seed owner/admin/editor/viewer; immutable
-  system roles; OpenAPI fixture.
+  system roles; OpenAPI/web fixture consumers.
 - **Depends:** Phase 1B role schema. **Acceptance/tests:** Matrix đúng/idempotent,
-  duplicate/missing/immutable mutation tests; UI không hard-code matrix.
+  duplicate/missing/immutable mutation tests; UI không hard-code matrix — green on CI
+  `a62850422dd070e7e1195bfe1d4f1dee0d73566d` run
+  [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)
+  (`role_catalog` in `rust-integration`).
 - **Security/migration:** Stable keys, expand/backfill. **Out:** custom role builder.
 
 ## 1C-04 — Route/service guards và service identities
