@@ -57,23 +57,50 @@ pub async fn revoke_collection_access_for_principal(
     new_owner_user_id: Uuid,
 ) -> Result<(), DbError> {
     authz_lock::lock_principal_authz(txn, org_id, user_id).await?;
-    txn.execute(
-        "UPDATE collections
-         SET visibility = 'private',
-             owner_user_id = $3,
-             updated_at = now()
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
-        &[&org_id, &collection_id, &new_owner_user_id],
-    )
-    .await
-    .map_err(DbError::from)?;
-    txn.execute(
-        "DELETE FROM collection_user_access
-         WHERE org_id = $1 AND collection_id = $2 AND user_id = $3",
-        &[&org_id, &collection_id, &user_id],
-    )
-    .await
-    .map_err(DbError::from)?;
+    txn
+        .query_one(
+            "SELECT 1 FROM collections
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+             FOR NO KEY UPDATE",
+            &[&org_id, &collection_id],
+        )
+        .await
+        .map_err(DbError::from)?;
+    txn
+        .execute(
+            "DELETE FROM collection_group_access
+             WHERE org_id = $1 AND collection_id = $2",
+            &[&org_id, &collection_id],
+        )
+        .await
+        .map_err(DbError::from)?;
+    txn
+        .execute(
+            "DELETE FROM collection_role_access
+             WHERE org_id = $1 AND collection_id = $2",
+            &[&org_id, &collection_id],
+        )
+        .await
+        .map_err(DbError::from)?;
+    txn
+        .execute(
+            "UPDATE collections
+             SET visibility = 'private',
+                 owner_user_id = $3,
+                 updated_at = now()
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+            &[&org_id, &collection_id, &new_owner_user_id],
+        )
+        .await
+        .map_err(DbError::from)?;
+    txn
+        .execute(
+            "DELETE FROM collection_user_access
+             WHERE org_id = $1 AND collection_id = $2 AND user_id = $3",
+            &[&org_id, &collection_id, &user_id],
+        )
+        .await
+        .map_err(DbError::from)?;
     // 1C-05: this changes visibility/ownership org-wide (not just for
     // `user_id`), so the cache invalidation is org-wide too.
     orgs::bump_acl_version(txn, org_id).await?;

@@ -1,8 +1,9 @@
 -- Phase: 1C
 -- Owner: security-owner
 -- Change: expand
--- Lock/data risk: three trigger functions + six row-level triggers on existing
---   ACL tables; preflight DO block scans collections/grants once at apply time.
+-- Lock/data risk: four SQL functions (three visibility guards + replacement
+--   bump_org_acl_version) and six row-level triggers on existing ACL tables;
+--   preflight DO block scans collections/grants once at apply time.
 --   Grant/visibility writers serialize on the parent collection row via
 --   FOR NO KEY UPDATE under READ COMMITTED — low-volume admin paths only.
 -- Rollback compatibility: additive only; dropping triggers/functions in a later
@@ -46,6 +47,13 @@ RETURNS trigger AS $$
 DECLARE
     parent_visibility text;
 BEGIN
+    IF TG_OP = 'UPDATE' AND (
+        OLD.org_id IS DISTINCT FROM NEW.org_id
+        OR OLD.collection_id IS DISTINCT FROM NEW.collection_id
+    ) THEN
+        RAISE EXCEPTION 'group/role grant parent keys (org_id, collection_id) are immutable; delete and re-insert to retarget';
+    END IF;
+
     SELECT visibility
     INTO parent_visibility
     FROM collections
@@ -104,6 +112,29 @@ DROP TRIGGER IF EXISTS collections_enforce_visibility_grant_invariant ON collect
 CREATE TRIGGER collections_enforce_visibility_grant_invariant
     BEFORE UPDATE OF visibility ON collections
     FOR EACH ROW EXECUTE FUNCTION enforce_collection_visibility_grant_invariant();
+
+-- Replace the 0033 helper so cross-org UPDATE bumps both orgs exactly once;
+-- same-org INSERT/UPDATE/DELETE still bump once.
+CREATE OR REPLACE FUNCTION bump_org_acl_version() RETURNS trigger AS $$
+DECLARE
+    target_org uuid;
+BEGIN
+    IF TG_OP = 'UPDATE' AND OLD.org_id IS DISTINCT FROM NEW.org_id THEN
+        IF OLD.org_id IS NOT NULL THEN
+            UPDATE orgs SET acl_version = acl_version + 1 WHERE id = OLD.org_id;
+        END IF;
+        IF NEW.org_id IS NOT NULL THEN
+            UPDATE orgs SET acl_version = acl_version + 1 WHERE id = NEW.org_id;
+        END IF;
+    ELSE
+        target_org := COALESCE(NEW.org_id, OLD.org_id);
+        IF target_org IS NOT NULL THEN
+            UPDATE orgs SET acl_version = acl_version + 1 WHERE id = target_org;
+        END IF;
+    END IF;
+    RETURN COALESCE(NEW, OLD);
+END;
+$$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS collection_group_access_bump_acl_version ON collection_group_access;
 CREATE TRIGGER collection_group_access_bump_acl_version
