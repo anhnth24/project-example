@@ -2,8 +2,11 @@
 //!
 //! Emits the same visibility and access-level branches as [`crate::auth::acl::allowed`].
 
-const ACCESS_LEVEL_RANK: &str =
-    "CASE access_level WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END";
+fn access_level_rank_expr(column: &str) -> String {
+    format!(
+        "CASE {column} WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END"
+    )
+}
 
 fn required_access_rank(required_access_param: &str) -> String {
     format!(
@@ -11,38 +14,45 @@ fn required_access_rank(required_access_param: &str) -> String {
     )
 }
 
-fn grant_meets_required(required_access_param: &str) -> String {
+fn grant_meets_required(grant_column: &str, required_access_param: &str) -> String {
     format!(
-        "({ACCESS_LEVEL_RANK}) >= ({})",
+        "({}) >= ({})",
+        access_level_rank_expr(grant_column),
         required_access_rank(required_access_param)
     )
 }
 
-fn visibility_route_sql(user_id_param: &str, required_access_param: &str) -> String {
-    let grant_meets = grant_meets_required(required_access_param);
+fn visibility_route_sql(
+    collection_alias: &str,
+    user_id_param: &str,
+    required_access_param: &str,
+) -> String {
+    let user_grant = grant_meets_required("cua.access_level", required_access_param);
+    let group_grant = grant_meets_required("cga.access_level", required_access_param);
+    let role_grant = grant_meets_required("cra.access_level", required_access_param);
     format!(
         "(
-           c.visibility = 'org'
-           OR c.owner_user_id = {user_id_param}
+           {collection_alias}.visibility = 'org'
+           OR {collection_alias}.owner_user_id = {user_id_param}
            OR (
-             c.visibility = 'private'
+             {collection_alias}.visibility = 'private'
              AND EXISTS (
                SELECT 1 FROM collection_user_access cua
-               WHERE cua.org_id = c.org_id
-                 AND cua.collection_id = c.id
+               WHERE cua.org_id = {collection_alias}.org_id
+                 AND cua.collection_id = {collection_alias}.id
                  AND cua.user_id = {user_id_param}
-                 AND {grant_meets}
+                 AND {user_grant}
              )
            )
            OR (
-             c.visibility = 'groups'
+             {collection_alias}.visibility = 'groups'
              AND (
                EXISTS (
                  SELECT 1 FROM collection_user_access cua
-                 WHERE cua.org_id = c.org_id
-                   AND cua.collection_id = c.id
+                 WHERE cua.org_id = {collection_alias}.org_id
+                   AND cua.collection_id = {collection_alias}.id
                    AND cua.user_id = {user_id_param}
-                   AND {grant_meets}
+                   AND {user_grant}
                )
                OR EXISTS (
                  SELECT 1 FROM collection_group_access cga
@@ -50,9 +60,9 @@ fn visibility_route_sql(user_id_param: &str, required_access_param: &str) -> Str
                    ON gm.org_id = cga.org_id
                   AND gm.group_id = cga.group_id
                   AND gm.user_id = {user_id_param}
-                 WHERE cga.org_id = c.org_id
-                   AND cga.collection_id = c.id
-                   AND {grant_meets}
+                 WHERE cga.org_id = {collection_alias}.org_id
+                   AND cga.collection_id = {collection_alias}.id
+                   AND {group_grant}
                )
                OR EXISTS (
                  SELECT 1 FROM collection_role_access cra
@@ -64,9 +74,9 @@ fn visibility_route_sql(user_id_param: &str, required_access_param: &str) -> Str
                   AND cra_m.user_id = {user_id_param}
                   AND cra_m.role = cra_r.code
                   AND cra_m.state = 'active'
-                 WHERE cra.org_id = c.org_id
-                   AND cra.collection_id = c.id
-                   AND {grant_meets}
+                 WHERE cra.org_id = {collection_alias}.org_id
+                   AND cra.collection_id = {collection_alias}.id
+                   AND {role_grant}
                )
              )
            )
@@ -98,7 +108,10 @@ fn membership_permission_exists_sql(
     )
 }
 
-/// SQL fragment listing collection ids visible to a principal for a permission/access pair.
+/// WHERE predicate for collection rows visible to a principal.
+///
+/// The outer query must alias the `collections` row as `c` (for example
+/// `FROM collections c WHERE ... AND ({allowed_collections_sql(...)})`).
 pub fn allowed_collections_sql(
     org_id_param: &str,
     user_id_param: &str,
@@ -107,7 +120,7 @@ pub fn allowed_collections_sql(
 ) -> String {
     let membership =
         membership_permission_exists_sql(org_id_param, user_id_param, permission_param);
-    let visibility = visibility_route_sql(user_id_param, required_access_param);
+    let visibility = visibility_route_sql("c", user_id_param, required_access_param);
     format!(
         "c.org_id = {org_id_param}
          AND c.deleted_at IS NULL
@@ -124,7 +137,7 @@ pub fn acl_predicate_sql(
     permission_param: &str,
     required_access_param: &str,
 ) -> String {
-    let grant_meets = grant_meets_required(required_access_param);
+    let visibility = visibility_route_sql("acl_c", user_id_param, required_access_param);
     format!(
         "EXISTS (
            SELECT 1
@@ -143,56 +156,7 @@ pub fn acl_predicate_sql(
              AND acl_c.deleted_at IS NULL
              AND acl_u.disabled_at IS NULL
              AND acl_p.code = {permission_param}
-             AND (
-               acl_c.visibility = 'org'
-               OR acl_c.owner_user_id = {user_id_param}
-               OR (
-                 acl_c.visibility = 'private'
-                 AND EXISTS (
-                   SELECT 1 FROM collection_user_access cua
-                   WHERE cua.org_id = acl_c.org_id
-                     AND cua.collection_id = acl_c.id
-                     AND cua.user_id = {user_id_param}
-                     AND {grant_meets}
-                 )
-               )
-               OR (
-                 acl_c.visibility = 'groups'
-                 AND (
-                   EXISTS (
-                     SELECT 1 FROM collection_user_access cua
-                     WHERE cua.org_id = acl_c.org_id
-                       AND cua.collection_id = acl_c.id
-                       AND cua.user_id = {user_id_param}
-                       AND {grant_meets}
-                   )
-                   OR EXISTS (
-                     SELECT 1 FROM collection_group_access cga
-                     JOIN group_memberships gm
-                       ON gm.org_id = cga.org_id
-                      AND gm.group_id = cga.group_id
-                      AND gm.user_id = {user_id_param}
-                     WHERE cga.org_id = acl_c.org_id
-                       AND cga.collection_id = acl_c.id
-                       AND {grant_meets}
-                   )
-                   OR EXISTS (
-                     SELECT 1 FROM collection_role_access cra
-                     JOIN roles cra_r
-                       ON cra_r.org_id = cra.org_id
-                      AND cra_r.id = cra.role_id
-                     JOIN org_memberships cra_m
-                       ON cra_m.org_id = cra_r.org_id
-                      AND cra_m.user_id = {user_id_param}
-                      AND cra_m.role = cra_r.code
-                      AND cra_m.state = 'active'
-                     WHERE cra.org_id = acl_c.org_id
-                       AND cra.collection_id = acl_c.id
-                       AND {grant_meets}
-                   )
-                 )
-               )
-             )
+             AND {visibility}
          )"
     )
 }
@@ -201,8 +165,9 @@ pub fn acl_predicate_sql(
 mod tests {
     use super::*;
 
-    const ACCESS_LEVEL_RANK: &str =
-        "CASE access_level WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END";
+    fn qualified_access_level_rank(column: &str) -> String {
+        access_level_rank_expr(column)
+    }
 
     fn visibility_arm<'a>(sql: &'a str, collection_alias: &str, visibility: &str) -> &'a str {
         let marker = format!("{collection_alias}.visibility = '{visibility}'");
@@ -257,15 +222,21 @@ mod tests {
     #[test]
     fn access_level_rank_expression_is_canonical() {
         let sql = allowed_collections_sql("$1", "$2", "$3", "$4");
-        assert!(
-            sql.contains(ACCESS_LEVEL_RANK),
-            "allowed_collections_sql must use canonical access_level rank expression;\ngot:\n{sql}"
-        );
+        for column in ["cua.access_level", "cga.access_level", "cra.access_level"] {
+            let expected = qualified_access_level_rank(column);
+            assert!(
+                sql.contains(&expected),
+                "allowed_collections_sql must qualify rank on {column};\ngot:\n{sql}"
+            );
+        }
         let predicate = acl_predicate_sql("c.org_id", "c.id", "$3", "$4", "$5");
-        assert!(
-            predicate.contains(ACCESS_LEVEL_RANK),
-            "acl_predicate_sql must use canonical access_level rank expression;\ngot:\n{predicate}"
-        );
+        for column in ["cua.access_level", "cga.access_level", "cra.access_level"] {
+            let expected = qualified_access_level_rank(column);
+            assert!(
+                predicate.contains(&expected),
+                "acl_predicate_sql must qualify rank on {column};\ngot:\n{predicate}"
+            );
+        }
     }
 
     #[test]
@@ -286,7 +257,9 @@ mod tests {
             "collection_group_access",
             "collection_role_access",
             "$4",
-            ACCESS_LEVEL_RANK,
+            "cua.access_level",
+            "cga.access_level",
+            "cra.access_level",
         ] {
             assert!(
                 sql.contains(expected),
@@ -316,7 +289,9 @@ mod tests {
             "collection_group_access",
             "collection_role_access",
             "$6",
-            ACCESS_LEVEL_RANK,
+            "cua.access_level",
+            "cga.access_level",
+            "cra.access_level",
         ] {
             assert!(
                 sql.contains(expected),
