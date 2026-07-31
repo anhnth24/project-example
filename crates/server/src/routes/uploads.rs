@@ -127,8 +127,7 @@ async fn create_upload(
     let collection_id = pending.collection_id.ok_or_else(|| {
         UploadRouteError::Validation("collectionId is required".into(), request_id.clone())
     })?;
-    match ensure_upload_collection_write_access(state.pool(), &auth.context, collection_id).await
-    {
+    match ensure_upload_collection_write_access(state.pool(), &auth.context, collection_id).await {
         UploadCollectionAccessCheck::Allowed => {}
         UploadCollectionAccessCheck::AuthorizationDenied => {
             let resource_id = collection_id.to_string();
@@ -493,13 +492,14 @@ async fn ensure_upload_collection_write_access(
     ctx: &crate::auth::context::OrgContext,
     collection_id: Uuid,
 ) -> UploadCollectionAccessCheck {
-    let ctx = ctx.clone();
-    match with_org_txn_typed(pool, &ctx, move |txn| {
-        let ctx = ctx.clone();
+    let gate_ctx = ctx.clone();
+    let txn_scope = ctx.clone();
+    match with_org_txn_typed(pool, &txn_scope, move |txn| {
+        let gate_ctx = gate_ctx;
         Box::pin(async move {
             require_operation_collection_access_on_txn(
                 txn,
-                &ctx,
+                &gate_ctx,
                 collection_id,
                 "doc.upload",
                 AccessLevel::Write,
@@ -656,16 +656,16 @@ mod tests {
             classify_collection_access_resolve_error(ResolveError::CollectionDenied),
             UploadCollectionAccessCheck::AuthorizationDenied
         );
-        for error in [
-            ResolveError::Database,
-            ResolveError::InvalidContext,
-            ResolveError::MembershipMissing,
-            ResolveError::UserDisabled,
+        for (label, error) in [
+            ("database", ResolveError::Database),
+            ("invalid_context", ResolveError::InvalidContext),
+            ("membership_missing", ResolveError::MembershipMissing),
+            ("user_disabled", ResolveError::UserDisabled),
         ] {
             assert_eq!(
                 classify_collection_access_resolve_error(error),
                 UploadCollectionAccessCheck::Internal,
-                "infrastructure fault must not be classified as authorization deny: {error:?}"
+                "infrastructure fault must not be classified as authorization deny: {label}"
             );
         }
     }
