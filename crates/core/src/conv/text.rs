@@ -18,11 +18,8 @@ mod tests {
     use super::*;
 
     fn temp_txt(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "fileconv_text_{}_{}.txt",
-            name,
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("fileconv_text_{}_{}.txt", name, std::process::id()));
         std::fs::write(&path, bytes).unwrap();
         path
     }
