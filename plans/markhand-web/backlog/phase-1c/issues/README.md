@@ -4,13 +4,15 @@ Parent plan: [`../../../phase-1c-multi-org-security.md`](../../../phase-1c-multi
 
 <!-- roadmap-default-status: backlog -->
 
-**Audit 2026-07-31 (PR 1 RBAC foundation).** Substrate 1B vẫn là nền; PR 1 đóng org
-lifecycle / membership / canonical RBAC catalog với CI exact-SHA evidence. P1C.3 ACL
-semantics còn mở cho PR 2. `AR-1C-AUDIT-RETENTION` giữ POC/non-production only.
+**Audit 2026-07-31 (PR 2 ACL enforcement).** Substrate 1B vẫn là nền; PR 1 đóng org
+lifecycle / membership / canonical RBAC catalog; PR 2 đóng collection ACL resolver/cache
+và PostgreSQL enforcement với CI exact-SHA evidence. `AR-1C-AUDIT-RETENTION` giữ
+POC/non-production only.
 
-- **3 Done** — **1C-01**, **1C-02**, **1C-03** (CI `rust` + `web` + `rust-integration` trên
-  `a628504`, run [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)).
-- **9 In progress** — 1C-04…1C-12 (ACL/guards/denial còn mở).
+- **5 Done** — **1C-01**, **1C-02**, **1C-03**, **1C-05**, **1C-06** (CI `rust` +
+  `rust-integration` trên `90742281e51d3c8ca8a32a78077a07fe3449bc68`, run
+  [30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)).
+- **7 In progress** — 1C-04, 1C-07…1C-12 (route guards, Qdrant/RLS/quota/denial suite còn mở).
 - **1 Backlog** — **1C-13** (security/load gate).
 
 > **Hai ranh giới quan trọng, áp cho MỌI issue dưới đây:**
@@ -123,138 +125,91 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-05 — Collection ACL resolver/cache
 
-- **Status:** In progress — resolver cơ bản (org/private/owner/`collection_user_access`) +
-  fail-closed `services/retrieval/mod.rs:181` + test, **và giờ có version + cache** (phiên
-  này, worktree, chưa chạy DB-gated CI): `orgs.acl_version` (migration
-  `0031_expand_org_acl_version.sql`, cột `bigint NOT NULL DEFAULT 1`, expand-only) là version
-  **org-wide** (cố ý không per-membership/per-role — `revoke_role_permission_for_principal`
-  xoá một hàng `role_permissions` dùng chung bởi mọi member cùng role, nên version hẹp hơn
-  sẽ under-invalidate; over-invalidate cả org là hướng an toàn, chấp nhận được ở quy mô
-  POC). `db::orgs::bump_acl_version` được gọi trong CÙNG transaction với
-  `services::members::{change_role, suspend_member, reactivate_member (qua set_member_state),
-  remove_member}` và `services::acl_mutate::{revoke_role_permission_for_principal,
-  revoke_collection_access_for_principal}` — đúng tập mutation duy nhất ảnh hưởng
-  `auth::permissions::resolve_org_context*` hiện có (đã audit toàn bộ call site, xem báo
-  cáo phiên). Cache in-process `auth::context_cache::OrgContextCache` (bounded, mặc định
-  4096 principal / TTL 3s, field mới trên `auth::provider::PasswordAuthProvider`, không đổi
-  signature `PasswordAuthProvider::new`) bọc **đúng một** điểm vào: `AuthenticatedOrg`
-  extractor (`auth/middleware.rs`) — KHÔNG bọc `resolve_org_context_on_txn` (ask-stream
-  append/pull, cần snapshot không bị xé trong transaction đã khoá) và KHÔNG bọc
-  `services::upload::saga::reload_principal_locked` (saga tự re-check trước commit) — cả
-  hai đường này vẫn luôn-tươi như trước, không có rủi ro hồi quy từ cache. Mỗi cache hit
-  (trong TTL) BẮT BUỘC một freshness-check rẻ (`users.disabled_at` + `orgs.acl_version`,
-  2 bảng không RLS) trước khi tin dữ liệu cache — mismatch/disabled/lỗi truy vấn đều rơi về
-  resolve đầy đủ (fail-closed, không tự chế deny). Vì mọi hit đều hỏi lại PostgreSQL (không
-  bao giờ tin cache "mù" theo TTL), một version bump ở tiến trình khác lập tức thấy được ở
-  request tiếp theo của tiến trình này — nên **không cần cơ chế invalidation cross-instance
-  riêng** (câu hỏi mở nêu trong nhiệm vụ đã tự đóng nhờ thiết kế). TTL chỉ còn là lưới an
-  toàn cho (a) call site tương lai quên bump và (b) KHOẢNG TRỐNG ĐÃ BIẾT: tạo/xoá-mềm
-  collection qua `db::collections` (ngoài `services::acl_mutate`) **chưa** bump version —
-  cố ý để ngoài phạm vi phiên này (xem "Out" bên dưới).
-  Test DB-gated mới `tests/acl_cache.rs` (5 test): role-downgrade/suspend/remove qua route
-  HTTP thật (cùng bearer token, không re-login) đều 403 ngay ở request kế tiếp; ACL
-  collection revoke (gọi thẳng `OrgContextCache::resolve` như extractor thật) drop quyền
-  ngay; và một test tách riêng cơ chế version-check (bump `acl_version` thủ công, không qua
-  helper) để chứng minh chính cơ chế mismatch-detection hoạt động độc lập với nơi gọi nó.
-  Unit test thuần (không DB) trong `auth::context_cache` phủ `trusts_cache`/
-  `should_check_freshness`/bounded-eviction/`clear`. `tests/members.rs`,
-  `tests/uploads.rs`, `tests/sse_stream_readiness.rs`, `tests/orgs.rs`,
-  `tests/schema_migrations.rs` chạy lại xanh không đổi hành vi (xem kết quả verify trong
-  báo cáo phiên).
-  **Cố tình KHÔNG làm trong phiên này** (xem báo cáo phiên để biết lý do đầy đủ): (1)
-  grant theo `groups`/`role` vẫn CHƯA resolve (bảng có, không ai đọc) — đây là một tính
-  năng authz mới (semantics resolve qua `groups`/`group_memberships`), không phải cache
-  key, cần thiết kế/review riêng, không phải phạm vi "version + cache" của vòng này; (2)
-  version bump cho `db::collections::{insert,soft_delete,update_metadata}` — cần audit
-  call-site + test riêng, ghi nhận là khoảng trống đã biết bên trên, giới hạn bởi TTL cho
-  đến khi đóng; (3) cache/version không (chưa) operator-configurable qua env — hằng số
-  module `DEFAULT_CAPACITY`/`DEFAULT_TTL`, có thể nâng cấp thành config sau nếu cần.
+- **Status:** Done — CI exact-SHA evidence on `90742281e51d3c8ca8a32a78077a07fe3449bc68`
+  (run [30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)):
+  changes/static
+  [91217513655](https://github.com/anhnth24/project-example/actions/runs/30649044974/job/91217513655),
+  `rust`
+  [91217686329](https://github.com/anhnth24/project-example/actions/runs/30649044974/job/91217686329),
+  `rust-integration`
+  [91217686352](https://github.com/anhnth24/project-example/actions/runs/30649044974/job/91217686352)
+  (not path-filter skip / soft pass). Task 4 review Approved; Task 5 review Approved.
+  Integration log executed ACL resolver/cache targets including
+  `groups_visibility_group_grant_allows_member_without_user_grant`,
+  `private_visibility_ignores_group_and_role_grants`,
+  `containment_removes_group_role_grants_but_preserves_other_user_grants`,
+  `resolver_matches_sql_predicate_for_acl_fixture_matrix`,
+  `read_grant_does_not_satisfy_write_or_admin`,
+  `group_membership_revoke_invalidates_cached_context`, concurrent grant-vs-flip, and
+  ACL-version bump. Canonical `(qa.query, read)` resolver projection via
+  `allowed_collections_sql` with `private`/`org`/`groups` visibility + group/role grant
+  branches; migration `0036` dormant-grant rejection; org-wide `acl_version` cache
+  invalidation (migrations `0031`/`0033`); `auth::context_cache` freshness check on
+  extractor hits.
 
-- **Plan/files:** Private/org/groups grants (groups **vẫn thiếu**, xem trên); ACL/version
+- **Plan/files:** Private/org/groups grants (**done**); ACL/version
   snapshot (**done**: `orgs.acl_version`, migration `0031`); cache key org/user/membership/
   ACL version (**done**: `auth::context_cache::OrgContextCache`, key `(org_id, user_id)` +
   version check); invalidation APIs (**không làm riêng** — invalidation là version-bump
   trong transaction mutation, không phải API endpoint mới; không có yêu cầu nào đòi một API
   invalidation tách biệt).
-- **Depends:** 1C-02/03. **Acceptance/tests:** Semantics đúng, empty/error fail closed
-  (pre-existing, không đổi); grants/status/cache/revoke tests (**done**: `tests/acl_cache.rs`
-  + unit tests `auth::context_cache`).
+- **Depends:** 1C-02/03. **Acceptance/tests:** Semantics đúng, empty/error fail closed;
+  grants/status/cache/revoke tests — green on CI
+  `90742281e51d3c8ca8a32a78077a07fe3449bc68` run
+  [30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)
+  (`acl_resolver`, `acl_equivalence`, `acl_cache` in `rust-integration`).
 - **Security/migration:** Backfill ACL version (**done**: `DEFAULT 1`, expand-only,
   migration `0031`). **Gap version-bump đã ĐÓNG (migration `0033`, 2026-07-29)**: trigger
   DB `bump_org_acl_version()` trên `collections`/`collection_user_access`/
   `org_memberships`/`roles`/`role_permissions` — bump cùng transaction cho MỌI writer,
   kể cả SQL trực tiếp (fixtures/vận hành; CI `rust-integration` bắt được đúng lỗ này
   ở `api_http_contracts`/`citation_authz_matrix` trước khi vá). **Out:**
-  nested/time-based groups; groups/role-based grant resolution (tính năng mới, không
-  phải phần "cache" — xem trên); operator-configurable cache capacity/TTL qua env.
+  nested/time-based groups; operator-configurable cache capacity/TTL qua env; collection
+  insert/soft-delete version bump outside `acl_mutate` (accepted TTL-bound gap).
 
 ## 1C-06 — PostgreSQL ACL enforcement
 
-- **Status:** In progress — vòng 11-B xác minh lại 4 điểm "Thiếu" trước đó bằng code thật
-  (đọc 2026-07-29; 3/4 stale hoặc đã đóng, 1/4 đúng và đã sửa):
-  1. **Đúng, đã sửa**: nhánh FTS candidate (`db::search::fts_search`, `db/search.rs:290`)
-     trước đây KHÔNG có ACL subquery — chỉ lọc `org_id`/`collection_id = ANY(...)`/version/
-     index-generation, dựa hoàn toàn vào (a) `resolve_scope` intersect
-     `ctx.allowed_collection_ids()` ở tầng service trước khi gọi, và (b) hydration re-check
-     sau đó. Đây là gap thật (defense-in-depth thiếu, TOCTOU nếu `allowed_collection_ids`
-     stale — context cache TTL 3s hoặc phiên ask-stream sống lâu). Đã thêm ACL EXISTS
-     predicate vào cả hai nhánh (`Current`/`VersionIds`) qua hàm builder dùng chung
-     `acl_predicate_sql` (`db/search.rs:128`), cùng pattern JOIN
-     `collections`/`org_memberships`/`roles`/`role_permissions`/`permissions` +
-     `collection_user_access` mà `hydrate_chunks_by_identity`/
-     `load_authorized_conflict_evidence` đã dùng; hydration re-check GIỮ NGUYÊN (không bỏ).
-     **Phát hiện thêm ngoài 4 điểm gốc**: pattern ACL cũ ở cả hydrate lẫn conflict-evidence
-     thiếu `acl_m.state = 'active'` — một membership `suspended` (chưa xóa hẳn) vẫn qua được
-     re-check, khác invariant 1C-02 "suspended resolves like missing". Đã đóng luôn trong hàm
-     builder dùng chung (áp dụng cho cả 3 query family). Test DB-gated mới
-     `fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership`
-     (`tests/retrieval.rs`) phủ cả hai: (a) FTS/hydration không lộ collection ngoài ACL dù
-     `collection_ids` request cố tình chứa nó (mô phỏng stale scope/TOCTOU), (b) suspend
-     (không xóa) membership → cả hai nhánh deny, reactivate → thấy lại (sanity chống
-     false-deny).
-  2. **Stale — không phải leak thật**: `db::documents::count`/`db::chunks::count`
-     (org-only, không ACL) chỉ được gọi từ `tests/repositories.rs`/`tests/index_worker.rs`
-     làm cross-org denial evidence — grep toàn repo xác nhận KHÔNG route/service nào gọi
-     chúng; không có endpoint count/total nào lộ ra HTTP (đã rà `routes/*.rs`,
-     `openapi/openapi.yaml`, response schema của `/api/v1/search` — không trường
-     `count`/`total` nào tồn tại). Không có leak thật để sửa vòng này. Đã siết footgun: doc
-     comment trên cả hai hàm nói rõ "test-only, không ACL, đừng gọi từ route/service" +
-     test source-scan mới `org_only_count_helpers_stay_out_of_routes_and_services`
-     (`tests/repositories.rs`) fail nếu tương lai có ai gọi chúng từ `src/routes`/
-     `src/services`.
-  3. **Đã làm**: cơ chế chống missing-predicate chọn là **builder trung tâm +
-     source-scan test cùng nhà với `middleware::write_gate`'s
-     `middleware_source_holds_shared_lock_across_next_run`** — không cần DB. Mọi query
-     đọc `chunks`/`claims` scoped theo collection PHẢI gọi `acl_predicate_sql(...)`
-     (`db/search.rs:128`) thay vì tự viết EXISTS; test
-     `every_chunk_scoped_query_embeds_acl_predicate` pin đúng 8 call-site (fts_search x2,
-     hydrate_chunks_by_identity x2, load_authorized_conflict_evidence x4) và fail nếu có
-     block `collections acl_c` viết tay ngoài hàm builder; test
-     `acl_predicate_sql_shape_is_pinned` pin đủ các mệnh đề bắt buộc (active membership,
-     disabled_at, permission + qa.query base gate, 3 nhánh visibility). Lựa chọn này thay vì
-     DB-gated so sánh hành vi vì nó chạy được `cargo test` không cần Postgres, bắt lỗi ngay
-     lúc review thay vì chờ CI DB-gated, và khớp tiền lệ đã có trong repo
-     (`write_gate.rs`) thay vì phát minh cơ chế mới.
-  4. **Đúng, xác nhận stale claim cũ đã đóng đúng**: grep `autocomplete` toàn repo (routes,
-     services, openapi.yaml, web/, app/) — không có endpoint/tính năng search-autocomplete
-     nào tồn tại (chỉ có thuộc tính HTML `autoComplete`/`aria-autocomplete` không liên quan
-     trên form đăng nhập). Xác nhận KHÔNG xây trong vòng này (out of scope, tránh thêm
-     surface mới chỉ để tick box) — khi xây sau này PHẢI dùng `acl_predicate_sql` ngay từ
-     đầu, không được lặp lại kiểu "list trước, ACL sau" mà điểm 1 vừa phải vá.
-  - Danh sách "list/count tenant-scoped" ở các vòng trước vẫn đúng cho `documents::
-    list_in_collection`/`db/graph.rs` (đã check `allowed_collection_ids`/`d.collection_id`
-    tại route reachable); không đổi gì thêm ở đó vòng này.
+- **Status:** Done — CI exact-SHA evidence on `90742281e51d3c8ca8a32a78077a07fe3449bc68`
+  (run [30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)):
+  changes/static
+  [91217513655](https://github.com/anhnth24/project-example/actions/runs/30649044974/job/91217513655),
+  `rust`
+  [91217686329](https://github.com/anhnth24/project-example/actions/runs/30649044974/job/91217686329),
+  `rust-integration`
+  [91217686352](https://github.com/anhnth24/project-example/actions/runs/30649044974/job/91217686352)
+  (not path-filter skip / soft pass). Task 6 rereview Approved. Integration log executed
+  PostgreSQL ACL enforcement targets including
+  `fts_rank_accent_fold_and_active_generation_gates` (dual `qa.query` + `qa.history`
+  hydration recheck), `fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership`,
+  upload regression quartet (`http_upload_happy_and_spoof`,
+  `cancelled_http_upload_settles_quota_consistently`,
+  `envelope_binds_collection_and_stable_replay_deep_equality`,
+  `quarantined_review_requires_approval_for_single_job`), private grant rejection, and
+  role-grant leave-groups. Shared `db/acl_sql` predicates on FTS/hydration/conflict paths;
+  explicit resolver↔SQL equivalence oracle; upload/quarantine operation-scoped write guards
+  (`doc.upload` / `doc.quarantine.review` at `AccessLevel::Write`, no read-projection
+  inference).
 
-- **Plan/files:** Tenant+ACL predicates cho list/count/FTS/hydration (autocomplete: không
-  xây, ghi nhận sẽ mang ACL predicate từ đầu nếu xây sau này — xem điểm 4 ở trên).
+- **Plan/files:** Tenant+ACL predicates cho FTS/hydration/conflict (**done**); upload write
+  gate (**done**). Autocomplete không xây (out of scope — xem điểm 4 legacy note bên dưới).
 - **Depends:** 1C-05. **Acceptance/tests:** Không path thiếu context; no existence/count
-  leak (xác nhận không có route/endpoint count nào tồn tại để leak — xem điểm 2); SQL
-  join/subquery/missing-predicate tests — `tests::every_chunk_scoped_query_embeds_acl_predicate`
-  + `tests::acl_predicate_sql_shape_is_pinned` (`db/search.rs`, fast) và
-  `fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership` +
-  `org_only_count_helpers_stay_out_of_routes_and_services` (DB-gated/fast, `tests/`).
-- **Security/migration:** PG authority, prepared queries. **Out:** vector/object path,
-  autocomplete (chưa xây — xem điểm 4).
+  leak; SQL join/subquery/missing-predicate tests — green on CI
+  `90742281e51d3c8ca8a32a78077a07fe3449bc68` run
+  [30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)
+  (`retrieval`, `uploads`, fast unit pins in `db/search.rs` / `db/acl_sql.rs`).
+- **Security/migration:** PG authority, prepared queries; migration `0036` dormant-grant
+  rejection enforced at seed + runtime. **Out:** vector/object path (1C-07), autocomplete,
+  broader route write inventory (PR 3).
+
+### Legacy verification notes (pre-PR-2, retained for audit trail)
+
+  1. **FTS candidate ACL subquery** (`db/search.rs`): defense-in-depth EXISTS on candidate
+     leg; shared builder includes `acl_m.state = 'active'`.
+  2. **Org-only count helpers** (`db/documents::count`, `db/chunks::count`): test-only;
+     `org_only_count_helpers_stay_out_of_routes_and_services` source-scan guard.
+  3. **Missing-predicate pin**: `every_chunk_scoped_query_embeds_acl_predicate` +
+     `acl_predicate_sql_shape_is_pinned`.
+  4. **Autocomplete**: không có endpoint — future work must use `acl_predicate_sql` from day one.
 
 ## 1C-07 — Qdrant/storage/jobs fail-closed enforcement
 

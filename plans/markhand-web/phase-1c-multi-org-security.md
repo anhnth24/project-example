@@ -8,8 +8,14 @@ fairness và denial suite; không retrofit `org_id` vì tenancy primitives đã 
 **PR 1 progress (2026-07-31):** 1C-01 / 1C-02 / 1C-03 Done with exact-SHA CI evidence
 on `a62850422dd070e7e1195bfe1d4f1dee0d73566d` (run
 [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747);
-jobs `rust` / `web` / `rust-integration`). P1C.3 collection ACL semantics remain open
-for PR 2. Audit retention stays deferred under `AR-1C-AUDIT-RETENTION`
+jobs `rust` / `web` / `rust-integration`).
+
+**PR 2 progress (2026-07-31):** 1C-05 / 1C-06 Done with exact-SHA CI evidence on
+`90742281e51d3c8ca8a32a78077a07fe3449bc68` (run
+[30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974);
+jobs changes/static / `rust` / `rust-integration`). Task 4 review Approved; Task 5 review
+Approved; Task 6 rereview Approved. Audit retention stays deferred under
+`AR-1C-AUDIT-RETENTION`
 (POC/non-production only; expires before production multi-org or Phase 4 gate).
 Qualifying embedding remains local/mock until embedding-token metering exists.
 
@@ -73,11 +79,24 @@ active operations belongs to later PRs (1C-04), not the catalog seed itself.
 
 ## P1C.3 — Collection ACL
 
-**Disposition (PR 1):** P1C.3 remains open for PR 2 ACL semantics. PR 1 does not close
-collection ACL resolver equivalence, grant/revoke invalidation, or dormant-grant
-containment; those remain Phase 1C work after the RBAC catalog foundation.
+**Disposition (PR 2):** P1C.3 PostgreSQL collection ACL semantics are **resolved** on
+`90742281e51d3c8ca8a32a78077a07fe3449bc68` (run
+[30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)):
+canonical `(qa.query, read)` resolver projection; `private`/`org`/`groups` visibility with
+group/role grant branches and `read`/`write`/`admin` access-level rank; migration `0036`
+dormant-grant rejection; containment revoke preserving other user grants; resolver↔SQL
+equivalence matrix with explicit oracle assertions; shared `db/acl_sql` predicates on
+FTS/hydration/conflict paths with dual `qa.query` + `qa.history` historical recheck;
+upload/quarantine operation-scoped write guards (no read-projection inference).
 
-Target semantics from ADR (to be machine-checked in PR 2):
+Remaining P1C.3 surfaces stay with later issues — not reopened here:
+
+- Qdrant filter enforcement (1C-07);
+- document list/count/autocomplete when built (must use shared predicates from day one);
+- preview/download/export/job/SSE beyond current PostgreSQL paths;
+- broader route write inventory (PR 3).
+
+Machine-checked semantics delivered in PR 2:
 
 - `private`: owner + principal được grant;
 - `org`: thành viên org có permission tương ứng;
