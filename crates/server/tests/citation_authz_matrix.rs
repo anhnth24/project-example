@@ -29,10 +29,13 @@ use uuid::Uuid;
 
 use common::worker_pipeline::WorkerPipeline;
 use common::{
-    admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    convert_to_markdown, login_access_token, put_bytes, quarantine_key, seed_user_with_permissions,
-    sha256_hex, take_live, test_auth_config, test_minio_client, tiny_pdf_bytes, tiny_pptx_bytes,
-    tiny_xlsx_bytes, trusted_key, MinioCleanupGuard,
+    admin_database_url, app_database_url, assert_markhand_app_role,
+    assert_minio_cleanup_soak_params, boot_app_pool, build_router, convert_to_markdown,
+    login_access_token, minio_cleanup_soak_lane, put_bytes, quarantine_key,
+    seed_user_with_permissions, sha256_hex, take_live, test_auth_config, test_minio_client,
+    tiny_pdf_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, trusted_key, MinioCleanupGuard,
+    MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY, MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET,
+    MINIO_CLEANUP_GUARD_SOAK_ROUNDS,
 };
 
 struct IndexedDoc {
@@ -947,4 +950,63 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
         .await
         .expect("clean citation authz bucket");
     ephemeral.drop().await;
+}
+
+#[test]
+fn minio_cleanup_guard_soak_plan_is_bounded_and_multi_object() {
+    assert_minio_cleanup_soak_params(
+        MINIO_CLEANUP_GUARD_SOAK_ROUNDS,
+        MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY,
+        MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET,
+    );
+    let total_buckets = MINIO_CLEANUP_GUARD_SOAK_ROUNDS * MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY;
+    assert!(
+        total_buckets >= 6,
+        "soak must exercise multiple unique buckets concurrently"
+    );
+}
+
+/// R02 cleanup evidence: bounded concurrent unique buckets, multi-object deletes,
+/// and hard bucket-gone assertions through [`MinioCleanupGuard`].
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_MINIO_*"]
+async fn live_minio_cleanup_guard_soak() {
+    let Some(probe) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+        return;
+    };
+    let probe_guard = MinioCleanupGuard::new(probe);
+    assert_minio_cleanup_soak_params(
+        MINIO_CLEANUP_GUARD_SOAK_ROUNDS,
+        MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY,
+        MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET,
+    );
+
+    for round in 0..MINIO_CLEANUP_GUARD_SOAK_ROUNDS {
+        let mut handles = Vec::with_capacity(MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY);
+        for slot in 0..MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY {
+            handles.push(tokio::spawn(async move {
+                minio_cleanup_soak_lane(MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET, round, slot)
+                    .await
+            }));
+        }
+        for handle in handles {
+            let bucket_name = handle
+                .await
+                .expect("soak lane task join")
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "round {round} cleanup guard must delete bucket and assert gone: {error}"
+                    )
+                });
+            assert!(
+                bucket_name.starts_with("markhand-it-"),
+                "unexpected soak bucket name: {bucket_name}"
+            );
+        }
+    }
+
+    probe_guard
+        .cleanup()
+        .await
+        .expect("clean probe bucket after soak");
 }

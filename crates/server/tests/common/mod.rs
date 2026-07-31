@@ -328,6 +328,67 @@ impl Drop for MinioCleanupGuard {
     }
 }
 
+/// Bounded soak dimensions for [`minio_cleanup_soak_lane`].
+pub const MINIO_CLEANUP_GUARD_SOAK_ROUNDS: usize = 3;
+pub const MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY: usize = 4;
+pub const MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET: usize = 3;
+
+/// Hermetic guardrail: soak must stay bounded and stress multi-object buckets.
+pub fn assert_minio_cleanup_soak_params(rounds: usize, concurrency: usize, objects: usize) {
+    assert!(
+        (1..=8).contains(&rounds),
+        "soak rounds must stay bounded, got {rounds}"
+    );
+    assert!(
+        (2..=16).contains(&concurrency),
+        "soak concurrency must expose cleanup races, got {concurrency}"
+    );
+    assert!(
+        objects >= 2,
+        "each bucket must hold multiple objects, got {objects}"
+    );
+}
+
+/// One soak lane: unique bucket, multiple objects, explicit guard cleanup.
+pub async fn minio_cleanup_soak_lane(
+    objects_per_bucket: usize,
+    round: usize,
+    slot: usize,
+) -> Result<String, fileconv_server::storage::StorageError> {
+    assert_minio_cleanup_soak_params(1, 2, objects_per_bucket);
+    let store = test_minio_client().expect("live soak lane requires MinIO env");
+    let bucket_name = store.bucket_name().to_string();
+    let guard = MinioCleanupGuard::new(store.clone());
+    let org = Uuid::new_v4();
+    store.ensure_bucket().await?;
+    for object_index in 0..objects_per_bucket {
+        let version_id = Uuid::new_v4();
+        let key = trusted_key(org, version_id, Uuid::new_v4(), None).expect("trusted key");
+        let payload = format!("soak-r{round}-s{slot}-o{object_index}");
+        put_bytes(
+            &store,
+            org,
+            &key,
+            payload.as_bytes(),
+            "text/plain",
+            ObjectIdentityMeta {
+                org_id: org,
+                collection_id: None,
+                document_id: None,
+                version_id: Some(version_id),
+                original_filename: Some(format!("soak-{object_index}.txt")),
+                canonical_format: Some("txt".into()),
+                content_sha256: Some(sha256_hex(payload.as_bytes())),
+                content_length: Some(payload.len() as u64),
+                disposition: Some("trusted".into()),
+            },
+        )
+        .await;
+    }
+    guard.cleanup().await?;
+    Ok(bucket_name)
+}
+
 /// Seed an org user with the given permission codes (owner role) + password.
 pub async fn seed_user_with_permissions(
     pool: &Pool,
