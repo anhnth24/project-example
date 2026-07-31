@@ -1,5 +1,6 @@
 //! Database models, pool, and tenant-scoped repositories.
 
+pub mod acl_sql;
 pub mod ask_streams;
 pub mod audit;
 pub mod chat_sessions;

@@ -261,6 +261,16 @@ pub enum AccessLevel {
     Admin,
 }
 
+impl AccessLevel {
+    pub fn rank(self) -> u8 {
+        todo!("Phase 1C AccessLevel::rank not implemented")
+    }
+
+    pub fn satisfies(self, _required: Self) -> bool {
+        todo!("Phase 1C AccessLevel::satisfies not implemented")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionUserAccess {
     pub id: Uuid,
