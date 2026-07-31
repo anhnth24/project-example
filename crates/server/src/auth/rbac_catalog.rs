@@ -5,6 +5,7 @@
 //! web presentation, and DB matrix tests.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,12 +51,111 @@ pub fn load_builtin_role_catalog() -> BuiltinRoleCatalog {
 
 /// Validate catalog structural and grant-matrix invariants.
 ///
-/// Returns sorted error messages when invariants fail. Production behavior is
-/// added in the GREEN phase; this RED stub only establishes the public API.
-pub fn validate_catalog_invariants(
-    _catalog: &BuiltinRoleCatalog,
-) -> Result<(), Vec<String>> {
-    unimplemented!("validate_catalog_invariants: GREEN phase")
+/// Returns sorted error messages when invariants fail. Rejects duplicate roles,
+/// duplicate permission keys, unknown grants, reserved grants, missing
+/// operation references, active references to missing source files, reserved
+/// references, and active keys lacking quoted-literal evidence in at least one
+/// referenced source file.
+pub fn validate_catalog_invariants(catalog: &BuiltinRoleCatalog) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+    let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+    let mut seen_roles = BTreeSet::new();
+    for role in &catalog.roles {
+        if !seen_roles.insert(role.as_str()) {
+            errors.push(format!("duplicate role: {role}"));
+        }
+    }
+    let role_set: BTreeSet<&str> = catalog.roles.iter().map(String::as_str).collect();
+
+    let mut seen_keys = BTreeSet::new();
+    let mut active_keys = BTreeSet::new();
+    let mut reserved_keys = BTreeSet::new();
+    for perm in &catalog.permissions {
+        if !seen_keys.insert(perm.key.as_str()) {
+            errors.push(format!("duplicate permission key: {}", perm.key));
+        }
+        match perm.status {
+            PermissionStatus::Active => {
+                active_keys.insert(perm.key.as_str());
+                if perm.operation_refs.is_empty() {
+                    errors.push(format!(
+                        "active permission {} is missing operation references",
+                        perm.key
+                    ));
+                } else {
+                    let mut literal_found = false;
+                    let needle = format!("\"{}\"", perm.key);
+                    for rel in &perm.operation_refs {
+                        let path = crate_root.join(rel);
+                        if !path.is_file() {
+                            errors.push(format!(
+                                "active permission {} references missing source file: {rel}",
+                                perm.key
+                            ));
+                            continue;
+                        }
+                        match std::fs::read_to_string(&path) {
+                            Ok(contents) if contents.contains(&needle) => {
+                                literal_found = true;
+                            }
+                            Ok(_) => {}
+                            Err(err) => {
+                                errors.push(format!(
+                                    "active permission {} could not read source file {rel}: {err}",
+                                    perm.key
+                                ));
+                            }
+                        }
+                    }
+                    if !literal_found {
+                        errors.push(format!(
+                            "active permission {} has no operationRefs file containing quoted literal {}",
+                            perm.key, needle
+                        ));
+                    }
+                }
+            }
+            PermissionStatus::Reserved => {
+                reserved_keys.insert(perm.key.as_str());
+                if !perm.operation_refs.is_empty() {
+                    errors.push(format!(
+                        "reserved permission {} must not have operation references",
+                        perm.key
+                    ));
+                }
+            }
+        }
+    }
+
+    let known_keys: BTreeSet<&str> = active_keys.union(&reserved_keys).copied().collect();
+    for (role, keys) in &catalog.grants {
+        if !role_set.contains(role.as_str()) {
+            errors.push(format!("unknown grant role: {role}"));
+        }
+        for key in keys {
+            if !known_keys.contains(key.as_str()) {
+                errors.push(format!("unknown grant permission {key} for role {role}"));
+                continue;
+            }
+            if reserved_keys.contains(key.as_str()) {
+                errors.push(format!(
+                    "reserved permission {key} must not be granted to role {role}"
+                ));
+            } else if !active_keys.contains(key.as_str()) {
+                errors.push(format!(
+                    "grant permission {key} for role {role} is not active"
+                ));
+            }
+        }
+    }
+
+    errors.sort();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 /// Current nine runtime (active) permission keys seeded in `permissions`.
@@ -72,12 +172,8 @@ pub const ACTIVE_RUNTIME_PERMISSIONS: &[&str] = &[
 ];
 
 /// Reserved permission keys that must remain ungranted and absent from runtime rows.
-pub const RESERVED_PERMISSIONS: &[&str] = &[
-    "export.run",
-    "intel.use",
-    "pii.manage",
-    "settings.manage",
-];
+pub const RESERVED_PERMISSIONS: &[&str] =
+    &["export.run", "intel.use", "pii.manage", "settings.manage"];
 
 #[cfg(test)]
 mod tests {

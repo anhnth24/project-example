@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "roles": ["owner", "admin", "editor", "viewer"],
+  "permissions": [
+    {
+      "key": "doc.upload",
+      "status": "active",
+      "description": "Upload documents",
+      "requiredCollectionAccess": "write",
+      "conditionalPolicy": null,
+      "operationRefs": ["src/routes/uploads.rs"]
+    },
+    {
+      "key": "doc.delete",
+      "status": "active",
+      "description": "Delete documents",
+      "requiredCollectionAccess": "admin",
+      "conditionalPolicy": "own_or_explicit_deferred_to_custom_role",
+      "operationRefs": ["src/routes/documents.rs", "src/routes/collections.rs"]
+    },
+    {
+      "key": "doc.publish",
+      "status": "active",
+      "description": "Publish document versions",
+      "requiredCollectionAccess": "write",
+      "conditionalPolicy": null,
+      "operationRefs": ["src/routes/documents.rs"]
+    },
+    {
+      "key": "qa.query",
+      "status": "active",
+      "description": "Query collections",
+      "requiredCollectionAccess": "read",
+      "conditionalPolicy": null,
+      "operationRefs": ["src/services/retrieval/mod.rs"]
+    },
+    {
+      "key": "qa.history",
+      "status": "active",
+      "description": "Read version history",
+      "requiredCollectionAccess": "read",
+      "conditionalPolicy": null,
+      "operationRefs": ["src/services/access.rs"]
+    },
+    {
+      "key": "member.manage",
+      "status": "active",
+      "description": "Manage members",
+      "requiredCollectionAccess": null,
+      "conditionalPolicy": "admin_cannot_manage_owner",
+      "operationRefs": ["src/routes/members.rs"]
+    },
+    {
+      "key": "audit.view",
+      "status": "active",
+      "description": "Read audit entries",
+      "requiredCollectionAccess": null,
+      "conditionalPolicy": null,
+      "operationRefs": ["src/routes/audit.rs"]
+    },
+    {
+      "key": "jobs.system",
+      "status": "active",
+      "description": "Operate system jobs",
+      "requiredCollectionAccess": null,
+      "conditionalPolicy": null,
+      "operationRefs": ["src/services/access.rs"]
+    },
+    {
+      "key": "doc.quarantine.review",
+      "status": "active",
+      "description": "Approve quarantined uploads",
+      "requiredCollectionAccess": "write",
+      "conditionalPolicy": null,
+      "operationRefs": ["src/services/upload/saga.rs"]
+    },
+    {
+      "key": "settings.manage",
+      "status": "reserved",
+      "description": "Reserved for organization settings",
+      "requiredCollectionAccess": null,
+      "conditionalPolicy": "admin_except_owner_security_deferred",
+      "operationRefs": []
+    },
+    {
+      "key": "intel.use",
+      "status": "reserved",
+      "description": "Reserved for intelligence operations",
+      "requiredCollectionAccess": null,
+      "conditionalPolicy": null,
+      "operationRefs": []
+    },
+    {
+      "key": "pii.manage",
+      "status": "reserved",
+      "description": "Reserved for PII operations",
+      "requiredCollectionAccess": null,
+      "conditionalPolicy": null,
+      "operationRefs": []
+    },
+    {
+      "key": "export.run",
+      "status": "reserved",
+      "description": "Reserved for export operations",
+      "requiredCollectionAccess": null,
+      "conditionalPolicy": "viewer_by_org_policy_deferred",
+      "operationRefs": []
+    }
+  ],
+  "grants": {
+    "owner": [
+      "audit.view",
+      "doc.delete",
+      "doc.publish",
+      "doc.upload",
+      "jobs.system",
+      "member.manage",
+      "qa.history",
+      "qa.query"
+    ],
+    "admin": [
+      "audit.view",
+      "doc.delete",
+      "doc.publish",
+      "doc.upload",
+      "jobs.system",
+      "member.manage",
+      "qa.history",
+      "qa.query"
+    ],
+    "editor": ["doc.publish", "doc.upload", "qa.query"],
+    "viewer": ["qa.query"]
+  },
+  "restrictions": [
+    {
+      "id": "admin_cannot_manage_owner",
+      "description": "Only an active owner may grant or manage the owner role",
+      "enforcedBy": "services::members::guard_owner_tier"
+    }
+  ]
+}
