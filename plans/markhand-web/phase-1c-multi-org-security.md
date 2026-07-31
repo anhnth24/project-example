@@ -5,6 +5,14 @@
 Mở kiến trúc single-org POC thành multi-org an toàn. Phase này hoàn thiện policy,
 fairness và denial suite; không retrofit `org_id` vì tenancy primitives đã có từ 1B.
 
+**PR 1 progress (2026-07-31):** 1C-01 / 1C-02 / 1C-03 Done with exact-SHA CI evidence
+on `a62850422dd070e7e1195bfe1d4f1dee0d73566d` (run
+[30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747);
+jobs `rust` / `web` / `rust-integration`). P1C.3 collection ACL semantics remain open
+for PR 2. Audit retention stays deferred under `AR-1C-AUDIT-RETENTION`
+(POC/non-production only; expires before production multi-org or Phase 4 gate).
+Qualifying embedding remains local/mock until embedding-token metering exists.
+
 ## P1C.1 — Organization và membership
 
 - Tạo/join/switch org.

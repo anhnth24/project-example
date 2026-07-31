@@ -63,7 +63,7 @@ GitHub milestone progress được đồng bộ bởi workflow
 | 0 | 10/10 | 0 | 0 | Discovery gates đạt |
 | 1A | 10/10 | 0 | 0 | Extraction gate đạt |
 | 1B | 24/24 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
-| 1C | 0/13 | 12 | 1 | Substrate 1B đã có; exit gate 1C-12/1C-13 chưa đạt |
+| 1C | 3/13 | 9 | 1 | 1C-01/02/03 Done (CI `a628504`); P1C.3 ACL + exit gate 1C-12/1C-13 còn mở |
 | 2 | 13/19 | 6 | 0 | MVP mock/CI xanh; exit gate chờ 1C + E2E deploy thật |
 | 3 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
 | 4 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 3 |
