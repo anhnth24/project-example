@@ -397,7 +397,7 @@ async fn seed_foreign_collection_document(
                         id, org_id, document_id, version_number, publication_state,
                         is_current, content_sha256, original_object_key, markdown_object_key,
                         source_content_type, byte_size, created_by_user_id
-                     ) VALUES ($1,$2,$3,1,'published',true,$4,$5,$5,'text/plain',$6,$7)",
+                     ) VALUES ($1,$2,$3,1,'published',true,$4,$5,NULL,'text/plain',$6,$7)",
                     &[
                         &version_id,
                         &ctx.org_id(),
@@ -2131,8 +2131,6 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
 /// allow-list as a hard deny, so the contract here is 403 `forbidden` rather
 /// than the 404 that hides existence for addressed resources — a foreign id in a
 /// filter reveals nothing either way, because the caller already supplied it.
-/// `POST /api/v1/ask/stream` is the exception: foreign scope must fail closed
-/// with 404 before any SSE session is created.
 ///
 /// Needs Qdrant because both handlers resolve `vector_index()` before scope and
 /// would otherwise answer 503. `hybrid_search` resolves scope before it touches
@@ -2182,8 +2180,15 @@ async fn live_http_retrieval_refuses_foreign_collection_scope() {
                 "collectionIds": [foreign_collection],
             }),
         ),
+        (
+            "/api/v1/ask/stream",
+            serde_json::json!({
+                "question": "kinh phí được phê duyệt là bao nhiêu?",
+                "collectionIds": [foreign_collection],
+            }),
+        ),
     ] {
-        let (status, error, _) =
+        let (status, error, body) =
             json_request(app.clone(), "POST", uri, Some(&token), Some(body), &[]).await;
         assert_eq!(
             status,
@@ -2195,38 +2200,11 @@ async fn live_http_retrieval_refuses_foreign_collection_scope() {
             !error.to_string().contains(&foreign_marker),
             "POST {uri} leaked foreign marker: {error}"
         );
+        assert!(
+            !String::from_utf8_lossy(&body).contains("event:"),
+            "POST {uri} must not emit SSE for foreign scope: {error}"
+        );
     }
-
-    let (status, error, body) = json_request(
-        app.clone(),
-        "POST",
-        "/api/v1/ask/stream",
-        Some(&token),
-        Some(serde_json::json!({
-            "question": "kinh phí được phê duyệt là bao nhiêu?",
-            "collectionIds": [foreign_collection],
-        })),
-        &[],
-    )
-    .await;
-    assert_eq!(
-        status,
-        StatusCode::NOT_FOUND,
-        "POST /api/v1/ask/stream did not deny foreign collection scope: {error}"
-    );
-    assert_eq!(
-        error["code"], "not_found",
-        "POST /api/v1/ask/stream: {error}"
-    );
-    assert!(
-        error["requestId"].as_str().is_some(),
-        "ask/stream denial must include requestId: {error}"
-    );
-    assert!(
-        !error.to_string().contains(&foreign_marker)
-            && !String::from_utf8_lossy(&body).contains("event:"),
-        "ask/stream must not emit SSE for foreign scope: {error}"
-    );
 
     ephemeral.drop().await;
 }

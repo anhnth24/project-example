@@ -505,8 +505,9 @@ enum RouteError {
 impl RouteError {
     fn from_retrieval(error: RetrievalError, request_id: &str) -> Self {
         match error {
-            RetrievalError::PermissionDenied => Self::NotFound(request_id.to_string()),
-            RetrievalError::EmptyScope => Self::Denied(request_id.to_string()),
+            RetrievalError::PermissionDenied | RetrievalError::EmptyScope => {
+                Self::Denied(request_id.to_string())
+            }
             RetrievalError::InvalidRequest(_) | RetrievalError::LineageMismatch => {
                 Self::Validation(request_id.to_string(), "Invalid ask request")
             }
