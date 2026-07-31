@@ -364,7 +364,7 @@ mod tests {
 
     /// Bảng đuôi → FormatKind; phải khớp `FormatKind::from_path` và `supported_extensions`.
     const FROM_PATH_EXTENSION_CASES: &[(&str, FormatKind)] = &[
-            ("pdf", FormatKind::Pdf),
+        ("pdf", FormatKind::Pdf),
         ("docx", FormatKind::Docx),
         ("pptx", FormatKind::Pptx),
         ("xlsx", FormatKind::Xlsx),
