@@ -434,4 +434,65 @@ mod tests {
         assert!(source.contains("'pending', 'writing', 'cleaned', 'committed'"));
         assert!(source.contains("status = 'committed'"));
     }
+
+    #[test]
+    fn acl_groups_invariants_migration_shape() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0036_expand_acl_groups_invariants.sql")
+            .expect("0036 ACL groups invariants migration")
+            .1;
+
+        assert!(
+            source.contains("ORDER BY bad.id"),
+            "preflight must report sorted collection IDs"
+        );
+        assert!(
+            source.contains("preflight"),
+            "migration must include a preflight guard for dormant grants"
+        );
+        assert!(
+            source.contains("FOR NO KEY UPDATE"),
+            "grant triggers must lock the parent collection row"
+        );
+
+        for table in ["collection_group_access", "collection_role_access"] {
+            assert!(
+                source.contains(&format!(
+                    "BEFORE INSERT OR UPDATE ON {table}\n    FOR EACH ROW"
+                )),
+                "{table} must have a BEFORE INSERT OR UPDATE visibility guard"
+            );
+            assert!(
+                source.contains(&format!(
+                    "WHERE org_id = NEW.org_id AND id = NEW.collection_id\n    FOR NO KEY UPDATE"
+                )) || source.contains(
+                    "WHERE org_id = NEW.org_id AND id = NEW.collection_id FOR NO KEY UPDATE"
+                ),
+                "{table} grant trigger must lock parent by org_id + collection_id"
+            );
+        }
+
+        assert!(
+            source.contains("BEFORE UPDATE OF visibility ON collections"),
+            "collections must guard visibility transitions away from groups"
+        );
+        assert!(
+            source.contains("NEW.visibility <> 'groups'"),
+            "visibility guard must fire when leaving groups"
+        );
+
+        for table in [
+            "collection_group_access",
+            "collection_role_access",
+            "group_memberships",
+        ] {
+            assert!(
+                source.contains(&format!(
+                    "ON {table}\n    FOR EACH ROW EXECUTE FUNCTION bump_org_acl_version()"
+                )),
+                "{table} must bump org acl_version"
+            );
+        }
+    }
 }
