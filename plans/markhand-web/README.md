@@ -62,14 +62,14 @@ GitHub milestone progress được đồng bộ bởi workflow
 | F | 12/12 | 0 | 0 | Foundation gate đạt |
 | 0 | 10/10 | 0 | 0 | Discovery gates đạt |
 | 1A | 10/10 | 0 | 0 | Extraction gate đạt |
-| 1B | 23/24 | 1 | 0 | **Đang đóng** — còn R06 (owner hanging soak); R02–R05 Done on CI rust-integration |
+| 1B | 24/24 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
 | 1C | 0/13 | 12 | 1 | Substrate 1B đã có; exit gate 1C-12/1C-13 chưa đạt |
 | 2 | 13/19 | 6 | 0 | MVP mock/CI xanh; exit gate chờ 1C + E2E deploy thật |
 | 3 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
 | 4 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 3 |
 
-**Critical path hiện tại:** đóng P1B-R06 → Phase 1B gate → hoàn thiện 1C denial suite
-→ Phase 2 completion gate (P2-15/P2-16 trên backend thật).
+**Critical path hiện tại:** hoàn thiện 1C denial suite (1C-12/1C-13) → Phase 2
+completion gate (P2-15/P2-16 trên backend thật).
 
 Issue mới gần đây trên Phase 2 (owner request 2026-07-29): P2-17 Document graph, P2-18
 Project grouping, P2-19 Chat history — đều In progress (server + web + mock/E2E đã landed,

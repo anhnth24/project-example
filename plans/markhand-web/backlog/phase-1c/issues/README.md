@@ -23,7 +23,7 @@ retrieval, Qdrant mandatory filter, quota atomic, rate-limit, audit append-only)
 >
 > **Exit gate Phase 1C (1C-12 + 1C-13) CHƯA đạt** — cả hai deliverable "suite gắn kết" và
 > "gate có report" đều chưa tồn tại như deliverable. Và Phase 1C chỉ activate sau khi
-> **Phase 1B gate đóng** (chỉ còn R06 pending — owner hanging soak), nên toàn phase vẫn là công việc phía trước.
+> **Phase 1B gate đóng** (2026-07-31 — R06 hanging soak pass); toàn phase vẫn là công việc phía trước.
 
 ## Dependency
 

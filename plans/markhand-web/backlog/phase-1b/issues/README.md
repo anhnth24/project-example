@@ -5,11 +5,11 @@ Parent plan: [`../../../phase-1b-single-org-poc.md`](../../../phase-1b-single-or
 <!-- roadmap-default-status: blocked -->
 <!-- roadmap-groups: F,I,R,O -->
 
-**Trạng thái tổng quan (cập nhật 2026-07-31).** **23/24 Done** — foundation F01–F06,
-ingest I01–I07, retrieval R01–R05, operations O01–O05 (O-chain + soak pass live 2026-07-26).
-**1 active:** R06 (owner-run Docker Compose hanging soak). Phase 1B gate **chưa đóng**
-cho tới khi R06 đạt acceptance; rust-integration evidence for R02–R05 on commit
-`b5cc92c` (GitHub Actions run
+**Trạng thái tổng quan (cập nhật 2026-07-31).** **24/24 Done** — foundation F01–F06,
+ingest I01–I07, retrieval R01–R06, operations O01–O05 (O-chain + soak pass live
+2026-07-26). **Phase 1B gate đóng** trên commit `a981fb3` + R06 hanging-soak
+evidence 2026-07-31. R02–R05 Done với rust-integration trên `b5cc92c` (GitHub
+Actions run
 [30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015),
 job
 [91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)).
@@ -348,15 +348,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
-- **Status:** In progress — Sol R2 complete for rate/readiness/OpenAPI.
-  Implemented: outer readiness timeout reports in-progress probe code; hanging
-  probe router matrix (code+deadline); baseline IP shares ceil `RateLimitRejected`;
-  OpenAPI `/openapi.yaml` 429; hermetic
-  `concurrent_checkers_share_ceil_and_stay_bounded` for shared-ceil + hard-cap
-  cardinality under concurrent pressure; `pnpm --dir web api:check` regenerates
-  TS client from OpenAPI (429 sweep already in `contract.ts`). **Only remaining
-  for Done:** owner-run Docker Compose hanging soak:
-  `MARKHAND_HANGING_SOAK=1 deploy/scripts/r06-hanging-soak.sh`.
+- **Status:** Done — live hanging-dependency Compose soak pass 2026-07-31 on a
+  24-core Ubuntu Docker host: `r06-hanging-soak.json` `status=pass`, 0 blockers,
+  raw `r06-20260731T080518Z-eee30b03`. All four network readiness probes
+  (`database`, `vector_store`, `object_store`, `embedding`) sustained 60s with
+  correct 503 probe codes, bounded `/ready` deadlines, `/health/live` +
+  `/openapi.yaml` within budget, bounded concurrent checkers, and confirmed
+  restore/recovery. Hermetic router/readiness/unit coverage unchanged (Sol R2).
+  Harness fix: post-pause `wait_for_hung_ready` excludes pool-drain transition
+  samples before the sustain window (see `bench/markhand_web/hanging_soak/`).
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, `middleware/**`, `routes/health.rs`,
