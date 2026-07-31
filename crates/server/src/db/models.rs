@@ -262,12 +262,24 @@ pub enum AccessLevel {
 }
 
 impl AccessLevel {
-    pub fn rank(self) -> u8 {
-        todo!("Phase 1C AccessLevel::rank not implemented")
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Admin => "admin",
+        }
     }
 
-    pub fn satisfies(self, _required: Self) -> bool {
-        todo!("Phase 1C AccessLevel::satisfies not implemented")
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Read => 1,
+            Self::Write => 2,
+            Self::Admin => 3,
+        }
+    }
+
+    pub const fn satisfies(self, required: Self) -> bool {
+        self.rank() >= required.rank()
     }
 }
 

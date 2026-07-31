@@ -34,12 +34,38 @@ pub struct CollectionAclSnapshot {
 
 /// Fail-closed collection ACL predicate (semantic reference).
 pub fn allowed(
-    _principal: &AclPrincipal,
-    _collection: &CollectionAclSnapshot,
-    _permission: &str,
-    _required_access: AccessLevel,
+    principal: &AclPrincipal,
+    collection: &CollectionAclSnapshot,
+    permission: &str,
+    required_access: AccessLevel,
 ) -> bool {
-    todo!("Phase 1C ACL semantics not implemented")
+    if !principal.membership_active
+        || principal.user_disabled
+        || principal.org_id != collection.org_id
+        || !principal.permissions.contains(permission)
+    {
+        return false;
+    }
+    let grant_allows = |grant: Option<AccessLevel>| {
+        grant.is_some_and(|level| level.satisfies(required_access))
+    };
+    match collection.visibility {
+        CollectionVisibility::Private => {
+            principal.user_id == collection.owner_user_id
+                || grant_allows(collection.user_grant)
+        }
+        CollectionVisibility::Org => true,
+        CollectionVisibility::Groups => {
+            principal.user_id == collection.owner_user_id
+                || grant_allows(collection.user_grant)
+                || collection
+                    .group_grants
+                    .iter()
+                    .copied()
+                    .any(|level| level.satisfies(required_access))
+                || grant_allows(collection.role_grant)
+        }
+    }
 }
 
 #[cfg(test)]

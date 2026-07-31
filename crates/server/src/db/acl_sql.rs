@@ -2,25 +2,195 @@
 //!
 //! Emits the same visibility and access-level branches as [`crate::auth::acl::allowed`].
 
+const ACCESS_LEVEL_RANK: &str =
+    "CASE access_level WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END";
+
+fn required_access_rank(required_access_param: &str) -> String {
+    format!(
+        "CASE {required_access_param} WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END"
+    )
+}
+
+fn grant_meets_required(required_access_param: &str) -> String {
+    format!("({ACCESS_LEVEL_RANK}) >= ({})", required_access_rank(required_access_param))
+}
+
+fn visibility_route_sql(user_id_param: &str, required_access_param: &str) -> String {
+    let grant_meets = grant_meets_required(required_access_param);
+    format!(
+        "(
+           c.visibility = 'org'
+           OR c.owner_user_id = {user_id_param}
+           OR (
+             c.visibility = 'private'
+             AND EXISTS (
+               SELECT 1 FROM collection_user_access cua
+               WHERE cua.org_id = c.org_id
+                 AND cua.collection_id = c.id
+                 AND cua.user_id = {user_id_param}
+                 AND {grant_meets}
+             )
+           )
+           OR (
+             c.visibility = 'groups'
+             AND (
+               EXISTS (
+                 SELECT 1 FROM collection_user_access cua
+                 WHERE cua.org_id = c.org_id
+                   AND cua.collection_id = c.id
+                   AND cua.user_id = {user_id_param}
+                   AND {grant_meets}
+               )
+               OR EXISTS (
+                 SELECT 1 FROM collection_group_access cga
+                 JOIN group_memberships gm
+                   ON gm.org_id = cga.org_id
+                  AND gm.group_id = cga.group_id
+                  AND gm.user_id = {user_id_param}
+                 WHERE cga.org_id = c.org_id
+                   AND cga.collection_id = c.id
+                   AND {grant_meets}
+               )
+               OR EXISTS (
+                 SELECT 1 FROM collection_role_access cra
+                 JOIN roles cra_r
+                   ON cra_r.org_id = cra.org_id
+                  AND cra_r.id = cra.role_id
+                 JOIN org_memberships cra_m
+                   ON cra_m.org_id = cra_r.org_id
+                  AND cra_m.user_id = {user_id_param}
+                  AND cra_m.role = cra_r.code
+                  AND cra_m.state = 'active'
+                 WHERE cra.org_id = c.org_id
+                   AND cra.collection_id = c.id
+                   AND {grant_meets}
+               )
+             )
+           )
+         )"
+    )
+}
+
+fn membership_permission_exists_sql(
+    org_id_param: &str,
+    user_id_param: &str,
+    permission_param: &str,
+) -> String {
+    format!(
+        "EXISTS (
+           SELECT 1
+           FROM org_memberships m
+           JOIN users u ON u.id = m.user_id
+           JOIN roles r
+             ON r.org_id = m.org_id AND r.code = m.role
+           JOIN role_permissions rp
+             ON rp.org_id = r.org_id AND rp.role_id = r.id
+           JOIN permissions p ON p.id = rp.permission_id
+           WHERE m.org_id = {org_id_param}
+             AND m.user_id = {user_id_param}
+             AND m.state = 'active'
+             AND u.disabled_at IS NULL
+             AND p.code = {permission_param}
+         )"
+    )
+}
+
 /// SQL fragment listing collection ids visible to a principal for a permission/access pair.
 pub fn allowed_collections_sql(
-    _org_id_param: &str,
-    _user_id_param: &str,
-    _permission_param: &str,
-    _required_access_param: &str,
+    org_id_param: &str,
+    user_id_param: &str,
+    permission_param: &str,
+    required_access_param: &str,
 ) -> String {
-    String::new()
+    let membership = membership_permission_exists_sql(org_id_param, user_id_param, permission_param);
+    let visibility = visibility_route_sql(user_id_param, required_access_param);
+    format!(
+        "c.org_id = {org_id_param}
+         AND c.deleted_at IS NULL
+         AND {membership}
+         AND {visibility}"
+    )
 }
 
 /// EXISTS predicate gating chunk/claim/document reads by collection ACL.
 pub fn acl_predicate_sql(
-    _org_id_expr: &str,
-    _collection_id_expr: &str,
-    _user_id_param: &str,
-    _permission_param: &str,
-    _required_access_param: &str,
+    org_id_expr: &str,
+    collection_id_expr: &str,
+    user_id_param: &str,
+    permission_param: &str,
+    required_access_param: &str,
 ) -> String {
-    String::new()
+    let grant_meets = grant_meets_required(required_access_param);
+    format!(
+        "EXISTS (
+           SELECT 1
+           FROM collections acl_c
+           JOIN org_memberships acl_m
+             ON acl_m.org_id = acl_c.org_id AND acl_m.user_id = {user_id_param}
+            AND acl_m.state = 'active'
+           JOIN users acl_u ON acl_u.id = acl_m.user_id
+           JOIN roles acl_r
+             ON acl_r.org_id = acl_m.org_id AND acl_r.code = acl_m.role
+           JOIN role_permissions acl_rp
+             ON acl_rp.org_id = acl_r.org_id AND acl_rp.role_id = acl_r.id
+           JOIN permissions acl_p ON acl_p.id = acl_rp.permission_id
+           WHERE acl_c.org_id = {org_id_expr}
+             AND acl_c.id = {collection_id_expr}
+             AND acl_c.deleted_at IS NULL
+             AND acl_u.disabled_at IS NULL
+             AND acl_p.code = {permission_param}
+             AND (
+               acl_c.visibility = 'org'
+               OR acl_c.owner_user_id = {user_id_param}
+               OR (
+                 acl_c.visibility = 'private'
+                 AND EXISTS (
+                   SELECT 1 FROM collection_user_access cua
+                   WHERE cua.org_id = acl_c.org_id
+                     AND cua.collection_id = acl_c.id
+                     AND cua.user_id = {user_id_param}
+                     AND {grant_meets}
+                 )
+               )
+               OR (
+                 acl_c.visibility = 'groups'
+                 AND (
+                   EXISTS (
+                     SELECT 1 FROM collection_user_access cua
+                     WHERE cua.org_id = acl_c.org_id
+                       AND cua.collection_id = acl_c.id
+                       AND cua.user_id = {user_id_param}
+                       AND {grant_meets}
+                   )
+                   OR EXISTS (
+                     SELECT 1 FROM collection_group_access cga
+                     JOIN group_memberships gm
+                       ON gm.org_id = cga.org_id
+                      AND gm.group_id = cga.group_id
+                      AND gm.user_id = {user_id_param}
+                     WHERE cga.org_id = acl_c.org_id
+                       AND cga.collection_id = acl_c.id
+                       AND {grant_meets}
+                   )
+                   OR EXISTS (
+                     SELECT 1 FROM collection_role_access cra
+                     JOIN roles cra_r
+                       ON cra_r.org_id = cra.org_id
+                      AND cra_r.id = cra.role_id
+                     JOIN org_memberships cra_m
+                       ON cra_m.org_id = cra_r.org_id
+                      AND cra_m.user_id = {user_id_param}
+                      AND cra_m.role = cra_r.code
+                      AND cra_m.state = 'active'
+                     WHERE cra.org_id = acl_c.org_id
+                       AND cra.collection_id = acl_c.id
+                       AND {grant_meets}
+                   )
+                 )
+               )
+             )
+         )"
+    )
 }
 
 #[cfg(test)]
