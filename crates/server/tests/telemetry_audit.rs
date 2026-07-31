@@ -1,6 +1,8 @@
 //! P1B-O01 live evidence: correlation, append-only audit, canary redaction, app-role.
 //!
 //! Gated on `MARKHAND_TEST_DATABASE_URL` + `MARKHAND_TEST_APP_DATABASE_URL`.
+//! `qa.query` is seeded for audit action coverage; fixtures use empty collection scope
+//! (audit writes do not traverse the 1C collection projection).
 
 mod common;
 

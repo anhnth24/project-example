@@ -66,6 +66,7 @@ async fn seed_caller_without_permissions(
     user: Uuid,
     email: &str,
 ) -> String {
+    // Intentionally omits `qa.query`: history CRUD 403 tests, not collection scope.
     common::seed_user_with_permissions(pool, org, user, email, PASSWORD, &[]).await;
     common::login_access_token(pool, email, PASSWORD).await
 }

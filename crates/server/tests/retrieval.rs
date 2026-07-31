@@ -2,6 +2,10 @@
 //!
 //! Hermetic acceptance coverage lives in `services/retrieval` unit tests.
 //! Live PostgreSQL tests are ignored unless `MARKHAND_TEST_DATABASE_URL` is set.
+//!
+//! Fixtures seed `qa.query` / `qa.history` directly on the viewer role (not via
+//! `seed_user_with_permissions`) so FTS/hydration ACL predicates match the 1C
+//! `(qa.query, read)` projection without widening unrelated integration seeds.
 
 use std::collections::BTreeSet;
 use std::time::Instant;

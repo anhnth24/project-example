@@ -78,6 +78,8 @@ async fn seed_caller(pool: &Pool, email: &str) -> (Uuid, String) {
 /// build a two-org fixture — the second call's `users` insert is a no-op on
 /// the primary key, but the `org_memberships` insert lands under the new
 /// `(org, user)` key).
+///
+/// Intentionally omits `qa.query`: org-switch tests never assert collection scope.
 async fn seed_member(pool: &Pool, org: Uuid, user: Uuid, email: &str) {
     common::seed_user_with_permissions(pool, org, user, email, PASSWORD, &[]).await;
 }

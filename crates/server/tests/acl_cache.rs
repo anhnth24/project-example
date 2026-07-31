@@ -14,12 +14,17 @@ mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::{
+    acl_fixture::{
+        boot_acl_pool, grant_group_access, insert_collection, resolver_allowed_collection_ids,
+        seed_acl_org, PERMISSION_QA_QUERY,
+    },
     admin_database_url, app_database_url, boot_app_pool, build_router, login_access_token,
     seed_user_with_permissions, test_auth_config,
 };
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::auth::jwt::JwtKeys;
 use fileconv_server::auth::provider::PasswordAuthProvider;
+use fileconv_server::db::models::AccessLevel;
 use fileconv_server::db::pool::with_org_txn;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -146,6 +151,7 @@ async fn cached_context_denies_immediately_after_role_downgrade() {
     let org = Uuid::new_v4();
     let owner = Uuid::new_v4();
     let admin = Uuid::new_v4();
+    // `member.manage` only — no `qa.query`; collection scope is not under test here.
     seed_user_with_permissions(
         &pool,
         org,
@@ -197,6 +203,7 @@ async fn cached_context_denies_immediately_after_suspend() {
     let org = Uuid::new_v4();
     let owner = Uuid::new_v4();
     let admin = Uuid::new_v4();
+    // `member.manage` only — no `qa.query`; collection scope is not under test here.
     seed_user_with_permissions(
         &pool,
         org,
@@ -243,6 +250,7 @@ async fn cached_context_denies_immediately_after_remove() {
     let org = Uuid::new_v4();
     let owner = Uuid::new_v4();
     let admin = Uuid::new_v4();
+    // `member.manage` only — no `qa.query`; collection scope is not under test here.
     seed_user_with_permissions(
         &pool,
         org,
@@ -304,14 +312,13 @@ async fn cached_context_drops_collection_access_immediately_after_acl_revoke() {
         user,
         "owner@acl-cache-coll.test",
         PASSWORD,
-        &["doc.upload"],
+        &["doc.upload", "qa.query"],
     )
     .await;
 
     // Give `user` a private collection they own (the resolver's
-    // `owner_user_id = $2` branch), matching `tests/uploads.rs`'s ACL-revoke
-    // fixture shape.
-    let ctx = OrgContext::try_new(org, user, ["doc.upload"], []).unwrap();
+    // `(qa.query, read)` projection must include owned private collections).
+    let ctx = OrgContext::try_new(org, user, ["doc.upload", "qa.query"], []).unwrap();
     with_org_txn(&pool, &ctx, {
         let ctx = ctx.clone();
         move |txn| {
@@ -383,6 +390,93 @@ async fn cached_context_drops_collection_access_immediately_after_acl_revoke() {
     assert!(
         !after.allows_collection(collection),
         "cached context must not keep granting a collection revoked out from under it"
+    );
+
+    ephemeral.drop().await;
+}
+
+/// Removing a principal from a group must invalidate the cached `(qa.query, read)`
+/// collection projection on the very next `OrgContextCache::resolve` call.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_APP_DATABASE_URL"]
+async fn group_membership_revoke_invalidates_cached_context() {
+    let Some((ephemeral, pool)) = boot_acl_pool().await else {
+        return;
+    };
+
+    let fixture = seed_acl_org(&pool).await;
+    let owner_ctx =
+        OrgContext::try_new(fixture.org, fixture.owner, [PERMISSION_QA_QUERY], []).unwrap();
+    let collection = with_org_txn(&pool, &owner_ctx, {
+        let fixture = fixture.clone();
+        move |txn| {
+            Box::pin(async move {
+                let collection =
+                    insert_collection(txn, fixture.org, fixture.owner, "groups", "cache").await?;
+                grant_group_access(
+                    txn,
+                    fixture.org,
+                    collection,
+                    fixture.group_id,
+                    AccessLevel::Write,
+                )
+                .await?;
+                Ok(collection)
+            })
+        }
+    })
+    .await
+    .expect("seed groups collection");
+
+    let auth = PasswordAuthProvider::new(
+        pool.clone(),
+        test_auth_config(),
+        JwtKeys::from_auth(&test_auth_config()).unwrap(),
+    );
+
+    let warm = auth
+        .context_cache()
+        .resolve(&pool, fixture.org, fixture.member)
+        .await
+        .expect("initial resolve");
+    assert!(
+        warm.allows_collection(collection),
+        "member must initially see groups collection via group membership"
+    );
+
+    let owner_ctx =
+        OrgContext::try_new(fixture.org, fixture.owner, [PERMISSION_QA_QUERY], []).unwrap();
+    with_org_txn(&pool, &owner_ctx, {
+        let fixture = fixture.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "DELETE FROM group_memberships
+                     WHERE org_id = $1 AND group_id = $2 AND user_id = $3",
+                    &[&fixture.org, &fixture.group_id, &fixture.member],
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("revoke group membership");
+
+    let after = auth
+        .context_cache()
+        .resolve(&pool, fixture.org, fixture.member)
+        .await
+        .expect("resolve after membership revoke");
+    assert!(
+        !after.allows_collection(collection),
+        "cached context must drop group-backed collection access after membership revoke"
+    );
+
+    let fresh = resolver_allowed_collection_ids(&pool, fixture.org, fixture.member).await;
+    assert!(
+        !fresh.contains(&collection),
+        "uncached resolver must also deny after membership revoke"
     );
 
     ephemeral.drop().await;

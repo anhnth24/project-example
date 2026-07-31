@@ -273,6 +273,7 @@ async fn graph_requires_qa_query_permission() {
     let user = Uuid::new_v4();
     common::seed_user_with_permissions(&pool, org, user, "graph-noperm@example.com", PASSWORD, &[])
         .await;
+    // Intentionally no `qa.query`: asserts graph route returns 403 without base permission.
     let token = common::login_access_token(&pool, "graph-noperm@example.com", PASSWORD).await;
     let app = build_router(pool.clone(), &app_database_url().unwrap(), None);
 
@@ -442,6 +443,7 @@ async fn graph_acl_hides_documents_in_a_private_collection_the_caller_cannot_acc
     let viewer = Uuid::new_v4();
     common::seed_user_with_permissions(&pool, org, owner, "graph-owner@example.com", PASSWORD, &[])
         .await;
+    // Owner fixture only seeds a private collection; the graph actor is `viewer` (has `qa.query`).
     common::seed_user_with_permissions(
         &pool,
         org,
