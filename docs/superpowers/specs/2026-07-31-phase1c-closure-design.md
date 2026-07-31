@@ -1,7 +1,7 @@
 # Thiết kế đóng Phase 1C theo luồng implement/review
 
 Ngày: 2026-07-31  
-Trạng thái: Đã sửa theo review vòng 1; chờ owner duyệt tài liệu
+Trạng thái: Đã sửa theo review vòng 2; chờ owner duyệt tài liệu
 Phạm vi: Phase 1C — multi-org security, denial suite và security/load gate
 
 ## 1. Mục tiêu
@@ -98,11 +98,12 @@ fixture; OpenAPI test và web role presentation sinh hoặc đọc cùng fixture
 chép một matrix thứ hai. Historical migration không được sửa; nếu matrix runtime đổi,
 thêm migration expand-only và cập nhật fixture trong cùng PR.
 
-Permission chỉ được `active` khi có operation thật và guard inventory chỉ ra nơi
-enforce. Active permission được seed vào bảng `permissions`; fixture cho phép active
-permission có zero default grants. Permission chưa có operation giữ `reserved`, không
-có row runtime trong `permissions` và không được seed grant cho tới migration kích
-hoạt nó.
+Permission chỉ được `active` khi fixture validator chỉ ra operation runtime thật.
+Active permission được seed vào bảng `permissions`; fixture cho phép active permission
+có zero default grants. Permission chưa có operation giữ `reserved`, không có row
+runtime trong `permissions` và không được seed grant cho tới migration kích hoạt nó.
+Guard enforcement của operation active thuộc 1C-04/PR 3, không phải điều kiện seed
+catalog của 1C-03.
 
 PR 1 phải disposition rõ các lệch hiện tại thay vì sửa plan cho khớp code một cách
 ngầm:
@@ -117,9 +118,10 @@ ngầm:
 - conditional policy như “viewer theo org policy” trên permission reserved là
   metadata không normative và không được resolver coi là quyền.
 
-PR 1 chỉ đóng phần canonical matrix của 1C-03. Issue 1C-03 giữ `In progress` tới PR 3,
-vì trạng thái active chỉ được chứng minh đầy đủ khi guard inventory xác nhận mỗi
-permission active có operation và enforcement tương ứng.
+PR 1 đóng 1C-03 sau khi fixture, DB matrix, OpenAPI/web consumer và operation-reference
+validator cùng xanh trong `rust-integration`. PR 3 đóng 1C-04 bằng guard inventory;
+inventory phải derive `requiredCollectionAccess` từ canonical fixture qua mapping
+operation → permission, không khai báo access level lần thứ hai.
 
 ### 3.2 ACL semantics
 
@@ -149,20 +151,36 @@ phép chiếu collection của hàm này; PostgreSQL `acl_predicate_sql`, Qdrant
 allowed-collection filter, citation hydration, download và jobs phải thực thi cùng
 predicate.
 
+Allow-list trong `OrgContext` được định nghĩa là phép chiếu tại
+`permission = qa.query`, `required_access = read`; principal không có `qa.query` nhận
+allow-list rỗng. Write/admin không suy ra từ allow-list này: service guard và shared SQL
+predicate phải re-check permission cùng required access của operation. Service identity
+system-only nhận scope tường minh theo §3.3, không đi qua phép chiếu `qa.query`.
+
 Equivalence test PR 2 dùng cùng fixture nhiều trạng thái và so tập collection resolver
-trả về với tập row SQL predicate trả về cho `permission = qa.query`,
-`required_access = read`; test riêng pin `write/admin` không được thỏa bởi grant hẹp
-hơn. Không adapter nào được mở rộng scope khi timeout, payload malformed hoặc
-dependency lỗi.
+trả về với tập row SQL predicate trả về cho phép chiếu trên; test riêng pin
+`write/admin` không được thỏa bởi grant hẹp hơn. Không adapter nào được mở rộng scope
+khi timeout, payload malformed hoặc dependency lỗi.
 
 Không cho dormant group/role grant trên collection `private` hoặc `org`:
 
 - insert/update `collection_group_access` hoặc `collection_role_access` chỉ hợp lệ khi
   collection đang có visibility `groups`;
+- grant trigger phải lock row collection cha bằng `FOR NO KEY UPDATE` (hoặc cơ chế
+  deferred tương đương) trước khi kiểm visibility; collection visibility update giữ
+  cùng row lock để insert-grant và visibility-flip song song không thể cùng commit
+  thành trạng thái dormant dưới `READ COMMITTED`;
 - đổi visibility khỏi `groups` phải xóa group/role grant trong cùng transaction trước
   khi đổi; DB invariant từ chối trạng thái còn grant;
+- `acl_mutate::revoke_collection_access_for_principal` phải xóa group/role grants
+  trước khi set `private`, rồi mới xử lý direct-user grant; containment test phải dùng
+  groups collection có cả group và role grant;
+- migration preflight phải phát hiện row group/role grant hiện hữu trên collection
+  không phải `groups` và fail với diagnostic collection IDs; không tự kích hoạt hoặc
+  silently delete grant. Fixture migration hiện hữu phải đổi collection sang `groups`
+  trước khi seed grant;
 - test pin private collection không mở qua group/role và visibility flip không âm thầm
-  kích hoạt grant cũ;
+  kích hoạt grant cũ; test hai transaction pin race grant-vs-flip;
 - PR 2 sửa wording P1C.3 để ghi rõ private chỉ nhận direct-user grant và groups nhận
   user/group/role grant.
 
@@ -262,15 +280,13 @@ Phạm vi:
 - thêm canonical RBAC fixture và consistency tests cho DB/OpenAPI/web;
 - disposition matrix divergence, audit-retention risk và embedding-token condition
   trong phase plan, issue catalog và risk register;
-- không đổi status 1C-03 thành `Done` trong PR 1; guard inventory PR 3 mới hoàn tất
-  acceptance còn lại.
+- đóng 1C-03 chỉ sau fixture validator, DB matrix và operation references cùng xanh.
 
 Exit:
 
 - fast checks và `rust-integration` xanh;
 - UI không chứa permission matrix độc lập;
-- issue 1C-01/02 và phần matrix của 1C-03 có evidence cụ thể;
-- 1C-03 vẫn `In progress` cho tới guard inventory PR 3.
+- issue 1C-01/02/03 có evidence cụ thể và chuyển `Done`.
 
 ### PR 2 — ACL resolver, predicates và invalidation
 
@@ -280,13 +296,16 @@ Phạm vi:
 - enforce read/write/admin access-level ordering và no-dormant-grant invariant;
 - đồng bộ resolver, SQL predicate và downstream scope;
 - thêm trigger/version bump cho mọi ACL mutation;
+- sửa containment mutation order và thêm migration preflight cho dormant grants;
 - thêm tests grant, revoke, suspend, cache invalidation và stale-scope defense;
 - đóng 1C-05/1C-06 khi kết quả resolver và SQL tương đương.
 
 Exit:
 
 - test RED chứng minh groups hiện không resolve trước implementation;
-- test grant/revoke, access-level và visibility-flip xanh ở fast và DB-gated layer;
+- 1C-03 dependency đã `Done` bằng evidence PR 1;
+- test grant/revoke, containment, concurrent grant-vs-flip, access-level và
+  visibility-flip xanh ở fast và DB-gated layer;
 - không query collection-scoped nào bỏ shared ACL predicate.
 
 ### PR 3 — Guard inventory và operational identities
@@ -298,7 +317,7 @@ Phạm vi:
 - least-privilege worker/reconcile identity;
 - provision `markhand_worker` trong POC deployment;
 - audit coverage cho mutation hiện hữu;
-- xác minh và cập nhật evidence 1C-03/04/07/08/09/10/11;
+- xác minh và cập nhật evidence 1C-04/07/08/09/10/11;
 - kiểm qualifying config cấm cloud/shared embedding khi chưa có token metering;
 - giữ accepted-risk audit retention hoặc implement purge nếu owner không duyệt defer.
 
@@ -307,7 +326,7 @@ Exit:
 - direct-service misuse bị deny;
 - route HTTP giữ đúng 403/404 contract và không tạo existence oracle;
 - config/static test chứng minh profile G1C yêu cầu worker URL riêng;
-- 1C-03/04/07/09/10 có thể đóng bằng CI evidence;
+- 1C-04/07/09/10 có thể đóng bằng CI evidence;
 - 1C-08 giữ deployed half-gate tới PR 5 chứng minh process thật không fallback;
 - 1C-11 chỉ đóng khi audit coverage xanh và accepted-risk retention đã được owner duyệt
   hoặc retention implementation đã xanh.
