@@ -27,6 +27,7 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use common::worker_pipeline::WorkerPipeline;
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
     convert_to_markdown, login_access_token, put_bytes, quarantine_key, seed_user_with_permissions,
@@ -538,7 +539,7 @@ async fn live_pdf_pptx_xlsx_citation_preview_download_matrix() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_MINIO_*"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MINIO + QDRANT + built fileconv"]
 async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
     let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
@@ -556,6 +557,7 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
         CapabilityKeys::from_auth_signing_key(test_auth_config().signing_key.as_ref().unwrap())
             .unwrap();
 
+    // Capability expiry/replay still uses the SQL fixture (not history/IDOR/delete).
     let doc = seed_indexed_format(
         &pool,
         &store,
@@ -621,70 +623,73 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
         Err(DownloadError::InvalidCapability)
     ));
 
-    // History permission required for non-current versions: promote a synthetic
-    // current sibling so the published document invariant still holds.
-    let historical = doc.version_id;
-    let current_v2 = Uuid::new_v4();
-    with_org_txn(&pool, &ctx, {
-        let ctx = ctx.clone();
-        let document_id = doc.document_id;
-        let markdown_key = doc.markdown_key.clone();
-        let source_sha = doc.source_sha.clone();
-        move |txn| {
-            Box::pin(async move {
-                txn.execute(
-                    "UPDATE document_versions
-                     SET is_current = false, effective_to = clock_timestamp()
-                     WHERE org_id = $1 AND document_id = $2 AND id = $3",
-                    &[&ctx.org_id(), &document_id, &historical],
-                )
-                .await?;
-                txn.execute(
-                    "INSERT INTO document_versions (
-                        id, org_id, document_id, version_number, publication_state,
-                        is_current, content_sha256, original_object_key, markdown_object_key,
-                        source_content_type, byte_size, created_by_user_id
-                     ) VALUES ($1,$2,$3,2,'published',true,$4,$5,$5,'application/pdf',1,$6)",
-                    &[
-                        &current_v2,
-                        &ctx.org_id(),
-                        &document_id,
-                        &source_sha,
-                        &markdown_key,
-                        &ctx.user_id(),
-                    ],
-                )
-                .await?;
-                txn.execute(
-                    "UPDATE documents SET current_version_id = $3 WHERE org_id = $1 AND id = $2",
-                    &[&ctx.org_id(), &document_id, &current_v2],
-                )
-                .await?;
-                Ok(())
-            })
-        }
-    })
-    .await
+    // History / IDOR / delete: worker-produced versions/artifacts/chunks only.
+    // Missing Qdrant or fileconv panics here (fail clearly) once DB+MinIO are live.
+    let pipeline = WorkerPipeline::boot(pool.clone(), store.clone(), &ephemeral.app_url).await;
+    let worker_perms = [
+        "qa.query",
+        "qa.history",
+        "doc.upload",
+        "doc.delete",
+        "doc.publish",
+        "jobs.system",
+    ];
+
+    // History: upload revision v1, upload revision v2, old version needs qa.history.
+    let history_v1 = pipeline
+        .produce_indexed(
+            "hist",
+            "history-v1.txt",
+            "text/plain",
+            b"History ACL revision one AUTHZV1\n",
+            &worker_perms,
+        )
+        .await;
+    let historical = history_v1.version_id;
+    let history_v2 = pipeline
+        .produce_revision(
+            &history_v1,
+            "history-v2.txt",
+            "text/plain",
+            b"History ACL revision two AUTHZV2\n",
+            "hist-rev",
+        )
+        .await;
+    assert_ne!(
+        history_v2.version_id, historical,
+        "revision must publish a new current version via ConvertWorker"
+    );
+    assert_eq!(history_v2.document_id, history_v1.document_id);
+    let no_history = OrgContext::try_new(
+        history_v1.org,
+        history_v1.user,
+        ["qa.query"],
+        [history_v1.collection_id],
+    )
     .unwrap();
-    let no_history = ctx_for(&doc, &["qa.query"]);
     assert!(matches!(
         preview_markdown(
             &pool,
             &no_history,
             &store,
-            doc.document_id,
+            history_v1.document_id,
             Some(historical)
         )
         .await,
         Err(PreviewError::HistoryRequired)
     ));
-    // With qa.history, historical preview is allowed against the demoted version.
-    let with_history = ctx_for(&doc, &["qa.query", "qa.history"]);
+    let with_history = OrgContext::try_new(
+        history_v1.org,
+        history_v1.user,
+        ["qa.query", "qa.history"],
+        [history_v1.collection_id],
+    )
+    .unwrap();
     let historical_preview = preview_markdown(
         &pool,
         &with_history,
         &store,
-        doc.document_id,
+        history_v1.document_id,
         Some(historical),
     )
     .await;
@@ -693,18 +698,24 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
             || matches!(historical_preview, Err(PreviewError::ArtifactUnavailable)),
         "history permission should authorize historical resolve path"
     );
-    let _ = current_v2;
 
-    // Multi-document / multi-version IDOR → not found.
-    let other = seed_indexed_format(
-        &pool,
-        &store,
-        "xlsx",
-        &tiny_xlsx_bytes("Other tenant sheet"),
-        &["qa.query", "qa.history"],
+    // IDOR: independently worker-produce org B; org A cannot preview/resolve it.
+    let other = pipeline
+        .produce_indexed(
+            "idor",
+            "other-tenant.txt",
+            "text/plain",
+            b"Other tenant sheet IDORX\n",
+            &worker_perms,
+        )
+        .await;
+    let attacker = OrgContext::try_new(
+        history_v1.org,
+        history_v1.user,
+        ["qa.query", "qa.history"],
+        [history_v1.collection_id],
     )
-    .await;
-    let attacker = ctx_for(&doc, &["qa.query", "qa.history"]);
+    .unwrap();
     assert!(matches!(
         preview_markdown(&pool, &attacker, &store, other.document_id, None).await,
         Err(PreviewError::NotFound)
@@ -716,51 +727,91 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
         ResolveCitationRequest {
             logical_document_id: other.document_id,
             version_id: other.version_id,
-            source_content_sha256: other.source_sha,
-            canonical_markdown_sha256: other.markdown_sha,
+            source_content_sha256: other.source_sha.clone(),
+            canonical_markdown_sha256: other.markdown_sha.clone(),
             chunk_id: other.chunk_id,
             source_span_start: other.span_start,
             source_span_end: other.span_end,
             quote_local_start: 0,
             quote_local_end: other.quote.len(),
-            quote: other.quote,
+            quote: other.quote.clone(),
             require_current: true,
         },
     )
     .await
     .is_err());
 
-    // Empty collection allow-list fails closed.
+    // Empty collection allow-list fails closed (capability fixture doc).
     let empty = OrgContext::try_new(doc.org, doc.user, ["qa.query"], BTreeSet::new()).unwrap();
     assert!(matches!(
         preview_markdown(&pool, &empty, &store, doc.document_id, None).await,
         Err(PreviewError::NotFound)
     ));
 
-    // Immediate deny after delete/tombstone.
-    with_org_txn(&pool, &ctx, {
-        let ctx = ctx.clone();
-        let document_id = doc.document_id;
-        move |txn| {
-            Box::pin(async move {
-                let tombstoned = DocumentState::Tombstoned.as_str();
-                txn.execute(
-                    "UPDATE documents
-                     SET state = $3, deleted_at = clock_timestamp(), updated_at = clock_timestamp()
-                     WHERE org_id = $1 AND id = $2",
-                    &[&ctx.org_id(), &document_id, &tombstoned],
-                )
-                .await?;
-                Ok(())
-            })
-        }
-    })
-    .await
+    // Immediate deny after production delete/tombstone of a worker-produced doc.
+    let doomed = pipeline
+        .produce_indexed(
+            "del",
+            "doomed.txt",
+            "text/plain",
+            b"Delete deny target DELDENY\n",
+            &worker_perms,
+        )
+        .await;
+    let doomed_token = login_access_token(
+        &pool,
+        &format!("{}@worker.test", doomed.user),
+        "correct-password-1",
+    )
+    .await;
+    let delete_response = pipeline
+        .app()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/v1/documents/{}", doomed.document_id))
+                .header("authorization", format!("Bearer {doomed_token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        delete_response.status(),
+        StatusCode::NO_CONTENT,
+        "production delete must tombstone worker-produced document"
+    );
+    let doomed_ctx = OrgContext::try_new(
+        doomed.org,
+        doomed.user,
+        ["qa.query", "qa.history", "doc.delete"],
+        [doomed.collection_id],
+    )
     .unwrap();
     assert!(matches!(
-        preview_markdown(&pool, &ctx, &store, doc.document_id, None).await,
+        preview_markdown(&pool, &doomed_ctx, &store, doomed.document_id, None).await,
         Err(PreviewError::NotFound)
     ));
+    assert!(resolve_citation(
+        &pool,
+        &doomed_ctx,
+        &store,
+        ResolveCitationRequest {
+            logical_document_id: doomed.document_id,
+            version_id: doomed.version_id,
+            source_content_sha256: doomed.source_sha,
+            canonical_markdown_sha256: doomed.markdown_sha,
+            chunk_id: doomed.chunk_id,
+            source_span_start: doomed.span_start,
+            source_span_end: doomed.span_end,
+            quote_local_start: 0,
+            quote_local_end: doomed.quote.len(),
+            quote: doomed.quote,
+            require_current: true,
+        },
+    )
+    .await
+    .is_err());
 
     // Membership removal → HTTP auth fails closed (immediate deny).
     let live = seed_indexed_format(
@@ -889,6 +940,7 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
         .unwrap();
     assert_ne!(denied.status(), StatusCode::OK);
 
+    pipeline.cleanup_qdrant().await;
     cleanup
         .cleanup()
         .await

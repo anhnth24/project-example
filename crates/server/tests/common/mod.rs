@@ -6,6 +6,7 @@
 #![allow(dead_code)] // not every integration binary uses every helper
 
 pub mod fixtures;
+pub mod worker_pipeline;
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
