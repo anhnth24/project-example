@@ -19,41 +19,57 @@ API gồm org list/detail, members CRUD và org switch/session refresh.
 
 ## P1C.2 — RBAC level 2
 
-Permission constants:
+**Disposition (PR 1):** P1C.2: active/reserved matrix follows
+`crates/server/openapi/builtin-role-catalog.json`. That fixture is the sole normative
+built-in contract; the table below is a human summary and must not diverge from it.
+Role→permission runtime authority remains PostgreSQL; OpenAPI/web consumers reference
+the same fixture (no second hard-coded grant matrix).
 
-- `doc.upload`, `doc.delete`;
+Active permission keys (seeded when operations exist):
+
+- `doc.upload`, `doc.delete`, `doc.publish`, `doc.quarantine.review`;
 - `qa.query`, `qa.history`;
-- `member.manage`, `settings.manage`;
-- `intel.use`, `pii.manage`, `export.run`;
-- `audit.view`.
+- `member.manage`, `audit.view`, `jobs.system`.
 
-Role→permission lưu DB, system role immutable; schema cho custom role tương lai nhưng
-chưa cần UI editor phức tạp. Mỗi route và service operation có explicit guard.
-Worker/admin/reconcile cũng dùng service identity với permission tối thiểu.
+Reserved permission keys (ungranted until a real operation activates them):
 
-Canonical built-in matrix:
+- `settings.manage`, `intel.use`, `pii.manage`, `export.run`.
 
-| Permission | Owner | Admin | Editor | Viewer |
-|---|---:|---:|---:|---:|
-| `doc.upload` | ✓ | ✓ | ✓ | |
-| `doc.delete` | ✓ | ✓ | own/explicit policy | |
-| `qa.query` | ✓ | ✓ | ✓ | ✓ |
-| `qa.history` | ✓ | ✓ | | |
-| `member.manage` | ✓ | ✓, không quản owner | | |
-| `settings.manage` | ✓ | ✓, trừ owner/security | | |
-| `intel.use` | ✓ | ✓ | ✓ | theo org policy |
-| `pii.manage` | ✓ | ✓ | | |
-| `export.run` | ✓ | ✓ | ✓ | theo org policy |
-| `audit.view` | ✓ | ✓ | | |
+System roles immutable; schema may allow custom roles later without a complex UI
+editor. Each route and service operation has an explicit guard. Worker/admin/reconcile
+use least-privilege service identities.
+
+Canonical built-in matrix (active grants only; matches `builtin-role-catalog.json`):
+
+| Permission | Owner | Admin | Editor | Viewer | Notes |
+|---|---:|---:|---:|---:|---|
+| `doc.upload` | ✓ | ✓ | ✓ | | |
+| `doc.delete` | ✓ | ✓ | | | Editor “own/explicit” deferred; not a built-in grant |
+| `doc.publish` | ✓ | ✓ | ✓ | | Active; was missing from older plan prose |
+| `doc.quarantine.review` | | | | | Active with zero default grants (intentional) |
+| `qa.query` | ✓ | ✓ | ✓ | ✓ | |
+| `qa.history` | ✓ | ✓ | | | |
+| `member.manage` | ✓ | ✓ | | | Admin cannot manage owner (`admin_cannot_manage_owner`) |
+| `audit.view` | ✓ | ✓ | | | |
+| `jobs.system` | ✓ | ✓ | | | Active; was missing from older plan prose |
+| `settings.manage` | | | | | Reserved / ungranted |
+| `intel.use` | | | | | Reserved / ungranted |
+| `pii.manage` | | | | | Reserved / ungranted |
+| `export.run` | | | | | Reserved / ungranted |
 
 Chỉ owner được assign/remove owner, đổi security/SSO policy, xóa org và thay quota
 hard limit. Admin không được nâng chính mình hoặc người khác lên owner. Test allow/
-deny phải phủ mỗi permission ở route lẫn service layer; matrix có migration seed và
-fixture duy nhất, không hard-code bản thứ hai trong UI.
+deny phải phủ mỗi *active* permission ở route lẫn service layer; matrix có migration
+seed và fixture duy nhất, không hard-code bản thứ hai trong UI. Guard inventory for
+active operations belongs to later PRs (1C-04), not the catalog seed itself.
 
 ## P1C.3 — Collection ACL
 
-Chốt semantics từ ADR:
+**Disposition (PR 1):** P1C.3 remains open for PR 2 ACL semantics. PR 1 does not close
+collection ACL resolver equivalence, grant/revoke invalidation, or dormant-grant
+containment; those remain Phase 1C work after the RBAC catalog foundation.
+
+Target semantics from ADR (to be machine-checked in PR 2):
 
 - `private`: owner + principal được grant;
 - `org`: thành viên org có permission tương ứng;
@@ -91,6 +107,11 @@ application authorization.
 
 ## P1C.5 — Atomic quota và fairness
 
+**Disposition (PR 1):** P1C.5: embedding-token metering is N/A only for local/mock
+qualifying runtime. Phase 1C qualification must use local/mock embedding; cloud/shared
+embedding profiles are out of scope until embedding-token metering exists. LLM/chat
+token reserve/finalize remains in scope where a chat provider is configured.
+
 Flow transaction:
 
 ```text
@@ -100,7 +121,8 @@ reserve → finalize(actual) | refund
 Resource:
 
 - upload/storage bytes;
-- LLM/embedding tokens;
+- LLM tokens (when a chat provider is configured);
+- embedding tokens — N/A for local/mock qualifying runtime only (see disposition);
 - concurrent convert/embed/intelligence jobs;
 - request rate.
 
@@ -115,11 +137,18 @@ Yêu cầu:
 
 ## P1C.6 — Audit/admin APIs
 
+**Disposition (PR 1):** P1C.6: audit retention is deferred to Phase 4 under
+`AR-1C-AUDIT-RETENTION`. Phase 1C keeps append-only audit without configurable
+purge/TTL; Phase 4 owns retention, tamper evidence, and export. Accepted risk scope
+is POC/non-production only. AR expiry: before production multi-org or Phase 4 gate,
+whichever comes first.
+
 - Member/role/ACL/config/quota changes.
 - Upload/delete/export/PII/cloud-LLM use.
 - Authorization deny và quota exceed.
 - Read-only audit endpoint có pagination/filter và `audit.view`.
-- Retention được config; log không chứa document text, prompt, token hoặc PII.
+- Retention/TTL deferred (see disposition / `AR-1C-AUDIT-RETENTION`); log không chứa
+  document text, prompt, token hoặc PII.
 
 ## P1C.7 — Denial suite
 

@@ -1,7 +1,9 @@
-# Markhand Web Phase 0 risk register
+# Markhand Web risk register
 
-Status: active for Phase 0 close. P0-10 accepts architecture decisions and local
-restore smoke only; high/critical Profile B items remain open where noted.
+Status: active for Phase 0 close and Phase 1C accepted risks. P0-10 accepts
+architecture decisions and local restore smoke only; high/critical Profile B items
+remain open where noted. `AR-1C-AUDIT-RETENTION` is POC/non-production only and
+expires before production multi-org or the Phase 4 gate, whichever comes first.
 
 | ID | Severity | Risk | Owner | Disposition | Evidence / next action |
 |---|---|---|---|---|---|
@@ -15,6 +17,12 @@ restore smoke only; high/critical Profile B items remain open where noted.
 | R-P0-10-UPLOAD-01 | High | Upload sandbox and denial policy are smoke-tested, not proven in container runtime with malware scanning. | security-owner, worker-owner | Block production upload hardening; implement worker sandbox and scanner evidence. | `bench/markhand_web/security/summary.json`; P0-09 notes. |
 | R-P0-10-QUEUE-01 | High | Recovery queue age under 2x normal load is simulated, not observed with real OCR/audio/vector workers. | worker-owner, operations-owner | Block production recovery target; include queue age in Profile B recovery drill. | `docs/markhand-web-sla-targets.md`; P0-08 queue simulation. |
 | R-P0-10-MINIO-01 | High | MinIO originals are not reconstructable; object inventory drift can make restored metadata incomplete. | operations-owner, storage-owner | Require backup manifest and reconciliation before readiness. | ADR 0012; restore smoke emits placeholder checksums only. |
+
+## Phase 1C accepted risks
+
+| ID | Severity | Risk | Owner | Disposition | Evidence / next action |
+|---|---|---|---|---|---|
+| AR-1C-AUDIT-RETENTION | High | P1C.6 calls for configurable audit retention, but Phase 1C ships append-only audit without purge/TTL; unbounded growth and missing lifecycle controls remain for multi-org deployments. | security-owner, operations-owner | Accepted for POC/non-production only. P1C.6: audit retention is deferred to Phase 4 under AR-1C-AUDIT-RETENTION. AR expiry: before production multi-org or Phase 4 gate, whichever comes first. Do not claim production audit lifecycle readiness from a Phase 1C pass. | Phase plan `plans/markhand-web/phase-1c-multi-org-security.md` P1C.6; Phase 4 owns retention/tamper evidence/export. Qualifying reports must record audit row growth and confirm non-production environment. |
 
 ## Closure rule
 
