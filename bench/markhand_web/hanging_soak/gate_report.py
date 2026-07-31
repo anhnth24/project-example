@@ -46,6 +46,11 @@ PER_PROBE_DEADLINE_SECONDS = 2.0
 # reason (see `assert_hanging_http_probe` / `hanging_router_ready_matrix_...`).
 READY_DEADLINE_SLACK_SECONDS = 2.0
 READY_BOUND_SECONDS = OUTER_DEADLINE_SECONDS + READY_DEADLINE_SLACK_SECONDS  # 6.0
+# After `docker pause`, warm connection pools can still return 200 briefly before
+# the hung probe surfaces. The live harness waits up to this long for the
+# expected 503+code before starting the sustain window.
+POST_PAUSE_HANG_DEADLINE_SECONDS = OUTER_DEADLINE_SECONDS * 2 + READY_DEADLINE_SLACK_SECONDS
+POST_PAUSE_HANG_POLL_INTERVAL_SECONDS = 0.25
 
 # `/api/v1/health/live` (routes/health.rs `liveness`) and
 # `/api/v1/openapi.yaml` (http.rs `openapi_yaml`, serving
