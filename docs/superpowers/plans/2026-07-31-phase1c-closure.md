@@ -155,7 +155,7 @@ Create version 1 with these normative grants:
     {"key":"doc.delete","status":"active","description":"Delete documents","requiredCollectionAccess":"admin","conditionalPolicy":"own_or_explicit_deferred_to_custom_role","operationRefs":["src/routes/documents.rs","src/routes/collections.rs"]},
     {"key":"doc.publish","status":"active","description":"Publish document versions","requiredCollectionAccess":"write","conditionalPolicy":null,"operationRefs":["src/routes/documents.rs"]},
     {"key":"qa.query","status":"active","description":"Query collections","requiredCollectionAccess":"read","conditionalPolicy":null,"operationRefs":["src/services/retrieval/mod.rs"]},
-    {"key":"qa.history","status":"active","description":"Read version history","requiredCollectionAccess":"read","conditionalPolicy":null,"operationRefs":["src/services/access.rs"]},
+    {"key":"qa.history","status":"active","description":"Read version history","requiredCollectionAccess":"read","conditionalPolicy":null,"operationRefs":["src/services/access.rs","src/services/retrieval/mod.rs"]},
     {"key":"member.manage","status":"active","description":"Manage members","requiredCollectionAccess":null,"conditionalPolicy":"admin_cannot_manage_owner","operationRefs":["src/routes/members.rs"]},
     {"key":"audit.view","status":"active","description":"Read audit entries","requiredCollectionAccess":null,"conditionalPolicy":null,"operationRefs":["src/routes/audit.rs"]},
     {"key":"jobs.system","status":"active","description":"Operate system jobs","requiredCollectionAccess":null,"conditionalPolicy":null,"operationRefs":["src/services/access.rs"]},
@@ -177,7 +177,7 @@ Create version 1 with these normative grants:
 }
 ```
 
-`validate_catalog_invariants()` returns `Result<(), Vec<String>>`, sorts errors, and rejects duplicate roles, duplicate permission keys, unknown grants, reserved grants, missing operation references, active references to missing source files, and reserved references. For every active key, at least one referenced file must contain the exact quoted permission literal; file existence alone is not sufficient evidence. Task 9 adds `src/bin/worker.rs` to the `jobs.system` references only after the worker binary contains that literal.
+`validate_catalog_invariants()` returns `Result<(), Vec<String>>`, sorts errors, and rejects duplicate roles, duplicate permission keys, unknown grants, reserved grants, missing operation references, active references to missing source files, and reserved references. For every active key, at least one referenced file must contain the exact quoted permission literal; file existence alone is not sufficient evidence. `operationRefs` may list both the real enforcement site and the literal-definition site (as with `qa.history`: `src/services/access.rs` enforces, `src/services/retrieval/mod.rs` defines `"qa.history"`), while at least one must contain the exact quoted literal. Task 9 adds `src/bin/worker.rs` to the `jobs.system` references only after the worker binary contains that literal.
 
 - [ ] **Step 4: Commit, push, and verify GREEN**
 
