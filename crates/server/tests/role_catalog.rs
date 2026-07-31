@@ -87,6 +87,20 @@ fn test_database_url() -> Option<String> {
 
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn canonical_matrix_matches_builtin_role_catalog_fixture() {
+    // Wired in GREEN: compare sorted DB role grants to load_builtin_role_catalog().
+    panic!("TODO: compare DB matrix to builtin-role-catalog fixture");
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn permissions_table_contains_exactly_active_catalog_keys() {
+    // Wired in GREEN: permissions rows must equal active fixture keys exactly.
+    panic!("TODO: compare permissions table to active catalog keys");
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn canonical_matrix_matches_the_current_poc_effective_matrix() {
     let Some(base_url) = test_database_url() else {
         return;

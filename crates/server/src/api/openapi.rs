@@ -596,4 +596,67 @@ mod tests {
         assert!(!get.contains("\"201\":"));
         assert!(post.contains("\"201\":"));
     }
+
+    #[test]
+    fn openapi_role_enums_match_builtin_catalog_roles() {
+        let catalog = crate::auth::rbac_catalog::load_builtin_role_catalog();
+        let yaml = embedded_openapi_yaml();
+        let expected = format!("enum: [{}]", catalog.roles.join(", "));
+        let role_enum_lines: Vec<&str> = yaml
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.starts_with("enum: [")
+                    && line.contains("owner")
+                    && line.contains("admin")
+                    && line.contains("editor")
+                    && line.contains("viewer")
+            })
+            .collect();
+        assert!(
+            !role_enum_lines.is_empty(),
+            "OpenAPI must declare MembershipRole-style enums"
+        );
+        for line in &role_enum_lines {
+            assert_eq!(
+                *line, expected.as_str(),
+                "role enum must match builtin catalog roles in order"
+            );
+        }
+        // Roles are authoritative via the catalog extension, not a second matrix.
+        assert!(
+            yaml.lines().any(|line| {
+                line.trim() == "x-markhand-builtin-role-catalog: ./builtin-role-catalog.json"
+            }),
+            "OpenAPI must reference the canonical builtin-role-catalog fixture"
+        );
+    }
+
+    #[test]
+    fn openapi_references_builtin_catalog_without_embedding_grants() {
+        let yaml = embedded_openapi_yaml();
+        assert!(
+            yaml.lines().any(|line| {
+                line.trim() == "x-markhand-builtin-role-catalog: ./builtin-role-catalog.json"
+            }),
+            "OpenAPI must expose only a reference to builtin-role-catalog.json"
+        );
+        // Fail closed: never embed a second grant matrix in the YAML document.
+        for line in yaml.lines() {
+            let trimmed = line.trim();
+            assert!(
+                !trimmed.starts_with("grants:") && trimmed != "grants",
+                "OpenAPI must not embed a grants matrix; found: {trimmed}"
+            );
+        }
+        let catalog = crate::auth::rbac_catalog::load_builtin_role_catalog();
+        for (role, keys) in &catalog.grants {
+            // A copied matrix would list grant keys beside a role label.
+            let role_grant_block = format!("{role}: [{keys}]", keys = keys.join(", "));
+            assert!(
+                !yaml.contains(&role_grant_block),
+                "OpenAPI must not embed catalog grants for {role}"
+            );
+        }
+    }
 }
