@@ -459,13 +459,46 @@ mod tests {
             source.contains("FOR NO KEY UPDATE"),
             "grant triggers must lock the parent collection row"
         );
+        assert!(
+            source.contains("OLD.org_id IS DISTINCT FROM NEW.org_id"),
+            "grant trigger must reject in-place org_id retargeting"
+        );
+        assert!(
+            source.contains("OLD.collection_id IS DISTINCT FROM NEW.collection_id"),
+            "grant trigger must reject in-place collection_id retargeting"
+        );
+        assert!(
+            source.contains("delete and re-insert"),
+            "grant retarget rejection must direct callers to delete+insert"
+        );
+        assert!(
+            source.contains("CREATE OR REPLACE FUNCTION bump_org_acl_version()"),
+            "0036 must replace the shared bump_org_acl_version function"
+        );
+        assert!(
+            source.contains("OLD.org_id IS DISTINCT FROM NEW.org_id")
+                && source
+                    .matches("UPDATE orgs SET acl_version = acl_version + 1")
+                    .count()
+                    >= 2,
+            "bump_org_acl_version must bump both OLD and NEW orgs on cross-org UPDATE"
+        );
 
-        for table in ["collection_group_access", "collection_role_access"] {
+        for (table, trigger) in [
+            (
+                "collection_group_access",
+                "collection_group_access_enforce_visibility",
+            ),
+            (
+                "collection_role_access",
+                "collection_role_access_enforce_visibility",
+            ),
+        ] {
             assert!(
                 source.contains(&format!(
-                    "BEFORE INSERT OR UPDATE ON {table}\n    FOR EACH ROW"
+                    "CREATE TRIGGER {trigger}\n    BEFORE INSERT OR UPDATE ON {table}"
                 )),
-                "{table} must have a BEFORE INSERT OR UPDATE visibility guard"
+                "{table} must have a named BEFORE INSERT OR UPDATE visibility guard"
             );
             assert!(
                 source.contains(&format!(
@@ -478,24 +511,32 @@ mod tests {
         }
 
         assert!(
-            source.contains("BEFORE UPDATE OF visibility ON collections"),
-            "collections must guard visibility transitions away from groups"
+            source.contains(
+                "CREATE TRIGGER collections_enforce_visibility_grant_invariant\n    BEFORE UPDATE OF visibility ON collections"
+            ),
+            "collections must have a named visibility transition guard"
         );
         assert!(
             source.contains("NEW.visibility <> 'groups'"),
             "visibility guard must fire when leaving groups"
         );
 
-        for table in [
-            "collection_group_access",
-            "collection_role_access",
-            "group_memberships",
+        for (table, trigger) in [
+            (
+                "collection_group_access",
+                "collection_group_access_bump_acl_version",
+            ),
+            (
+                "collection_role_access",
+                "collection_role_access_bump_acl_version",
+            ),
+            ("group_memberships", "group_memberships_bump_acl_version"),
         ] {
             assert!(
                 source.contains(&format!(
-                    "ON {table}\n    FOR EACH ROW EXECUTE FUNCTION bump_org_acl_version()"
+                    "CREATE TRIGGER {trigger}\n    AFTER INSERT OR UPDATE OR DELETE ON {table}\n    FOR EACH ROW EXECUTE FUNCTION bump_org_acl_version()"
                 )),
-                "{table} must bump org acl_version"
+                "{table} must have a named acl_version bump trigger"
             );
         }
     }

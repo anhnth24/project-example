@@ -79,3 +79,33 @@ pub async fn revoke_collection_access_for_principal(
     orgs::bump_acl_version(txn, org_id).await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn revoke_collection_access_follows_parent_lock_and_grant_delete_order() {
+        let source = include_str!("acl_mutate.rs");
+        let lock = source
+            .find("FOR NO KEY UPDATE")
+            .expect("collection parent lock");
+        let delete_group = source
+            .find("DELETE FROM collection_group_access")
+            .expect("delete group grants");
+        let delete_role = source
+            .find("DELETE FROM collection_role_access")
+            .expect("delete role grants");
+        let visibility = source
+            .find("SET visibility = 'private'")
+            .expect("visibility update");
+        let delete_user = source
+            .find("DELETE FROM collection_user_access")
+            .expect("delete target user grant");
+        assert!(
+            lock < delete_group
+                && delete_group < delete_role
+                && delete_role < visibility
+                && visibility < delete_user,
+            "revoke_collection_access_for_principal must lock parent, delete group/role grants, update visibility, then delete only the target user grant"
+        );
+    }
+}

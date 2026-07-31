@@ -191,6 +191,59 @@ async fn dormant_grant_count(client: &Client) -> i64 {
         .get(0)
 }
 
+async fn collection_group_grant_state(
+    client: &Client,
+    org: Uuid,
+    collection: Uuid,
+) -> (String, i64) {
+    let visibility: String = client
+        .query_one(
+            "SELECT visibility FROM collections WHERE org_id = $1 AND id = $2",
+            &[&org, &collection],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    let grants: i64 = client
+        .query_one(
+            "SELECT count(*)::bigint FROM collection_group_access
+             WHERE org_id = $1 AND collection_id = $2",
+            &[&org, &collection],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    (visibility, grants)
+}
+
+async fn org_acl_version(client: &Client, org: Uuid) -> i64 {
+    client
+        .query_one("SELECT acl_version FROM orgs WHERE id = $1", &[&org])
+        .await
+        .unwrap()
+        .get(0)
+}
+
+async fn seed_second_groups_collection(client: &mut Client, fixture: &AclFixture) -> Uuid {
+    let collection = Uuid::new_v4();
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "INSERT INTO collections (id, org_id, name, slug, owner_user_id, visibility)
+         VALUES ($1, $2, 'Archive', $3, $4, 'groups')",
+        &[
+            &collection,
+            &fixture.org,
+            &format!("archive-{}", &collection.simple().to_string()[..8]),
+            &fixture._owner,
+        ],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    collection
+}
+
 async fn boot_db() -> Option<EphemeralDb> {
     let base = admin_database_url()?;
     let ephemeral = EphemeralDb::create(&base).await;
@@ -285,6 +338,41 @@ async fn groups_visibility_accepts_group_and_role_grants() {
 
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn groups_to_private_fails_while_role_grants_remain() {
+    let Some(ephemeral) = boot_db().await else {
+        return;
+    };
+    let mut client = connect(&ephemeral.url).await;
+    let fixture = seed_acl_fixture(&mut client, "groups").await;
+
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "INSERT INTO collection_role_access (org_id, collection_id, role_id, access_level)
+         VALUES ($1, $2, $3, 'read')",
+        &[&fixture.org, &fixture.collection, &fixture.role_id],
+    )
+    .await
+    .unwrap();
+    let err = tx
+        .execute(
+            "UPDATE collections SET visibility = 'private'
+             WHERE org_id = $1 AND id = $2",
+            &[&fixture.org, &fixture.collection],
+        )
+        .await
+        .expect_err("visibility flip with remaining role grants must fail");
+    assert!(
+        pg_error_text(&err).contains("grants remain"),
+        "{}",
+        pg_error_text(&err)
+    );
+    tx.rollback().await.unwrap();
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn groups_to_private_fails_while_grants_remain() {
     let Some(ephemeral) = boot_db().await else {
         return;
@@ -336,19 +424,24 @@ async fn concurrent_grant_vs_visibility_flip_cannot_leave_dormant_rows() {
         let org = fixture.org;
         let collection = fixture.collection;
         tokio::spawn(async move {
-            barrier.wait().await;
             let mut client = connect(&url).await;
             let tx = client.transaction().await.unwrap();
             set_org(&tx, org).await;
-            let result = tx
+            barrier.wait().await;
+            let dml = tx
                 .execute(
                     "UPDATE collections SET visibility = 'private'
                      WHERE org_id = $1 AND id = $2",
                     &[&org, &collection],
                 )
                 .await;
-            let _ = tx.commit().await;
-            result
+            match dml {
+                Ok(_) => tx.commit().await.is_ok(),
+                Err(_) => {
+                    tx.rollback().await.ok();
+                    false
+                }
+            }
         })
     };
 
@@ -359,33 +452,34 @@ async fn concurrent_grant_vs_visibility_flip_cannot_leave_dormant_rows() {
         let collection = fixture.collection;
         let group_id = fixture.group_id;
         tokio::spawn(async move {
-            barrier.wait().await;
             let mut client = connect(&url).await;
             let tx = client.transaction().await.unwrap();
             set_org(&tx, org).await;
-            let result = tx
+            barrier.wait().await;
+            let dml = tx
                 .execute(
                     "INSERT INTO collection_group_access (org_id, collection_id, group_id, access_level)
                      VALUES ($1, $2, $3, 'read')",
                     &[&org, &collection, &group_id],
                 )
                 .await;
-            let _ = tx.commit().await;
-            result
+            match dml {
+                Ok(_) => tx.commit().await.is_ok(),
+                Err(_) => {
+                    tx.rollback().await.ok();
+                    false
+                }
+            }
         })
     };
 
-    let (flip_result, grant_result) = tokio::join!(flip, grant);
-    let flip_result = flip_result.expect("flip task join");
-    let grant_result = grant_result.expect("grant task join");
+    let flip_committed = flip.await.expect("flip task join");
+    let grant_committed = grant.await.expect("grant task join");
 
-    let successes = [flip_result.is_ok(), grant_result.is_ok()]
-        .iter()
-        .filter(|ok| **ok)
-        .count();
-    assert!(
-        successes <= 1,
-        "grant-vs-flip race must not let both commit: flip={flip_result:?} grant={grant_result:?}"
+    assert_eq!(
+        usize::from(flip_committed) + usize::from(grant_committed),
+        1,
+        "grant-vs-flip race must leave exactly one durable winner: flip={flip_committed} grant={grant_committed}"
     );
 
     let client = connect(&ephemeral.url).await;
@@ -394,6 +488,94 @@ async fn concurrent_grant_vs_visibility_flip_cannot_leave_dormant_rows() {
         0,
         "no interleaving may leave group/role grants on non-groups collections"
     );
+    let (visibility, grants) =
+        collection_group_grant_state(&client, fixture.org, fixture.collection).await;
+    match (visibility.as_str(), grants) {
+        ("private", 0) | ("groups", 1) => {}
+        other => panic!("incoherent durable final state: {other:?}"),
+    }
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn grant_retargeting_collection_id_is_rejected() {
+    let Some(ephemeral) = boot_db().await else {
+        return;
+    };
+    let mut client = connect(&ephemeral.url).await;
+    let fixture = seed_acl_fixture(&mut client, "groups").await;
+    let other_collection = seed_second_groups_collection(&mut client, &fixture).await;
+
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "INSERT INTO collection_group_access (org_id, collection_id, group_id, access_level)
+         VALUES ($1, $2, $3, 'read')",
+        &[&fixture.org, &fixture.collection, &fixture.group_id],
+    )
+    .await
+    .unwrap();
+    let err = tx
+        .execute(
+            "UPDATE collection_group_access
+             SET collection_id = $4
+             WHERE org_id = $1 AND collection_id = $2 AND group_id = $3",
+            &[
+                &fixture.org,
+                &fixture.collection,
+                &fixture.group_id,
+                &other_collection,
+            ],
+        )
+        .await
+        .expect_err("in-place collection retargeting must fail");
+    let message = pg_error_text(&err);
+    assert!(
+        message.contains("delete and re-insert") || message.contains("immutable"),
+        "{message}"
+    );
+    tx.rollback().await.unwrap();
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn grant_access_level_update_still_validates_parent() {
+    let Some(ephemeral) = boot_db().await else {
+        return;
+    };
+    let mut client = connect(&ephemeral.url).await;
+    let fixture = seed_acl_fixture(&mut client, "groups").await;
+
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "INSERT INTO collection_group_access (org_id, collection_id, group_id, access_level)
+         VALUES ($1, $2, $3, 'read')",
+        &[&fixture.org, &fixture.collection, &fixture.group_id],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "UPDATE collection_group_access
+         SET access_level = 'write'
+         WHERE org_id = $1 AND collection_id = $2 AND group_id = $3",
+        &[&fixture.org, &fixture.collection, &fixture.group_id],
+    )
+    .await
+    .unwrap();
+    let level: String = tx
+        .query_one(
+            "SELECT access_level FROM collection_group_access
+             WHERE org_id = $1 AND collection_id = $2 AND group_id = $3",
+            &[&fixture.org, &fixture.collection, &fixture.group_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(level, "write");
+    tx.commit().await.unwrap();
     ephemeral.drop().await;
 }
 
@@ -476,6 +658,200 @@ async fn acl_version_bumps_on_role_grant() {
         .unwrap()
         .get(0);
     assert_eq!(after, before + 1);
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn acl_version_bumps_on_group_grant_update_and_delete() {
+    let Some(ephemeral) = boot_db().await else {
+        return;
+    };
+    let mut client = connect(&ephemeral.url).await;
+    let fixture = seed_acl_fixture(&mut client, "groups").await;
+
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "INSERT INTO collection_group_access (org_id, collection_id, group_id, access_level)
+         VALUES ($1, $2, $3, 'read')",
+        &[&fixture.org, &fixture.collection, &fixture.group_id],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let before_update = org_acl_version(&client, fixture.org).await;
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "UPDATE collection_group_access
+         SET access_level = 'write'
+         WHERE org_id = $1 AND collection_id = $2 AND group_id = $3",
+        &[&fixture.org, &fixture.collection, &fixture.group_id],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        org_acl_version(&client, fixture.org).await,
+        before_update + 1,
+        "group grant UPDATE must bump acl_version once"
+    );
+
+    let before_delete = org_acl_version(&client, fixture.org).await;
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "DELETE FROM collection_group_access
+         WHERE org_id = $1 AND collection_id = $2 AND group_id = $3",
+        &[&fixture.org, &fixture.collection, &fixture.group_id],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        org_acl_version(&client, fixture.org).await,
+        before_delete + 1,
+        "group grant DELETE must bump acl_version once"
+    );
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn acl_version_bumps_on_role_grant_update_and_delete() {
+    let Some(ephemeral) = boot_db().await else {
+        return;
+    };
+    let mut client = connect(&ephemeral.url).await;
+    let fixture = seed_acl_fixture(&mut client, "groups").await;
+
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "INSERT INTO collection_role_access (org_id, collection_id, role_id, access_level)
+         VALUES ($1, $2, $3, 'read')",
+        &[&fixture.org, &fixture.collection, &fixture.role_id],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let before_update = org_acl_version(&client, fixture.org).await;
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "UPDATE collection_role_access
+         SET access_level = 'write'
+         WHERE org_id = $1 AND collection_id = $2 AND role_id = $3",
+        &[&fixture.org, &fixture.collection, &fixture.role_id],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        org_acl_version(&client, fixture.org).await,
+        before_update + 1,
+        "role grant UPDATE must bump acl_version once"
+    );
+
+    let before_delete = org_acl_version(&client, fixture.org).await;
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "DELETE FROM collection_role_access
+         WHERE org_id = $1 AND collection_id = $2 AND role_id = $3",
+        &[&fixture.org, &fixture.collection, &fixture.role_id],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        org_acl_version(&client, fixture.org).await,
+        before_delete + 1,
+        "role grant DELETE must bump acl_version once"
+    );
+    ephemeral.drop().await;
+}
+
+// Grant tables forbid in-place org_id/collection_id retargeting (see
+// `grant_retargeting_collection_id_is_rejected`), so cross-org dual-bump
+// behavior of `bump_org_acl_version` is pinned by the migration shape test and
+// exercised here through same-org membership UPDATE/DELETE on `group_memberships`.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn acl_version_bumps_on_group_membership_update_and_delete() {
+    let Some(ephemeral) = boot_db().await else {
+        return;
+    };
+    let mut client = connect(&ephemeral.url).await;
+    let fixture = seed_acl_fixture(&mut client, "groups").await;
+    let member = Uuid::new_v4();
+    let second_group = Uuid::new_v4();
+
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "INSERT INTO users (id, email, display_name) VALUES ($1, $2, 'Member')",
+        &[&member, &format!("member-{}@acl-it.test", member.simple())],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "INSERT INTO org_memberships (org_id, user_id, role) VALUES ($1, $2, 'viewer')",
+        &[&fixture.org, &member],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "INSERT INTO groups (id, org_id, name) VALUES ($1, $2, 'Reviewers')",
+        &[&second_group, &fixture.org],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "INSERT INTO group_memberships (org_id, group_id, user_id) VALUES ($1, $2, $3)",
+        &[&fixture.org, &fixture.group_id, &member],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let before_update = org_acl_version(&client, fixture.org).await;
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "UPDATE group_memberships
+         SET group_id = $4
+         WHERE org_id = $1 AND group_id = $2 AND user_id = $3",
+        &[&fixture.org, &fixture.group_id, &member, &second_group],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        org_acl_version(&client, fixture.org).await,
+        before_update + 1,
+        "group membership UPDATE within the same org must bump acl_version once"
+    );
+
+    let before_delete = org_acl_version(&client, fixture.org).await;
+    let tx = client.transaction().await.unwrap();
+    set_org(&tx, fixture.org).await;
+    tx.execute(
+        "DELETE FROM group_memberships
+         WHERE org_id = $1 AND group_id = $2 AND user_id = $3",
+        &[&fixture.org, &second_group, &member],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(
+        org_acl_version(&client, fixture.org).await,
+        before_delete + 1,
+        "group membership DELETE must bump acl_version once"
+    );
     ephemeral.drop().await;
 }
 
