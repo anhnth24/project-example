@@ -3,9 +3,7 @@
 //! Emits the same visibility and access-level branches as [`crate::auth::acl::allowed`].
 
 fn access_level_rank_expr(column: &str) -> String {
-    format!(
-        "CASE {column} WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END"
-    )
+    format!("CASE {column} WHEN 'read' THEN 1 WHEN 'write' THEN 2 WHEN 'admin' THEN 3 ELSE 0 END")
 }
 
 fn required_access_rank(required_access_param: &str) -> String {
@@ -303,8 +301,11 @@ mod tests {
     #[test]
     fn visibility_markers_are_pinned_in_allowed_collections_sql() {
         let sql = allowed_collections_sql("$1", "$2", "$3", "$4");
-        for marker in ["c.visibility = 'org'", "c.visibility = 'private'", "c.visibility = 'groups'"]
-        {
+        for marker in [
+            "c.visibility = 'org'",
+            "c.visibility = 'private'",
+            "c.visibility = 'groups'",
+        ] {
             assert!(
                 sql.contains(marker),
                 "allowed_collections_sql missing visibility marker {marker:?} in:\n{sql}"
