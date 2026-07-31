@@ -523,6 +523,49 @@ mod tests {
     }
 
     #[test]
+    fn title_from_markdown_edge_cases() {
+        assert_eq!(
+            title_from_markdown("## Mục phụ\n\nNội dung."),
+            Some("Mục phụ".into())
+        );
+        assert_eq!(title_from_markdown("#\n\nbody"), None);
+        assert_eq!(title_from_markdown("##   \n\nbody"), None);
+
+        let ok240 = format!("# {}", "a".repeat(240));
+        assert_eq!(title_from_markdown(&ok240), Some("a".repeat(240)));
+        let over241 = format!("# {}", "a".repeat(241));
+        assert_eq!(title_from_markdown(&over241), None);
+    }
+
+    #[test]
+    fn convert_path_title_heading_and_stem_fallback() {
+        let dir = std::env::temp_dir().join(format!(
+            "fileconv_title_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let no_heading = dir.join("báo_cáo.txt");
+        std::fs::write(&no_heading, "Chỉ có nội dung, không heading.\n").unwrap();
+        let conv = Converter::new();
+        let legacy = conv.convert_path(&no_heading).unwrap();
+        assert_eq!(legacy.title.as_deref(), Some("báo_cáo"));
+        let detailed = conv.convert_path_detailed(&no_heading).unwrap();
+        assert_eq!(detailed.result.title.as_deref(), Some("báo_cáo"));
+
+        let with_heading = dir.join("ten_file.txt");
+        std::fs::write(&with_heading, "# Tiêu đề thật\n\nNội dung.\n").unwrap();
+        let legacy = conv.convert_path(&with_heading).unwrap();
+        assert_eq!(legacy.title.as_deref(), Some("Tiêu đề thật"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn legacy_convert_error_remains_exhaustive() {
         fn classify(error: &ConvertError) -> &'static str {
             match error {
