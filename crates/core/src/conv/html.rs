@@ -724,8 +724,19 @@ mod tests {
 
     #[test]
     fn skip_tags_drops_script_style_noscript_keeps_vietnamese_body() {
-        // Khóa skip_tags(["script","style","noscript"]): marker trong các thẻ đó
-        // không được lọt Markdown; nội dung tiếng Việt trong <p> vẫn còn.
+        // Regression / khóa hành vi `to_markdown` → `htmd` +
+        // `skip_tags(["script","style","noscript"])` (xem production ngay trên hàm).
+        //
+        // Issue #291 (intern-08) yêu cầu tối thiểu: HTML có <script>, <style>, và
+        // đoạn tiếng Việt trong <body>/<p>. Test này làm đủ yêu cầu đó, và thêm
+        // <noscript> vì production cũng skip tag này — nếu bỏ noscript khỏi
+        // skip_tags sau này, assert marker noscript phải đỏ.
+        //
+        // Marker `SKIP_*_TOKEN_9f3a` cố ý chọn chuỗi không xuất hiện tự nhiên
+        // trong HTML/Markdown (tránh assert mơ hồ kiểu `contains("var")`).
+        // Luồng: ghi file tạm → decode HTML bytes → htmd convert → Markdown.
+        // Assert dương: body tiếng Việt còn. Assert âm: không còn marker trong
+        // các thẻ bị skip.
         let html = "\
 <html><head>\
 <meta charset=\"utf-8\">\
@@ -739,19 +750,19 @@ mod tests {
         let md = to_markdown(&path).expect("html convert");
         assert!(
             md.contains("Xin chào Việt Nam"),
-            "expected Vietnamese body, got: {md:?}"
+            "expected Vietnamese body kept after convert, got: {md:?}"
         );
         assert!(
             !md.contains("SKIP_JS_TOKEN_9f3a"),
-            "script must be skipped, got: {md:?}"
+            "script body must not leak into Markdown, got: {md:?}"
         );
         assert!(
             !md.contains("SKIP_CSS_TOKEN_9f3a"),
-            "style must be skipped, got: {md:?}"
+            "style body must not leak into Markdown, got: {md:?}"
         );
         assert!(
             !md.contains("SKIP_NOSCRIPT_TOKEN_9f3a"),
-            "noscript must be skipped, got: {md:?}"
+            "noscript body must not leak into Markdown, got: {md:?}"
         );
         let _ = std::fs::remove_file(path);
     }
