@@ -4,26 +4,33 @@ Parent plan: [`../../../phase-1c-multi-org-security.md`](../../../phase-1c-multi
 
 <!-- roadmap-default-status: backlog -->
 
-**Audit 2026-07-27 (đọc code, không đoán).** Con số cũ "0/13" gây hiểu nhầm: phần lớn
-**nền tảng thực thi 1C đã được xây sẵn trong Phase 1B** (RLS FORCE, ACL predicate ở
-retrieval, Qdrant mandatory filter, quota atomic, rate-limit, audit append-only) — nhưng
-**chưa issue nào đạt full acceptance**, nên không tick Done cái nào. Kết quả audit:
+**Cập nhật 2026-07-30 (sau các PR #331/#332/#334/#335/#338 merged, CI
+`rust-integration` xanh).** Audit gốc 2026-07-27 chốt "11 In progress / 2 Backlog /
+0 Done"; từ đó các vòng làm việc đã đóng phần định nghĩa 1C của 9 issue — mỗi issue
+ghi bằng chứng (file:line, tên test, PR) ngay trong mục Status của nó. Hiện trạng:
 
-- **11 In progress** — có building block thật + có test, nhưng thiếu phần định nghĩa 1C.
-- **2 Backlog** — chỉ có schema/prose, logic chính chưa viết: **1C-02** (invite/last-owner)
-  và **1C-13** (security/load gate).
-- **0 Done.**
+- **9 Done** — 1C-01/02 (org lifecycle + membership/invite/last-owner), 1C-05 (ACL
+  version + cache + trigger bump `0033`), 1C-06 (ACL predicate builder 8 call-site),
+  1C-07 (fail-closed Qdrant/storage/jobs + fast-unit deny), 1C-08 (pool Clean
+  recycling + worker role `0035`), 1C-09 (token/job-slot/reconcile quota lifecycle),
+  1C-10 (per-org rate bucket + worker fairness), 1C-11 (audit READ endpoint;
+  retention/coverage mở rộng ghi Out).
+- **3 In progress** — 1C-03 (thiếu OpenAPI fixture matrix + đối chiếu UI), 1C-04
+  (thiếu guard tầng worker + missing-guard inventory + phủ allow/deny), 1C-12
+  (suite denial gắn kết chưa có — mới có ~10 check rải rác).
+- **1 Backlog** — 1C-13 (security/load gate: chưa có gate/report/CI job nào).
 
-> **Hai ranh giới quan trọng, áp cho MỌI issue dưới đây:**
-> 1. **Test enforcement gần như toàn bộ là `#[ignore]` DB-gated** — chỉ chạy trong job CI
->    `rust-integration` khi có `MARKHAND_TEST_DATABASE_URL`/MinIO/Qdrant, KHÔNG chạy trong
->    `cargo test` mặc định. Fast-unit chỉ phủ logic thuần (scope resolve, filter, HMAC).
-> 2. **`context.rs:11-12` tự ghi "full ACL resolution belongs to Phase 1C"** — substrate
->    hiện tại xây cho single-org POC (1B), chưa phải multi-org đầy đủ.
+> **Hai ranh giới còn hiệu lực:**
+> 1. **Test enforcement phần lớn là `#[ignore]` DB-gated** — chạy trong job CI
+>    `rust-integration` (có `MARKHAND_TEST_DATABASE_URL`/MinIO/Qdrant), KHÔNG chạy trong
+>    `cargo test` mặc định. Fast-unit phủ logic thuần (scope resolve, filter, HMAC,
+>    ACL-predicate shape, forged-payload/timeout deny).
+> 2. Doc comment `context.rs` "full ACL resolution belongs to Phase 1C" nay đã **stale**
+>    (resolver + version/cache đã landed ở 1C-05/06) — ứng viên dọn ở vòng code kế.
 >
-> **Exit gate Phase 1C (1C-12 + 1C-13) CHƯA đạt** — cả hai deliverable "suite gắn kết" và
-> "gate có report" đều chưa tồn tại như deliverable. Và Phase 1C chỉ activate sau khi
-> **Phase 1B gate đóng** (R04/R06 còn pending), nên toàn phase vẫn là công việc phía trước.
+> **Exit gate Phase 1C (1C-12 + 1C-13) CHƯA đạt** — "suite gắn kết" và "gate có report"
+> vẫn chưa tồn tại như deliverable; đây là toàn bộ đường găng còn lại của phase
+> (cùng phần đuôi 1C-03/04).
 
 ## Dependency
 
@@ -36,7 +43,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-01 — Organization lifecycle và validated context
 
-- **Status:** In progress — nửa *validated-context* đã có + test DB-gated: resolver `auth/permissions.rs:39`, membership re-verify (JWT chỉ là hint) `auth/middleware.rs:144`, fail-closed `auth/context.rs:30`, RLS `migrations/0002`. **Nửa lifecycle đã landed phần lớn**: `GET /orgs` (chỉ org của mình), `GET /orgs/{id}` (404 đồng nhất cho "không tồn tại"/"không phải member" — không oracle), `POST /orgs/switch` (re-verify membership từ PG, mint session mới độc lập scoped target org, audit `org.switch` cả success/deny; deny với org không tồn tại thì không ghi audit để tránh FK-oracle) — routes bearer-identity-only theo tiền lệ `accept_invite`, kèm two-org resolver test DB-gated (`tests/orgs.rs`, 8 test: forged/stale/suspended deny + audit). **`POST /orgs` (create) đã landed** sau khi owner chốt thiết kế catalog toàn cục (xem 1C-03/migration `0030`): tạo org + owner membership + `provision_org_role_catalog(org_id)` trong MỘT transaction, audit `org.create`, validate slug khớp CHECK constraint, rate-limit auth-IP, 409 slug taken; test DB-gated create (happy/duplicate/unauth/audit + owner resolve đủ permission không cần seed riêng) trong `tests/orgs.rs` (12 test).
+- **Status:** Done — nửa *validated-context* đã có + test DB-gated: resolver `auth/permissions.rs:39`, membership re-verify (JWT chỉ là hint) `auth/middleware.rs:144`, fail-closed `auth/context.rs:30`, RLS `migrations/0002`. **Nửa lifecycle đã landed phần lớn**: `GET /orgs` (chỉ org của mình), `GET /orgs/{id}` (404 đồng nhất cho "không tồn tại"/"không phải member" — không oracle), `POST /orgs/switch` (re-verify membership từ PG, mint session mới độc lập scoped target org, audit `org.switch` cả success/deny; deny với org không tồn tại thì không ghi audit để tránh FK-oracle) — routes bearer-identity-only theo tiền lệ `accept_invite`, kèm two-org resolver test DB-gated (`tests/orgs.rs`, 8 test: forged/stale/suspended deny + audit). **`POST /orgs` (create) đã landed** sau khi owner chốt thiết kế catalog toàn cục (xem 1C-03/migration `0030`): tạo org + owner membership + `provision_org_role_catalog(org_id)` trong MỘT transaction, audit `org.create`, validate slug khớp CHECK constraint, rate-limit auth-IP, 409 slug taken; test DB-gated create (happy/duplicate/unauth/audit + owner resolve đủ permission không cần seed riêng) trong `tests/orgs.rs` (12 test).
 
 - **Plan/files:** Org create/list/detail/switch, service/repo/middleware; issue new
   context/session after verified membership.
@@ -46,7 +53,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-02 — Membership, invites và last-owner invariant
 
-- **Status:** In progress — gần Done; **đã landed đầy đủ trong #317** (đọc code xác
+- **Status:** Done — **đã landed đầy đủ trong #317** (đọc code xác
   minh 2026-07-28, không phải backlog cũ ghi "Backlog"): invite create/accept/revoke/list
   hashed single-use `routes/members.rs` E1-E5, **`PATCH /api/v1/members/{userId}`** (đổi
   role/state, `routes/members.rs:450 patch_member`) và **`DELETE /api/v1/members/{userId}`**
@@ -117,9 +124,9 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-05 — Collection ACL resolver/cache
 
-- **Status:** In progress — resolver cơ bản (org/private/owner/`collection_user_access`) +
-  fail-closed `services/retrieval/mod.rs:181` + test, **và giờ có version + cache** (phiên
-  này, worktree, chưa chạy DB-gated CI): `orgs.acl_version` (migration
+- **Status:** Done — resolver cơ bản (org/private/owner/`collection_user_access`) +
+  fail-closed `services/retrieval/mod.rs:181` + test, **và giờ có version + cache** (landed, đã qua CI
+  `rust-integration` khi merge): `orgs.acl_version` (migration
   `0031_expand_org_acl_version.sql`, cột `bigint NOT NULL DEFAULT 1`, expand-only) là version
   **org-wide** (cố ý không per-membership/per-role — `revoke_role_permission_for_principal`
   xoá một hàng `role_permissions` dùng chung bởi mọi member cùng role, nên version hẹp hơn
@@ -184,7 +191,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-06 — PostgreSQL ACL enforcement
 
-- **Status:** In progress — vòng 11-B xác minh lại 4 điểm "Thiếu" trước đó bằng code thật
+- **Status:** Done — vòng 11-B xác minh lại 4 điểm "Thiếu" trước đó bằng code thật
   (đọc 2026-07-29; 3/4 stale hoặc đã đóng, 1/4 đúng và đã sửa):
   1. **Đúng, đã sửa**: nhánh FTS candidate (`db::search::fts_search`, `db/search.rs:290`)
      trước đây KHÔNG có ACL subquery — chỉ lọc `org_id`/`collection_id = ANY(...)`/version/
@@ -252,7 +259,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-07 — Qdrant/storage/jobs fail-closed enforcement
 
-- **Status:** In progress — Qdrant mandatory org+collection filter (`storage/qdrant.rs:897`), PG payload validation, download capability authorize+replay (`services/download.rs`), authorize preview/download/export/job/SSE, abort in-flight → `citation_revoked` (`services/qa/ask_stream.rs`); test tốt (fast + DB/MinIO/Qdrant-gated). **Gap "vài fast-unit deny (forged/timeout Qdrant client)" đã ĐÓNG (2026-07-30, xác minh bằng đọc code trước khi viết — gap là thật, không stale)**: trước đó forged-payload chỉ có test Qdrant-gated (`cross_org_point_overwrite_rejected`/`same_org_different_collection_cannot_overwrite`, `tests/storage.rs`) và timeout/failure của client hoàn toàn CHƯA có test. Đã thêm fast-unit (chạy trong `cargo test` mặc định, không cần service): (a) forged payload phía response — hit/scroll page mang org/collection ngoài scope → `OwnershipConflict` (`storage::qdrant::tests::{forged_search_hit_payload_denies_with_ownership_conflict, forged_scrolled_point_payload_denies_with_ownership_conflict}`) + defense-in-depth tầng service (`services::retrieval::vector::tests::forged_candidate_collection_denies_with_ownership_conflict`); (b) forged payload phía upsert deny client-side TRƯỚC mọi network I/O (`storage::qdrant::tests::upsert_denies_forged_payload_scope_before_any_network`); (c) malformed payload/point-id từ Qdrant → lỗi, không default-fill (`malformed_qdrant_payload_fails_closed`), nil-collection lẩn trong scope set → `MissingScope` (`scope_with_nil_collection_member_is_rejected`); (d) client failure/timeout fail-closed thành `StorageError::Transport` — connection refused cho search/get_points/upsert/delete và endpoint nhận TCP nhưng không trả lời → timeout bounded (`tests/storage.rs::{qdrant_connection_failure_fails_closed_as_transport, qdrant_unresponsive_endpoint_times_out_as_transport}`, không `#[ignore]`). Ở tầng retrieval, leg Qdrant lỗi/timeout chỉ degrade thành FTS-only CÓ warning (cả hai leg lỗi → `BothLegsFailed`), không bao giờ degrade thành query không filter — filter gắn trong client trước khi gửi request, không nhánh lỗi nào bỏ filter (`services/retrieval/mod.rs:411`). Các acceptance item còn lại xác minh ĐÃ có test từ trước: missing scope (`empty_scope_is_rejected` + `missing_scope_rejects_without_network_side_effects`), malformed/tamper/expiry capability (unit trong `services/download.rs`), replay + concurrent redemption (`citation_authz_matrix.rs::live_citation_authz_expiry_replay_idor_and_immediate_deny`), job ID/SSE IDOR (`sse_stream_readiness.rs::live_job_sse_replay_worker_restart_and_cross_org_idor`), stream revoke (`ask_grounding_matrix.rs` `citation_revoked` + `live_ask_stream_jwt_exp_membership_and_delete_barriers`), dimension mismatch (`existing_collection_dimension_mismatch_rejected`, Qdrant-gated). Signed-URL không áp dụng — thay bằng capability token (theo thiết kế); phần enforcement fail-closed của 1C-07 coi như đủ test hai tầng (fast + gated), phần "suite gắn kết" cross-org còn lại thuộc 1C-12.
+- **Status:** Done — Qdrant mandatory org+collection filter (`storage/qdrant.rs:897`), PG payload validation, download capability authorize+replay (`services/download.rs`), authorize preview/download/export/job/SSE, abort in-flight → `citation_revoked` (`services/qa/ask_stream.rs`); test tốt (fast + DB/MinIO/Qdrant-gated). **Gap "vài fast-unit deny (forged/timeout Qdrant client)" đã ĐÓNG (2026-07-30, xác minh bằng đọc code trước khi viết — gap là thật, không stale)**: trước đó forged-payload chỉ có test Qdrant-gated (`cross_org_point_overwrite_rejected`/`same_org_different_collection_cannot_overwrite`, `tests/storage.rs`) và timeout/failure của client hoàn toàn CHƯA có test. Đã thêm fast-unit (chạy trong `cargo test` mặc định, không cần service): (a) forged payload phía response — hit/scroll page mang org/collection ngoài scope → `OwnershipConflict` (`storage::qdrant::tests::{forged_search_hit_payload_denies_with_ownership_conflict, forged_scrolled_point_payload_denies_with_ownership_conflict}`) + defense-in-depth tầng service (`services::retrieval::vector::tests::forged_candidate_collection_denies_with_ownership_conflict`); (b) forged payload phía upsert deny client-side TRƯỚC mọi network I/O (`storage::qdrant::tests::upsert_denies_forged_payload_scope_before_any_network`); (c) malformed payload/point-id từ Qdrant → lỗi, không default-fill (`malformed_qdrant_payload_fails_closed`), nil-collection lẩn trong scope set → `MissingScope` (`scope_with_nil_collection_member_is_rejected`); (d) client failure/timeout fail-closed thành `StorageError::Transport` — connection refused cho search/get_points/upsert/delete và endpoint nhận TCP nhưng không trả lời → timeout bounded (`tests/storage.rs::{qdrant_connection_failure_fails_closed_as_transport, qdrant_unresponsive_endpoint_times_out_as_transport}`, không `#[ignore]`). Ở tầng retrieval, leg Qdrant lỗi/timeout chỉ degrade thành FTS-only CÓ warning (cả hai leg lỗi → `BothLegsFailed`), không bao giờ degrade thành query không filter — filter gắn trong client trước khi gửi request, không nhánh lỗi nào bỏ filter (`services/retrieval/mod.rs:411`). Các acceptance item còn lại xác minh ĐÃ có test từ trước: missing scope (`empty_scope_is_rejected` + `missing_scope_rejects_without_network_side_effects`), malformed/tamper/expiry capability (unit trong `services/download.rs`), replay + concurrent redemption (`citation_authz_matrix.rs::live_citation_authz_expiry_replay_idor_and_immediate_deny`), job ID/SSE IDOR (`sse_stream_readiness.rs::live_job_sse_replay_worker_restart_and_cross_org_idor`), stream revoke (`ask_grounding_matrix.rs` `citation_revoked` + `live_ask_stream_jwt_exp_membership_and_delete_barriers`), dimension mismatch (`existing_collection_dimension_mismatch_rejected`, Qdrant-gated). Signed-URL không áp dụng — thay bằng capability token (theo thiết kế); phần enforcement fail-closed của 1C-07 coi như đủ test hai tầng (fast + gated), phần "suite gắn kết" cross-org còn lại thuộc 1C-12.
 
 - **Plan/files:** Mandatory org+non-empty collection filter; PG payload validation;
   authorize preview/download/export/job/SSE; abort in-flight on ACL change.
@@ -262,7 +269,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-08 — RLS và pool defense
 
-- **Status:** In progress — FORCE RLS ~26 bảng (`migrations/0010`), app role không owner/không BYPASSRLS (`0027/0028`), GUC transaction-local `set_config('app.org_id',…,true)` (`db/pool.rs::apply_org_context`), FORCE-RLS pin bằng unit test trên nguồn migration (`database.rs` tests — ghi chú: dòng status cũ ghi "assert FORCE-RLS ở startup, database.rs:309" là KHÔNG chính xác/stale: vị trí đó là unit test trên source migration, không có probe runtime nào ở startup assert `relforcerowsecurity`; sửa lại cho đúng hiện trạng), test pool-leak/cross-org/force-rls/deploy-role (DB-gated). **Hai gap "Thiếu" đã ĐÓNG (2026-07-30, xác minh code trước khi sửa — cả hai gap là thật):** (a) *pool reset lúc checkout*: pool trước đó dùng deadpool `RecyclingMethod::Fast` mặc định (không cleanup gì khi tái sử dụng connection). GUC transaction-local tự hết sau COMMIT/ROLLBACK by-construction (test sẵn `repositories.rs::pool_does_not_leak_tenant_gucs`), nhưng misuse **session-level** (`set_config(...,false)`, advisory lock rò, `LISTEN`, temp table) trên đường `pool.get()` thô (readiness probe, write-gate, code tương lai) sống qua checkin/checkout. Đã chuyển sang `RecyclingMethod::Clean` trong `db/pool.rs::create_pool_with_max_size` (áp dụng cho mọi pool: API, write-gate, worker): `CLOSE ALL; SET SESSION AUTHORIZATION DEFAULT; RESET ALL; UNLISTEN *; pg_advisory_unlock_all(); DISCARD TEMP; DISCARD SEQUENCES` mỗi lần recycle. Chi phí: 1 round-trip batched cho mỗi checkout connection tái sử dụng — đo cục bộ ~75µs/checkout (localhost, gồm cả recycle query, 200 vòng); KHÔNG mất prepared-statement cache (Clean cố ý không `DEALLOCATE ALL`/`DISCARD PLAN`); write-gate không xung đột vì shared advisory lock đã release trước khi client về pool (unlock_all lúc recycle chỉ là backstop). Test DB-gated mới `tests/pool_worker_defense.rs::contaminated_pool_connection_is_reset_on_next_checkout`: pool max_size=1, nhiễm session GUC + advisory lock → checkout sau phải sạch (`current_setting`/`markhand_current_org_id()` NULL, 0 advisory lock); đã chạy negative control — test FAIL đúng như kỳ vọng khi tạm quay lại `Fast`. (b) *worker role riêng*: migration mới `0035_expand_worker_role.sql` — grant guarded `IF EXISTS markhand_worker` (role LOGIN do deploy/ops provision, theo đúng tiền lệ `markhand_app`/0027: password không bao giờ nằm trong migration): DML chỉ trên bảng worker binary thật sự chạm (jobs/outbox_events/event_log; documents/document_versions/derived_artifacts/chunks/claims; index_metadata/index_generation_backfills/embedding_batches/vector_cleanup_intents; quota_reservations/usage_counters + org_quotas read-only), audit_log append-only (SELECT+INSERT, REVOKE UPDATE/DELETE/TRUNCATE — giống app), KHÔNG một grant nào trên auth/session/membership/ACL/invite/chat/upload/capability (unit test pin shape + negative list: `database.rs::worker_role_grants_are_guarded_scoped_and_append_only_audit`). Worker connect: env mới `MARKHAND_WORKER_DATABASE_URL` (hoặc `workerDatabaseUrl` trong config file), **fallback về `MARKHAND_DATABASE_URL`** khi vắng — fail-open-config CÓ CHỦ ĐÍCH để deploy cũ (chưa provision role) không gãy, cùng triết lý 0027 coi role-provisioning là việc ops; trade-off ghi rõ trong doc comment `config.rs` (quên set biến ⇒ worker âm thầm chạy bằng app role rộng hơn; RLS/FORCE RLS vẫn bó blast radius, và test posture bắt được khi role dùng thật); unit test `config.rs::worker_role_prefers_dedicated_database_url_with_app_fallback` (worker ưu tiên biến mới, fallback đúng, API role không bao giờ nhặt biến worker). Test DB-gated `tests/pool_worker_defense.rs::worker_role_is_rls_scoped_and_least_privilege`: worker không superuser/không BYPASSRLS/không owner bảng RLS, enqueue+claim job chạy được trong org của mình, org khác claim rỗng + count 0 (RLS), không context ⇒ 0 hàng (FORCE RLS chứ không phải grant), permission-denied 42501 trên refresh_tokens/org_memberships/org_invites/collection_user_access/qa_chat_sessions/upload_operations, không UPDATE audit_log, không CREATE TABLE. **Còn lại (ops, ngoài phạm vi code vòng này):** deploy/compose thật chưa provision role `markhand_worker` + chưa set `MARKHAND_WORKER_DATABASE_URL` — migration idempotent + fallback đã sẵn sàng, bật lúc nào cũng được.
+- **Status:** Done — FORCE RLS ~26 bảng (`migrations/0010`), app role không owner/không BYPASSRLS (`0027/0028`), GUC transaction-local `set_config('app.org_id',…,true)` (`db/pool.rs::apply_org_context`), FORCE-RLS pin bằng unit test trên nguồn migration (`database.rs` tests — ghi chú: dòng status cũ ghi "assert FORCE-RLS ở startup, database.rs:309" là KHÔNG chính xác/stale: vị trí đó là unit test trên source migration, không có probe runtime nào ở startup assert `relforcerowsecurity`; sửa lại cho đúng hiện trạng), test pool-leak/cross-org/force-rls/deploy-role (DB-gated). **Hai gap "Thiếu" đã ĐÓNG (2026-07-30, xác minh code trước khi sửa — cả hai gap là thật):** (a) *pool reset lúc checkout*: pool trước đó dùng deadpool `RecyclingMethod::Fast` mặc định (không cleanup gì khi tái sử dụng connection). GUC transaction-local tự hết sau COMMIT/ROLLBACK by-construction (test sẵn `repositories.rs::pool_does_not_leak_tenant_gucs`), nhưng misuse **session-level** (`set_config(...,false)`, advisory lock rò, `LISTEN`, temp table) trên đường `pool.get()` thô (readiness probe, write-gate, code tương lai) sống qua checkin/checkout. Đã chuyển sang `RecyclingMethod::Clean` trong `db/pool.rs::create_pool_with_max_size` (áp dụng cho mọi pool: API, write-gate, worker): `CLOSE ALL; SET SESSION AUTHORIZATION DEFAULT; RESET ALL; UNLISTEN *; pg_advisory_unlock_all(); DISCARD TEMP; DISCARD SEQUENCES` mỗi lần recycle. Chi phí: 1 round-trip batched cho mỗi checkout connection tái sử dụng — đo cục bộ ~75µs/checkout (localhost, gồm cả recycle query, 200 vòng); KHÔNG mất prepared-statement cache (Clean cố ý không `DEALLOCATE ALL`/`DISCARD PLAN`); write-gate không xung đột vì shared advisory lock đã release trước khi client về pool (unlock_all lúc recycle chỉ là backstop). Test DB-gated mới `tests/pool_worker_defense.rs::contaminated_pool_connection_is_reset_on_next_checkout`: pool max_size=1, nhiễm session GUC + advisory lock → checkout sau phải sạch (`current_setting`/`markhand_current_org_id()` NULL, 0 advisory lock); đã chạy negative control — test FAIL đúng như kỳ vọng khi tạm quay lại `Fast`. (b) *worker role riêng*: migration mới `0035_expand_worker_role.sql` — grant guarded `IF EXISTS markhand_worker` (role LOGIN do deploy/ops provision, theo đúng tiền lệ `markhand_app`/0027: password không bao giờ nằm trong migration): DML chỉ trên bảng worker binary thật sự chạm (jobs/outbox_events/event_log; documents/document_versions/derived_artifacts/chunks/claims; index_metadata/index_generation_backfills/embedding_batches/vector_cleanup_intents; quota_reservations/usage_counters + org_quotas read-only), audit_log append-only (SELECT+INSERT, REVOKE UPDATE/DELETE/TRUNCATE — giống app), KHÔNG một grant nào trên auth/session/membership/ACL/invite/chat/upload/capability (unit test pin shape + negative list: `database.rs::worker_role_grants_are_guarded_scoped_and_append_only_audit`). Worker connect: env mới `MARKHAND_WORKER_DATABASE_URL` (hoặc `workerDatabaseUrl` trong config file), **fallback về `MARKHAND_DATABASE_URL`** khi vắng — fail-open-config CÓ CHỦ ĐÍCH để deploy cũ (chưa provision role) không gãy, cùng triết lý 0027 coi role-provisioning là việc ops; trade-off ghi rõ trong doc comment `config.rs` (quên set biến ⇒ worker âm thầm chạy bằng app role rộng hơn; RLS/FORCE RLS vẫn bó blast radius, và test posture bắt được khi role dùng thật); unit test `config.rs::worker_role_prefers_dedicated_database_url_with_app_fallback` (worker ưu tiên biến mới, fallback đúng, API role không bao giờ nhặt biến worker). Test DB-gated `tests/pool_worker_defense.rs::worker_role_is_rls_scoped_and_least_privilege`: worker không superuser/không BYPASSRLS/không owner bảng RLS, enqueue+claim job chạy được trong org của mình, org khác claim rỗng + count 0 (RLS), không context ⇒ 0 hàng (FORCE RLS chứ không phải grant), permission-denied 42501 trên refresh_tokens/org_memberships/org_invites/collection_user_access/qa_chat_sessions/upload_operations, không UPDATE audit_log, không CREATE TABLE. **Còn lại (ops, ngoài phạm vi code vòng này):** deploy/compose thật chưa provision role `markhand_worker` + chưa set `MARKHAND_WORKER_DATABASE_URL` — migration idempotent + fallback đã sẵn sàng, bật lúc nào cũng được.
 
 - **Plan/files:** Nếu ADR chọn: FORCE RLS, non-owner app role, transaction-local context,
   worker role, pool reset/verification.
@@ -273,7 +280,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-09 — Atomic quota lifecycle
 
-- **Status:** In progress — reserve/finalize/refund + reserve_upload hai-tài-nguyên atomic (`services/quota.rs`), idempotency theo key, expiry, sweeper **đã wire** vào background (`http.rs`), checked arithmetic, advisory lock. Đợt này đóng 4 phần "Thiếu" cũ (đã xác minh từng điểm trước khi làm):
+- **Status:** Done — reserve/finalize/refund + reserve_upload hai-tài-nguyên atomic (`services/quota.rs`), idempotency theo key, expiry, sweeper **đã wire** vào background (`http.rs`), checked arithmetic, advisory lock. Đợt này đóng 4 phần "Thiếu" cũ (đã xác minh từng điểm trước khi làm):
   (a) **Token-quota lifecycle**: consumer token thật duy nhất trên đường `ask` là **chat provider** (`ChatProvider::complete`/`stream_tokens` — được gọi cả ở chế độ fail-closed để đo outage); khi không cấu hình provider (MVP extractive-only) không tiêu token nên không reserve. Reserve ước lượng (prompt + `MAX_ANSWER_CHARS`/4, heuristic ~4 chars/token vì response OpenAI-compat/GLM stream không bảo đảm block `usage`) trước khi gọi provider ở cả `ask()` JSON (`services/qa/mod.rs`) lẫn `ask/stream` (`ask_stream.rs::start_ask_stream`, reserve TRƯỚC khi tạo durable session → deny là 429 sạch không side-effect); settle usage thật qua `quota::finalize_actual` mới (commit số đo, không phải số ước lượng); refund khi transport fail, commit prompt-only khi timeout, commit phần đã stream khi cancel/`citation_revoked` giữa chừng (token provider đã tiêu thì không refund). Hết quota → 429 `quota_exceeded` + `x-quota-*` headers (tái dùng nguyên `QuotaError` contract của upload, `routes/ask.rs`) + audit `quota.deny`. Token của embedding-provider (index/backfill hàng loạt) **chưa** meter — backlog riêng, gắn với job lifecycle chứ không phải request `ask`.
   (b) **Concurrent-jobs enforce ở prod**: mọi đường claim prod (`jobs::claim`/`claim_type`/`claim_reconcile` — chính là đường `bin/worker.rs` → `workers/*::run_once`) giờ lấy advisory lock `concurrent_jobs`, clamp limit theo slot còn trống, insert reservation `job.slot.{job_id}.{uuid}` (amount 1, TTL = lease TTL) **atomic trong cùng txn claim**; heartbeat gia hạn reservation cùng lease; complete/fail/cancel(+children)/reclaim/dry-run-release refund slot ngay. Hết slot → claim trả rỗng (worker idle-poll); org thiếu `org_quotas` → fail-closed lỗi cấu hình rõ ràng (cùng posture upload).
   (c) **Quota reconcile**: task nền `http.rs::start_quota_reconcile` (knob `MARKHAND_QUOTA_RECONCILE_INTERVAL_SECS`, default 3600s, min 60s, `0` = off; cùng pattern maintenance-lock + ops-fence guard như sweeper) gọi `quota::reconcile_all_orgs`: đối chiếu `usage_counters` với ground truth (storage = bytes version + derived artifacts của documents còn sống; documents = count sống) và refund slot `concurrent_jobs` mồ côi (job không còn leased). Drift → upsert counter + audit `quota.reconcile` (action mới, allowlist chỉ số liệu, actor NULL qua `audit::record_system_in_txn` vì là system action). **Lưu ý ngữ nghĩa**: trước đây counter storage/documents là cộng dồn vĩnh viễn (xoá tài liệu không trả quota); reconcile đưa counter về mức sử dụng thật → sau purge quota được giải phóng ở lần reconcile kế. Tokens **không** reconcile (tiêu ở provider ngoài, không có ground truth đếm lại được).
@@ -288,7 +295,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-10 — Rate limit và per-org fairness
 
-- **Status:** In progress — limiter per-IP/user/route (`middleware/rate_limit.rs`) +
+- **Status:** Done — limiter per-IP/user/route (`middleware/rate_limit.rs`) +
   Retry-After header + metrics privacy-safe + worker type-fairness
   (`workers/index.rs:137`) đã có từ trước. **Phần per-ORG fairness đã landed
   (2026-07-30, xác minh từng điểm "Thiếu" bằng code trước khi xây):**
@@ -354,8 +361,8 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-11 — Audit/admin APIs
 
-- **Status:** In progress — audit **READ** endpoint landed (phiên này, worktree,
-  chưa chạy DB-gated CI): `GET /api/v1/audit` (`routes/audit.rs`), org-scoped
+- **Status:** Done — audit **READ** endpoint landed (landed, đã qua CI
+  `rust-integration` khi merge): `GET /api/v1/audit` (`routes/audit.rs`), org-scoped
   (`org_id = $1` defense-in-depth + RLS `audit_log_org_isolation` migration `0010`
   là gate thật), guard `audit.view` (đã seed sẵn `migrations/0011`/`0030`, owner/admin
   có) — 403 khi thiếu, và **tự ghi audit `audit.read`/deny cho chính lần đọc bị từ
