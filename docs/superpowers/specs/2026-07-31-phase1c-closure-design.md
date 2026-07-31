@@ -1,7 +1,7 @@
 # Thiết kế đóng Phase 1C theo luồng implement/review
 
 Ngày: 2026-07-31  
-Trạng thái: Đã sửa theo review vòng 2; chờ owner duyệt tài liệu
+Trạng thái: Fable review vòng 3 `Ready to merge: Yes`; chờ owner duyệt tài liệu
 Phạm vi: Phase 1C — multi-org security, denial suite và security/load gate
 
 ## 1. Mục tiêu
@@ -119,9 +119,10 @@ ngầm:
   metadata không normative và không được resolver coi là quyền.
 
 PR 1 đóng 1C-03 sau khi fixture, DB matrix, OpenAPI/web consumer và operation-reference
-validator cùng xanh trong `rust-integration`. PR 3 đóng 1C-04 bằng guard inventory;
-inventory phải derive `requiredCollectionAccess` từ canonical fixture qua mapping
-operation → permission, không khai báo access level lần thứ hai.
+validator cùng xanh ở lớp CI tương ứng (fast, `rust-integration`, web). PR 3 đóng
+1C-04 bằng guard inventory; inventory phải derive `requiredCollectionAccess` từ
+canonical fixture qua mapping operation → permission, không khai báo access level lần
+thứ hai.
 
 ### 3.2 ACL semantics
 
@@ -174,11 +175,12 @@ Không cho dormant group/role grant trên collection `private` hoặc `org`:
   khi đổi; DB invariant từ chối trạng thái còn grant;
 - `acl_mutate::revoke_collection_access_for_principal` phải xóa group/role grants
   trước khi set `private`, rồi mới xử lý direct-user grant; containment test phải dùng
-  groups collection có cả group và role grant;
+  groups collection có cả group và role grant, đồng thời chứng minh direct-user grant
+  của principal khác vẫn tồn tại và hợp lệ trên private collection;
 - migration preflight phải phát hiện row group/role grant hiện hữu trên collection
   không phải `groups` và fail với diagnostic collection IDs; không tự kích hoạt hoặc
-  silently delete grant. Fixture migration hiện hữu phải đổi collection sang `groups`
-  trước khi seed grant;
+  silently delete grant. Test/ops fixture hiện hữu, gồm
+  `tests/schema_migrations.rs`, phải đổi collection sang `groups` trước khi seed grant;
 - test pin private collection không mở qua group/role và visibility flip không âm thầm
   kích hoạt grant cũ; test hai transaction pin race grant-vs-flip;
 - PR 2 sửa wording P1C.3 để ghi rõ private chỉ nhận direct-user grant và groups nhận
