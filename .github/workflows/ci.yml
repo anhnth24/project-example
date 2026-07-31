@@ -128,6 +128,10 @@ jobs:
       MARKHAND_TEST_MINIO_SECRET_KEY: markhand_dev_only
       MARKHAND_TEST_MINIO_REGION: us-east-1
       MARKHAND_TEST_QDRANT_URL: http://127.0.0.1:6333
+      # Local compose Qdrant has auth disabled; value is required by admin client
+      # construction (see tests/common/worker_pipeline.rs). Missing this previously
+      # soft-skipped retrieval_vertical_slice to a false green in CI.
+      MARKHAND_TEST_QDRANT_ADMIN_API_KEY: test-operator-admin-key
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install base build dependencies

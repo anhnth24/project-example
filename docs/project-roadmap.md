@@ -51,12 +51,14 @@
 
 ### Markhand Web (on-prem RAG platform)
 
-Phase F, 0 và 1A **đã đóng** (32/32 issue). Phase 1B **19/24 Done** — còn retrieval/API
-slice R02–R06 (R03 Review). O-chain release (O01–O05) và soak qualification đã pass trên
-live infrastructure (2026-07-26). Phase 1C **12/13 In progress** — nền multi-org/RLS/ACL
-đã có từ 1B, exit gate denial suite chưa đạt. Phase 2 **13/19 Done** trên mock/CI
-(#311–#318, #327, #332); còn P2-10, P2-15, P2-16 và ba issue mở rộng P2-17…19. Phase 3–4
-chưa activate (Backlog).
+Phase F, 0 và 1A **đã đóng** (32/32 issue). Phase 1B **23/24 Done** — còn R06
+(owner-run Docker Compose hanging soak). R02–R05 Done với evidence CI rust-integration
+trên `b5cc92c` (run 30603158015). O-chain release (O01–O05) và soak qualification đã
+pass trên live infrastructure (2026-07-26). Phase 1C **12/13 In progress** — nền
+multi-org/RLS/ACL đã có từ 1B, exit gate denial suite chưa đạt. Phase 2 **13/19 Done**
+trên mock/CI (#311–#318, #327, #332); còn P2-10, P2-15, P2-16 và ba issue mở rộng
+P2-17…19. Phase 3–4 chưa activate (Backlog). Catalog aggregate: **68 Done**,
+**19 In progress**, **0 Review**, **29 Backlog**.
 
 Dashboard: [`../plans/markhand-web/roadmap.html`](../plans/markhand-web/roadmap.html) ·
 Issue catalog: [`../plans/markhand-web/backlog/`](../plans/markhand-web/backlog/)
