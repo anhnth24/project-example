@@ -619,7 +619,8 @@ mod tests {
         );
         for line in &role_enum_lines {
             assert_eq!(
-                *line, expected.as_str(),
+                *line,
+                expected.as_str(),
                 "role enum must match builtin catalog roles in order"
             );
         }
