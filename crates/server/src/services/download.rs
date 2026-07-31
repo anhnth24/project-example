@@ -407,7 +407,7 @@ pub async fn redeem_capability(
     }
     let claims = decode_capability(keys, token)?;
     if claims.org_id != ctx.org_id() || claims.user_id != ctx.user_id() {
-        return Err(DownloadError::PermissionDenied);
+        return Err(DownloadError::NotFound);
     }
     let purpose =
         DownloadPurpose::parse(&claims.purpose).ok_or(DownloadError::InvalidCapability)?;

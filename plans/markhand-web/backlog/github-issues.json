@@ -714,56 +714,56 @@
       "phase": "1B",
       "id": "P1B-R02",
       "title": "P1B-R02 — Citation, preview và download authorization",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1B — Single-org POC",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1b"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R02\n- Status: `in_progress`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nStable anchor pin logical document/version number/version ID/content hash/\neffective time/current flag; fresh auth per resolve; trusted Markdown fetch; short\nsingle-purpose download capability.\n\n## Files/modules\n\n`services/{access,citation,preview,download}.rs`, `routes/documents.rs`,\n`migrations/0018_expand_download_capability_redemptions.sql`,\n`tests/{citation_authz_matrix.rs,common/fixtures.rs}`.\n\n## Dependencies / blocks\n\nF05/F06/R01.\n\n## Required tests / evidence\n\nQuote/hash/version/anchor valid; historical permission + fresh\nACL; delete/suspend/removal deny; IDOR, expiry/replay, multi-document/multi-version,\nPDF/PPTX/XLSX anchor tests.\n\n## Security and migration notes\n\nNo raw bucket credential/key.\n\n## Out of scope\n\nrich rendering.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R02\n- Status: `done`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nStable anchor pin logical document/version number/version ID/content hash/\neffective time/current flag; fresh auth per resolve; trusted Markdown fetch; short\nsingle-purpose download capability.\n\n## Files/modules\n\n`services/{access,citation,preview,download}.rs`, `routes/documents.rs`,\n`migrations/0018_expand_download_capability_redemptions.sql`,\n`tests/{citation_authz_matrix.rs,common/fixtures.rs}`.\n\n## Dependencies / blocks\n\nF05/F06/R01.\n\n## Required tests / evidence\n\nQuote/hash/version/anchor valid; historical permission + fresh\nACL; delete/suspend/removal deny; IDOR, expiry/replay, multi-document/multi-version,\nPDF/PPTX/XLSX anchor tests.\n\n## Security and migration notes\n\nNo raw bucket credential/key.\n\n## Out of scope\n\nrich rendering.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
       "phase": "1B",
       "id": "P1B-R03",
       "title": "P1B-R03 — Grounded Q&A, stream và fallback",
-      "status": "review",
+      "status": "done",
       "milestone": "Phase 1B — Single-org POC",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1b"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R03\n- Status: `review`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nPolicy-separated prompt, untrusted passage framing, GLM, version-aware\ncitation validation, current answer + history/change note, token stream,\ncurrent unresolved-conflict warnings + resolved-history note, token stream,\ndeterministic extractive fallback.\n\n## Files/modules\n\n`services/qa/{mod,prompt,provider,grounding,stream}.rs`,\n`services/stream_auth.rs`, `routes/ask.rs`, `tests/ask_grounding_matrix.rs`.\n\n## Dependencies / blocks\n\nR01/R02 + G0-RET/G0-SEC/G1A.\n\n## Required tests / evidence\n\nCitation subset only; current claim không cite version cũ;\ncompare cite old+new và đúng delta; injection không tool/scope change; provider\noutage fallback; BA/design numeric conflict warning và v2 resolution; false-positive/\naccepted-exception; fabricated/version-mix/conflict citation, timeout,\ndelete-during-stream tests.\n\n## Security and migration notes\n\nAudit metadata only.\n\n## Out of scope\n\nagents/memory/web browse.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R03\n- Status: `done`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nPolicy-separated prompt, untrusted passage framing, GLM, version-aware\ncitation validation, current answer + history/change note, token stream,\ncurrent unresolved-conflict warnings + resolved-history note, token stream,\ndeterministic extractive fallback.\n\n## Files/modules\n\n`services/qa/{mod,prompt,provider,grounding,stream}.rs`,\n`services/stream_auth.rs`, `routes/ask.rs`, `tests/ask_grounding_matrix.rs`.\n\n## Dependencies / blocks\n\nR01/R02 + G0-RET/G0-SEC/G1A.\n\n## Required tests / evidence\n\nCitation subset only; current claim không cite version cũ;\ncompare cite old+new và đúng delta; injection không tool/scope change; provider\noutage fallback; BA/design numeric conflict warning và v2 resolution; false-positive/\naccepted-exception; fabricated/version-mix/conflict citation, timeout,\ndelete-during-stream tests.\n\n## Security and migration notes\n\nAudit metadata only.\n\n## Out of scope\n\nagents/memory/web browse.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
       "phase": "1B",
       "id": "P1B-R04",
       "title": "P1B-R04 — Collection/document/job REST API",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1B — Single-org POC",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1b"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R04\n- Status: `in_progress`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\n`/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable\nversion list/get/diff/current publish; conflict list/detail/triage + evidence routes;\njob status; pagination/idempotency/error schema.\n\n## Files/modules\n\n`routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`,\n`tests/api_http_contracts.rs`.\n\n## Dependencies / blocks\n\nF04/F05/I01/I03/I07/R02.\n\n## Required tests / evidence\n\nOrg context + permissions; stable errors; idempotent reindex;\nHTTP contract/pagination/IDOR/malformed tests.\n\n## Security and migration notes\n\nBounded body/page, no internals.\n\n## Out of scope\n\nadmin membership API.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R04\n- Status: `done`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\n`/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable\nversion list/get/diff/current publish; conflict list/detail/triage + evidence routes;\njob status; pagination/idempotency/error schema.\n\n## Files/modules\n\n`routes/{collections,documents,jobs}.rs`, `api/{types,error,pagination}.rs`,\n`tests/api_http_contracts.rs`.\n\n## Dependencies / blocks\n\nF04/F05/I01/I03/I07/R02.\n\n## Required tests / evidence\n\nOrg context + permissions; stable errors; idempotent reindex;\nHTTP contract/pagination/IDOR/malformed tests.\n\n## Security and migration notes\n\nBounded body/page, no internals.\n\n## Out of scope\n\nadmin membership API.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {
       "phase": "1B",
       "id": "P1B-R05",
       "title": "P1B-R05 — Search/ask/resumable SSE API",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1B — Single-org POC",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1b"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R05\n- Status: `in_progress`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nSearch/ask/stream routes; versioned sequence; Last-Event-ID replay;\nheartbeat/bounded buffering; auth expiry/revoke close.\n\n## Files/modules\n\n`routes/{search,ask,events}.rs`, `api/{sse,last_event_id}.rs`,\n`db/ask_streams.rs`, `services/qa/{ask_stream,provider,stream}.rs`,\n`services/stream_auth.rs`,\n`migrations/0024_expand_ask_stream_sessions.sql`,\n`migrations/0025_backfill_event_log_ids_ask_stream_ops.sql`.\n\n## Dependencies / blocks\n\nF05/I03/R01/R03/R04.\n\n## Required tests / evidence\n\nNo lost acknowledged/duplicate sequence; bounded slow client;\nreconnect/order/expiry/revoke/worker restart; zero post-revoke content; durable\nterminal/control; Last-Event-ID validation; retention purge; provider framing;\nlifecycle lease/recovery.\n\n## Security and migration notes\n\nScoped per user/org/job, no cache.\n\n## Out of scope\n\nWebSocket.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1B — Single-org POC\n- Phase code: 1B\n- Issue ID: P1B-R05\n- Status: `done`\n- Catalog: `backlog/phase-1b/issues/README.md`\n- Phase plan: `phase-1b-single-org-poc.md`\n\n## Implementation plan\n\nSearch/ask/stream routes; versioned sequence; Last-Event-ID replay;\nheartbeat/bounded buffering; auth expiry/revoke close.\n\n## Files/modules\n\n`routes/{search,ask,events}.rs`, `api/{sse,last_event_id}.rs`,\n`db/ask_streams.rs`, `services/qa/{ask_stream,provider,stream}.rs`,\n`services/stream_auth.rs`,\n`migrations/0024_expand_ask_stream_sessions.sql`,\n`migrations/0025_backfill_event_log_ids_ask_stream_ops.sql`.\n\n## Dependencies / blocks\n\nF05/I03/R01/R03/R04.\n\n## Required tests / evidence\n\nNo lost acknowledged/duplicate sequence; bounded slow client;\nreconnect/order/expiry/revoke/worker restart; zero post-revoke content; durable\nterminal/control; Last-Event-ID validation; retention purge; provider framing;\nlifecycle lease/recovery.\n\n## Security and migration notes\n\nScoped per user/org/job, no cache.\n\n## Out of scope\n\nWebSocket.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1b/issues/README.md"
     },
     {

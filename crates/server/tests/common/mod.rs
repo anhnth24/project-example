@@ -6,6 +6,7 @@
 #![allow(dead_code)] // not every integration binary uses every helper
 
 pub mod fixtures;
+pub mod worker_pipeline;
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
@@ -325,6 +326,183 @@ impl Drop for MinioCleanupGuard {
         })
         .join();
     }
+}
+
+/// Bounded soak dimensions for [`minio_cleanup_soak_lane`].
+pub const MINIO_CLEANUP_GUARD_SOAK_ROUNDS: usize = 3;
+pub const MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY: usize = 4;
+pub const MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET: usize = 3;
+
+/// Hermetic guardrail: soak must stay bounded and stress multi-object buckets.
+pub fn assert_minio_cleanup_soak_params(rounds: usize, concurrency: usize, objects: usize) {
+    assert!(
+        (1..=8).contains(&rounds),
+        "soak rounds must stay bounded, got {rounds}"
+    );
+    assert!(
+        (2..=16).contains(&concurrency),
+        "soak concurrency must expose cleanup races, got {concurrency}"
+    );
+    assert!(
+        objects >= 2,
+        "each bucket must hold multiple objects, got {objects}"
+    );
+}
+
+/// Lane failure with round/slot/bucket identity for residual-bucket diagnosis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinioCleanupSoakLaneFailure {
+    pub round: usize,
+    pub slot: usize,
+    pub bucket_name: String,
+    pub error: fileconv_server::storage::StorageError,
+}
+
+impl std::fmt::Display for MinioCleanupSoakLaneFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "round {} slot {} bucket {} cleanup failed: {:?}",
+            self.round, self.slot, self.bucket_name, self.error
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinioCleanupSoakLaneSuccess {
+    pub round: usize,
+    pub slot: usize,
+    pub bucket_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MinioCleanupSoakLaneOutcome {
+    Success(MinioCleanupSoakLaneSuccess),
+    LaneFailed(MinioCleanupSoakLaneFailure),
+    JoinFailed {
+        round: usize,
+        slot: usize,
+        error: String,
+    },
+}
+
+/// Await every spawned lane in a soak round before returning outcomes.
+pub async fn collect_minio_cleanup_soak_round(
+    round: usize,
+    handles: Vec<(
+        usize,
+        tokio::task::JoinHandle<Result<String, MinioCleanupSoakLaneFailure>>,
+    )>,
+) -> Vec<MinioCleanupSoakLaneOutcome> {
+    let mut outcomes = Vec::with_capacity(handles.len());
+    for (slot, handle) in handles {
+        outcomes.push(match handle.await {
+            Ok(Ok(bucket_name)) => {
+                MinioCleanupSoakLaneOutcome::Success(MinioCleanupSoakLaneSuccess {
+                    round,
+                    slot,
+                    bucket_name,
+                })
+            }
+            Ok(Err(failure)) => MinioCleanupSoakLaneOutcome::LaneFailed(failure),
+            Err(join_error) => MinioCleanupSoakLaneOutcome::JoinFailed {
+                round,
+                slot,
+                error: join_error.to_string(),
+            },
+        });
+    }
+    outcomes
+}
+
+/// Assert a fully drained soak round; reports every failing lane together.
+pub fn assert_minio_cleanup_soak_round_succeeded(outcomes: &[MinioCleanupSoakLaneOutcome]) {
+    let failures: Vec<String> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            MinioCleanupSoakLaneOutcome::Success(success) => {
+                if success.bucket_name.starts_with("markhand-it-") {
+                    None
+                } else {
+                    Some(format!(
+                        "round {} slot {} unexpected bucket name: {}",
+                        success.round, success.slot, success.bucket_name
+                    ))
+                }
+            }
+            MinioCleanupSoakLaneOutcome::LaneFailed(failure) => Some(failure.to_string()),
+            MinioCleanupSoakLaneOutcome::JoinFailed { round, slot, error } => {
+                Some(format!("round {round} slot {slot} join failed: {error}"))
+            }
+        })
+        .collect();
+    if !failures.is_empty() {
+        panic!(
+            "MinIO cleanup soak round had {} failing lane(s):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
+
+fn minio_cleanup_soak_lane_failure(
+    round: usize,
+    slot: usize,
+    bucket_name: &str,
+    error: fileconv_server::storage::StorageError,
+) -> MinioCleanupSoakLaneFailure {
+    MinioCleanupSoakLaneFailure {
+        round,
+        slot,
+        bucket_name: bucket_name.to_string(),
+        error,
+    }
+}
+
+/// One soak lane: unique bucket, multiple objects, explicit guard cleanup.
+pub async fn minio_cleanup_soak_lane(
+    objects_per_bucket: usize,
+    round: usize,
+    slot: usize,
+) -> Result<String, MinioCleanupSoakLaneFailure> {
+    assert_minio_cleanup_soak_params(1, 2, objects_per_bucket);
+    let store = test_minio_client().expect("live soak lane requires MinIO env");
+    let bucket_name = store.bucket_name().to_string();
+    let guard = MinioCleanupGuard::new(store.clone());
+    let org = Uuid::new_v4();
+    store
+        .ensure_bucket()
+        .await
+        .map_err(|error| minio_cleanup_soak_lane_failure(round, slot, &bucket_name, error))?;
+    for object_index in 0..objects_per_bucket {
+        let version_id = Uuid::new_v4();
+        let key = trusted_key(org, version_id, Uuid::new_v4(), None).expect("trusted key");
+        let payload = format!("soak-r{round}-s{slot}-o{object_index}");
+        put_bytes(
+            &store,
+            org,
+            &key,
+            payload.as_bytes(),
+            "text/plain",
+            ObjectIdentityMeta {
+                org_id: org,
+                collection_id: None,
+                document_id: None,
+                version_id: Some(version_id),
+                original_filename: Some(format!("soak-{object_index}.txt")),
+                canonical_format: Some("txt".into()),
+                content_sha256: Some(sha256_hex(payload.as_bytes())),
+                content_length: Some(payload.len() as u64),
+                disposition: Some("trusted".into()),
+            },
+        )
+        .await;
+    }
+    guard
+        .cleanup()
+        .await
+        .map_err(|error| minio_cleanup_soak_lane_failure(round, slot, &bucket_name, error))?;
+    Ok(bucket_name)
 }
 
 /// Seed an org user with the given permission codes (owner role) + password.
