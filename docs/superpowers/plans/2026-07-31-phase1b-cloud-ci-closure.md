@@ -39,9 +39,11 @@ Extend the existing cross-tenant tests to assert:
 
 ```text
 GET  /api/v1/downloads/{foreign_capability}   -> 404, no foreign metadata/body
-POST /api/v1/ask/stream with foreign scope   -> 404, no SSE content
+POST /api/v1/search, /api/v1/ask, /api/v1/ask/stream with foreign collectionIds -> 403 forbidden, no SSE on ask/stream
 GET  /api/v1/conflicts as tenant A           -> 200 and excludes tenant B conflict
 ```
+
+Request-body collection scopes use 403 consistently: the caller already supplied the id, so `forbidden` does not create an existence oracle. Path-addressed resources (capability redemption, session/project IDOR) stay 404.
 
 Use a capability minted through the production service or route for the foreign tenant; do not handcraft or decode the token. Assert the stable error envelope (`code`, `requestId`) where the endpoint returns JSON.
 
