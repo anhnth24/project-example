@@ -293,14 +293,19 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
-- **Status:** Done — full `api_http_contracts` HTTP matrix green on CI
+- **Status:** Done — all CI-runnable `api_http_contracts` tests green on
   rust-integration (`b5cc92c`, run
   [30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015)/job
   [91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)),
-  including cross-tenant IDOR/403 fixture corrections. Sol R3 upload saga
-  retained; `live_http_collection_document_job_contract_matrix` asserts reindex
-  same `jobId` with `created=false` on idempotent replay. Business API
-  mutations gated by central `mutation_write_gate` middleware (see O03).
+  including cross-tenant IDOR/403 fixture corrections. Note:
+  `test-hooks`-only audit rollback tests
+  (`live_patch_collection_audit_correlation_and_rollback`,
+  `live_reindex_audit_failure_rolls_back_enqueue`) are excluded from the normal
+  rust-integration build (feature not enabled in CI), so evidence does not
+  cover that gated subset. Sol R3 upload saga retained;
+  `live_http_collection_document_job_contract_matrix` asserts reindex same
+  `jobId` with `created=false` on idempotent replay. Business API mutations
+  gated by central `mutation_write_gate` middleware (see O03).
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
