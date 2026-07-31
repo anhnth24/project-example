@@ -12,7 +12,10 @@ fn required_access_rank(required_access_param: &str) -> String {
 }
 
 fn grant_meets_required(required_access_param: &str) -> String {
-    format!("({ACCESS_LEVEL_RANK}) >= ({})", required_access_rank(required_access_param))
+    format!(
+        "({ACCESS_LEVEL_RANK}) >= ({})",
+        required_access_rank(required_access_param)
+    )
 }
 
 fn visibility_route_sql(user_id_param: &str, required_access_param: &str) -> String {
@@ -102,7 +105,8 @@ pub fn allowed_collections_sql(
     permission_param: &str,
     required_access_param: &str,
 ) -> String {
-    let membership = membership_permission_exists_sql(org_id_param, user_id_param, permission_param);
+    let membership =
+        membership_permission_exists_sql(org_id_param, user_id_param, permission_param);
     let visibility = visibility_route_sql(user_id_param, required_access_param);
     format!(
         "c.org_id = {org_id_param}

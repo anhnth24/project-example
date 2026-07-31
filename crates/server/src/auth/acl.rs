@@ -46,13 +46,11 @@ pub fn allowed(
     {
         return false;
     }
-    let grant_allows = |grant: Option<AccessLevel>| {
-        grant.is_some_and(|level| level.satisfies(required_access))
-    };
+    let grant_allows =
+        |grant: Option<AccessLevel>| grant.is_some_and(|level| level.satisfies(required_access));
     match collection.visibility {
         CollectionVisibility::Private => {
-            principal.user_id == collection.owner_user_id
-                || grant_allows(collection.user_grant)
+            principal.user_id == collection.owner_user_id || grant_allows(collection.user_grant)
         }
         CollectionVisibility::Org => true,
         CollectionVisibility::Groups => {
