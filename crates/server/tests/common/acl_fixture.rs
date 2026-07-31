@@ -9,6 +9,7 @@ use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::auth::permissions::resolve_org_context_in_txn;
 use fileconv_server::db::acl_sql::{acl_predicate_sql, allowed_collections_sql};
+use fileconv_server::db::error::DbError;
 use fileconv_server::db::models::AccessLevel;
 use fileconv_server::db::pool::with_org_txn;
 use tokio_postgres::Transaction;
@@ -37,7 +38,11 @@ pub struct AclCollectionMatrix {
     pub private_owned: Uuid,
     pub private_foreign: Uuid,
     pub private_user_grant: Uuid,
+    /// Private collection used by `private_visibility_ignores_group_and_role_grants`
+    /// to prove migration 0036 rejects dormant group grants (never seeded here).
     pub private_group_leak: Uuid,
+    /// Private collection used by `private_visibility_ignores_group_and_role_grants`
+    /// to prove migration 0036 rejects dormant role grants (never seeded here).
     pub private_role_leak: Uuid,
     pub groups_via_group: Uuid,
     pub groups_via_role: Uuid,
@@ -255,26 +260,10 @@ pub async fn seed_acl_collection_matrix(
                 matrix.private_group_leak =
                     insert_collection(txn, fixture.org, fixture.owner, "private", "group-leak")
                         .await?;
-                grant_group_access(
-                    txn,
-                    fixture.org,
-                    matrix.private_group_leak,
-                    fixture.group_id,
-                    AccessLevel::Write,
-                )
-                .await?;
 
                 matrix.private_role_leak =
                     insert_collection(txn, fixture.org, fixture.owner, "private", "role-leak")
                         .await?;
-                grant_role_access(
-                    txn,
-                    fixture.org,
-                    matrix.private_role_leak,
-                    fixture.viewer_role_id,
-                    AccessLevel::Write,
-                )
-                .await?;
 
                 matrix.groups_via_group =
                     insert_collection(txn, fixture.org, fixture.owner, "groups", "via-group")
@@ -344,6 +333,8 @@ pub async fn seed_acl_collection_matrix(
 }
 
 /// Collection ids `member` should see under the `(qa.query, read)` projection.
+/// Excludes private collections with no user grant and collections denied by
+/// missing group/role grants; dormant grants on private are not seedable (0036).
 pub fn expected_member_read_projection(matrix: &AclCollectionMatrix) -> BTreeSet<Uuid> {
     [
         matrix.org_visible,
@@ -492,4 +483,68 @@ pub async fn user_grant_count(pool: &Pool, org: Uuid, collection_id: Uuid, user_
     })
     .await
     .expect("user grant count")
+}
+
+fn pg_error_text(error: &tokio_postgres::Error) -> String {
+    if let Some(db) = error.as_db_error() {
+        format!("{} {}", db.message(), db.detail().unwrap_or(""))
+    } else {
+        format!("{error:?}")
+    }
+}
+
+/// Attempt a group grant in its own transaction (migration 0036 may reject).
+pub async fn attempt_grant_group_access(
+    pool: &Pool,
+    fixture: &AclOrgFixture,
+    collection_id: Uuid,
+    access_level: AccessLevel,
+) -> Result<(), String> {
+    let ctx = OrgContext::try_new(fixture.org, fixture.owner, [PERMISSION_QA_QUERY], []).unwrap();
+    with_org_txn(pool, &ctx, {
+        let fixture = fixture.clone();
+        move |txn| {
+            Box::pin(async move {
+                grant_group_access(
+                    txn,
+                    fixture.org,
+                    collection_id,
+                    fixture.group_id,
+                    access_level,
+                )
+                .await
+                .map_err(|error| DbError::Config(pg_error_text(&error)))
+            })
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// Attempt a role grant in its own transaction (migration 0036 may reject).
+pub async fn attempt_grant_role_access(
+    pool: &Pool,
+    fixture: &AclOrgFixture,
+    collection_id: Uuid,
+    access_level: AccessLevel,
+) -> Result<(), String> {
+    let ctx = OrgContext::try_new(fixture.org, fixture.owner, [PERMISSION_QA_QUERY], []).unwrap();
+    with_org_txn(pool, &ctx, {
+        let fixture = fixture.clone();
+        move |txn| {
+            Box::pin(async move {
+                grant_role_access(
+                    txn,
+                    fixture.org,
+                    collection_id,
+                    fixture.viewer_role_id,
+                    access_level,
+                )
+                .await
+                .map_err(|error| DbError::Config(pg_error_text(&error)))
+            })
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())
 }
