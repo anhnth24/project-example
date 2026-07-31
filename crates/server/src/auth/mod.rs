@@ -7,4 +7,5 @@ pub mod middleware;
 pub mod password;
 pub mod permissions;
 pub mod provider;
+pub mod rbac_catalog;
 pub mod session;
