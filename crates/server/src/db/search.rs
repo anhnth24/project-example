@@ -109,6 +109,55 @@ fn acl_read_access_param() -> &'static str {
     AccessLevel::Read.as_str()
 }
 
+const PERMISSION_QA_QUERY: &str = "qa.query";
+const PERMISSION_QA_HISTORY: &str = "qa.history";
+
+/// Current retrieval (`VersionVisibility::Current`) — canonical `qa.query` + read.
+fn current_retrieval_acl_predicate(
+    org_id_expr: &str,
+    collection_id_expr: &str,
+    user_param: &str,
+    permission_param: &str,
+    access_param: &str,
+) -> String {
+    acl_predicate_sql(
+        org_id_expr,
+        collection_id_expr,
+        user_param,
+        permission_param,
+        access_param,
+    )
+}
+
+/// Historical/as-of/compare retrieval — requires both `qa.query` and `qa.history`
+/// at read access against current DB membership state.
+fn historical_retrieval_acl_predicate(
+    org_id_expr: &str,
+    collection_id_expr: &str,
+    user_param: &str,
+    query_permission_param: &str,
+    history_permission_param: &str,
+    access_param: &str,
+) -> String {
+    format!(
+        "({}) AND ({})",
+        acl_predicate_sql(
+            org_id_expr,
+            collection_id_expr,
+            user_param,
+            query_permission_param,
+            access_param,
+        ),
+        acl_predicate_sql(
+            org_id_expr,
+            collection_id_expr,
+            user_param,
+            history_permission_param,
+            access_param,
+        ),
+    )
+}
+
 fn normalize_fts_query(query: &str) -> String {
     const QUESTION_STOP_WORDS: &[&str] = &["bao", "nhieu", "la", "gi", "nao"];
     let normalized = fileconv_core::intelligence::normalize_search_text(query);
@@ -245,8 +294,9 @@ pub async fn fts_search(
         VersionVisibility::Current => {
             // 1C-06: candidate leg now carries its own ACL predicate
             // (defense-in-depth) instead of relying solely on the
-            // hydration re-check downstream — see `acl_predicate_sql`.
-            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$5", "$6", "$7");
+            // hydration re-check downstream — see `current_retrieval_acl_predicate`.
+            let acl =
+                current_retrieval_acl_predicate("d.org_id", "d.collection_id", "$5", "$6", "$7");
             let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
@@ -292,7 +342,14 @@ pub async fn fts_search(
                 return Ok(Vec::new());
             }
             let versions: Vec<Uuid> = version_ids.iter().copied().collect();
-            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$6", "$7", "$8");
+            let acl = historical_retrieval_acl_predicate(
+                "d.org_id",
+                "d.collection_id",
+                "$6",
+                "$7",
+                "$9",
+                "$8",
+            );
             let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
@@ -328,8 +385,9 @@ pub async fn fts_search(
                     &limit_i64,
                     &folded,
                     &ctx.user_id(),
-                    &visibility.required_permission(),
+                    &PERMISSION_QA_QUERY,
                     &acl_read_access_param(),
+                    &PERMISSION_QA_HISTORY,
                 ],
             )
             .await?
@@ -351,7 +409,8 @@ pub async fn hydrate_chunks_by_identity(
     }
     let rows = match visibility {
         VersionVisibility::Current => {
-            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$4", "$5", "$6");
+            let acl =
+                current_retrieval_acl_predicate("d.org_id", "d.collection_id", "$4", "$5", "$6");
             let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.org_id, d.collection_id,
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
@@ -403,7 +462,14 @@ pub async fn hydrate_chunks_by_identity(
                 return Ok(Vec::new());
             }
             let versions: Vec<Uuid> = version_ids.iter().copied().collect();
-            let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$5", "$6", "$7");
+            let acl = historical_retrieval_acl_predicate(
+                "d.org_id",
+                "d.collection_id",
+                "$5",
+                "$6",
+                "$8",
+                "$7",
+            );
             let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.org_id, d.collection_id,
                         c.document_id, c.version_id, dv.version_number, dv.content_sha256,
@@ -445,8 +511,9 @@ pub async fn hydrate_chunks_by_identity(
                     &identities,
                     &versions,
                     &ctx.user_id(),
-                    &visibility.required_permission(),
+                    &PERMISSION_QA_QUERY,
                     &acl_read_access_param(),
+                    &PERMISSION_QA_HISTORY,
                 ],
             )
             .await?
@@ -469,8 +536,10 @@ pub async fn load_authorized_conflict_evidence(
     }
     let rows = match visibility {
         VersionVisibility::Current => {
-            let acl_a = acl_predicate_sql("da.org_id", "da.collection_id", "$4", "$5", "$6");
-            let acl_b = acl_predicate_sql("db.org_id", "db.collection_id", "$4", "$5", "$6");
+            let acl_a =
+                current_retrieval_acl_predicate("da.org_id", "da.collection_id", "$4", "$5", "$6");
+            let acl_b =
+                current_retrieval_acl_predicate("db.org_id", "db.collection_id", "$4", "$5", "$6");
             let sql = format!(
                 "SELECT conf.id AS conflict_id,
                         conf.status, conf.resolution_note, conf.resolved_at,
@@ -537,8 +606,22 @@ pub async fn load_authorized_conflict_evidence(
                 return Ok(Vec::new());
             }
             let versions: Vec<Uuid> = version_ids.iter().copied().collect();
-            let acl_a = acl_predicate_sql("da.org_id", "da.collection_id", "$5", "$6", "$7");
-            let acl_b = acl_predicate_sql("db.org_id", "db.collection_id", "$5", "$6", "$7");
+            let acl_a = historical_retrieval_acl_predicate(
+                "da.org_id",
+                "da.collection_id",
+                "$5",
+                "$6",
+                "$8",
+                "$7",
+            );
+            let acl_b = historical_retrieval_acl_predicate(
+                "db.org_id",
+                "db.collection_id",
+                "$5",
+                "$6",
+                "$8",
+                "$7",
+            );
             let sql = format!(
                 "SELECT conf.id AS conflict_id,
                         conf.status, conf.resolution_note, conf.resolved_at,
@@ -595,8 +678,9 @@ pub async fn load_authorized_conflict_evidence(
                     &collection_ids,
                     &versions,
                     &ctx.user_id(),
-                    &visibility.required_permission(),
+                    &PERMISSION_QA_QUERY,
                     &acl_read_access_param(),
+                    &PERMISSION_QA_HISTORY,
                 ],
             )
             .await?
@@ -783,21 +867,26 @@ mod tests {
 
     /// 1C-06 regression guard: every SQL string in this module that reads
     /// `chunks`/`claims` content scoped by collection must route its ACL
-    /// check through `db::acl_sql::acl_predicate_sql(...)` rather than a
-    /// hand-rolled EXISTS clause.
+    /// check through the shared retrieval helpers rather than a hand-rolled
+    /// EXISTS clause.
     #[test]
     fn every_chunk_scoped_query_embeds_acl_predicate() {
         let src = include_str!("search.rs");
         let production = src.split("#[cfg(test)]").next().unwrap();
 
-        let builder_calls = production.matches("= acl_predicate_sql(").count();
+        let current_calls = production
+            .matches("= current_retrieval_acl_predicate(")
+            .count();
+        let historical_calls = production
+            .matches("= historical_retrieval_acl_predicate(")
+            .count();
         assert_eq!(
-            builder_calls, 8,
-            "expected exactly 8 acl_predicate_sql(...) call sites in production code \
-             (fts_search x2, hydrate_chunks_by_identity x2, \
-             load_authorized_conflict_evidence x4); got {builder_calls}. If you added a \
-             new chunk/claim query, route its ACL check through acl_predicate_sql and \
-             update this count deliberately."
+            current_calls, 4,
+            "expected current_retrieval_acl_predicate at fts/hydrate/conflict-current x2; got {current_calls}"
+        );
+        assert_eq!(
+            historical_calls, 4,
+            "expected historical_retrieval_acl_predicate at fts/hydrate/conflict-historical x2; got {historical_calls}"
         );
 
         assert!(
@@ -813,6 +902,44 @@ mod tests {
         assert!(
             !production.contains("collections acl_c"),
             "found a hand-rolled ACL EXISTS block; route through db::acl_sql::acl_predicate_sql"
+        );
+    }
+
+    #[test]
+    fn historical_retrieval_acl_predicate_requires_query_and_history() {
+        let sql = historical_retrieval_acl_predicate(
+            "d.org_id",
+            "d.collection_id",
+            "$4",
+            "$5",
+            "$7",
+            "$6",
+        );
+        assert!(
+            sql.contains("acl_p.code = $5"),
+            "historical predicate must gate qa.query: {sql}"
+        );
+        assert!(
+            sql.contains("acl_p.code = $7"),
+            "historical predicate must gate qa.history: {sql}"
+        );
+        assert_eq!(
+            sql.matches("acl_p.code =").count(),
+            2,
+            "historical predicate must combine qa.query and qa.history ACL arms"
+        );
+    }
+
+    #[test]
+    fn seed_acl_org_fixture_grants_qa_query_to_viewer_role() {
+        let src = include_str!("../../tests/common/acl_fixture.rs");
+        assert!(
+            src.contains("SELECT id FROM roles WHERE org_id = $1 AND code = 'viewer'"),
+            "fixture must resolve persisted viewer role id"
+        );
+        assert!(
+            src.contains("INSERT INTO role_permissions") && src.contains("PERMISSION_QA_QUERY"),
+            "fixture must grant qa.query to viewer role before membership downgrade"
         );
     }
 }

@@ -96,7 +96,7 @@ pub async fn seed_acl_org(pool: &Pool) -> AclOrgFixture {
 
     let owner_ctx = OrgContext::try_new(org, owner, [PERMISSION_QA_QUERY], []).unwrap();
     let org_id = org;
-    with_org_txn(pool, &owner_ctx, {
+    let resolved_viewer_role_id = with_org_txn(pool, &owner_ctx, {
         move |txn| {
             Box::pin(async move {
                 txn.execute(
@@ -109,6 +109,22 @@ pub async fn seed_acl_org(pool: &Pool) -> AclOrgFixture {
                      VALUES ($1, $2, 'viewer', 'Viewer', true)
                      ON CONFLICT (org_id, code) DO NOTHING",
                     &[&viewer_role_id, &org_id],
+                )
+                .await?;
+                let resolved_viewer_role_id: Uuid = txn
+                    .query_one(
+                        "SELECT id FROM roles WHERE org_id = $1 AND code = 'viewer'",
+                        &[&org_id],
+                    )
+                    .await?
+                    .get(0);
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, p.id
+                     FROM permissions p
+                     WHERE p.code = $3
+                     ON CONFLICT DO NOTHING",
+                    &[&org_id, &resolved_viewer_role_id, &PERMISSION_QA_QUERY],
                 )
                 .await?;
                 txn.execute(
@@ -124,7 +140,7 @@ pub async fn seed_acl_org(pool: &Pool) -> AclOrgFixture {
                     &[&org_id, &member],
                 )
                 .await?;
-                Ok(())
+                Ok(resolved_viewer_role_id)
             })
         }
     })
@@ -137,7 +153,7 @@ pub async fn seed_acl_org(pool: &Pool) -> AclOrgFixture {
         member,
         other_user,
         group_id,
-        viewer_role_id,
+        viewer_role_id: resolved_viewer_role_id,
     }
 }
 
