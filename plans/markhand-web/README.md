@@ -51,7 +51,7 @@ không bị local override cũ che mất.
 
 ## Tiến độ milestone (2026-07-31)
 
-Tổng **116 issue** trong catalog: **70 Done**, **17 In progress**, **0 Review**, **29 Backlog**.
+Tổng **116 issue** trong catalog: **74 Done**, **13 In progress**, **0 Review**, **29 Backlog**.
 Nguồn sự thật là `**Status:**` trong từng issue catalog; bảng dưới tóm tắt theo phase.
 GitHub milestone progress được đồng bộ bởi workflow
 [`Sync Markhand Web issues`](../../.github/workflows/sync-markhand-issues.yml) khi
