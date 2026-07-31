@@ -1,4 +1,5 @@
 /target
+.worktrees/
 node_modules/
 .artifacts/
 **/__pycache__/
