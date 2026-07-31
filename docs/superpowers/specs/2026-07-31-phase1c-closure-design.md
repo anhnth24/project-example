@@ -1,7 +1,7 @@
 # Thiết kế đóng Phase 1C theo luồng implement/review
 
 Ngày: 2026-07-31  
-Trạng thái: Đã được owner duyệt ở mức thiết kế hội thoại; chờ review tài liệu  
+Trạng thái: Đã sửa theo review vòng 1; chờ owner duyệt tài liệu
 Phạm vi: Phase 1C — multi-org security, denial suite và security/load gate
 
 ## 1. Mục tiêu
@@ -41,10 +41,16 @@ intelligence chưa có surface runtime trong Phase 1C:
 - signed URL được thay bằng capability token, nên suite kiểm capability
   tamper/expiry/replay/IDOR;
 - permission dự kiến nhưng chưa có operation được khai báo reserved, không tự cấp
-  quyền hoặc tạo endpoint rỗng.
+  quyền hoặc tạo endpoint rỗng;
+- embedding-token metering là `N/A` chỉ khi qualifying environment dùng local/mock
+  provider không phát sinh token billable. Cloud/shared embedding provider không được
+  bật trong qualifying environment cho tới khi job lifecycle meter được token usage;
+  `concurrent_jobs` tiếp tục bound compute trong cấu hình local/mock.
 
 Khi một surface được bổ sung về sau, guard inventory và denial manifest phải buộc PR
-đó thêm test tương ứng.
+đó thêm test tương ứng. Validator đối chiếu denial manifest với guard/route inventory:
+operation mới không có row executable hoặc `N/A` hợp lệ làm CI fail; row `N/A` cũng
+fail khi operation tương ứng xuất hiện.
 
 ### 2.3 Không thuộc phạm vi
 
@@ -53,18 +59,39 @@ Khi một surface được bổ sung về sau, guard inventory và denial manife
 - thay đổi business feature Phase 2/3 không cần cho security gate;
 - tuyên bố production-scale nếu environment không khớp profile đã phê duyệt.
 
+### 2.4 Accepted risk: audit retention
+
+Phase plan P1C.6 yêu cầu audit retention configurable, trong khi catalog 1C-11 đã
+defer retention/TTL và Phase 4 sở hữu audit tamper evidence, retention và export.
+Thiết kế này chọn disposition tường minh:
+
+- Phase 1C không thêm purge/TTL cho append-only audit log;
+- PR 1 phải sửa P1C.6/catalog cho nhất quán và ghi accepted risk
+  `AR-1C-AUDIT-RETENTION` trong risk register, approver là security owner và operations
+  owner;
+- risk chỉ được chấp nhận cho POC/non-production multi-org, hết hiệu lực trước lần
+  production multi-org đầu tiên hoặc Phase 4 gate, điều kiện nào đến trước;
+- qualifying report phải ghi audit row growth và xác nhận environment không phải
+  production; không được dùng Phase 1C pass để tuyên bố audit lifecycle production-ready.
+
+Nếu owner không duyệt accepted risk này khi review spec, retention config + purge job
+phải được đưa vào PR 3 và 1C-11 giữ `In progress` cho tới khi test lifecycle xanh.
+
 ## 3. Quyết định kiến trúc
 
 ### 3.1 Canonical RBAC contract
 
-Tạo một fixture máy đọc được làm canonical contract cho built-in role và permission.
-Fixture chứa:
+Tạo fixture JSON
+`crates/server/openapi/builtin-role-catalog.json` làm canonical contract cho built-in
+role và permission. Fixture chứa:
 
 - stable permission key;
 - trạng thái `active` hoặc `reserved`;
 - role `owner/admin/editor/viewer`;
 - grant matrix cho permission active;
-- restriction như “admin không quản owner”.
+- `requiredCollectionAccess` khi operation collection-scoped;
+- restriction như “admin không quản owner”;
+- metadata `conditionalPolicy` để mô tả policy tương lai nhưng không tự tạo grant.
 
 Database vẫn là authority runtime. Test DB-gated đối chiếu catalog đã provision với
 fixture; OpenAPI test và web role presentation sinh hoặc đọc cùng fixture thay vì
@@ -72,7 +99,27 @@ chép một matrix thứ hai. Historical migration không được sửa; nếu 
 thêm migration expand-only và cập nhật fixture trong cùng PR.
 
 Permission chỉ được `active` khi có operation thật và guard inventory chỉ ra nơi
-enforce. Permission chưa có operation giữ `reserved` và không được seed grant.
+enforce. Active permission được seed vào bảng `permissions`; fixture cho phép active
+permission có zero default grants. Permission chưa có operation giữ `reserved`, không
+có row runtime trong `permissions` và không được seed grant cho tới migration kích
+hoạt nó.
+
+PR 1 phải disposition rõ các lệch hiện tại thay vì sửa plan cho khớp code một cách
+ngầm:
+
+- `doc.publish`, `jobs.system` và `doc.quarantine.review` được bổ sung vào phase-plan
+  matrix dưới dạng active; `doc.quarantine.review` giữ zero default grants có chủ đích;
+- `settings.manage`, `intel.use`, `pii.manage`, `export.run` giữ reserved và ungranted
+  vì chưa có operation runtime;
+- built-in editor không có `doc.delete`. Policy “own/explicit” được defer tới policy/
+  custom-role work; fixture giữ `conditionalPolicy` chỉ để ghi provenance, không phải
+  grant runtime;
+- conditional policy như “viewer theo org policy” trên permission reserved là
+  metadata không normative và không được resolver coi là quyền.
+
+PR 1 chỉ đóng phần canonical matrix của 1C-03. Issue 1C-03 giữ `In progress` tới PR 3,
+vì trạng thái active chỉ được chứng minh đầy đủ khi guard inventory xác nhận mỗi
+permission active có operation và enforcement tương ứng.
 
 ### 3.2 ACL semantics
 
@@ -84,10 +131,40 @@ ACL áp dụng cho active membership:
 - `groups`: collection owner, explicit user grant, membership trong group được grant,
   hoặc role hiện tại được grant qua `collection_role_access`.
 
-Resolver trong `auth/permissions.rs` là semantic reference. PostgreSQL
-`acl_predicate_sql`, Qdrant allowed-collection filter, citation hydration, download,
-jobs và cache phải cho cùng kết quả. Không adapter nào được mở rộng scope khi timeout,
-payload malformed hoặc dependency lỗi.
+Mọi explicit grant phải đạt `access_level` tối thiểu của operation. Guard inventory
+phân loại operation collection-scoped theo thứ tự:
+
+- `read`: list/search/Q&A/citation/preview/download/status/SSE;
+- `write`: toàn bộ `read` cộng upload/publish/reindex;
+- `admin`: toàn bộ `write` cộng delete và ACL mutation.
+
+Operation system-only như reconcile/maintenance không suy quyền từ collection grant;
+chúng dùng service identity riêng.
+
+Semantic reference là hàm logic
+`allowed(user, collection, permission, required_access)`: user và membership active,
+role có base permission, collection thuộc đúng org, visibility cho phép principal và
+explicit grant (nếu cần) đạt access level. Resolver trong `auth/permissions.rs` là
+phép chiếu collection của hàm này; PostgreSQL `acl_predicate_sql`, Qdrant
+allowed-collection filter, citation hydration, download và jobs phải thực thi cùng
+predicate.
+
+Equivalence test PR 2 dùng cùng fixture nhiều trạng thái và so tập collection resolver
+trả về với tập row SQL predicate trả về cho `permission = qa.query`,
+`required_access = read`; test riêng pin `write/admin` không được thỏa bởi grant hẹp
+hơn. Không adapter nào được mở rộng scope khi timeout, payload malformed hoặc
+dependency lỗi.
+
+Không cho dormant group/role grant trên collection `private` hoặc `org`:
+
+- insert/update `collection_group_access` hoặc `collection_role_access` chỉ hợp lệ khi
+  collection đang có visibility `groups`;
+- đổi visibility khỏi `groups` phải xóa group/role grant trong cùng transaction trước
+  khi đổi; DB invariant từ chối trạng thái còn grant;
+- test pin private collection không mở qua group/role và visibility flip không âm thầm
+  kích hoạt grant cũ;
+- PR 2 sửa wording P1C.3 để ghi rõ private chỉ nhận direct-user grant và groups nhận
+  user/group/role grant.
 
 Mọi mutation ảnh hưởng scope phải bump `orgs.acl_version` trong cùng transaction.
 Trigger phải phủ user, group, role grants, group membership, role permission,
@@ -126,6 +203,11 @@ lý do. Suite tái sử dụng helper hiện có, nhưng có một test binary/m
 có thể chạy và báo cáo riêng. Assertion âm phải kiểm cả status/error code lẫn việc
 response không chứa marker, ID, tên, object key hoặc metadata của org khác.
 
+Manifest validator phải join với guard inventory và `ROUTE_INVENTORY`. Mọi business
+operation/route phải có denial row; test reference phải resolve tới test đã đăng ký.
+`N/A` chỉ hợp lệ khi source-scan chứng minh surface chưa tồn tại hoặc contract ghi rõ
+capability thay thế.
+
 Suite phủ HTTP và direct-service/repository cho:
 
 - list/search/FTS/vector/Q&A/citation;
@@ -157,6 +239,16 @@ Report chứa ít nhất git SHA, environment ID, test manifest, leakage count, 
 measurement, quota drift, fairness metric, scan summary và disposition của mọi finding
 high/critical.
 
+PR 5 định nghĩa environment profile `phase1c-multi-org-poc` và cập nhật schema/
+validator của gate registry cho `G1C-*` cùng `failureDisposition: block-phase-1c`.
+Qualifying configuration là chính profile này: ít nhất 2 org, dedicated
+`MARKHAND_WORKER_DATABASE_URL`, local/mock embedding theo disposition ở §2.2 và
+`targetMatch=true`.
+
+Final report có bảng ánh xạ từng item P1C.8 tới gate row hoặc evidence link, bao gồm
+token rotation/reuse/revoke và Qdrant timeout/partial failure; không chỉ báo các metric
+load mới.
+
 ## 4. Phân chia PR
 
 Các PR chạy nối tiếp để tránh conflict tại `openapi.yaml`, `auth/permissions.rs`,
@@ -168,20 +260,24 @@ Phạm vi:
 
 - xác minh và đóng acceptance 1C-01/1C-02 bằng test đã có;
 - thêm canonical RBAC fixture và consistency tests cho DB/OpenAPI/web;
-- sửa claim stale trong phase plan, issue catalog và risk register có liên quan;
-- không đổi status 1C-03 thành `Done` nếu CI DB-gated chưa chứng minh matrix.
+- disposition matrix divergence, audit-retention risk và embedding-token condition
+  trong phase plan, issue catalog và risk register;
+- không đổi status 1C-03 thành `Done` trong PR 1; guard inventory PR 3 mới hoàn tất
+  acceptance còn lại.
 
 Exit:
 
 - fast checks và `rust-integration` xanh;
 - UI không chứa permission matrix độc lập;
-- issue 1C-01/02 và phần matrix của 1C-03 có evidence cụ thể.
+- issue 1C-01/02 và phần matrix của 1C-03 có evidence cụ thể;
+- 1C-03 vẫn `In progress` cho tới guard inventory PR 3.
 
 ### PR 2 — ACL resolver, predicates và invalidation
 
 Phạm vi:
 
 - implement explicit user/group/role grant semantics;
+- enforce read/write/admin access-level ordering và no-dormant-grant invariant;
 - đồng bộ resolver, SQL predicate và downstream scope;
 - thêm trigger/version bump cho mọi ACL mutation;
 - thêm tests grant, revoke, suspend, cache invalidation và stale-scope defense;
@@ -190,7 +286,7 @@ Phạm vi:
 Exit:
 
 - test RED chứng minh groups hiện không resolve trước implementation;
-- test grant/revoke xanh ở fast và DB-gated layer;
+- test grant/revoke, access-level và visibility-flip xanh ở fast và DB-gated layer;
 - không query collection-scoped nào bỏ shared ACL predicate.
 
 ### PR 3 — Guard inventory và operational identities
@@ -202,14 +298,19 @@ Phạm vi:
 - least-privilege worker/reconcile identity;
 - provision `markhand_worker` trong POC deployment;
 - audit coverage cho mutation hiện hữu;
-- xác minh và cập nhật evidence 1C-03/04/07/08/09/10/11.
+- xác minh và cập nhật evidence 1C-03/04/07/08/09/10/11;
+- kiểm qualifying config cấm cloud/shared embedding khi chưa có token metering;
+- giữ accepted-risk audit retention hoặc implement purge nếu owner không duyệt defer.
 
 Exit:
 
 - direct-service misuse bị deny;
 - route HTTP giữ đúng 403/404 contract và không tạo existence oracle;
-- POC worker không fallback app-role trong qualifying configuration;
-- 1C-07…11 chỉ `Done` sau test/gate tương ứng, không dựa vào prose.
+- config/static test chứng minh profile G1C yêu cầu worker URL riêng;
+- 1C-03/04/07/09/10 có thể đóng bằng CI evidence;
+- 1C-08 giữ deployed half-gate tới PR 5 chứng minh process thật không fallback;
+- 1C-11 chỉ đóng khi audit coverage xanh và accepted-risk retention đã được owner duyệt
+  hoặc retention implementation đã xanh.
 
 ### PR 4 — Multi-org denial suite
 
@@ -218,12 +319,14 @@ Phạm vi:
 - shared fixture và denial manifest;
 - gom/tái sử dụng test rải rác;
 - bổ sung HTTP indexed FTS/Q&A, duplicate-name, org-switch/cache và các gap thực;
-- thêm CI invocation riêng, không soft-pass khi thiếu dependency.
+- thêm CI invocation riêng và `MARKHAND_TEST_REQUIRED=1`; helper phải panic thay vì
+  soft-skip khi required mode thiếu env/dependency.
 
 Exit:
 
 - fixture đạt 2 org và ít nhất 3 user/org;
 - mọi manifest row có executable test hoặc `N/A` có bằng chứng;
+- guard/route inventory không có operation thiếu denial row;
 - zero foreign marker/metadata leak;
 - `rust-integration` xanh và artifact manifest được lưu;
 - 1C-12 đạt CI half-gate; deployed half-gate còn chờ PR 5.
@@ -233,7 +336,7 @@ Exit:
 Phạm vi:
 
 - registry `G1C-*`, harness, report validator và opt-in CI job;
-- boot deployment multi-org với dedicated worker role;
+- boot profile `phase1c-multi-org-poc` với dedicated worker role;
 - chạy denial, revoke, quota recovery, fairness, audit và vulnerability scan;
 - cập nhật risk register và final phase report.
 
@@ -243,6 +346,8 @@ Exit:
 - leakage bằng 0;
 - mọi metric đạt threshold đã phê duyệt;
 - không còn high/critical finding chưa disposition;
+- report chứng minh worker process dùng dedicated URL/role, hoàn tất half-gate 1C-08;
+- report ánh xạ đủ mọi item P1C.8;
 - 1C-12 deployed half-gate và 1C-13 cùng xanh;
 - Phase 1C chuyển 13/13 `Done`.
 
@@ -286,13 +391,15 @@ substrate chưa ổn định.
 - PostgreSQL FORCE RLS và application role;
 - MinIO/Qdrant ownership, timeout và capability tests;
 - worker pipeline, ACL cache, quota race và multi-org denial fixture;
-- chạy `--include-ignored` với dependency bắt buộc; thiếu biến/service phải fail hoặc
-  được job skip rõ ràng, không `return Ok(())` tạo false green.
+- job `rust-integration` và G1C harness set `MARKHAND_TEST_REQUIRED=1`; shared
+  `take_live`/dependency helpers phải panic khi required mode thiếu biến hoặc service;
+- ngoài required mode, ignored test có thể skip rõ ràng cho developer không chạy
+  services; không `return Ok(())` tạo false green trong CI.
 
 ### 6.3 Deployed gate
 
 - dùng POC compose hoặc environment tương đương có nhiều org;
-- dedicated worker DB role;
+- profile `phase1c-multi-org-poc` và dedicated worker DB role;
 - opt-in qua workflow dispatch/label để không làm chậm mọi PR;
 - upload artifact kể cả khi fail và luôn teardown;
 - nếu GitHub runner không đáp ứng target environment, owner chạy cùng harness trên máy
@@ -318,4 +425,6 @@ Thiết kế được coi là thực thi xong khi:
 2. 1C-01…1C-13 đều có evidence link và trạng thái `Done`;
 3. fast CI, `rust-integration` và deployed `G1C-*` đều xanh;
 4. roadmap, issue catalog, generated dashboard và GitHub issue sync nhất quán;
-5. không còn blocker high/critical chưa disposition cho trust boundary multi-org.
+5. không còn blocker high/critical chưa disposition cho trust boundary multi-org;
+6. accepted risk audit retention đã được owner duyệt và còn trong phạm vi hiệu lực,
+   hoặc retention implementation đã thay thế risk bằng evidence xanh.
