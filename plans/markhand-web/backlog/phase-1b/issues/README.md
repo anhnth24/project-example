@@ -5,11 +5,14 @@ Parent plan: [`../../../phase-1b-single-org-poc.md`](../../../phase-1b-single-or
 <!-- roadmap-default-status: blocked -->
 <!-- roadmap-groups: F,I,R,O -->
 
-**Trạng thái tổng quan (cập nhật 2026-07-30).** **19/24 Done** — foundation F01–F06,
-ingest I01–I07, retrieval R01, operations O01–O05 (O-chain + soak pass live 2026-07-26).
-**5 active:** R02–R06 (R03 Review). Phase 1B gate **chưa đóng** cho tới khi R02–R06 đạt
-acceptance; release suite O04/O05 đã pass trên cùng commit `f4f33cd` nhưng phụ thuộc R04–R06
-trong critical path.
+**Trạng thái tổng quan (cập nhật 2026-07-31).** **24/24 Done** — foundation F01–F06,
+ingest I01–I07, retrieval R01–R06, operations O01–O05 (O-chain + soak pass live
+2026-07-26). **Phase 1B gate đóng** trên commit `a981fb3` + R06 hanging-soak
+evidence 2026-07-31. R02–R05 Done với rust-integration trên `b5cc92c` (GitHub
+Actions run
+[30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015),
+job
+[91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)).
 
 Tất cả issue bắt đầu ở **Blocked**. Chỉ chuyển `Ready` khi external gate và predecessor
 ghi trong issue đã `Done`.
@@ -235,18 +238,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-R02 — Citation, preview và download authorization
 
-- **Status:** In progress — multi-format vertical slice green on live PG/MinIO/
-  Qdrant: `live_upload_convert_index_citation_vertical_slice` covers
-  all `phase1b-mixed.yaml` ingest formats
-  (csv/docx/html/pdf/png/pptx/txt/xlsx) via HTTP upload →
-  ConvertWorker/`fileconv` → IndexWorker → citation resolve on
-  worker-produced IDs/artifacts/chunks; no SQL seed of
-  versions/artifacts/chunks; shared embedding plan/signature. Concurrent
-  redemption barrier + expiry/IDOR/delete/suspend/membership deny covered by
-  `live_citation_authz_expiry_replay_idor_and_immediate_deny` (still SQL-seeds
-  derived artifacts for history ACL paths). Remaining for Done: history
-  ACL/IDOR/delete-deny matrices driven only by worker-produced artifacts;
-  MinIO cleanup guard soak evidence.
+- **Status:** Done — CI rust-integration SUCCESS on `b5cc92c` (run
+  [30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015)/job
+  [91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)):
+  `live_citation_authz_expiry_replay_idor_and_immediate_deny` passed with
+  worker-produced history/IDOR/delete paths; `live_minio_cleanup_guard_soak`
+  passed. Prior multi-format vertical slice retained:
+  `live_upload_convert_index_citation_vertical_slice` covers all
+  `phase1b-mixed.yaml` ingest formats via HTTP upload → ConvertWorker/`fileconv`
+  → IndexWorker → citation resolve on worker-produced IDs/artifacts/chunks.
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
@@ -261,43 +261,22 @@ ghi trong issue đã `Done`.
 
 ### P1B-R03 — Grounded Q&A, stream và fallback
 
-- **Status:** Review — ask now attempts injectable ChatProvider
-  (Static/Failing/Timeout) but never claims GLM grounded while structured
-  entailment is unavailable. Conflict hydrate exposes status/resolutionNote;
-  current warns only `open`; history emits resolution notes for
-  resolved/accepted_exception/false_positive. 2026-07-29 re-verify on local
-  PG16+MinIO (no Qdrant): all three "Remaining for Done" items closed —
-  (a) `live_ask_stream_slow_trickle_concurrent_delete_releases_locks` +
-  `live_ask_stream_jwt_exp_membership_and_delete_barriers` already drive the
-  production router SSE live-tail through a delete/ACL-revoke *between* two
-  trickled batches and assert `citation_revoked`/`stream.closed` with no
-  post-commit content sequence — this was already Done, the backlog text was
-  stale; (b) new `live_ask_conflict_triage_then_current_and_history_matrix`
-  (`tests/ask_grounding_matrix.rs`) drives `services::access::triage_authorized_conflict`
-  against a real open conflict across all three terminal statuses
-  (resolved/accepted_exception/false_positive) and asserts current-mode warns
-  only pre-triage while history-mode surfaces the exact resolution note only
-  post-triage; (c) new `live_ask_wrong_delta_and_contradiction_soak_stays_fail_closed`
-  runs 20 concurrent `ask()` calls across two tenants, each fed a
-  StaticChatProvider that fabricates the *other* tenant's value (wrong-delta/
-  same-topic contradiction), and asserts the fail-closed extractive guarantee
-  and citation tenant-scoping hold under concurrency — no fabricated value or
-  cross-tenant citation ever leaks. Note: `force_extractive_only()` is a
-  hardcoded `true` while `STRUCTURED_ENTAILMENT_AVAILABLE` is `false`
-  (`services/qa/mod.rs`), so `validate_answer_citations`'s wrong-delta/
-  contradiction detectors are exercised today only via the existing hermetic
-  unit tests in `services/qa/grounding.rs`, not via the live `ask()` branch
-  (that branch is dead code until a trusted structured-entailment verifier
-  ships) — this is intentional fail-closed design, not a bug. **Dev-gate
-  landed 2026-07-29 (owner quyết định)**: provider HTTP OpenAI-compatible đã
-  có sẵn từ trước (`OpenAiCompatibleChat`, env `MARKHAND_GLM_*`/`MARKHAND_CHAT_*`);
-  phần mới là cờ opt-in `MARKHAND_QA_ALLOW_UNVERIFIED_LLM` (default OFF —
-  hành vi extractive fail-closed giữ nguyên từng bit): khi bật VÀ provider
-  cấu hình, answer LLM đi qua `validate_answer_citations` (các detector
-  wrong-delta/fabricated-citation giờ reachable từ ask thật), mode wire mới
-  `llm_unverified` + warning cố định "chưa kiểm chứng entailment" — không bao
-  giờ claim grounded; validation fail → rớt về extractive. Claim GLM
-  *grounded* thật vẫn chờ structured-entailment verifier (không đổi).
+- **Status:** Done — acceptance matrix green on CI rust-integration (`b5cc92c`,
+  run [30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015)/job
+  [91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)):
+  full `ask_grounding_matrix` passed. Ask remains intentionally fail-closed /
+  extractive when structured entailment is unavailable — **does not** claim
+  structured-entailment or GLM grounded. Conflict hydrate exposes
+  status/resolutionNote; current warns only `open`; history emits resolution
+  notes for resolved/accepted_exception/false_positive. Prior live evidence
+  retained: delete/ACL-revoke mid-stream barriers
+  (`live_ask_stream_slow_trickle_concurrent_delete_releases_locks`,
+  `live_ask_stream_jwt_exp_membership_and_delete_barriers`);
+  `live_ask_conflict_triage_then_current_and_history_matrix`;
+  `live_ask_wrong_delta_and_contradiction_soak_stays_fail_closed`.
+  `STRUCTURED_ENTAILMENT_AVAILABLE = false` / `force_extractive_only()` stay
+  hardcoded; opt-in `MARKHAND_QA_ALLOW_UNVERIFIED_LLM` (default OFF) may emit
+  `llm_unverified` with fixed warning, never grounded.
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
@@ -314,14 +293,19 @@ ghi trong issue đã `Done`.
 
 ### P1B-R04 — Collection/document/job REST API
 
-- **Status:** In progress — Sol R3 upload saga retained; live
+- **Status:** Done — all CI-runnable `api_http_contracts` tests green on
+  rust-integration (`b5cc92c`, run
+  [30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015)/job
+  [91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)),
+  including cross-tenant IDOR/403 fixture corrections. Note:
+  `test-hooks`-only audit rollback tests
+  (`live_patch_collection_audit_correlation_and_rollback`,
+  `live_reindex_audit_failure_rolls_back_enqueue`) are excluded from the normal
+  rust-integration build (feature not enabled in CI), so evidence does not
+  cover that gated subset. Sol R3 upload saga retained;
   `live_http_collection_document_job_contract_matrix` asserts reindex same
-  `jobId` with `created=false` on idempotent replay. Business API mutations are
-  gated by central `mutation_write_gate` middleware (see O03), not per-handler
-  copies. Remaining for Done: broader cross-tenant resource IDOR suite beyond
-  collections; publish/download/citation HTTP coverage in the same contract
-  matrix; full status/schema matrix vs OpenAPI; live Sol R3 barrier evidence on
-  CI agent.
+  `jobId` with `created=false` on idempotent replay. Business API mutations
+  gated by central `mutation_write_gate` middleware (see O03).
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -334,33 +318,20 @@ ghi trong issue đã `Done`.
 
 ### P1B-R05 — Search/ask/resumable SSE API
 
-- **Status:** In progress — Sol R3 hardening in flight. Implemented: ask/job
-  reserve-before-select on cap-1 channel (await client drain with no DB locks),
-  then family→principal→fresh OrgContext (permissions + collection ACL) → select
-  ≤1 event under fixed pull deadline → non-blocking permit enqueue; production
-  `/auth/logout` router barriers (≤1 in-flight, no buffered batch after commit);
-  concurrent delete trickle + `acl_mutate` role/collection barriers assert no new
-  sequenced content after commit. 2026-07-29 re-verify on local PG16+MinIO (no
-  Qdrant reachable in this sandbox): the delayed-producer reconnect matrix
-  (`live_ask_stream_last_event_id_purge_and_delayed_reconnect`) and the live
-  purge/load bound evidence (`live_ask_stream_maintenance_converges_under_bounded_load`)
-  both already exist in `tests/sse_stream_readiness.rs` and pass green —
-  neither actually dials Qdrant: every test in this file configures
-  `embedder: None`, so `hybrid_search`'s vector leg (`search_all_vector_legs`)
-  is never dispatched (`query_vector.as_deref()` short-circuits to
-  `Ok(Ok(Vec::new()))`) and retrieval runs FTS-only; the `QdrantClient` values
-  built in these tests are constructed but never make a network call. So both
-  gaps were already Done — the "green on CI agent" framing was the only
-  outstanding piece, and this run supplies that PG(+MinIO)-only evidence
-  locally. Remaining, unchanged: production ask still routes through the
-  fail-closed extractive path whenever entailment is unavailable (by design,
-  see P1B-R03 status — `STRUCTURED_ENTAILMENT_AVAILABLE = false` is a hardcoded
-  constant, not a bug; unblocking it needs a trusted structured-entailment
-  verifier / GLM readiness decision outside this session's scope, not more
-  test code). **Dev-gate 2026-07-29** (xem R03): `run_producer` có nhánh
-  opt-in cùng cờ — buffer toàn bộ answer GLM, validate xong mới tokenize qua
-  đường `ask.token` sẵn có (không phải passthrough token thật — chủ ý, vì
-  validation cần cả answer); stream token thật để dành khi hết fail-closed.
+- **Status:** Done — full `sse_stream_readiness` matrix green on CI
+  rust-integration (`b5cc92c`, run
+  [30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015)/job
+  [91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)).
+  Implemented: ask/job reserve-before-select on cap-1 channel; family→principal→
+  fresh OrgContext → select ≤1 event under fixed pull deadline; production
+  `/auth/logout` router barriers; concurrent delete trickle + `acl_mutate`
+  role/collection barriers assert no new sequenced content after commit;
+  delayed-producer reconnect
+  (`live_ask_stream_last_event_id_purge_and_delayed_reconnect`) and
+  purge/load bound
+  (`live_ask_stream_maintenance_converges_under_bounded_load`) evidence.
+  Production ask remains fail-closed extractive when entailment is unavailable
+  (by design — see P1B-R03; not a Done blocker).
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/{sse,last_event_id}.rs`,
@@ -377,14 +348,15 @@ ghi trong issue đã `Done`.
 
 ### P1B-R06 — OpenAPI, rate limit và readiness
 
-- **Status:** In progress — Sol R2 complete for rate/readiness/OpenAPI; kept open with
-  R05. Implemented: outer readiness timeout reports in-progress probe code; hanging
-  probe router matrix (code+deadline); baseline IP shares ceil `RateLimitRejected`;
-  OpenAPI `/openapi.yaml` 429; hermetic
-  `concurrent_checkers_share_ceil_and_stay_bounded` for shared-ceil + hard-cap
-  cardinality under concurrent pressure; `pnpm --dir web api:check` regenerates
-  TS client from OpenAPI (429 sweep already in `contract.ts`). Gaps remaining
-  for Done: Compose-stack hanging soak on a Docker host.
+- **Status:** Done — live hanging-dependency Compose soak pass 2026-07-31 on a
+  24-core Ubuntu Docker host: `r06-hanging-soak.json` `status=pass`, 0 blockers,
+  raw `r06-20260731T080518Z-eee30b03`. All four network readiness probes
+  (`database`, `vector_store`, `object_store`, `embedding`) sustained 60s with
+  correct 503 probe codes, bounded `/ready` deadlines, `/health/live` +
+  `/openapi.yaml` within budget, bounded concurrent checkers, and confirmed
+  restore/recovery. Hermetic router/readiness/unit coverage unchanged (Sol R2).
+  Harness fix: post-pause `wait_for_hung_ready` excludes pool-drain transition
+  samples before the sustain window (see `bench/markhand_web/hanging_soak/`).
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, `middleware/**`, `routes/health.rs`,

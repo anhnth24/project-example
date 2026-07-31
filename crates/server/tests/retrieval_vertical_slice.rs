@@ -10,15 +10,18 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use common::worker_pipeline::{
+    drain_embedding_jobs, drain_index_jobs, fileconv_binary, load_first_chunk,
+    load_published_version, test_qdrant, test_qdrant_admin, MockEmbedding,
+};
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
     login_access_token, seed_user_with_permissions, take_live, test_minio_client, tiny_docx_bytes,
     tiny_pdf_bytes, tiny_png_ocr_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
 };
-use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{Profile, SecretString};
+use fileconv_server::config::Profile;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs::{self};
 use fileconv_server::services::citation::{
@@ -28,12 +31,9 @@ use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::index_signature::collection_name_for_signature;
 use fileconv_server::services::indexing::IndexingOutboxSink;
 use fileconv_server::storage::parse_key_for_org;
-use fileconv_server::storage::qdrant::{QdrantAdminApiKey, QdrantAdminClient, QdrantClient};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
-use fileconv_server::workers::embedding::{
-    EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
-};
-use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig, IndexWorkerRun};
+use fileconv_server::workers::embedding::{EmbeddingWorker, EmbeddingWorkerConfig};
+use fileconv_server::workers::index::{IndexWorker, IndexWorkerConfig};
 use fileconv_server::workers::limits::ResourceLimits;
 use fileconv_server::workers::sandbox::{self, SandboxCancel, SandboxConfig, SandboxInput};
 use http_body_util::BodyExt;
@@ -41,35 +41,6 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 const BOUNDARY: &str = "----markhandVerticalSliceBoundary";
-
-fn fileconv_binary() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("MARKHAND_TEST_FILECONV_BIN") {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv");
-    path.exists().then_some(path)
-}
-
-fn test_qdrant() -> Option<QdrantClient> {
-    let url = std::env::var("MARKHAND_TEST_QDRANT_URL").ok()?;
-    if url.trim().is_empty() {
-        return None;
-    }
-    QdrantClient::with_api_key(url, None).ok()
-}
-
-fn test_qdrant_admin() -> Option<QdrantAdminClient> {
-    let url = std::env::var("MARKHAND_TEST_QDRANT_URL").ok()?;
-    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY").ok()?;
-    QdrantAdminClient::new(
-        url,
-        QdrantAdminApiKey::new(SecretString::new(key)).expect("admin key"),
-    )
-    .ok()
-}
 
 fn multipart(
     filename: &str,
@@ -239,18 +210,23 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
         return;
     };
-    let Some(qdrant) = take_live(test_qdrant(), "MARKHAND_TEST_QDRANT_URL") else {
-        eprintln!("skipped: MARKHAND_TEST_QDRANT_URL unset");
-        return;
-    };
-    let Some(qdrant_admin) = take_live(test_qdrant_admin(), "MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
-    else {
-        eprintln!("skipped: MARKHAND_TEST_QDRANT_ADMIN_API_KEY unset");
-        return;
-    };
-    let Some(fileconv) = take_live(fileconv_binary(), "target/debug/fileconv") else {
-        panic!("target/debug/fileconv missing — build fileconv-cli for vertical slice evidence");
-    };
+    // Once DB+MinIO are live (CI sets them), Qdrant is required — do not soft-skip
+    // to a false green when MARKHAND_TEST_QDRANT_URL/admin are absent.
+    let qdrant = test_qdrant().unwrap_or_else(|| {
+        panic!(
+            "MARKHAND_TEST_QDRANT_URL is required once live DB/MinIO are configured \
+             (vertical slice IndexWorker)"
+        )
+    });
+    let qdrant_admin = test_qdrant_admin().unwrap_or_else(|| {
+        panic!(
+            "Qdrant admin client required once MARKHAND_TEST_QDRANT_URL is set \
+             (set MARKHAND_TEST_QDRANT_ADMIN_API_KEY or use the default operator key)"
+        )
+    });
+    let fileconv = fileconv_binary().unwrap_or_else(|| {
+        panic!("target/debug/fileconv missing — build fileconv-cli for vertical slice evidence")
+    });
     let cleanup = MinioCleanupGuard::new(store.clone());
     store.ensure_bucket().await.expect("bucket");
 
@@ -827,199 +803,6 @@ async fn live_upload_convert_index_citation_vertical_slice() {
     ephemeral.drop().await;
 }
 
-async fn drain_index_jobs(worker: &IndexWorker, ctx: &OrgContext) -> usize {
-    let mut completed = 0;
-    for _ in 0..32 {
-        match worker.run_once(ctx).await.expect("index/lifecycle run") {
-            IndexWorkerRun::Completed { .. } => completed += 1,
-            IndexWorkerRun::NoJob => return completed,
-            outcome => panic!("unexpected index/lifecycle outcome: {outcome:?}"),
-        }
-    }
-    panic!("index/lifecycle queue did not drain within 32 jobs");
-}
-
-async fn drain_embedding_jobs(worker: &EmbeddingWorker, ctx: &OrgContext) -> usize {
-    let mut completed = 0;
-    for _ in 0..32 {
-        match worker.run_once(ctx).await.expect("embedding run") {
-            EmbeddingWorkerRun::Completed { .. } => completed += 1,
-            EmbeddingWorkerRun::NoJob => return completed,
-            outcome => panic!("unexpected embedding outcome: {outcome:?}"),
-        }
-    }
-    panic!("embedding queue did not drain within 32 jobs");
-}
-
-async fn load_published_version(
-    pool: &Pool,
-    ctx: &OrgContext,
-    document_id: Uuid,
-) -> (Uuid, String, String) {
-    with_org_txn(pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                let row = txn
-                    .query_one(
-                        "SELECT dv.id, da.content_sha256 AS markdown_sha, dv.content_sha256 AS source_sha
-                         FROM documents d
-                         JOIN document_versions dv
-                           ON dv.org_id = d.org_id AND dv.id = d.current_version_id
-                         JOIN derived_artifacts da
-                           ON da.org_id = dv.org_id
-                          AND da.version_id = dv.id
-                          AND da.artifact_kind = 'markdown'
-                         WHERE d.org_id = $1 AND d.id = $2
-                           AND dv.publication_state = 'published'
-                           AND dv.is_current",
-                        &[&ctx.org_id(), &document_id],
-                    )
-                    .await?;
-                Ok((row.get(0), row.get(1), row.get(2)))
-            })
-        }
-    })
-    .await
-    .expect("published version from convert worker")
-}
-
-struct ChunkRow {
-    id: Uuid,
-    body: String,
-    span_start: Option<i32>,
-    span_end: Option<i32>,
-}
-
-async fn load_first_chunk(
-    pool: &Pool,
-    ctx: &OrgContext,
-    document_id: Uuid,
-    version_id: Uuid,
-) -> ChunkRow {
-    with_org_txn(pool, ctx, {
-        let ctx = ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                let row = txn
-                    .query_one(
-                        "SELECT id, body, span_start, span_end
-                         FROM chunks
-                         WHERE org_id = $1 AND document_id = $2 AND version_id = $3
-                         ORDER BY ordinal
-                         LIMIT 1",
-                        &[&ctx.org_id(), &document_id, &version_id],
-                    )
-                    .await?;
-                Ok(ChunkRow {
-                    id: row.get(0),
-                    body: row.get(1),
-                    span_start: row.get(2),
-                    span_end: row.get(3),
-                })
-            })
-        }
-    })
-    .await
-    .expect("chunk produced by index worker")
-}
-
-struct MockEmbedding {
-    base_url: String,
-    stopping: Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl MockEmbedding {
-    fn start() -> Self {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::thread;
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
-        listener.set_nonblocking(true).expect("nonblocking");
-        let base_url = format!("http://{}/v1", listener.local_addr().expect("addr"));
-        let stopping = Arc::new(AtomicBool::new(false));
-        let thread_stopping = Arc::clone(&stopping);
-        let thread = thread::spawn(move || {
-            while !thread_stopping.load(Ordering::Relaxed) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        stream
-                            .set_read_timeout(Some(Duration::from_secs(5)))
-                            .expect("read timeout");
-                        let mut buf = Vec::new();
-                        let mut tmp = [0u8; 1024];
-                        let body_start = loop {
-                            if let Some(offset) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                                break Some(offset + 4);
-                            }
-                            match stream.read(&mut tmp) {
-                                Ok(0) => break None,
-                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                                Err(_) => break None,
-                            }
-                        };
-                        let Some(body_start) = body_start else {
-                            continue;
-                        };
-                        let headers = String::from_utf8_lossy(&buf[..body_start]);
-                        let content_length = headers
-                            .lines()
-                            .filter_map(|line| line.split_once(':'))
-                            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-                            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
-                            .unwrap_or(0);
-                        while buf.len() < body_start + content_length {
-                            match stream.read(&mut tmp) {
-                                Ok(0) => break,
-                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                                Err(_) => break,
-                            }
-                        }
-                        let input_count = serde_json::from_slice::<serde_json::Value>(
-                            &buf[body_start..buf.len().min(body_start + content_length)],
-                        )
-                        .ok()
-                        .and_then(|value| value["input"].as_array().map(Vec::len))
-                        .unwrap_or(1);
-                        let data = (0..input_count)
-                            .map(|index| {
-                                serde_json::json!({
-                                    "index": index,
-                                    "embedding": [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-                                })
-                            })
-                            .collect::<Vec<_>>();
-                        let body = serde_json::to_vec(&serde_json::json!({ "data": data }))
-                            .expect("embedding response");
-                        let headers = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                            body.len()
-                        );
-                        let _ = stream.write_all(headers.as_bytes());
-                        let _ = stream.write_all(&body);
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(5));
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
-        Self {
-            base_url,
-            stopping,
-            thread: Some(thread),
-        }
-    }
-
-    fn base_url(&self) -> &str {
-        &self.base_url
-    }
-}
-
 #[tokio::test]
 async fn mock_embedding_reads_complete_batched_requests() {
     let mock = MockEmbedding::start();
@@ -1043,14 +826,4 @@ async fn mock_embedding_reads_complete_batched_requests() {
         .expect("batched mock response");
     assert_eq!(vectors.len(), 2);
     assert!(vectors.iter().all(|vector| vector.len() == 8));
-}
-
-impl Drop for MockEmbedding {
-    fn drop(&mut self) {
-        self.stopping
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
 }

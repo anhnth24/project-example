@@ -1,6 +1,6 @@
 # Markhand Web — kế hoạch triển khai theo phase
 
-Ngày lập: 2026-07-16 · Cập nhật milestone/issue: 2026-07-30
+Ngày lập: 2026-07-16 · Cập nhật milestone/issue: 2026-07-31
 Nguồn thiết kế đã duyệt:
 [`../reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md`](../reports/brainstorm-260713-1656-markhand-web-rag-multi-org-report.md)
 
@@ -49,9 +49,9 @@ không bị local override cũ che mất.
 | 3 | Port intelligence: BRD/PRD, quality, PII, bảng, version, export | [Phase plan](phase-3-intelligence.md) | [14 issues](backlog/phase-3/issues/README.md) |
 | 4 | OIDC/SSO, hardening production, DR và onboarding/help | [Phase plan](phase-4-production-hardening.md) | [14 issues](backlog/phase-4/issues/README.md) |
 
-## Tiến độ milestone (2026-07-30)
+## Tiến độ milestone (2026-07-31)
 
-Tổng **116 issue** trong catalog: **64 Done**, **22 In progress**, **1 Review**, **29 Backlog**.
+Tổng **116 issue** trong catalog: **68 Done**, **19 In progress**, **0 Review**, **29 Backlog**.
 Nguồn sự thật là `**Status:**` trong từng issue catalog; bảng dưới tóm tắt theo phase.
 GitHub milestone progress được đồng bộ bởi workflow
 [`Sync Markhand Web issues`](../../.github/workflows/sync-markhand-issues.yml) khi
@@ -62,14 +62,14 @@ GitHub milestone progress được đồng bộ bởi workflow
 | F | 12/12 | 0 | 0 | Foundation gate đạt |
 | 0 | 10/10 | 0 | 0 | Discovery gates đạt |
 | 1A | 10/10 | 0 | 0 | Extraction gate đạt |
-| 1B | 19/24 | 5 | 0 | **Đang đóng** — còn R02–R06 (R03 Review); O-chain (O01–O05) Done |
+| 1B | 24/24 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
 | 1C | 0/13 | 12 | 1 | Substrate 1B đã có; exit gate 1C-12/1C-13 chưa đạt |
 | 2 | 13/19 | 6 | 0 | MVP mock/CI xanh; exit gate chờ 1C + E2E deploy thật |
 | 3 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
 | 4 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 3 |
 
-**Critical path hiện tại:** đóng P1B-R02…R06 → Phase 1B gate → hoàn thiện 1C denial suite
-→ Phase 2 completion gate (P2-15/P2-16 trên backend thật).
+**Critical path hiện tại:** hoàn thiện 1C denial suite (1C-12/1C-13) → Phase 2
+completion gate (P2-15/P2-16 trên backend thật).
 
 Issue mới gần đây trên Phase 2 (owner request 2026-07-29): P2-17 Document graph, P2-18
 Project grouping, P2-19 Chat history — đều In progress (server + web + mock/E2E đã landed,
