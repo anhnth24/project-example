@@ -331,6 +331,22 @@ pub async fn seed_acl_collection_matrix(
                     AccessLevel::Write,
                 )
                 .await?;
+                grant_role_access(
+                    txn,
+                    fixture.org,
+                    matrix.containment,
+                    fixture.viewer_role_id,
+                    AccessLevel::Write,
+                )
+                .await?;
+                grant_user_access(
+                    txn,
+                    fixture.org,
+                    matrix.containment,
+                    fixture.member,
+                    AccessLevel::Write,
+                )
+                .await?;
                 grant_user_access(
                     txn,
                     fixture.org,

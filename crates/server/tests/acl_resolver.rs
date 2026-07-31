@@ -112,6 +112,34 @@ async fn containment_removes_group_role_grants_but_preserves_other_user_grants()
     let matrix = seed_acl_collection_matrix(&pool, &fixture).await;
     let collection = matrix.containment;
 
+    assert_eq!(
+        group_grant_count(&pool, fixture.org, collection).await,
+        1,
+        "containment fixture must seed one group grant before revoke"
+    );
+    assert_eq!(
+        role_grant_count(&pool, fixture.org, collection).await,
+        1,
+        "containment fixture must seed one role grant before revoke"
+    );
+    assert_eq!(
+        user_grant_count(&pool, fixture.org, collection, fixture.member).await,
+        1,
+        "containment fixture must seed target member direct grant before revoke"
+    );
+    assert_eq!(
+        user_grant_count(&pool, fixture.org, collection, fixture.other_user).await,
+        1,
+        "containment fixture must seed unrelated other-user direct grant before revoke"
+    );
+
+    let member_allowed_before =
+        resolver_allowed_collection_ids(&pool, fixture.org, fixture.member).await;
+    assert!(
+        member_allowed_before.contains(&collection),
+        "member must resolve containment before revoke; got {member_allowed_before:?}"
+    );
+
     let owner_ctx =
         OrgContext::try_new(fixture.org, fixture.owner, [PERMISSION_QA_QUERY], []).unwrap();
     with_org_txn(&pool, &owner_ctx, {
