@@ -40,7 +40,10 @@
       "description": "Read version history",
       "requiredCollectionAccess": "read",
       "conditionalPolicy": null,
-      "operationRefs": ["src/services/access.rs"]
+      "operationRefs": [
+        "src/services/access.rs",
+        "src/services/retrieval/mod.rs"
+      ]
     },
     {
       "key": "member.manage",
