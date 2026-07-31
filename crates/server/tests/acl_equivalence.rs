@@ -25,6 +25,7 @@ async fn resolver_matches_sql_predicate_for_acl_fixture_matrix() {
     let matrix = seed_acl_collection_matrix(&pool, &fixture).await;
 
     let resolver_ids = resolver_allowed_collection_ids(&pool, fixture.org, fixture.member).await;
+    let expected = expected_member_read_projection(&matrix);
     let sql_ids = sql_allowed_collection_ids(
         &pool,
         fixture.org,
@@ -35,11 +36,18 @@ async fn resolver_matches_sql_predicate_for_acl_fixture_matrix() {
     .await;
 
     assert_eq!(
+        resolver_ids, expected,
+        "resolver drift: member `(qa.query, read)` projection must match canonical fixture \
+         matrix (org_visible, private_owned, private_user_grant, groups_via_group, \
+         groups_via_role, groups_read_grant, containment); resolver={resolver_ids:?} \
+         expected={expected:?}"
+    );
+
+    assert_eq!(
         resolver_ids, sql_ids,
         "resolver and SQL must agree on the full ACL fixture matrix"
     );
 
-    let expected = expected_member_read_projection(&matrix);
     assert_eq!(
         sql_ids, expected,
         "SQL projection must match canonical matrix expectations"
