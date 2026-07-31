@@ -34,8 +34,10 @@ use crate::services::qa::prompt::build_grounded_messages;
 use crate::services::qa::provider::{ChatProvider, ProviderError, StreamCancel};
 use crate::services::qa::stream::{tokenize_answer, HEARTBEAT_INTERVAL, SSE_ENVELOPE_VERSION};
 use crate::services::qa::{
-    allow_unverified_llm_runtime, force_extractive_only_runtime, hits_to_hybrid, resolve_llm_answer,
+    allow_unverified_llm_runtime, force_extractive_only_runtime, hits_to_hybrid,
+    reserve_ask_tokens, resolve_llm_answer, settle_ask_tokens, TokenLease,
 };
+use crate::services::quota::QuotaError;
 use crate::services::retrieval::{hybrid_search, RetrievalHit, RetrievalRequest, VersionMode};
 use crate::services::stream_auth::{self, StreamAuthError};
 use crate::storage::qdrant::QdrantClient;
@@ -60,6 +62,9 @@ pub struct AskStreamStart {
 pub enum AskStreamPrepareError {
     Retrieval(crate::services::retrieval::RetrievalError),
     InvalidRequest(&'static str),
+    /// Token-quota admission failed before any durable session side effect
+    /// (1C-09 a): `QuotaExceeded` maps to a distinguishable 429.
+    Quota(QuotaError),
     Database,
 }
 
@@ -134,6 +139,28 @@ pub async fn start_ask_stream(
 
     let hybrid = hits_to_hybrid(&retrieval.hits);
     let extractive = extractive_answer(&question, &hybrid);
+
+    // Token quota (1C-09 a): reserve before creating any durable session state
+    // — a denial is a clean 429 with zero side effects. Only reserved when the
+    // producer will really call the provider (same predicate as run_producer):
+    // incremental streaming, or the buffered dev-gate path.
+    let extractive_forced = force_extractive_only_runtime();
+    let will_call_provider = !retrieval.hits.is_empty()
+        && provider.as_ref().is_some_and(|chat| {
+            (chat.supports_incremental_stream() && !extractive_forced)
+                || (extractive_forced && allow_unverified_llm_runtime())
+        });
+    let token_lease = if will_call_provider {
+        let messages = build_grounded_messages(&question, &hybrid, &mode);
+        Some(
+            reserve_ask_tokens(pool, ctx, &messages)
+                .await
+                .map_err(AskStreamPrepareError::Quota)?,
+        )
+    } else {
+        None
+    };
+
     let session_id = Uuid::new_v4();
     // Retention-safe snapshot: IDs/hashes only — never question/answer/quote body.
     let pinned_snapshot = json!({
@@ -152,7 +179,7 @@ pub async fn start_ask_stream(
 
     let version_mode = mode_wire(&mode);
     let ctx_owned = ctx.clone();
-    with_org_txn(pool, ctx, {
+    let created = with_org_txn(pool, ctx, {
         let pinned = pinned_snapshot.clone();
         let collections = collection_list.clone();
         let cited_docs = cited_document_ids.clone();
@@ -181,7 +208,15 @@ pub async fn start_ask_stream(
         }
     })
     .await
-    .map_err(|_| AskStreamPrepareError::Database)?;
+    .map_err(|_| AskStreamPrepareError::Database);
+    if let Err(error) = created {
+        // No producer will run — release the token reservation immediately
+        // instead of waiting out its TTL.
+        if let Some(lease) = token_lease {
+            settle_ask_tokens(pool, ctx, lease, None).await;
+        }
+        return Err(error);
+    }
 
     let cancel = StreamCancel::new();
     let producer_pool = pool.clone();
@@ -207,6 +242,7 @@ pub async fn start_ask_stream(
             mode,
             producer_provider,
             producer_cancel,
+            token_lease,
         )
         .await;
     });
@@ -236,7 +272,14 @@ async fn run_producer(
     mode: VersionMode,
     provider: Option<ChatProvider>,
     cancel: StreamCancel,
+    token_lease: Option<TokenLease>,
 ) {
+    let mut token_lease = token_lease;
+    // Measured provider consumption for token settlement (1C-09 a):
+    // `None` = the provider request never got off the ground (refund);
+    // `Some(chars)` = prompt was sent, `chars` answer characters were
+    // streamed/returned so far (commit prompt + chars).
+    let mut provider_usage: Option<usize> = None;
     let family_id = Uuid::parse_str(&claims.sid).ok();
     let started = std::time::Instant::now();
     let corr = crate::telemetry::CorrelationContext::current();
@@ -316,6 +359,7 @@ async fn run_producer(
     )
     .await
     {
+        settle_lease(&pool, &ctx, &mut token_lease, provider_usage).await;
         let reason = config_reason(&error).unwrap_or("stream_error");
         close(AskStreamStatus::Error, reason).await;
         return;
@@ -343,17 +387,31 @@ async fn run_producer(
             match chat.stream_tokens(&messages, cancel.clone()).await {
                 Ok(mut rx) => {
                     answer_mode = chat.answer_mode();
+                    // Request reached the provider: prompt tokens are spent
+                    // from here on, even if zero answer tokens arrive.
+                    provider_usage = Some(0);
                     while let Some(item) = rx.recv().await {
                         if cancel.is_cancelled() {
+                            settle_lease(&pool, &ctx, &mut token_lease, provider_usage).await;
                             close(AskStreamStatus::Error, "cancelled").await;
                             return;
                         }
                         match item {
                             Ok(token) => {
                                 streamed_any = true;
+                                provider_usage = Some(
+                                    provider_usage
+                                        .unwrap_or(0)
+                                        .saturating_add(token.chars().count()),
+                                );
                                 if let Err(error) =
                                     append("ask.token", json!({ "text": token })).await
                                 {
+                                    // Includes mid-stream citation_revoked:
+                                    // tokens already streamed by the provider
+                                    // stay committed, never refunded.
+                                    settle_lease(&pool, &ctx, &mut token_lease, provider_usage)
+                                        .await;
                                     let reason = config_reason(&error).unwrap_or("stream_error");
                                     cancel.cancel();
                                     close(AskStreamStatus::Error, reason).await;
@@ -361,6 +419,7 @@ async fn run_producer(
                                 }
                             }
                             Err(ProviderError::Cancelled) => {
+                                settle_lease(&pool, &ctx, &mut token_lease, provider_usage).await;
                                 close(AskStreamStatus::Error, "cancelled").await;
                                 return;
                             }
@@ -382,6 +441,8 @@ async fn run_producer(
                     }
                 }
                 Err(ProviderError::Timeout) => {
+                    // Request was sent; assume the prompt was billed.
+                    provider_usage = Some(0);
                     warnings.push("LLM provider timed out; using extractive fallback.".into());
                     answer_mode = AnswerMode::FallbackExtractive;
                 }
@@ -397,6 +458,8 @@ async fn run_producer(
             let messages = build_grounded_messages(&question, &hybrid, &mode);
             match chat.complete(&messages).await {
                 Ok(llm_answer) => {
+                    // Consumed even when validation later discards the answer.
+                    provider_usage = Some(llm_answer.chars().count());
                     let valid_ids = valid_citation_ids(hybrid.len());
                     // Same policy helper as the JSON ask() route — identical
                     // fail-closed / dev-gate / validation semantics.
@@ -417,6 +480,7 @@ async fn run_producer(
                     }
                 }
                 Err(ProviderError::Timeout) => {
+                    provider_usage = Some(0);
                     warnings.push("LLM provider timed out; using extractive fallback.".into());
                     answer_mode = AnswerMode::FallbackExtractive;
                     dev_gate_attempted_and_failed = true;
@@ -429,6 +493,10 @@ async fn run_producer(
             }
         }
     }
+
+    // Provider interaction is over on every remaining path — settle exactly
+    // once here (later returns only emit already-persisted/extractive data).
+    settle_lease(&pool, &ctx, &mut token_lease, provider_usage).await;
 
     if let Some(answer) = unverified_answer {
         for token in tokenize_answer(&answer) {
@@ -526,6 +594,18 @@ async fn run_producer(
         );
     }
     crate::telemetry::record_retrieval_leg("ask_stream", outcome, started.elapsed());
+}
+
+/// Settle the producer's token lease exactly once (`Option::take` guard).
+async fn settle_lease(
+    pool: &Pool,
+    ctx: &OrgContext,
+    lease: &mut Option<TokenLease>,
+    provider_usage: Option<usize>,
+) {
+    if let Some(lease) = lease.take() {
+        settle_ask_tokens(pool, ctx, lease, provider_usage).await;
+    }
 }
 
 fn config_reason(error: &crate::db::error::DbError) -> Option<&'static str> {

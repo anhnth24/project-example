@@ -459,6 +459,71 @@ pub async fn finalize(
     .await
 }
 
+/// Finalize a reservation committing the *measured* amount instead of the
+/// reserved estimate (token settlement: reserve an upper bound before the
+/// provider call, commit actual usage after it). `actual == 0` refunds the
+/// reservation — nothing was consumed, nothing may be committed.
+pub async fn finalize_actual(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+    reservation_key: &str,
+    actual: u64,
+) -> Result<QuotaSettlement, QuotaError> {
+    validate_reservation_key(reservation_key)?;
+    if actual == 0 {
+        return refund(db_pool, ctx, reservation_key).await;
+    }
+    let actual = checked_amount(actual)?;
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        let reservation_key = reservation_key.to_string();
+        move |txn| {
+            Box::pin(async move {
+                let kind = quota::kind_by_key(txn, &ctx, &reservation_key)
+                    .await
+                    .map_err(map_reservation_error)?;
+                quota::lock_admission(txn, &ctx, kind).await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
+                if let Some(finalized) = quota::finalize_reserved_by_key_with_amount(
+                    txn,
+                    &ctx,
+                    &reservation_key,
+                    actual,
+                    observed_at,
+                )
+                .await?
+                {
+                    if finalized.resource_kind != kind {
+                        return Err(QuotaError::ReservationResourceMismatch);
+                    }
+                    add_committed_counter(txn, &ctx, &finalized, observed_at).await?;
+                    return Ok(QuotaSettlement::Finalized(finalized));
+                }
+                if let Some(expired) =
+                    quota::expire_reserved_by_key_if_due(txn, &ctx, &reservation_key, observed_at)
+                        .await?
+                {
+                    return Ok(QuotaSettlement::Expired(expired));
+                }
+                let reservation = quota::get_by_key_for_update(txn, &ctx, &reservation_key)
+                    .await
+                    .map_err(map_reservation_error)?;
+                match reservation.status {
+                    ReservationStatus::Finalized => {
+                        Ok(QuotaSettlement::AlreadyFinalized(reservation))
+                    }
+                    ReservationStatus::Refunded => {
+                        Ok(QuotaSettlement::RefundedCannotFinalize(reservation))
+                    }
+                    ReservationStatus::Expired => Ok(QuotaSettlement::Expired(reservation)),
+                    ReservationStatus::Reserved => Err(QuotaError::ReservationConflict),
+                }
+            })
+        }
+    })
+    .await
+}
+
 pub async fn refund(
     db_pool: &Pool,
     ctx: &OrgContext,
@@ -795,6 +860,216 @@ pub async fn refund_upload_in_txn(
             }),
         )
     }
+}
+
+/// Serialize concurrent-jobs admission and return the currently free slot
+/// count plus the post-lock clock, for the job-claim transaction (1C-09 b).
+pub(crate) async fn lock_and_available_job_slots(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+) -> Result<(i64, DateTime<Utc>), QuotaError> {
+    quota::lock_admission(txn, ctx, ResourceKind::ConcurrentJobs).await?;
+    let observed_at = quota::fresh_clock_timestamp(txn).await?;
+    let usage = quota::usage(txn, ctx, ResourceKind::ConcurrentJobs, observed_at)
+        .await
+        .map_err(map_quota_config_error)?;
+    Ok((
+        remaining(usage.limit, usage.committed, usage.active_reserved)?,
+        observed_at,
+    ))
+}
+
+/// Reserve one concurrent-jobs slot for a freshly claimed job, inside the
+/// claim transaction (caller already holds the admission lock via
+/// [`lock_and_available_job_slots`]). The key is unique per claim event —
+/// the reservation is atomic with the claim, so idempotent replay never
+/// re-runs this insert for the same claim.
+pub(crate) async fn reserve_job_slot_in_txn(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    job_id: Uuid,
+    ttl_secs: i64,
+    observed_at: DateTime<Utc>,
+) -> Result<(), QuotaError> {
+    let reservation_key = format!("job.slot.{job_id}.{}", Uuid::new_v4());
+    let inserted = quota::insert_reserved(
+        txn,
+        ctx,
+        quota::ReservationInsert {
+            reservation_key: &reservation_key,
+            kind: ResourceKind::ConcurrentJobs,
+            amount: 1,
+            ttl_secs,
+            job_id: Some(job_id),
+            observed_at,
+        },
+    )
+    .await?;
+    if inserted.is_none() {
+        // Freshly minted UUID key cannot collide; treat as conflict defensively.
+        return Err(QuotaError::ReservationConflict);
+    }
+    Ok(())
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct QuotaReconcileOutcome {
+    pub orgs_checked: u64,
+    pub counters_fixed: u64,
+    pub job_slots_released: u64,
+}
+
+/// Periodic drift repair (1C-09 c): re-derive committed counters from ground
+/// truth and release orphaned concurrent-job slots, per org.
+///
+/// Ground truth per resource:
+/// - `storage_bytes`: bytes of live source versions + derived artifacts
+///   (documents not soft-deleted/purged) — fixes crash drift and releases
+///   quota held by purged documents.
+/// - `documents`: count of live documents.
+/// - `concurrent_jobs`: no counter; instead refund `reserved` slot rows whose
+///   job is missing or no longer leased (crash between terminal transition and
+///   slot refund).
+/// - `tokens` is intentionally NOT reconciled: provider-side consumption has
+///   no recountable ground truth in our datastore.
+///
+/// Orgs without an `org_quotas` row are skipped (nothing is enforced there).
+/// Every applied fix writes a `quota.reconcile` audit row in the same
+/// transaction (numbers only, per the audit metadata allowlist).
+pub async fn reconcile_all_orgs(db_pool: &Pool) -> Result<QuotaReconcileOutcome, QuotaError> {
+    let org_ids = quota::list_org_ids_for_sweep(db_pool).await?;
+    let mut outcome = QuotaReconcileOutcome::default();
+    for org_id in org_ids {
+        let ctx = OrgContext::try_new(org_id, SWEEP_USER_ID, [] as [&str; 0], [])
+            .map_err(|error| QuotaError::Database(DbError::Config(error.to_string())))?;
+        let org = reconcile_org(db_pool, &ctx).await?;
+        outcome.orgs_checked = outcome
+            .orgs_checked
+            .checked_add(1)
+            .ok_or(QuotaError::ArithmeticOverflow)?;
+        outcome.counters_fixed = outcome
+            .counters_fixed
+            .checked_add(org.counters_fixed)
+            .ok_or(QuotaError::ArithmeticOverflow)?;
+        outcome.job_slots_released = outcome
+            .job_slots_released
+            .checked_add(org.job_slots_released)
+            .ok_or(QuotaError::ArithmeticOverflow)?;
+    }
+    Ok(outcome)
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct OrgQuotaReconcile {
+    pub counters_fixed: u64,
+    pub job_slots_released: u64,
+}
+
+pub async fn reconcile_org(
+    db_pool: &Pool,
+    ctx: &OrgContext,
+) -> Result<OrgQuotaReconcile, QuotaError> {
+    pool::with_org_txn_typed(db_pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                // Skip unconfigured orgs — quota is not enforced for them.
+                match quota::quota_limit(txn, &ctx, ResourceKind::StorageBytes).await {
+                    Ok(_) => {}
+                    Err(DbError::NotFound) => return Ok(OrgQuotaReconcile::default()),
+                    Err(error) => return Err(QuotaError::Database(error)),
+                }
+                lock_resource_kinds(
+                    txn,
+                    &ctx,
+                    &[
+                        ResourceKind::ConcurrentJobs,
+                        ResourceKind::Documents,
+                        ResourceKind::StorageBytes,
+                    ],
+                )
+                .await?;
+                let observed_at = quota::fresh_clock_timestamp(txn).await?;
+                let audit_request_id = Uuid::new_v4().to_string();
+                let mut counters_fixed = 0_u64;
+                for kind in [ResourceKind::StorageBytes, ResourceKind::Documents] {
+                    let period = quota::current_period(txn, kind, observed_at).await?;
+                    let counter = quota::lock_committed_counter(txn, &ctx, kind, period)
+                        .await?
+                        .unwrap_or(0);
+                    let actual = match kind {
+                        ResourceKind::StorageBytes => {
+                            quota::actual_storage_bytes(txn, &ctx).await?
+                        }
+                        _ => quota::actual_document_count(txn, &ctx).await?,
+                    };
+                    if counter != actual {
+                        quota::upsert_counter_value(txn, &ctx, kind, period, actual).await?;
+                        crate::telemetry::inc_quota("reconcile_drift");
+                        write_reconcile_audit(
+                            txn,
+                            &ctx,
+                            &audit_request_id,
+                            kind,
+                            serde_json::json!({
+                                "resource_kind": kind.as_str(),
+                                "counter_value": counter,
+                                "actual_value": actual,
+                            }),
+                        )
+                        .await?;
+                        counters_fixed = counters_fixed
+                            .checked_add(1)
+                            .ok_or(QuotaError::ArithmeticOverflow)?;
+                    }
+                }
+                let job_slots_released =
+                    quota::refund_orphaned_job_slots(txn, &ctx, observed_at).await?;
+                if job_slots_released > 0 {
+                    crate::telemetry::inc_quota("reconcile_slots");
+                    write_reconcile_audit(
+                        txn,
+                        &ctx,
+                        &audit_request_id,
+                        ResourceKind::ConcurrentJobs,
+                        serde_json::json!({
+                            "resource_kind": ResourceKind::ConcurrentJobs.as_str(),
+                            "released_slots": job_slots_released,
+                        }),
+                    )
+                    .await?;
+                }
+                Ok(OrgQuotaReconcile {
+                    counters_fixed,
+                    job_slots_released,
+                })
+            })
+        }
+    })
+    .await
+}
+
+async fn write_reconcile_audit(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    request_id: &str,
+    kind: ResourceKind,
+    metadata: serde_json::Value,
+) -> Result<(), QuotaError> {
+    crate::services::audit::record_system_in_txn(
+        txn,
+        ctx.org_id(),
+        crate::services::audit::AuditRecord {
+            request_id,
+            action: "quota.reconcile",
+            resource_type: "quota",
+            resource_id: Some(kind.as_str()),
+            outcome: crate::db::models::AuditOutcome::Success,
+            metadata,
+        },
+    )
+    .await
+    .map_err(QuotaError::Database)
 }
 
 async fn lock_resource_kinds(

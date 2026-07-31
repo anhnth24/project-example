@@ -154,6 +154,7 @@ fn rate_limit_and_audit_and_metrics_are_secret_safe() {
         user_per_minute: 1,
         ip_per_minute: 1,
         expensive_route_per_minute: 1,
+        org_per_minute: 1,
     });
     assert!(limiter.check_ip("10.0.0.1").is_ok());
     assert!(limiter.check_ip("10.0.0.1").is_err());

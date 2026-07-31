@@ -86,6 +86,13 @@ pub fn check_auth_ip(
     reject_or_allow(state.rate_limiter().check_auth_ip(ip), request_id, "auth")
 }
 
+/// Per-user bucket plus the org-wide bucket (1C-10 per-org fairness).
+///
+/// The user bucket runs first so a single over-active user is rejected with
+/// scope `user` before touching org capacity; the org bucket then bounds the
+/// org as a whole, so an org cannot multiply its API capacity by spreading
+/// traffic across many users. One user token may be consumed on an org-scope
+/// rejection — acceptable, since that request is denied anyway.
 pub fn check_user(
     state: &Arc<AppState>,
     org_id: &str,
@@ -96,7 +103,8 @@ pub fn check_user(
         state.rate_limiter().check_user(org_id, user_id),
         request_id,
         "user",
-    )
+    )?;
+    reject_or_allow(state.rate_limiter().check_org(org_id), request_id, "org")
 }
 
 pub fn check_route(
