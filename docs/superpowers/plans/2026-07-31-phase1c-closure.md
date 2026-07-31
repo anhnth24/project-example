@@ -1326,7 +1326,8 @@ Download the successful artifact:
 
 ```bash
 RUN_ID="$(gh run list --branch cursor/phase1c-denial-suite-6ddb \
-  --workflow ci.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+  --workflow ci.yml --status success --limit 1 \
+  --json databaseId --jq '.[0].databaseId')"
 rm -rf /tmp/phase1c-denial-artifact
 gh run download "$RUN_ID" \
   -n "phase1c-denial-$(git rev-parse HEAD)" \
@@ -1334,6 +1335,14 @@ gh run download "$RUN_ID" \
 mkdir -p bench/markhand_web/reports/phase-1c-denial
 cp /tmp/phase1c-denial-artifact/manifest-run.json \
   bench/markhand_web/reports/phase-1c-denial/manifest-run.json
+python3 - <<'PY'
+import json
+from pathlib import Path
+p = Path("bench/markhand_web/reports/phase-1c-denial/manifest-run.json")
+report = json.loads(p.read_text())
+assert report["leakageCount"] == 0, report["leakageCount"]
+assert not report["failures"], report["failures"]
+PY
 ```
 
 Keep 1C-12 `In progress`; state “CI half complete, deployed half pending PR 5” with
@@ -1395,7 +1404,8 @@ git push -u origin cursor/phase1c-security-gate-6ddb
 python3 scripts/check-markhand-gates.py --self-test
 ```
 
-Expected: unknown family/disposition/environment failures.
+Expected: the new G1C validator self-test cases fail because the validator does not
+yet reject the new family, disposition, environment, and report invariants.
 
 - [ ] **Step 3: Add profile, workload, thresholds, and gate rows**
 
@@ -1472,7 +1482,7 @@ missing P1C.8 evidence mapping
 Declare one ignored test function named exactly `e2e_phase1c_gate` and opt it in through
 `MARKHAND_PHASE1C_GATE=1`. In the normal `rust-integration` command add
 `--skip e2e_phase1c_gate`; the dedicated G1C job runs this binary explicitly with the
-flag and report path. This explicit skip is not a prerequisite soft-pass.
+flag, report path, and `--ignored`. This explicit skip is not a prerequisite soft-pass.
 
 - [ ] **Step 2: Commit/push and verify RED**
 
@@ -1572,7 +1582,7 @@ python3 bench/markhand_web/scripts/run_phase1c_gate.py \
   --validate-report bench/markhand_web/reports/phase-1c-gate/phase-1c-gate.json
 MARKHAND_PHASE1C_GATE=1 \
 MARKHAND_PHASE1C_REPORT_PATH=bench/markhand_web/reports/phase-1c-gate/phase-1c-gate.json \
-cargo test -p fileconv-server --test e2e_phase1c_gate -- --nocapture
+cargo test -p fileconv-server --test e2e_phase1c_gate -- --ignored --nocapture
 ```
 
 Expected:
