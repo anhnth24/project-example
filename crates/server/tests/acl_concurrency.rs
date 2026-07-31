@@ -97,7 +97,7 @@ async fn set_org<C: GenericClient>(client: &C, org_id: Uuid) {
 
 struct AclFixture {
     org: Uuid,
-    owner: Uuid,
+    _owner: Uuid,
     collection: Uuid,
     group_id: Uuid,
     role_id: Uuid,
@@ -161,7 +161,7 @@ async fn seed_acl_fixture(client: &mut Client, visibility: &str) -> AclFixture {
 
     AclFixture {
         org,
-        owner,
+        _owner: owner,
         collection,
         group_id,
         role_id,
@@ -407,7 +407,10 @@ async fn acl_version_bumps_on_group_grant() {
     let fixture = seed_acl_fixture(&mut client, "groups").await;
 
     let before: i64 = client
-        .query_one("SELECT acl_version FROM orgs WHERE id = $1", &[&fixture.org])
+        .query_one(
+            "SELECT acl_version FROM orgs WHERE id = $1",
+            &[&fixture.org],
+        )
         .await
         .unwrap()
         .get(0);
@@ -424,7 +427,10 @@ async fn acl_version_bumps_on_group_grant() {
     tx.commit().await.unwrap();
 
     let after: i64 = client
-        .query_one("SELECT acl_version FROM orgs WHERE id = $1", &[&fixture.org])
+        .query_one(
+            "SELECT acl_version FROM orgs WHERE id = $1",
+            &[&fixture.org],
+        )
         .await
         .unwrap()
         .get(0);
@@ -442,7 +448,10 @@ async fn acl_version_bumps_on_role_grant() {
     let fixture = seed_acl_fixture(&mut client, "groups").await;
 
     let before: i64 = client
-        .query_one("SELECT acl_version FROM orgs WHERE id = $1", &[&fixture.org])
+        .query_one(
+            "SELECT acl_version FROM orgs WHERE id = $1",
+            &[&fixture.org],
+        )
         .await
         .unwrap()
         .get(0);
@@ -459,7 +468,10 @@ async fn acl_version_bumps_on_role_grant() {
     tx.commit().await.unwrap();
 
     let after: i64 = client
-        .query_one("SELECT acl_version FROM orgs WHERE id = $1", &[&fixture.org])
+        .query_one(
+            "SELECT acl_version FROM orgs WHERE id = $1",
+            &[&fixture.org],
+        )
         .await
         .unwrap()
         .get(0);
@@ -494,7 +506,10 @@ async fn acl_version_bumps_on_group_membership_change() {
     tx.commit().await.unwrap();
 
     let before: i64 = client
-        .query_one("SELECT acl_version FROM orgs WHERE id = $1", &[&fixture.org])
+        .query_one(
+            "SELECT acl_version FROM orgs WHERE id = $1",
+            &[&fixture.org],
+        )
         .await
         .unwrap()
         .get(0);
@@ -510,7 +525,10 @@ async fn acl_version_bumps_on_group_membership_change() {
     tx.commit().await.unwrap();
 
     let after: i64 = client
-        .query_one("SELECT acl_version FROM orgs WHERE id = $1", &[&fixture.org])
+        .query_one(
+            "SELECT acl_version FROM orgs WHERE id = $1",
+            &[&fixture.org],
+        )
         .await
         .unwrap()
         .get(0);

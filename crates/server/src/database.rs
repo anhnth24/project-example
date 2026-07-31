@@ -146,6 +146,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0035_expand_worker_role.sql",
         include_str!("../migrations/0035_expand_worker_role.sql"),
     ),
+    (
+        "0036_expand_acl_groups_invariants.sql",
+        include_str!("../migrations/0036_expand_acl_groups_invariants.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
