@@ -721,4 +721,38 @@ mod tests {
             Some("tcvn3".into())
         );
     }
+
+    #[test]
+    fn skip_tags_drops_script_style_noscript_keeps_vietnamese_body() {
+        // Khóa skip_tags(["script","style","noscript"]): marker trong các thẻ đó
+        // không được lọt Markdown; nội dung tiếng Việt trong <p> vẫn còn.
+        let html = "\
+<html><head>\
+<meta charset=\"utf-8\">\
+<script>var SKIP_JS_TOKEN_9f3a = 1;</script>\
+<style>.SKIP_CSS_TOKEN_9f3a { color: red; }</style>\
+</head><body>\
+<p>Xin chào Việt Nam</p>\
+<noscript>SKIP_NOSCRIPT_TOKEN_9f3a</noscript>\
+</body></html>";
+        let path = temp_html("skip_tags", html.as_bytes());
+        let md = to_markdown(&path).expect("html convert");
+        assert!(
+            md.contains("Xin chào Việt Nam"),
+            "expected Vietnamese body, got: {md:?}"
+        );
+        assert!(
+            !md.contains("SKIP_JS_TOKEN_9f3a"),
+            "script must be skipped, got: {md:?}"
+        );
+        assert!(
+            !md.contains("SKIP_CSS_TOKEN_9f3a"),
+            "style must be skipped, got: {md:?}"
+        );
+        assert!(
+            !md.contains("SKIP_NOSCRIPT_TOKEN_9f3a"),
+            "noscript must be skipped, got: {md:?}"
+        );
+        let _ = std::fs::remove_file(path);
+    }
 }
