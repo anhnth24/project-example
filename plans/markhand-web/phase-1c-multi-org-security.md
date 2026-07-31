@@ -98,9 +98,11 @@ Remaining P1C.3 surfaces stay with later issues — not reopened here:
 
 Machine-checked semantics delivered in PR 2:
 
-- `private`: owner + principal được grant;
-- `org`: thành viên org có permission tương ứng;
-- `groups`: principal group/user được grant.
+- `private`: collection owner hoặc explicit user grant đủ access; group/role grant
+  bị bỏ qua và không được phép (dormant — migration `0036`);
+- `org`: thành viên org active có base permission tương ứng;
+- `groups`: collection owner, explicit user grant, membership trong group được grant,
+  hoặc role hiện tại được grant qua `collection_role_access`.
 
 Enforce tại:
 
