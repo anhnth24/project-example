@@ -349,17 +349,6 @@ pub fn expected_member_read_projection(matrix: &AclCollectionMatrix) -> BTreeSet
     .collect()
 }
 
-/// Collection ids the POC resolver currently returns (org/owner/direct-user only).
-pub fn poc_resolver_projection(matrix: &AclCollectionMatrix) -> BTreeSet<Uuid> {
-    [
-        matrix.org_visible,
-        matrix.private_owned,
-        matrix.private_user_grant,
-    ]
-    .into_iter()
-    .collect()
-}
-
 pub async fn resolver_allowed_collection_ids(pool: &Pool, org: Uuid, user: Uuid) -> BTreeSet<Uuid> {
     let ctx = resolve_org_context_in_txn(pool, org, user)
         .await

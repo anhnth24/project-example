@@ -5,11 +5,8 @@
 
 mod common;
 
-use std::collections::BTreeSet;
-
 use common::acl_fixture::{
-    attempt_grant_group_access, attempt_grant_role_access, boot_acl_pool,
-    expected_member_read_projection, group_grant_count, poc_resolver_projection,
+    attempt_grant_group_access, attempt_grant_role_access, boot_acl_pool, group_grant_count,
     resolver_allowed_collection_ids, role_grant_count, seed_acl_collection_matrix, seed_acl_org,
     user_grant_count, PERMISSION_QA_QUERY,
 };
@@ -17,7 +14,6 @@ use fileconv_server::auth::context::OrgContext;
 use fileconv_server::db::models::AccessLevel;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::services::acl_mutate::revoke_collection_access_for_principal;
-use uuid::Uuid;
 
 /// Group grant on a `groups` collection must surface via the resolver even when
 /// the member has no direct `collection_user_access` row.
@@ -172,36 +168,4 @@ async fn containment_removes_group_role_grants_but_preserves_other_user_grants()
     );
 
     ephemeral.drop().await;
-}
-
-/// Hermetic contract pin: documents the RED gap between the POC resolver and
-/// the `(qa.query, read)` projection SQL already ships. CI integration runs
-/// prove the live resolver still matches the narrower POC set until Task 6 GREEN.
-#[test]
-fn poc_resolver_projection_is_narrower_than_qa_query_read_matrix() {
-    let matrix = common::acl_fixture::AclCollectionMatrix {
-        org_visible: Uuid::from_u128(1),
-        private_owned: Uuid::from_u128(2),
-        private_foreign: Uuid::from_u128(3),
-        private_user_grant: Uuid::from_u128(4),
-        private_group_leak: Uuid::from_u128(5),
-        private_role_leak: Uuid::from_u128(6),
-        groups_via_group: Uuid::from_u128(7),
-        groups_via_role: Uuid::from_u128(8),
-        groups_denied: Uuid::from_u128(9),
-        groups_read_grant: Uuid::from_u128(10),
-        containment: Uuid::from_u128(11),
-    };
-    let expected = expected_member_read_projection(&matrix);
-    let poc = poc_resolver_projection(&matrix);
-    let missing_from_poc: BTreeSet<_> = expected.difference(&poc).copied().collect();
-    assert!(
-        !missing_from_poc.is_empty(),
-        "Task 6 RED: POC resolver must omit group/role-backed collections until wired; \
-         missing from POC projection: {missing_from_poc:?}"
-    );
-    assert!(
-        missing_from_poc.contains(&matrix.groups_via_group),
-        "groups_via_group is the canonical RED case"
-    );
 }

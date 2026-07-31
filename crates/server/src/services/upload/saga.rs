@@ -9,10 +9,11 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
-use crate::auth::permissions::require_permission;
+use crate::auth::permissions::{require_permission, COLLECTION_SCOPE_PERMISSION};
+use crate::db::acl_sql::allowed_collections_sql;
 use crate::db::documents::{self, NewDocument};
 use crate::db::error::DbError;
-use crate::db::models::{AuditOutcome, DocumentState, JobType};
+use crate::db::models::{AccessLevel, AuditOutcome, DocumentState, JobType};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::upload_operations::{
     self, NewUploadOperation, UploadOperation, UploadOperationState,
@@ -930,24 +931,14 @@ async fn reload_principal_locked(
         .map_err(DbError::from)?;
     let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
 
+    let collection_sql = format!(
+        "SELECT c.id FROM collections c WHERE {}",
+        allowed_collections_sql("$1", "$2", "$3", "$4")
+    );
+    let permission = COLLECTION_SCOPE_PERMISSION;
+    let access = AccessLevel::Read.as_str();
     let collection_rows = txn
-        .query(
-            "SELECT c.id
-             FROM collections c
-             WHERE c.org_id = $1
-               AND c.deleted_at IS NULL
-               AND (
-                 c.visibility = 'org'
-                 OR c.owner_user_id = $2
-                 OR EXISTS (
-                   SELECT 1 FROM collection_user_access cua
-                   WHERE cua.org_id = c.org_id
-                     AND cua.collection_id = c.id
-                     AND cua.user_id = $2
-                 )
-               )",
-            &[&org_id, &user_id],
-        )
+        .query(&collection_sql, &[&org_id, &user_id, &permission, &access])
         .await
         .map_err(DbError::from)?;
     let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
