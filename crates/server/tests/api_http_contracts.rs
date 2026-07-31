@@ -1753,7 +1753,7 @@ async fn live_write_gate_advisory_lock_concurrency_contract() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_MINIO_*"]
 async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
         return;
@@ -1761,8 +1761,10 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
         return;
     };
-    let store = test_minio_client();
-    let cleanup = store.clone().map(MinioCleanupGuard::new);
+    let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+        return;
+    };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
     let (_org, _user, token) = seed_http_principal(&pool).await;
@@ -1775,8 +1777,8 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
         foreign_conflict,
         foreign_org,
         foreign_user,
-    ) = seed_foreign_collection_document(&pool, &foreign_marker, store.as_ref()).await;
-    let app = build_router(pool.clone(), &ephemeral.app_url, store.clone());
+    ) = seed_foreign_collection_document(&pool, &foreign_marker, Some(&store)).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, Some(store.clone()));
 
     let (status, err, _) =
         json_request(app.clone(), "GET", "/api/v1/collections", None, None, &[]).await;
@@ -2066,66 +2068,59 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     );
 
     // Foreign capability minted by the foreign tenant must not redeem under tenant A.
-    if let Some(store) = store.as_ref() {
-        let foreign_token = login_access_token(
-            &pool,
-            &format!("{foreign_user}@foreign-http.test"),
-            "correct-password-1",
-        )
-        .await;
-        let _ = foreign_org;
-        let (status, issued, _) = json_request(
-            app.clone(),
-            "POST",
-            &format!(
-                "/api/v1/documents/{foreign_document}/versions/{foreign_version}/download-capability"
-            ),
-            Some(&foreign_token),
-            Some(serde_json::json!({ "purpose": "original" })),
-            &[],
-        )
-        .await;
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "foreign tenant must mint capability via production route: {issued}"
-        );
-        let foreign_capability = issued["capability"]
-            .as_str()
-            .expect("foreign capability token")
-            .to_string();
-        let (status, error, body) = json_request(
-            app.clone(),
-            "GET",
-            &format!("/api/v1/downloads/{foreign_capability}"),
-            Some(&token),
-            None,
-            &[],
-        )
-        .await;
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "GET /downloads/{{foreign}} must hide foreign capability: {error}"
-        );
-        assert_eq!(error["code"], "not_found", "GET /downloads: {error}");
-        assert!(
-            error["requestId"].as_str().is_some(),
-            "download denial must include requestId: {error}"
-        );
-        assert!(
-            !error.to_string().contains(&foreign_marker)
-                && !String::from_utf8_lossy(&body).contains(&foreign_marker),
-            "download denial leaked foreign marker: {error}"
-        );
-        let _ = store;
-    } else {
-        eprintln!("skipped foreign capability redemption: MARKHAND_TEST_MINIO_ENDPOINT unset");
-    }
+    let foreign_token = login_access_token(
+        &pool,
+        &format!("{foreign_user}@foreign-http.test"),
+        "correct-password-1",
+    )
+    .await;
+    let _ = foreign_org;
+    let (status, issued, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!(
+            "/api/v1/documents/{foreign_document}/versions/{foreign_version}/download-capability"
+        ),
+        Some(&foreign_token),
+        Some(serde_json::json!({ "purpose": "original" })),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "foreign tenant must mint capability via production route: {issued}"
+    );
+    let foreign_capability = issued["capability"]
+        .as_str()
+        .expect("foreign capability token")
+        .to_string();
+    let (status, error, body) = json_request(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/downloads/{foreign_capability}"),
+        Some(&token),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "GET /downloads/{{foreign}} must hide foreign capability: {error}"
+    );
+    assert_eq!(error["code"], "not_found", "GET /downloads: {error}");
+    assert!(
+        error["requestId"].as_str().is_some(),
+        "download denial must include requestId: {error}"
+    );
+    assert!(
+        !error.to_string().contains(&foreign_marker)
+            && !String::from_utf8_lossy(&body).contains(&foreign_marker),
+        "download denial leaked foreign marker: {error}"
+    );
 
-    if let Some(cleanup) = cleanup {
-        cleanup.cleanup().await.expect("clean cross-tenant bucket");
-    }
+    cleanup.cleanup().await.expect("clean cross-tenant bucket");
 
     ephemeral.drop().await;
 }
