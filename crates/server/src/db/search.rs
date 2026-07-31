@@ -875,11 +875,13 @@ mod tests {
         let production = src.split("#[cfg(test)]").next().unwrap();
 
         let current_calls = production
-            .matches("= current_retrieval_acl_predicate(")
-            .count();
+            .matches("current_retrieval_acl_predicate(")
+            .count()
+            .saturating_sub(1); // exclude `fn current_retrieval_acl_predicate(`
         let historical_calls = production
-            .matches("= historical_retrieval_acl_predicate(")
-            .count();
+            .matches("historical_retrieval_acl_predicate(")
+            .count()
+            .saturating_sub(1); // exclude `fn historical_retrieval_acl_predicate(`
         assert_eq!(
             current_calls, 4,
             "expected current_retrieval_acl_predicate at fts/hydrate/conflict-current x2; got {current_calls}"
