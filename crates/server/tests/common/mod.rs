@@ -349,18 +349,131 @@ pub fn assert_minio_cleanup_soak_params(rounds: usize, concurrency: usize, objec
     );
 }
 
+/// Lane failure with round/slot/bucket identity for residual-bucket diagnosis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinioCleanupSoakLaneFailure {
+    pub round: usize,
+    pub slot: usize,
+    pub bucket_name: String,
+    pub error: fileconv_server::storage::StorageError,
+}
+
+impl std::fmt::Display for MinioCleanupSoakLaneFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "round {} slot {} bucket {} cleanup failed: {:?}",
+            self.round, self.slot, self.bucket_name, self.error
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinioCleanupSoakLaneSuccess {
+    pub round: usize,
+    pub slot: usize,
+    pub bucket_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MinioCleanupSoakLaneOutcome {
+    Success(MinioCleanupSoakLaneSuccess),
+    LaneFailed(MinioCleanupSoakLaneFailure),
+    JoinFailed {
+        round: usize,
+        slot: usize,
+        error: String,
+    },
+}
+
+/// Await every spawned lane in a soak round before returning outcomes.
+pub async fn collect_minio_cleanup_soak_round(
+    round: usize,
+    handles: Vec<(
+        usize,
+        tokio::task::JoinHandle<Result<String, MinioCleanupSoakLaneFailure>>,
+    )>,
+) -> Vec<MinioCleanupSoakLaneOutcome> {
+    let mut outcomes = Vec::with_capacity(handles.len());
+    for (slot, handle) in handles {
+        outcomes.push(match handle.await {
+            Ok(Ok(bucket_name)) => {
+                MinioCleanupSoakLaneOutcome::Success(MinioCleanupSoakLaneSuccess {
+                    round,
+                    slot,
+                    bucket_name,
+                })
+            }
+            Ok(Err(failure)) => MinioCleanupSoakLaneOutcome::LaneFailed(failure),
+            Err(join_error) => MinioCleanupSoakLaneOutcome::JoinFailed {
+                round,
+                slot,
+                error: join_error.to_string(),
+            },
+        });
+    }
+    outcomes
+}
+
+/// Assert a fully drained soak round; reports every failing lane together.
+pub fn assert_minio_cleanup_soak_round_succeeded(outcomes: &[MinioCleanupSoakLaneOutcome]) {
+    let failures: Vec<String> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            MinioCleanupSoakLaneOutcome::Success(success) => {
+                if success.bucket_name.starts_with("markhand-it-") {
+                    None
+                } else {
+                    Some(format!(
+                        "round {} slot {} unexpected bucket name: {}",
+                        success.round, success.slot, success.bucket_name
+                    ))
+                }
+            }
+            MinioCleanupSoakLaneOutcome::LaneFailed(failure) => Some(failure.to_string()),
+            MinioCleanupSoakLaneOutcome::JoinFailed { round, slot, error } => {
+                Some(format!("round {round} slot {slot} join failed: {error}"))
+            }
+        })
+        .collect();
+    if !failures.is_empty() {
+        panic!(
+            "MinIO cleanup soak round had {} failing lane(s):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
+
+fn minio_cleanup_soak_lane_failure(
+    round: usize,
+    slot: usize,
+    bucket_name: &str,
+    error: fileconv_server::storage::StorageError,
+) -> MinioCleanupSoakLaneFailure {
+    MinioCleanupSoakLaneFailure {
+        round,
+        slot,
+        bucket_name: bucket_name.to_string(),
+        error,
+    }
+}
+
 /// One soak lane: unique bucket, multiple objects, explicit guard cleanup.
 pub async fn minio_cleanup_soak_lane(
     objects_per_bucket: usize,
     round: usize,
     slot: usize,
-) -> Result<String, fileconv_server::storage::StorageError> {
+) -> Result<String, MinioCleanupSoakLaneFailure> {
     assert_minio_cleanup_soak_params(1, 2, objects_per_bucket);
     let store = test_minio_client().expect("live soak lane requires MinIO env");
     let bucket_name = store.bucket_name().to_string();
     let guard = MinioCleanupGuard::new(store.clone());
     let org = Uuid::new_v4();
-    store.ensure_bucket().await?;
+    store
+        .ensure_bucket()
+        .await
+        .map_err(|error| minio_cleanup_soak_lane_failure(round, slot, &bucket_name, error))?;
     for object_index in 0..objects_per_bucket {
         let version_id = Uuid::new_v4();
         let key = trusted_key(org, version_id, Uuid::new_v4(), None).expect("trusted key");
@@ -385,7 +498,10 @@ pub async fn minio_cleanup_soak_lane(
         )
         .await;
     }
-    guard.cleanup().await?;
+    guard
+        .cleanup()
+        .await
+        .map_err(|error| minio_cleanup_soak_lane_failure(round, slot, &bucket_name, error))?;
     Ok(bucket_name)
 }
 

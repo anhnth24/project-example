@@ -30,12 +30,13 @@ use uuid::Uuid;
 use common::worker_pipeline::WorkerPipeline;
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role,
-    assert_minio_cleanup_soak_params, boot_app_pool, build_router, convert_to_markdown,
-    login_access_token, minio_cleanup_soak_lane, put_bytes, quarantine_key,
-    seed_user_with_permissions, sha256_hex, take_live, test_auth_config, test_minio_client,
-    tiny_pdf_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, trusted_key, MinioCleanupGuard,
-    MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY, MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET,
-    MINIO_CLEANUP_GUARD_SOAK_ROUNDS,
+    assert_minio_cleanup_soak_params, assert_minio_cleanup_soak_round_succeeded, boot_app_pool,
+    build_router, collect_minio_cleanup_soak_round, convert_to_markdown, login_access_token,
+    minio_cleanup_soak_lane, put_bytes, quarantine_key, seed_user_with_permissions, sha256_hex,
+    take_live, test_auth_config, test_minio_client, tiny_pdf_bytes, tiny_pptx_bytes,
+    tiny_xlsx_bytes, trusted_key, MinioCleanupGuard, MinioCleanupSoakLaneFailure,
+    MinioCleanupSoakLaneOutcome, MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY,
+    MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET, MINIO_CLEANUP_GUARD_SOAK_ROUNDS,
 };
 
 struct IndexedDoc {
@@ -966,6 +967,70 @@ fn minio_cleanup_guard_soak_plan_is_bounded_and_multi_object() {
     );
 }
 
+#[test]
+fn minio_cleanup_soak_lane_failure_includes_bucket_identity() {
+    let failure = MinioCleanupSoakLaneFailure {
+        round: 2,
+        slot: 3,
+        bucket_name: "markhand-it-deadbeef".into(),
+        error: fileconv_server::storage::StorageError::Backend,
+    };
+    let message = failure.to_string();
+    assert!(message.contains("round 2"));
+    assert!(message.contains("slot 3"));
+    assert!(message.contains("markhand-it-deadbeef"));
+    assert!(message.contains("Backend"));
+}
+
+#[tokio::test]
+async fn minio_cleanup_soak_round_drains_all_lanes_before_asserting() {
+    let round = 1;
+    let handles = vec![
+        (
+            0,
+            tokio::spawn(async { Ok::<_, MinioCleanupSoakLaneFailure>("markhand-it-aaa".into()) }),
+        ),
+        (
+            1,
+            tokio::spawn(async move {
+                Err(MinioCleanupSoakLaneFailure {
+                    round,
+                    slot: 1,
+                    bucket_name: "markhand-it-bbb".into(),
+                    error: fileconv_server::storage::StorageError::Backend,
+                })
+            }),
+        ),
+        (
+            2,
+            tokio::spawn(async { Ok::<_, MinioCleanupSoakLaneFailure>("markhand-it-ccc".into()) }),
+        ),
+    ];
+    let outcomes = collect_minio_cleanup_soak_round(round, handles).await;
+    assert_eq!(outcomes.len(), 3);
+    assert!(matches!(
+        outcomes[0],
+        MinioCleanupSoakLaneOutcome::Success(_)
+    ));
+    assert!(matches!(
+        outcomes[1],
+        MinioCleanupSoakLaneOutcome::LaneFailed(_)
+    ));
+    assert!(matches!(
+        outcomes[2],
+        MinioCleanupSoakLaneOutcome::Success(_)
+    ));
+    let failure_messages: Vec<String> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            MinioCleanupSoakLaneOutcome::LaneFailed(failure) => Some(failure.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(failure_messages.len(), 1);
+    assert!(failure_messages[0].contains("markhand-it-bbb"));
+}
+
 /// R02 cleanup evidence: bounded concurrent unique buckets, multi-object deletes,
 /// and hard bucket-gone assertions through [`MinioCleanupGuard`].
 #[tokio::test]
@@ -984,25 +1049,20 @@ async fn live_minio_cleanup_guard_soak() {
     for round in 0..MINIO_CLEANUP_GUARD_SOAK_ROUNDS {
         let mut handles = Vec::with_capacity(MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY);
         for slot in 0..MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY {
-            handles.push(tokio::spawn(async move {
-                minio_cleanup_soak_lane(MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET, round, slot)
-                    .await
-            }));
-        }
-        for handle in handles {
-            let bucket_name = handle
-                .await
-                .expect("soak lane task join")
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "round {round} cleanup guard must delete bucket and assert gone: {error}"
+            handles.push((
+                slot,
+                tokio::spawn(async move {
+                    minio_cleanup_soak_lane(
+                        MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET,
+                        round,
+                        slot,
                     )
-                });
-            assert!(
-                bucket_name.starts_with("markhand-it-"),
-                "unexpected soak bucket name: {bucket_name}"
-            );
+                    .await
+                }),
+            ));
         }
+        let outcomes = collect_minio_cleanup_soak_round(round, handles).await;
+        assert_minio_cleanup_soak_round_succeeded(&outcomes);
     }
 
     probe_guard
