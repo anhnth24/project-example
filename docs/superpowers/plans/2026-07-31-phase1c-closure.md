@@ -154,11 +154,11 @@ Create version 1 with these normative grants:
     {"key":"doc.upload","status":"active","description":"Upload documents","requiredCollectionAccess":"write","conditionalPolicy":null,"operationRefs":["src/routes/uploads.rs"]},
     {"key":"doc.delete","status":"active","description":"Delete documents","requiredCollectionAccess":"admin","conditionalPolicy":"own_or_explicit_deferred_to_custom_role","operationRefs":["src/routes/documents.rs","src/routes/collections.rs"]},
     {"key":"doc.publish","status":"active","description":"Publish document versions","requiredCollectionAccess":"write","conditionalPolicy":null,"operationRefs":["src/routes/documents.rs"]},
-    {"key":"qa.query","status":"active","description":"Query collections","requiredCollectionAccess":"read","conditionalPolicy":null,"operationRefs":["src/routes/search.rs","src/routes/ask.rs"]},
+    {"key":"qa.query","status":"active","description":"Query collections","requiredCollectionAccess":"read","conditionalPolicy":null,"operationRefs":["src/services/retrieval/mod.rs"]},
     {"key":"qa.history","status":"active","description":"Read version history","requiredCollectionAccess":"read","conditionalPolicy":null,"operationRefs":["src/services/access.rs"]},
     {"key":"member.manage","status":"active","description":"Manage members","requiredCollectionAccess":null,"conditionalPolicy":"admin_cannot_manage_owner","operationRefs":["src/routes/members.rs"]},
     {"key":"audit.view","status":"active","description":"Read audit entries","requiredCollectionAccess":null,"conditionalPolicy":null,"operationRefs":["src/routes/audit.rs"]},
-    {"key":"jobs.system","status":"active","description":"Operate system jobs","requiredCollectionAccess":null,"conditionalPolicy":null,"operationRefs":["src/services/access.rs","src/bin/worker.rs"]},
+    {"key":"jobs.system","status":"active","description":"Operate system jobs","requiredCollectionAccess":null,"conditionalPolicy":null,"operationRefs":["src/services/access.rs"]},
     {"key":"doc.quarantine.review","status":"active","description":"Approve quarantined uploads","requiredCollectionAccess":"write","conditionalPolicy":null,"operationRefs":["src/services/upload/saga.rs"]},
     {"key":"settings.manage","status":"reserved","description":"Reserved for organization settings","requiredCollectionAccess":null,"conditionalPolicy":"admin_except_owner_security_deferred","operationRefs":[]},
     {"key":"intel.use","status":"reserved","description":"Reserved for intelligence operations","requiredCollectionAccess":null,"conditionalPolicy":null,"operationRefs":[]},
@@ -177,7 +177,7 @@ Create version 1 with these normative grants:
 }
 ```
 
-`validate_catalog_invariants()` returns `Result<(), Vec<String>>`, sorts errors, and rejects duplicate roles, duplicate permission keys, unknown grants, reserved grants, missing operation references, active references to missing source files, and reserved references.
+`validate_catalog_invariants()` returns `Result<(), Vec<String>>`, sorts errors, and rejects duplicate roles, duplicate permission keys, unknown grants, reserved grants, missing operation references, active references to missing source files, and reserved references. For every active key, at least one referenced file must contain the exact quoted permission literal; file existence alone is not sufficient evidence. Task 9 adds `src/bin/worker.rs` to the `jobs.system` references only after the worker binary contains that literal.
 
 - [ ] **Step 4: Commit, push, and verify GREEN**
 
@@ -624,15 +624,8 @@ Update `schema_migrations.rs` to set the POC fixture collection to `groups` befo
 - [ ] **Step 4: Update checksum, commit/push, and verify GREEN**
 
 ```bash
-python3 - <<'PY'
-import hashlib, json
-from pathlib import Path
-p = Path("crates/server/migrations/0036_expand_acl_groups_invariants.sql")
-m = Path("crates/server/migrations/manifest.json")
-data = json.loads(m.read_text())
-data["migrations"][p.name] = hashlib.sha256(p.read_bytes()).hexdigest()
-m.write_text(json.dumps(data, indent=2) + "\n")
-PY
+python3 scripts/check-migration-manifest.py --write-manifest
+python3 scripts/check-migration-manifest.py --check
 git add crates/server/migrations/0036_expand_acl_groups_invariants.sql \
   crates/server/migrations/manifest.json crates/server/src/database.rs \
   crates/server/tests/schema_migrations.rs crates/server/tests/acl_concurrency.rs
@@ -665,6 +658,7 @@ Expected: no interleaving leaves group/role grants on non-`groups` collections.
 - Modify: `crates/server/tests/common/mod.rs`
 - Modify: `crates/server/tests/acl_cache.rs`
 - Modify: `crates/server/tests/retrieval.rs`
+- Audit and modify fixture call sites returned by: `rg -l 'seed_user_with_permissions' crates/server/tests`
 
 **Interfaces:**
 - `OrgContext.allowed_collection_ids` becomes exactly the `(qa.query, read)` projection.
@@ -683,6 +677,12 @@ read_grant_does_not_satisfy_write_or_admin
 group_membership_revoke_invalidates_cached_context
 containment_removes_group_role_grants_but_preserves_other_user_grants
 ```
+
+Before changing the resolver, audit every `seed_user_with_permissions` call. Add
+`qa.query` only to fixtures whose actor is expected to obtain non-empty collection
+scope; preserve and annotate fixtures intentionally proving missing-query denial. This
+prevents the new `(qa.query, read)` projection from turning unrelated integration
+tests red for the wrong reason.
 
 - [ ] **Step 2: Commit/push and verify RED**
 
@@ -912,7 +912,7 @@ At every service entry, call:
 
 ```rust
 require_permission(ctx, permission_code)?;
-require_operation_collection_access(
+require_operation_collection_access_on_txn(
     txn,
     ctx,
     collection_id,
@@ -1078,6 +1078,7 @@ Composer performs whole-PR review. Merge PR 3 before PR 4.
 **Files:**
 - Modify: `crates/server/tests/common/mod.rs`
 - Modify: `.github/workflows/ci.yml`
+- Test: `crates/server/tests/api_http_contracts.rs`
 - Test: unit/source tests in `tests/common/mod.rs` consumers
 
 **Interfaces:**
@@ -1272,6 +1273,18 @@ Expected: zero leakage assertions pass.
 
 Self-tests cover unknown binary, missing test source, nonzero child exit, foreign marker finding, missing required env, and deterministic JSON output.
 
+Commit/push the runner skeleton before executing RED:
+
+```bash
+git add scripts/run-phase1c-denial-suite.py
+git commit -m "test(ci): define Phase 1C denial runner contract"
+git push -u origin cursor/phase1c-denial-suite-6ddb
+python3 scripts/run-phase1c-denial-suite.py --self-test
+```
+
+Expected: self-tests fail because subprocess execution, redaction, and deterministic
+report assembly are not implemented.
+
 - [ ] **Step 2: Implement runner and CI artifact upload**
 
 The `rust-integration` job runs:
@@ -1283,21 +1296,54 @@ python3 scripts/run-phase1c-denial-suite.py \
 ```
 
 Upload the output even on failure. The artifact records full git SHA, manifest SHA-256, executable/N/A counts, binaries run, failures, and `leakageCount`.
+Name the workflow artifact `phase1c-denial-${{ github.sha }}` so Step 4 can fetch the
+evidence for the exact commit.
+
+Run:
+
+```bash
+python3 scripts/run-phase1c-denial-suite.py --self-test
+```
+
+Expected: all runner self-tests pass.
 
 - [ ] **Step 3: Commit/push and require CI success**
 
 ```bash
-git add scripts/run-phase1c-denial-suite.py .github/workflows/ci.yml \
-  bench/markhand_web/reports/phase-1c-denial
+git add scripts/run-phase1c-denial-suite.py .github/workflows/ci.yml
 git commit -m "ci(server): run connected Phase 1C denial suite"
 git push -u origin cursor/phase1c-denial-suite-6ddb
 ```
 
-Require `rust-integration` and artifact generation with `leakageCount = 0`.
+The manifest runner intentionally re-runs the referenced integration binaries after
+the broad `rust-integration` command. The duplicate execution is accepted because it
+produces a manifest-scoped result and detects test-selection drift. Require
+`rust-integration` and artifact generation with `leakageCount = 0`.
 
-- [ ] **Step 4: Record half-gate, regenerate, and review**
+- [ ] **Step 4: Download evidence and record the half-gate**
 
-Keep 1C-12 `In progress`; state “CI half complete, deployed half pending PR 5” with links. Regenerate roadmap and issue JSON, commit/push. Grok performs whole-PR review. Merge before PR 5.
+Download the successful artifact:
+
+```bash
+RUN_ID="$(gh run list --branch cursor/phase1c-denial-suite-6ddb \
+  --workflow ci.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
+rm -rf /tmp/phase1c-denial-artifact
+gh run download "$RUN_ID" \
+  -n "phase1c-denial-$(git rev-parse HEAD)" \
+  -D /tmp/phase1c-denial-artifact
+mkdir -p bench/markhand_web/reports/phase-1c-denial
+cp /tmp/phase1c-denial-artifact/manifest-run.json \
+  bench/markhand_web/reports/phase-1c-denial/manifest-run.json
+```
+
+Keep 1C-12 `In progress`; state “CI half complete, deployed half pending PR 5” with
+run/job links. Regenerate roadmap and issue JSON, then commit/push the downloaded
+sanitized report and status artifacts.
+
+- [ ] **Step 5: Whole-PR review**
+
+Grok verifies the runner artifact against the exact branch SHA, performs whole-PR
+review, and requires corrections before merge. Merge PR 4 before PR 5.
 
 ---
 
@@ -1311,6 +1357,7 @@ Keep 1C-12 `In progress`; state “CI half complete, deployed half pending PR 5�
 - Create: `bench/markhand_web/schema/phase1c-gate-report.schema.json`
 - Modify: `bench/markhand_web/gates.yaml`
 - Modify: `bench/markhand_web/schema/gates.schema.json`
+- Modify: `bench/markhand_web/schema/environment.schema.json`
 - Modify: `scripts/check-markhand-gates.py`
 - Modify: `docs/markhand-web-sla-targets.md`
 - Test: validator unit tests in `scripts/check-markhand-gates.py`
@@ -1345,7 +1392,7 @@ git add bench/markhand_web/schema/phase1c-gate-report.schema.json \
   scripts/check-markhand-gates.py
 git commit -m "test(gate): define Phase 1C security report contract"
 git push -u origin cursor/phase1c-security-gate-6ddb
-python3 scripts/check-markhand-gates.py
+python3 scripts/check-markhand-gates.py --self-test
 ```
 
 Expected: unknown family/disposition/environment failures.
@@ -1362,6 +1409,11 @@ requiresDedicatedWorkerRole = true
 requiresWorkerDatabaseUrl = true
 ```
 
+Keep the `.yaml` files JSON-compatible because
+`scripts/check-markhand-gates.py::load_json_yaml` parses JSON. Add these four Phase 1C
+profile fields to `environment.schema.json` so the schema validates the qualifying
+environment rather than silently accepting undocumented properties.
+
 Add separate `G1C-SEC-*` rows for leakage, revoke, ACL cache, quota recovery, noisy neighbor, audit coverage, worker role, container vulnerabilities, stale tokens, and Qdrant fail-closed. Record security-owner and operations-owner approval in the SLA/registry before the qualifying run.
 
 - [ ] **Step 4: Commit/push and verify GREEN**
@@ -1371,9 +1423,11 @@ git add bench/markhand_web/environments/phase1c-multi-org-poc.yaml \
   bench/markhand_web/workloads/phase1c-multi-org.yaml \
   bench/markhand_web/schema/phase1c-gate-report.schema.json \
   bench/markhand_web/gates.yaml bench/markhand_web/schema/gates.schema.json \
+  bench/markhand_web/schema/environment.schema.json \
   scripts/check-markhand-gates.py docs/markhand-web-sla-targets.md
 git commit -m "feat(gate): register Phase 1C security qualification"
 git push -u origin cursor/phase1c-security-gate-6ddb
+python3 scripts/check-markhand-gates.py --self-test
 python3 scripts/check-markhand-gates.py
 ```
 
@@ -1389,6 +1443,7 @@ Composer reviews threshold provenance and confirms this gate makes no production
 - Create: `bench/markhand_web/scripts/run_phase1c_gate.py`
 - Create: `bench/markhand_web/scripts/test_run_phase1c_gate.py`
 - Create: `crates/server/tests/e2e_phase1c_gate.rs`
+- Modify: `.github/workflows/ci.yml`
 - Modify: `deploy/compose.poc.yml`
 - Modify: `deploy/.env.example`
 - Modify: `deploy/poc/images.lock.json`
@@ -1414,12 +1469,17 @@ secret or absolute path in report
 missing P1C.8 evidence mapping
 ```
 
+Declare one ignored test function named exactly `e2e_phase1c_gate` and opt it in through
+`MARKHAND_PHASE1C_GATE=1`. In the normal `rust-integration` command add
+`--skip e2e_phase1c_gate`; the dedicated G1C job runs this binary explicitly with the
+flag and report path. This explicit skip is not a prerequisite soft-pass.
+
 - [ ] **Step 2: Commit/push and verify RED**
 
 ```bash
 git add bench/markhand_web/scripts/run_phase1c_gate.py \
   bench/markhand_web/scripts/test_run_phase1c_gate.py \
-  crates/server/tests/e2e_phase1c_gate.rs
+  crates/server/tests/e2e_phase1c_gate.rs .github/workflows/ci.yml
 git commit -m "test(gate): require complete Phase 1C deployed evidence"
 git push -u origin cursor/phase1c-security-gate-6ddb
 python3 bench/markhand_web/scripts/test_run_phase1c_gate.py
