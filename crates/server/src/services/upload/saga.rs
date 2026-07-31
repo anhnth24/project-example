@@ -9,7 +9,10 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
-use crate::auth::permissions::{require_permission, COLLECTION_SCOPE_PERMISSION};
+use crate::auth::permissions::{
+    require_operation_collection_access_on_txn, require_permission, ResolveError,
+    COLLECTION_SCOPE_PERMISSION,
+};
 use crate::db::acl_sql::allowed_collections_sql;
 use crate::db::documents::{self, NewDocument};
 use crate::db::error::DbError;
@@ -30,6 +33,7 @@ use crate::storage::{parse_key_for_org, ObjectKey};
 use super::{Disposition, QuarantineIdentity, UploadError, UploadOutcome};
 
 pub const PERMISSION_QUARANTINE_REVIEW: &str = "doc.quarantine.review";
+const PERMISSION_DOC_UPLOAD: &str = "doc.upload";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredUpload {
@@ -626,9 +630,13 @@ async fn begin_or_replay(
                     UploadOperationState::Completed => {
                         // Fresh-auth original operation collection before returning.
                         let fresh = reload_principal_locked(txn, &ctx).await?;
-                        require_permission(&fresh, "doc.upload")
-                            .map_err(|_| SagaError::PermissionDenied)?;
-                        ensure_collection_writable(txn, &fresh, op.collection_id).await?;
+                        ensure_collection_writable(
+                            txn,
+                            &fresh,
+                            op.collection_id,
+                            PERMISSION_DOC_UPLOAD,
+                        )
+                        .await?;
                         Ok(Some(replay_from_operation(&op)?))
                     }
                     UploadOperationState::Started
@@ -800,7 +808,13 @@ async fn commit_registration_and_finalize(
                     upload_operations::get_by_id_for_update(txn, &provisional_ctx, op_id).await?;
                 if op.state == UploadOperationState::Completed {
                     let fresh = reload_principal_locked(txn, &provisional_ctx).await?;
-                    ensure_collection_writable(txn, &fresh, op.collection_id).await?;
+                    ensure_collection_writable(
+                        txn,
+                        &fresh,
+                        op.collection_id,
+                        PERMISSION_DOC_UPLOAD,
+                    )
+                    .await?;
                     return replay_from_operation(&op);
                 }
                 if op.state == UploadOperationState::Reconciling
@@ -814,9 +828,8 @@ async fn commit_registration_and_finalize(
                 }
 
                 let fresh = reload_principal_locked(txn, &provisional_ctx).await?;
-                require_permission(&fresh, "doc.upload")
-                    .map_err(|_| SagaError::PermissionDenied)?;
-                ensure_collection_writable(txn, &fresh, collection_id).await?;
+                ensure_collection_writable(txn, &fresh, collection_id, PERMISSION_DOC_UPLOAD)
+                    .await?;
 
                 let registered = register_rows(
                     txn,
@@ -950,10 +963,18 @@ async fn ensure_collection_writable(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
     collection_id: Uuid,
+    permission: &str,
 ) -> Result<(), SagaError> {
-    if !ctx.allows_collection(collection_id) {
-        return Err(SagaError::PermissionDenied);
-    }
+    require_operation_collection_access_on_txn(
+        txn,
+        ctx,
+        collection_id,
+        permission,
+        AccessLevel::Write,
+    )
+    .await
+    .map_err(collection_access_denied)?;
+
     let row = txn
         .query_opt(
             "SELECT id FROM collections
@@ -1136,9 +1157,13 @@ pub async fn approve_quarantined_upload(
             Box::pin(async move {
                 authz_lock::lock_principal_authz(txn, ctx.org_id(), ctx.user_id()).await?;
                 let fresh = reload_principal_locked(txn, &ctx).await?;
-                require_permission(&fresh, PERMISSION_QUARANTINE_REVIEW)
-                    .map_err(|_| SagaError::PermissionDenied)?;
-                ensure_collection_writable(txn, &fresh, collection_id).await?;
+                ensure_collection_writable(
+                    txn,
+                    &fresh,
+                    collection_id,
+                    PERMISSION_QUARANTINE_REVIEW,
+                )
+                .await?;
 
                 let op = upload_operations::get_by_collection_document_for_update(
                     txn,
@@ -1511,5 +1536,41 @@ fn mime_for(format: super::CanonicalFormat) -> &'static str {
         super::CanonicalFormat::Xls => "application/vnd.ms-excel",
         super::CanonicalFormat::Xlsb => "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
         super::CanonicalFormat::ZipContainer => "application/zip",
+    }
+}
+
+fn collection_access_denied(error: ResolveError) -> SagaError {
+    match error {
+        ResolveError::PermissionDenied | ResolveError::CollectionDenied => {
+            SagaError::PermissionDenied
+        }
+        _ => SagaError::Database(DbError::Config("collection_access_check".into())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ensure_collection_writable_uses_operation_guard_not_read_allow_list() {
+        let src = include_str!("saga.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+
+        assert!(
+            production.contains("require_operation_collection_access_on_txn"),
+            "upload write gate must use operation-scoped ACL SQL"
+        );
+        assert!(
+            !production.contains("ctx.allows_collection(collection_id)"),
+            "upload write gate must not consult qa.query read allow-list"
+        );
+        assert!(
+            production.matches("ensure_collection_writable(").count() >= 4,
+            "expected upload/quarantine call sites to route through ensure_collection_writable"
+        );
+        assert!(
+            production.contains("PERMISSION_DOC_UPLOAD")
+                && production.contains("PERMISSION_QUARANTINE_REVIEW"),
+            "upload and quarantine approval must pass distinct operation permissions"
+        );
     }
 }

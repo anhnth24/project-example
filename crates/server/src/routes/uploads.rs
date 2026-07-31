@@ -18,10 +18,10 @@ use sha2::{Digest, Sha256};
 
 use crate::api::ApiError;
 use crate::auth::middleware::AuthenticatedOrg;
-use crate::auth::permissions::require_permission;
+use crate::auth::permissions::{require_operation_collection_access_on_txn, require_permission, ResolveError};
 use crate::db::documents;
 use crate::db::error::DbError;
-use crate::db::models::DocumentState;
+use crate::db::models::{AccessLevel, DocumentState};
 use crate::db::pool::with_org_txn;
 use crate::http::AppState;
 use crate::services::quota::{self, QuotaError, QuotaSnapshot};
@@ -125,7 +125,30 @@ async fn create_upload(
     let collection_id = pending.collection_id.ok_or_else(|| {
         UploadRouteError::Validation("collectionId is required".into(), request_id.clone())
     })?;
-    if !auth.context.allows_collection(collection_id) {
+    if with_org_txn(state.pool(), &auth.context, {
+        let ctx = auth.context.clone();
+        move |txn| {
+            Box::pin(async move {
+                require_operation_collection_access_on_txn(
+                    txn,
+                    &ctx,
+                    collection_id,
+                    "doc.upload",
+                    AccessLevel::Write,
+                )
+                .await
+                .map_err(|error| match error {
+                    ResolveError::PermissionDenied | ResolveError::CollectionDenied => {
+                        DbError::Config("collection_denied".into())
+                    }
+                    _ => DbError::Config("collection_access_check".into()),
+                })
+            })
+        }
+    })
+    .await
+    .is_err()
+    {
         let resource_id = collection_id.to_string();
         crate::services::audit::record_deny(
             state.pool(),
