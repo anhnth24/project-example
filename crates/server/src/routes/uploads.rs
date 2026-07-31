@@ -18,7 +18,9 @@ use sha2::{Digest, Sha256};
 
 use crate::api::ApiError;
 use crate::auth::middleware::AuthenticatedOrg;
-use crate::auth::permissions::{require_operation_collection_access_on_txn, require_permission, ResolveError};
+use crate::auth::permissions::{
+    require_operation_collection_access_on_txn, require_permission, ResolveError,
+};
 use crate::db::documents;
 use crate::db::error::DbError;
 use crate::db::models::{AccessLevel, DocumentState};
