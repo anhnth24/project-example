@@ -3,6 +3,7 @@
 //! Used by citation authz (history/IDOR/delete) and the retrieval vertical slice.
 //! Does **not** SQL-seed `document_versions`, `derived_artifacts`, or `chunks`.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -148,6 +149,35 @@ pub struct WorkerProducedDoc {
     pub span_start: usize,
     pub span_end: usize,
     pub quote: String,
+    /// Exact permissions seeded for this principal (and used for worker `OrgContext`).
+    pub permissions: BTreeSet<String>,
+}
+
+/// Build the worker `OrgContext` from the caller's effective permission set only.
+///
+/// Does not inject an unrequested permission superset — regressions that drop
+/// required codes (e.g. `jobs.system`) must surface when workers run.
+pub fn worker_org_context(
+    org: Uuid,
+    user: Uuid,
+    collection_id: Uuid,
+    permissions: impl IntoIterator<Item = impl Into<String>>,
+) -> OrgContext {
+    OrgContext::try_new(org, user, permissions, [collection_id]).expect("worker org context")
+}
+
+#[test]
+fn worker_org_context_preserves_exact_permissions_without_superset() {
+    let org = Uuid::from_u128(0x1111);
+    let user = Uuid::from_u128(0x2222);
+    let collection = Uuid::from_u128(0x3333);
+    let supplied = ["doc.upload", "jobs.system"];
+    let ctx = worker_org_context(org, user, collection, supplied);
+    let expected: BTreeSet<String> = supplied.iter().map(|s| (*s).to_string()).collect();
+    assert_eq!(ctx.permissions(), &expected);
+    assert!(!ctx.has_permission("qa.history"));
+    assert!(!ctx.has_permission("doc.delete"));
+    assert!(!ctx.has_permission("qa.query"));
 }
 
 /// In-process mock OpenAI-compatible embedding server (8-dim unit vectors).
@@ -420,19 +450,7 @@ impl WorkerPipeline {
         .await;
         assert_eq!(status, StatusCode::CREATED, "{created}");
         let collection_id = Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
-        let worker_ctx = OrgContext::try_new(
-            org,
-            user,
-            [
-                "doc.upload",
-                "jobs.system",
-                "qa.query",
-                "qa.history",
-                "doc.delete",
-            ],
-            [collection_id],
-        )
-        .unwrap();
+        let worker_ctx = worker_org_context(org, user, collection_id, permissions.iter().copied());
 
         self.upload_convert_index(
             &token,
@@ -458,19 +476,12 @@ impl WorkerPipeline {
     ) -> WorkerProducedDoc {
         let email = format!("{}@worker.test", doc.user);
         let token = login_access_token(&self.pool, &email, "correct-password-1").await;
-        let worker_ctx = OrgContext::try_new(
+        let worker_ctx = worker_org_context(
             doc.org,
             doc.user,
-            [
-                "doc.upload",
-                "jobs.system",
-                "qa.query",
-                "qa.history",
-                "doc.delete",
-            ],
-            [doc.collection_id],
-        )
-        .unwrap();
+            doc.collection_id,
+            doc.permissions.iter().cloned(),
+        );
         self.upload_convert_index(
             &token,
             &worker_ctx,
@@ -618,6 +629,7 @@ impl WorkerPipeline {
             span_start: chunk.span_start.unwrap_or(0) as usize,
             span_end: chunk.span_end.unwrap_or(chunk.body.len() as i32) as usize,
             quote: chunk.body,
+            permissions: worker_ctx.permissions().clone(),
         }
     }
 }

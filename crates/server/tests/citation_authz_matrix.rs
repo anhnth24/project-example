@@ -692,11 +692,12 @@ async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
         history_v1.document_id,
         Some(historical),
     )
-    .await;
+    .await
+    .expect("historical preview with qa.history must succeed against worker-produced v1");
     assert!(
-        historical_preview.is_ok()
-            || matches!(historical_preview, Err(PreviewError::ArtifactUnavailable)),
-        "history permission should authorize historical resolve path"
+        historical_preview.markdown.contains("AUTHZV1"),
+        "historical preview must contain v1 marker AUTHZV1, got {:?}",
+        historical_preview.markdown
     );
 
     // IDOR: independently worker-produce org B; org A cannot preview/resolve it.
