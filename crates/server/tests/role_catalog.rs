@@ -88,26 +88,21 @@ fn test_database_url() -> Option<String> {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
 async fn canonical_matrix_matches_builtin_role_catalog_fixture() {
-    // Wired in GREEN: compare sorted DB role grants to load_builtin_role_catalog().
-    panic!("TODO: compare DB matrix to builtin-role-catalog fixture");
-}
+    use fileconv_server::auth::rbac_catalog::load_builtin_role_catalog;
+    use std::collections::BTreeMap;
 
-#[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
-async fn permissions_table_contains_exactly_active_catalog_keys() {
-    // Wired in GREEN: permissions rows must equal active fixture keys exactly.
-    panic!("TODO: compare permissions table to active catalog keys");
-}
-
-#[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
-async fn canonical_matrix_matches_the_current_poc_effective_matrix() {
     let Some(base_url) = test_database_url() else {
         return;
     };
     let ephemeral = EphemeralDb::create(&base_url).await;
     let pool = create_pool(&ephemeral.url).expect("create pool");
     let client = pool.get().await.expect("client");
+
+    let catalog = load_builtin_role_catalog();
+    let mut expected: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (role, keys) in &catalog.grants {
+        expected.insert(role.clone(), keys.iter().cloned().collect());
+    }
 
     let rows = client
         .query(
@@ -119,52 +114,78 @@ async fn canonical_matrix_matches_the_current_poc_effective_matrix() {
         )
         .await
         .expect("query catalog matrix");
-    let mut by_role: std::collections::BTreeMap<String, BTreeSet<String>> = Default::default();
+    let mut by_role: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for row in &rows {
         let role: String = row.get(0);
         let permission: String = row.get(1);
         by_role.entry(role).or_default().insert(permission);
     }
 
-    let owner_admin_expected: BTreeSet<String> = [
-        "doc.upload",
-        "doc.delete",
-        "doc.publish",
-        "qa.query",
-        "member.manage",
-        "audit.view",
-        "qa.history",
-        "jobs.system",
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    let editor_expected: BTreeSet<String> = ["doc.upload", "doc.publish", "qa.query"]
-        .into_iter()
-        .map(String::from)
-        .collect();
-    let viewer_expected: BTreeSet<String> = ["qa.query"].into_iter().map(String::from).collect();
-
-    assert_eq!(by_role.get("owner"), Some(&owner_admin_expected));
-    assert_eq!(by_role.get("admin"), Some(&owner_admin_expected));
-    assert_eq!(by_role.get("editor"), Some(&editor_expected));
-    assert_eq!(by_role.get("viewer"), Some(&viewer_expected));
-    // Deliberately NOT granted to any role — see migrations/0030 comment
-    // (matches the POC org's current, unchanged behavior).
-    for permissions in by_role.values() {
-        assert!(!permissions.contains("doc.quarantine.review"));
-    }
+    assert_eq!(
+        by_role, expected,
+        "DB role_catalog_permissions must equal fixture grants exactly"
+    );
 
     // Cross-check: the POC org's OWN `role_permissions` (migrations/0011/
     // 0017/0019) resolve to exactly the same set the catalog now describes —
     // globalizing the catalog changed no existing behavior.
+    let owner_expected = expected
+        .get("owner")
+        .expect("fixture must define owner grants")
+        .clone();
     let poc_org: Uuid = "11111111-1111-1111-1111-111111111111".parse().unwrap();
     let poc_owner: Uuid = "22222222-2222-2222-2222-222222222201".parse().unwrap();
     let ctx = resolve_org_context_in_txn(&pool, poc_org, poc_owner)
         .await
         .expect("POC owner must still resolve");
     let poc_permissions: BTreeSet<String> = ctx.permissions().iter().cloned().collect();
-    assert_eq!(poc_permissions, owner_admin_expected);
+    assert_eq!(poc_permissions, owner_expected);
+
+    ephemeral.drop().await;
+}
+
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn permissions_table_contains_exactly_active_catalog_keys() {
+    use fileconv_server::auth::rbac_catalog::{load_builtin_role_catalog, PermissionStatus};
+
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let ephemeral = EphemeralDb::create(&base_url).await;
+    let pool = create_pool(&ephemeral.url).expect("create pool");
+    let client = pool.get().await.expect("client");
+
+    let catalog = load_builtin_role_catalog();
+    let active: BTreeSet<String> = catalog
+        .permissions
+        .iter()
+        .filter(|p| p.status == PermissionStatus::Active)
+        .map(|p| p.key.clone())
+        .collect();
+    let reserved: BTreeSet<String> = catalog
+        .permissions
+        .iter()
+        .filter(|p| p.status == PermissionStatus::Reserved)
+        .map(|p| p.key.clone())
+        .collect();
+
+    let rows = client
+        .query("SELECT code FROM permissions ORDER BY code", &[])
+        .await
+        .expect("query permissions");
+    let db_keys: BTreeSet<String> = rows.iter().map(|row| row.get(0)).collect();
+
+    assert_eq!(
+        db_keys, active,
+        "permissions table must contain exactly the active catalog keys"
+    );
+    for key in &reserved {
+        assert!(
+            !db_keys.contains(key),
+            "reserved permission {key} must be absent from permissions table"
+        );
+    }
 
     ephemeral.drop().await;
 }
