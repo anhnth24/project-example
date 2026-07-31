@@ -459,7 +459,7 @@ enum UploadCollectionAccessCheck {
     Internal,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 enum UploadCollectionAccessTxnError {
     AuthorizationDenied,
     Internal,
@@ -471,20 +471,25 @@ impl From<DbError> for UploadCollectionAccessTxnError {
     }
 }
 
-fn classify_collection_access_resolve_error(error: ResolveError) -> UploadCollectionAccessCheck {
+fn map_collection_access_resolve_error(error: ResolveError) -> UploadCollectionAccessTxnError {
     match error {
         ResolveError::PermissionDenied | ResolveError::CollectionDenied => {
-            UploadCollectionAccessCheck::AuthorizationDenied
+            UploadCollectionAccessTxnError::AuthorizationDenied
         }
         ResolveError::UserDisabled
         | ResolveError::MembershipMissing
         | ResolveError::InvalidContext
-        | ResolveError::Database => UploadCollectionAccessCheck::Internal,
+        | ResolveError::Database => UploadCollectionAccessTxnError::Internal,
     }
 }
 
-fn upload_collection_access_records_deny_audit(check: UploadCollectionAccessCheck) -> bool {
-    matches!(check, UploadCollectionAccessCheck::AuthorizationDenied)
+impl From<UploadCollectionAccessTxnError> for UploadCollectionAccessCheck {
+    fn from(error: UploadCollectionAccessTxnError) -> Self {
+        match error {
+            UploadCollectionAccessTxnError::AuthorizationDenied => Self::AuthorizationDenied,
+            UploadCollectionAccessTxnError::Internal => Self::Internal,
+        }
+    }
 }
 
 async fn ensure_upload_collection_write_access(
@@ -505,21 +510,13 @@ async fn ensure_upload_collection_write_access(
                 AccessLevel::Write,
             )
             .await
-            .map_err(|error| match error {
-                ResolveError::PermissionDenied | ResolveError::CollectionDenied => {
-                    UploadCollectionAccessTxnError::AuthorizationDenied
-                }
-                _ => UploadCollectionAccessTxnError::Internal,
-            })
+            .map_err(map_collection_access_resolve_error)
         })
     })
     .await
     {
         Ok(()) => UploadCollectionAccessCheck::Allowed,
-        Err(UploadCollectionAccessTxnError::AuthorizationDenied) => {
-            UploadCollectionAccessCheck::AuthorizationDenied
-        }
-        Err(UploadCollectionAccessTxnError::Internal) => UploadCollectionAccessCheck::Internal,
+        Err(error) => error.into(),
     }
 }
 
@@ -647,14 +644,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn collection_access_resolve_denies_only_map_explicit_acl_errors() {
+    fn map_collection_access_resolve_error_classifies_acl_vs_infrastructure() {
         assert_eq!(
-            classify_collection_access_resolve_error(ResolveError::PermissionDenied),
-            UploadCollectionAccessCheck::AuthorizationDenied
+            map_collection_access_resolve_error(ResolveError::PermissionDenied),
+            UploadCollectionAccessTxnError::AuthorizationDenied
         );
         assert_eq!(
-            classify_collection_access_resolve_error(ResolveError::CollectionDenied),
-            UploadCollectionAccessCheck::AuthorizationDenied
+            map_collection_access_resolve_error(ResolveError::CollectionDenied),
+            UploadCollectionAccessTxnError::AuthorizationDenied
         );
         for (label, error) in [
             ("database", ResolveError::Database),
@@ -663,23 +660,26 @@ mod tests {
             ("user_disabled", ResolveError::UserDisabled),
         ] {
             assert_eq!(
-                classify_collection_access_resolve_error(error),
-                UploadCollectionAccessCheck::Internal,
+                map_collection_access_resolve_error(error),
+                UploadCollectionAccessTxnError::Internal,
                 "infrastructure fault must not be classified as authorization deny: {label}"
             );
         }
     }
 
     #[test]
-    fn collection_access_check_records_deny_audit_only_for_authorization_denied() {
-        assert!(upload_collection_access_records_deny_audit(
-            UploadCollectionAccessCheck::AuthorizationDenied
-        ));
-        assert!(!upload_collection_access_records_deny_audit(
-            UploadCollectionAccessCheck::Internal
-        ));
-        assert!(!upload_collection_access_records_deny_audit(
-            UploadCollectionAccessCheck::Allowed
-        ));
+    fn create_upload_collection_gate_pins_deny_audit_to_authorization_denied_arm() {
+        let src = include_str!("uploads.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            production.contains("UploadCollectionAccessCheck::AuthorizationDenied =>")
+                && production.contains("record_deny("),
+            "deny audit must live only on the AuthorizationDenied arm"
+        );
+        assert!(
+            production.contains("UploadCollectionAccessCheck::Internal =>")
+                && production.matches("UploadError::Internal").count() >= 2,
+            "internal faults must return UploadError::Internal without deny audit"
+        );
     }
 }
