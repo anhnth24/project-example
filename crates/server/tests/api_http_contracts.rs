@@ -305,7 +305,8 @@ async fn seed_published_doc(
 async fn seed_foreign_collection_document(
     pool: &deadpool_postgres::Pool,
     marker: &str,
-) -> (Uuid, Uuid, Uuid, Uuid, Uuid) {
+    store: Option<&fileconv_server::storage::minio::MinioClient>,
+) -> (Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid) {
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
     let collection_id = Uuid::new_v4();
@@ -341,10 +342,30 @@ async fn seed_foreign_collection_document(
     let document_title = format!("Foreign document {marker}");
     let content_sha = sha256_hex(marker.as_bytes());
     let content_length = marker.len() as i64;
-    let object_key = trusted_key(org, version_id, Uuid::new_v4(), None)
-        .expect("foreign trusted key")
-        .as_str()
-        .to_string();
+    let foreign_object_key =
+        trusted_key(org, version_id, Uuid::new_v4(), None).expect("foreign trusted key");
+    let object_key = foreign_object_key.as_str().to_string();
+    if let Some(store) = store {
+        put_bytes(
+            store,
+            org,
+            &foreign_object_key,
+            marker.as_bytes(),
+            "text/plain",
+            ObjectIdentityMeta {
+                org_id: org,
+                collection_id: Some(collection_id),
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                original_filename: None,
+                canonical_format: Some("txt".into()),
+                content_sha256: Some(content_sha.clone()),
+                content_length: Some(content_length as u64),
+                disposition: Some("trusted".into()),
+            },
+        )
+        .await;
+    }
     with_org_txn(pool, &ctx, {
         let ctx = ctx.clone();
         move |txn| {
@@ -452,7 +473,15 @@ async fn seed_foreign_collection_document(
     })
     .await
     .expect("seed foreign collection/document");
-    (collection_id, document_id, version_id, job_id, conflict_id)
+    (
+        collection_id,
+        document_id,
+        version_id,
+        job_id,
+        conflict_id,
+        org,
+        user,
+    )
 }
 
 #[tokio::test]
@@ -1732,13 +1761,22 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
         return;
     };
+    let store = test_minio_client();
+    let cleanup = store.clone().map(MinioCleanupGuard::new);
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
     let (_org, _user, token) = seed_http_principal(&pool).await;
     let foreign_marker = format!("foreign-marker-{}", Uuid::new_v4().simple());
-    let (foreign_collection, foreign_document, foreign_version, foreign_job, foreign_conflict) =
-        seed_foreign_collection_document(&pool, &foreign_marker).await;
-    let app = build_router(pool, &ephemeral.app_url, None);
+    let (
+        foreign_collection,
+        foreign_document,
+        foreign_version,
+        foreign_job,
+        foreign_conflict,
+        foreign_org,
+        foreign_user,
+    ) = seed_foreign_collection_document(&pool, &foreign_marker, store.as_ref()).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, store.clone());
 
     let (status, err, _) =
         json_request(app.clone(), "GET", "/api/v1/collections", None, None, &[]).await;
@@ -1978,7 +2016,7 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     .await;
     let foreign_sha = sha256_hex(foreign_marker.as_bytes());
     assert_foreign_not_found(
-        app,
+        app.clone(),
         "POST",
         "/api/v1/citations/resolve".to_string(),
         &token,
@@ -1999,6 +2037,96 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     )
     .await;
 
+    // Conflict list is org-scoped: tenant A must not see tenant B's open conflict.
+    let (status, conflicts, _) = json_request(
+        app.clone(),
+        "GET",
+        "/api/v1/conflicts",
+        Some(&token),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{conflicts}");
+    assert!(
+        conflicts["requestId"].as_str().is_some(),
+        "conflict list must return stable error envelope fields on success: {conflicts}"
+    );
+    assert!(
+        !conflicts["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == foreign_conflict.to_string()),
+        "foreign conflict must not appear in tenant A list: {conflicts}"
+    );
+    assert!(
+        !conflicts.to_string().contains(&foreign_marker),
+        "conflict list leaked foreign marker: {conflicts}"
+    );
+
+    // Foreign capability minted by the foreign tenant must not redeem under tenant A.
+    if let Some(store) = store.as_ref() {
+        let foreign_token = login_access_token(
+            &pool,
+            &format!("{foreign_user}@foreign-http.test"),
+            "correct-password-1",
+        )
+        .await;
+        let _ = foreign_org;
+        let (status, issued, _) = json_request(
+            app.clone(),
+            "POST",
+            &format!(
+                "/api/v1/documents/{foreign_document}/versions/{foreign_version}/download-capability"
+            ),
+            Some(&foreign_token),
+            Some(serde_json::json!({ "purpose": "original" })),
+            &[],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "foreign tenant must mint capability via production route: {issued}"
+        );
+        let foreign_capability = issued["capability"]
+            .as_str()
+            .expect("foreign capability token")
+            .to_string();
+        let (status, error, body) = json_request(
+            app.clone(),
+            "GET",
+            &format!("/api/v1/downloads/{foreign_capability}"),
+            Some(&token),
+            None,
+            &[],
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "GET /downloads/{{foreign}} must hide foreign capability: {error}"
+        );
+        assert_eq!(error["code"], "not_found", "GET /downloads: {error}");
+        assert!(
+            error["requestId"].as_str().is_some(),
+            "download denial must include requestId: {error}"
+        );
+        assert!(
+            !error.to_string().contains(&foreign_marker)
+                && !String::from_utf8_lossy(&body).contains(&foreign_marker),
+            "download denial leaked foreign marker: {error}"
+        );
+        let _ = store;
+    } else {
+        eprintln!("skipped foreign capability redemption: MARKHAND_TEST_MINIO_ENDPOINT unset");
+    }
+
+    if let Some(cleanup) = cleanup {
+        cleanup.cleanup().await.expect("clean cross-tenant bucket");
+    }
+
     ephemeral.drop().await;
 }
 
@@ -2008,6 +2136,8 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
 /// allow-list as a hard deny, so the contract here is 403 `forbidden` rather
 /// than the 404 that hides existence for addressed resources — a foreign id in a
 /// filter reveals nothing either way, because the caller already supplied it.
+/// `POST /api/v1/ask/stream` is the exception: foreign scope must fail closed
+/// with 404 before any SSE session is created.
 ///
 /// Needs Qdrant because both handlers resolve `vector_index()` before scope and
 /// would otherwise answer 503. `hybrid_search` resolves scope before it touches
@@ -2034,7 +2164,8 @@ async fn live_http_retrieval_refuses_foreign_collection_scope() {
 
     let (_org, _user, token) = seed_http_principal(&pool).await;
     let foreign_marker = format!("foreign-scope-{}", Uuid::new_v4());
-    let (foreign_collection, ..) = seed_foreign_collection_document(&pool, &foreign_marker).await;
+    let (foreign_collection, _, _, _, _, _, _) =
+        seed_foreign_collection_document(&pool, &foreign_marker, None).await;
 
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let state = common::build_app_state(pool.clone(), &ephemeral.app_url, None)
@@ -2070,6 +2201,37 @@ async fn live_http_retrieval_refuses_foreign_collection_scope() {
             "POST {uri} leaked foreign marker: {error}"
         );
     }
+
+    let (status, error, body) = json_request(
+        app.clone(),
+        "POST",
+        "/api/v1/ask/stream",
+        Some(&token),
+        Some(serde_json::json!({
+            "question": "kinh phí được phê duyệt là bao nhiêu?",
+            "collectionIds": [foreign_collection],
+        })),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "POST /api/v1/ask/stream did not deny foreign collection scope: {error}"
+    );
+    assert_eq!(
+        error["code"], "not_found",
+        "POST /api/v1/ask/stream: {error}"
+    );
+    assert!(
+        error["requestId"].as_str().is_some(),
+        "ask/stream denial must include requestId: {error}"
+    );
+    assert!(
+        !error.to_string().contains(&foreign_marker)
+            && !String::from_utf8_lossy(&body).contains("event:"),
+        "ask/stream must not emit SSE for foreign scope: {error}"
+    );
 
     ephemeral.drop().await;
 }
