@@ -1,0 +1,321 @@
+# Thiết kế đóng Phase 1C theo luồng implement/review
+
+Ngày: 2026-07-31  
+Trạng thái: Đã được owner duyệt ở mức thiết kế hội thoại; chờ review tài liệu  
+Phạm vi: Phase 1C — multi-org security, denial suite và security/load gate
+
+## 1. Mục tiêu
+
+Đóng Phase 1C bằng bằng chứng thực thi, không chỉ đổi trạng thái issue. Kết quả cuối
+cùng phải chứng minh:
+
+- RBAC/ACL nhất quán ở route, service, PostgreSQL, Qdrant, object storage và worker;
+- không rò nội dung, metadata, sự tồn tại hoặc trạng thái giữa các org;
+- revoke, cache invalidation, quota recovery và worker fairness có bound kiểm chứng;
+- suite chạy trong GitHub CI và gate chạy trên một deployment multi-org thật;
+- catalog, report và GitHub issue chỉ chuyển `Done` sau khi bằng chứng tương ứng xanh.
+
+Phase 1B tại `master` commit `9ddfc06` là baseline đã đóng. Công việc này không mở lại
+Phase 1B nếu không phát hiện regression trực tiếp.
+
+## 2. Nguyên tắc phạm vi
+
+### 2.1 Nguồn sự thật
+
+- Acceptance gốc nằm trong
+  `plans/markhand-web/phase-1c-multi-org-security.md`.
+- Trạng thái và bằng chứng nằm trong
+  `plans/markhand-web/backlog/phase-1c/issues/README.md`.
+- Hành vi có thể kiểm chứng của code, migration và test được ưu tiên hơn mô tả audit
+  cũ. Claim stale phải được sửa trong chính PR xác minh nó.
+- Một issue chỉ `Done` khi tất cả acceptance còn áp dụng có test xanh ở đúng môi
+  trường. “Code đã landed”, test soft-skip hoặc CI path-filter skip không phải bằng
+  chứng hoàn thành.
+
+### 2.2 Surface chưa tồn tại
+
+Không tạo API giả chỉ để tick checklist. `export`, `autocomplete`, signed URL, PII và
+intelligence chưa có surface runtime trong Phase 1C:
+
+- denial matrix ghi `N/A` kèm bằng chứng source-scan và issue/phase sẽ sở hữu surface;
+- signed URL được thay bằng capability token, nên suite kiểm capability
+  tamper/expiry/replay/IDOR;
+- permission dự kiến nhưng chưa có operation được khai báo reserved, không tự cấp
+  quyền hoặc tạo endpoint rỗng.
+
+Khi một surface được bổ sung về sau, guard inventory và denial manifest phải buộc PR
+đó thêm test tương ứng.
+
+### 2.3 Không thuộc phạm vi
+
+- Custom-role builder, OIDC/group sync, billing và SIEM archive;
+- embedding model hoặc LLM provider mới;
+- thay đổi business feature Phase 2/3 không cần cho security gate;
+- tuyên bố production-scale nếu environment không khớp profile đã phê duyệt.
+
+## 3. Quyết định kiến trúc
+
+### 3.1 Canonical RBAC contract
+
+Tạo một fixture máy đọc được làm canonical contract cho built-in role và permission.
+Fixture chứa:
+
+- stable permission key;
+- trạng thái `active` hoặc `reserved`;
+- role `owner/admin/editor/viewer`;
+- grant matrix cho permission active;
+- restriction như “admin không quản owner”.
+
+Database vẫn là authority runtime. Test DB-gated đối chiếu catalog đã provision với
+fixture; OpenAPI test và web role presentation sinh hoặc đọc cùng fixture thay vì
+chép một matrix thứ hai. Historical migration không được sửa; nếu matrix runtime đổi,
+thêm migration expand-only và cập nhật fixture trong cùng PR.
+
+Permission chỉ được `active` khi có operation thật và guard inventory chỉ ra nơi
+enforce. Permission chưa có operation giữ `reserved` và không được seed grant.
+
+### 3.2 ACL semantics
+
+ACL áp dụng cho active membership:
+
+- `private`: collection owner hoặc explicit user grant; group/role grant không mở
+  private collection;
+- `org`: member active có base permission tương ứng;
+- `groups`: collection owner, explicit user grant, membership trong group được grant,
+  hoặc role hiện tại được grant qua `collection_role_access`.
+
+Resolver trong `auth/permissions.rs` là semantic reference. PostgreSQL
+`acl_predicate_sql`, Qdrant allowed-collection filter, citation hydration, download,
+jobs và cache phải cho cùng kết quả. Không adapter nào được mở rộng scope khi timeout,
+payload malformed hoặc dependency lỗi.
+
+Mọi mutation ảnh hưởng scope phải bump `orgs.acl_version` trong cùng transaction.
+Trigger phải phủ user, group, role grants, group membership, role permission,
+collection visibility và membership state. Cache hit tiếp tục freshness-check với
+PostgreSQL; lỗi freshness không được tin cache cũ.
+
+### 3.3 Dual-layer authorization
+
+Mỗi operation business hiện hữu có:
+
+1. route guard để trả HTTP contract đúng;
+2. service guard để direct call, worker hoặc call-site tương lai không bypass route.
+
+Guard inventory là artifact machine-checked ánh xạ operation → permission → route →
+service entry point. Test fail nếu thêm operation mà không đăng ký, nếu operation
+không có đủ hai guard, hoặc nếu inventory trỏ tới guard không tồn tại.
+
+Worker, reconcile và maintenance dùng service identity có permission tối thiểu, tenant
+scope rõ ràng và không có cờ `internal=true` để bypass. Dedicated PostgreSQL role
+`markhand_worker` phải được provision trong POC deployment; fallback app-role chỉ giữ
+tương thích dev và không được dùng làm evidence cho gate.
+
+### 3.4 Unified denial suite
+
+Tạo shared fixture:
+
+- 2 org;
+- ít nhất 3 user mỗi org, gồm owner/admin/member có quyền hạn khác nhau;
+- collection `private`, `org`, `groups`;
+- document và collection trùng tên giữa hai org;
+- token phát hành trước downgrade/suspend/remove;
+- indexed content có marker riêng cho từng org.
+
+Tạo denial manifest ánh xạ mỗi surface tới test executable hoặc trạng thái `N/A` có
+lý do. Suite tái sử dụng helper hiện có, nhưng có một test binary/module rõ ràng để CI
+có thể chạy và báo cáo riêng. Assertion âm phải kiểm cả status/error code lẫn việc
+response không chứa marker, ID, tên, object key hoặc metadata của org khác.
+
+Suite phủ HTTP và direct-service/repository cho:
+
+- list/search/FTS/vector/Q&A/citation;
+- preview/download capability;
+- delete/reindex/job/SSE;
+- audit, worker, reconcile và cache sau org switch;
+- stale token và in-flight Q&A sau revoke;
+- RLS, pool contamination và privileged worker misuse.
+
+### 3.5 Security/load gate
+
+Thêm gate `G1C-*` vào registry với `failureDisposition: block-phase-1c`. Gate tối thiểu
+gồm:
+
+- zero cross-tenant leakage;
+- membership/ACL revoke bound;
+- quota recovery sau crash/retry/cancel/timeout;
+- noisy-neighbor fairness/latency;
+- dependency và container vulnerability policy;
+- audit coverage của administrative mutation hiện hữu.
+
+Mỗi gate có environment ID, command, metric, threshold, owner, approver và evidence
+path. Không tự phát minh threshold để tạo kết quả xanh. Threshold phải lấy từ SLA/ADR
+đã phê duyệt; nếu chưa có, PR gate phải thêm quyết định máy đọc được và được owner
+duyệt trước lần qualifying run. Run trên environment không khớp phải ghi
+`targetMatch=false` và không đóng Phase 1C.
+
+Report chứa ít nhất git SHA, environment ID, test manifest, leakage count, revoke
+measurement, quota drift, fairness metric, scan summary và disposition của mọi finding
+high/critical.
+
+## 4. Phân chia PR
+
+Các PR chạy nối tiếp để tránh conflict tại `openapi.yaml`, `auth/permissions.rs`,
+`db/search.rs`, migration manifest và CI workflow.
+
+### PR 1 — RBAC foundation và catalog truth
+
+Phạm vi:
+
+- xác minh và đóng acceptance 1C-01/1C-02 bằng test đã có;
+- thêm canonical RBAC fixture và consistency tests cho DB/OpenAPI/web;
+- sửa claim stale trong phase plan, issue catalog và risk register có liên quan;
+- không đổi status 1C-03 thành `Done` nếu CI DB-gated chưa chứng minh matrix.
+
+Exit:
+
+- fast checks và `rust-integration` xanh;
+- UI không chứa permission matrix độc lập;
+- issue 1C-01/02 và phần matrix của 1C-03 có evidence cụ thể.
+
+### PR 2 — ACL resolver, predicates và invalidation
+
+Phạm vi:
+
+- implement explicit user/group/role grant semantics;
+- đồng bộ resolver, SQL predicate và downstream scope;
+- thêm trigger/version bump cho mọi ACL mutation;
+- thêm tests grant, revoke, suspend, cache invalidation và stale-scope defense;
+- đóng 1C-05/1C-06 khi kết quả resolver và SQL tương đương.
+
+Exit:
+
+- test RED chứng minh groups hiện không resolve trước implementation;
+- test grant/revoke xanh ở fast và DB-gated layer;
+- không query collection-scoped nào bỏ shared ACL predicate.
+
+### PR 3 — Guard inventory và operational identities
+
+Phạm vi:
+
+- machine-check guard inventory;
+- dual-layer allow/deny cho mọi permission active;
+- least-privilege worker/reconcile identity;
+- provision `markhand_worker` trong POC deployment;
+- audit coverage cho mutation hiện hữu;
+- xác minh và cập nhật evidence 1C-03/04/07/08/09/10/11.
+
+Exit:
+
+- direct-service misuse bị deny;
+- route HTTP giữ đúng 403/404 contract và không tạo existence oracle;
+- POC worker không fallback app-role trong qualifying configuration;
+- 1C-07…11 chỉ `Done` sau test/gate tương ứng, không dựa vào prose.
+
+### PR 4 — Multi-org denial suite
+
+Phạm vi:
+
+- shared fixture và denial manifest;
+- gom/tái sử dụng test rải rác;
+- bổ sung HTTP indexed FTS/Q&A, duplicate-name, org-switch/cache và các gap thực;
+- thêm CI invocation riêng, không soft-pass khi thiếu dependency.
+
+Exit:
+
+- fixture đạt 2 org và ít nhất 3 user/org;
+- mọi manifest row có executable test hoặc `N/A` có bằng chứng;
+- zero foreign marker/metadata leak;
+- `rust-integration` xanh và artifact manifest được lưu;
+- 1C-12 đạt CI half-gate; deployed half-gate còn chờ PR 5.
+
+### PR 5 — Phase 1C security/load gate
+
+Phạm vi:
+
+- registry `G1C-*`, harness, report validator và opt-in CI job;
+- boot deployment multi-org với dedicated worker role;
+- chạy denial, revoke, quota recovery, fairness, audit và vulnerability scan;
+- cập nhật risk register và final phase report.
+
+Exit:
+
+- report có `targetMatch=true`;
+- leakage bằng 0;
+- mọi metric đạt threshold đã phê duyệt;
+- không còn high/critical finding chưa disposition;
+- 1C-12 deployed half-gate và 1C-13 cùng xanh;
+- Phase 1C chuyển 13/13 `Done`.
+
+## 5. Luồng implement/review
+
+Mỗi PR dùng vòng lặp:
+
+```text
+coordinator task brief + acceptance/RED test
+→ implementer TDD
+→ reviewer độc lập đọc diff, test và contract
+→ implementer sửa finding
+→ reviewer xác nhận APPROVED
+→ coordinator verify, commit, push, tạo/cập nhật draft PR
+→ GitHub CI
+→ sửa tới khi required checks xanh
+→ cập nhật catalog bằng evidence
+```
+
+Grok và Composer luân phiên vai trò implementer/reviewer giữa các PR. Reviewer không
+chỉ đọc summary của implementer; phải kiểm diff và chạy lớp test có thể chạy trong
+environment của mình. Finding security mức Important trở lên chặn merge. Concern được
+ghi rõ disposition nếu cố ý defer.
+
+Mỗi PR là một branch riêng từ `master` mới nhất. PR sau chỉ bắt đầu implementation khi
+PR trước đã merge hoặc được rebase trên commit đã merge, nhằm tránh review dựa trên
+substrate chưa ổn định.
+
+## 6. Chiến lược kiểm thử
+
+### 6.1 Fast/hermetic trên Cloud Agent
+
+- unit tests cho resolver, cache policy, guard inventory, manifest validator và report
+  validator;
+- source-shape tests cho shared SQL predicate và route/service registration;
+- OpenAPI/codegen/web tests khi contract thay đổi;
+- Rust formatting, metadata locked và dependency policy checks trước mỗi push.
+
+### 6.2 GitHub `rust-integration`
+
+- PostgreSQL FORCE RLS và application role;
+- MinIO/Qdrant ownership, timeout và capability tests;
+- worker pipeline, ACL cache, quota race và multi-org denial fixture;
+- chạy `--include-ignored` với dependency bắt buộc; thiếu biến/service phải fail hoặc
+  được job skip rõ ràng, không `return Ok(())` tạo false green.
+
+### 6.3 Deployed gate
+
+- dùng POC compose hoặc environment tương đương có nhiều org;
+- dedicated worker DB role;
+- opt-in qua workflow dispatch/label để không làm chậm mọi PR;
+- upload artifact kể cả khi fail và luôn teardown;
+- nếu GitHub runner không đáp ứng target environment, owner chạy cùng harness trên máy
+  được phê duyệt và commit report đã sanitize.
+
+## 7. Error handling và an toàn migration
+
+- Migration chỉ expand/backfill/contract theo compatibility window; không sửa migration
+  lịch sử.
+- ACL/permission lookup lỗi phải deny, không fallback scope rộng.
+- Test fixture cleanup phải await mọi lane và chỉ báo pass sau khi resource được xóa.
+- Gate harness phải thu thập tất cả failure trước khi thoát để không che lỗi thứ hai.
+- Report không chứa password, token, document content, prompt, signed capability hoặc
+  PII; chỉ chứa marker/hash và aggregate metric.
+- Nếu PR phát hiện acceptance cũ mâu thuẫn hành vi đúng, sửa plan và test theo bằng
+  chứng trong cùng PR; không đổi production behavior chỉ để khớp một expectation stale.
+
+## 8. Điều kiện hoàn tất
+
+Thiết kế được coi là thực thi xong khi:
+
+1. năm PR hoặc các PR tương đương đã merge theo dependency;
+2. 1C-01…1C-13 đều có evidence link và trạng thái `Done`;
+3. fast CI, `rust-integration` và deployed `G1C-*` đều xanh;
+4. roadmap, issue catalog, generated dashboard và GitHub issue sync nhất quán;
+5. không còn blocker high/critical chưa disposition cho trust boundary multi-org.
