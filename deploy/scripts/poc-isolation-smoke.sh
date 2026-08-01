@@ -241,6 +241,45 @@ require_regex "$ROOT/deploy/poc/postgres-init.sh" 'MARKHAND_APP_DB_PASSWORD' \
   "postgres init reads app password from env"
 require_regex "$COMPOSE_FILE" 'postgres-init\.sh' "compose mounts parameterized postgres-init.sh"
 
+# Phase 1C / 1C-08: dedicated least-privilege worker DB identity
+require_regex "$ENV_EXAMPLE" 'MARKHAND_WORKER_DB_USER' \
+  ".env.example documents worker DB user"
+require_regex "$ENV_EXAMPLE" 'MARKHAND_WORKER_DB_PASSWORD' \
+  ".env.example documents worker DB password"
+require_regex "$ROOT/deploy/poc/postgres-init.sh" 'markhand_worker|MARKHAND_WORKER_DB' \
+  "postgres init provisions markhand_worker"
+require_regex "$ROOT/deploy/poc/postgres-init.sh" 'NOBYPASSRLS' \
+  "postgres init creates worker without BYPASSRLS"
+forbid_regex "$ROOT/deploy/poc/postgres-init.sh" "PASSWORD[[:space:]]+'[^'$]*change_me" \
+  "postgres-init must not embed disposable password literals for roles"
+# Every qualifying worker service must receive MARKHAND_WORKER_DATABASE_URL.
+for svc in worker-convert worker-index worker-embedding worker-delete worker-reconcile; do
+  if awk -v svc="$svc:" '
+    $0 ~ "^  "svc {found=1; next}
+    found && /^  [a-z0-9-]+:/ {exit}
+    found && /MARKHAND_WORKER_DATABASE_URL:/ {url=1}
+    END { exit !(found && url) }
+  ' "$COMPOSE_FILE"; then
+    pass "$svc sets MARKHAND_WORKER_DATABASE_URL"
+  else
+    fail "$svc missing MARKHAND_WORKER_DATABASE_URL (qualifying workers must not use app-role silently)"
+  fi
+done
+# API keeps the app role URL and must not be switched onto the worker role.
+if awk '
+  /^  api:/ {found=1; next}
+  found && /^  [a-z0-9-]+:/ {exit}
+  found && /MARKHAND_DATABASE_URL:/ {app=1}
+  found && /MARKHAND_WORKER_DATABASE_URL:/ {worker=1}
+  END { exit !(found && app && !worker) }
+' "$COMPOSE_FILE"; then
+  pass "api keeps MARKHAND_DATABASE_URL and omits MARKHAND_WORKER_DATABASE_URL"
+else
+  fail "api must keep app DATABASE_URL and must not use MARKHAND_WORKER_DATABASE_URL"
+fi
+require_regex "$COMPOSE_FILE" 'markhand_worker' \
+  "compose interpolates markhand_worker into worker database URLs"
+
 # Embedding-cpu hardening
 require_regex "$COMPOSE_FILE" 'deploy/poc/Dockerfile\.embedding-cpu' \
   "POC embedding uses hardened Dockerfile"

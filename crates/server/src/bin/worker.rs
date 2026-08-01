@@ -895,6 +895,112 @@ fn exit_with_error(error: String) -> ! {
     std::process::exit(1);
 }
 
+/// Least-privilege permission set for a background worker kind (Phase 1C / 1C-08).
+///
+/// Unknown kinds are a configuration error: the process must not construct an
+/// `OrgContext` or claim work until the kind is validated.
+fn worker_permissions(kind: &str) -> Result<&'static [&'static str], String> {
+    // RED stub: known kinds intentionally return an empty set so identity tests
+    // fail until GREEN wires the exact convert/index/embedding and
+    // delete/reconcile allow-lists. Unknown kinds also return Ok([]) so the
+    // unknown-kind denial assertion fails for the expected reason.
+    let _ = kind;
+    Ok(&[])
+}
+
+/// Build org contexts only after `worker_permissions` accepts the kind.
+fn worker_contexts_for_kind(
+    org_ids: &[Uuid],
+    user_id: Uuid,
+    kind: &str,
+) -> Result<Vec<OrgContext>, String> {
+    let permissions = worker_permissions(kind)?;
+    let mut contexts = Vec::with_capacity(org_ids.len());
+    for &org_id in org_ids {
+        contexts.push(
+            OrgContext::try_new(org_id, user_id, permissions.iter().copied(), [])
+                .map_err(|error| format!("invalid worker tenant context: {error}"))?,
+        );
+    }
+    Ok(contexts)
+}
+
+#[cfg(test)]
+mod worker_permissions_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn convert_index_embedding_get_jobs_system_and_doc_upload_only() {
+        for kind in ["convert", "index", "embedding"] {
+            let perms = worker_permissions(kind).expect(kind);
+            assert_eq!(
+                perms,
+                &["jobs.system", "doc.upload"][..],
+                "{kind} must be jobs.system + doc.upload exactly"
+            );
+            let forbidden = ["member.manage", "audit.view", "doc.delete", "qa.query"];
+            for code in forbidden {
+                assert!(
+                    !perms.contains(&code),
+                    "{kind} must not include {code}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn delete_reconcile_get_jobs_system_and_doc_delete_only() {
+        for kind in ["delete", "reconcile"] {
+            let perms = worker_permissions(kind).expect(kind);
+            assert_eq!(
+                perms,
+                &["jobs.system", "doc.delete"][..],
+                "{kind} must be jobs.system + doc.delete exactly"
+            );
+            let forbidden = ["member.manage", "audit.view", "doc.upload", "qa.query"];
+            for code in forbidden {
+                assert!(
+                    !perms.contains(&code),
+                    "{kind} must not include {code}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_worker_kind_is_configuration_error() {
+        let err = worker_permissions("not-a-real-kind").expect_err("unknown kind");
+        assert!(
+            err.contains("unknown") || err.contains("MARKHAND_WORKER_KIND"),
+            "error should name the configuration problem, got: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_contexts_carry_exact_permissions_without_superset() {
+        let org = Uuid::from_u128(0x1111);
+        let user = Uuid::from_u128(0x2222);
+        let contexts = worker_contexts_for_kind(&[org], user, "convert").expect("convert");
+        assert_eq!(contexts.len(), 1);
+        let expected: BTreeSet<String> = ["jobs.system", "doc.upload"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(contexts[0].permissions(), &expected);
+        assert!(!contexts[0].has_permission("member.manage"));
+        assert!(!contexts[0].has_permission("audit.view"));
+        assert!(!contexts[0].has_permission("doc.delete"));
+    }
+
+    #[test]
+    fn unknown_kind_cannot_build_worker_contexts() {
+        let org = Uuid::from_u128(0x1111);
+        let user = Uuid::from_u128(0x2222);
+        assert!(worker_contexts_for_kind(&[org], user, "ghost").is_err());
+    }
+}
+
 #[cfg(test)]
 mod shutdown_tests {
     use super::*;
