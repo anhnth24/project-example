@@ -10,7 +10,9 @@ use tokio::time::Instant as TokioInstant;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
+use crate::auth::permissions::{require_operation_collection_access_on_txn, require_permission};
 use crate::db::error::DbError;
+use crate::db::models::AccessLevel;
 use crate::db::models::AuditOutcome;
 use crate::db::models::{Document, DocumentState, Job, JobStatus};
 use crate::db::pool::with_org_txn_typed;
@@ -71,16 +73,35 @@ pub fn document_reads_suppressed(state: DocumentState, deleted_at_set: bool) -> 
     matches!(state, DocumentState::Tombstoned | DocumentState::Purged) || deleted_at_set
 }
 
+const PERMISSION_DOC_DELETE: &str = "doc.delete";
+
 pub async fn request_delete(
     pool: &Pool,
     ctx: &OrgContext,
     document_id: Uuid,
 ) -> Result<DeleteRequestOutcome, DeletionError> {
+    // Fail closed before any txn/side effects when the caller lacks doc.delete.
+    require_permission(ctx, PERMISSION_DOC_DELETE).map_err(|_| DeletionError::PermissionDenied)?;
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| {
             Box::pin(async move {
                 let document = documents::get_by_id_for_update(txn, &ctx, document_id).await?;
+                require_operation_collection_access_on_txn(
+                    txn,
+                    &ctx,
+                    document.collection_id,
+                    PERMISSION_DOC_DELETE,
+                    AccessLevel::Admin,
+                )
+                .await
+                .map_err(|error| match error {
+                    crate::auth::permissions::ResolveError::PermissionDenied
+                    | crate::auth::permissions::ResolveError::CollectionDenied => {
+                        DeletionError::PermissionDenied
+                    }
+                    _ => DeletionError::Db(DbError::Config("delete_authz_failed".into())),
+                })?;
                 match document.state {
                     DocumentState::Tombstoned | DocumentState::Purged => {
                         Ok(DeleteRequestOutcome::AlreadyRequested(document))
@@ -688,6 +709,8 @@ fn heartbeat_claim<'a>(
 
 #[derive(Debug, Error)]
 pub enum DeletionError {
+    #[error("permission denied")]
+    PermissionDenied,
     #[error("database error")]
     Db(#[from] DbError),
     #[error("job error")]
@@ -718,6 +741,7 @@ impl From<HeartbeatError> for DeletionError {
 impl DeletionError {
     pub fn safe_job_error(&self) -> &'static str {
         match self {
+            Self::PermissionDenied => "delete permission denied",
             Self::Db(_) => "delete database error",
             Self::Job(_) => "delete job error",
             Self::Storage(_) => "delete storage error",

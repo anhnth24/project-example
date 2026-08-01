@@ -70,6 +70,7 @@ impl PreviewError {
 fn map_access(error: AccessError) -> PreviewError {
     match error {
         AccessError::NotFound => PreviewError::NotFound,
+        AccessError::PermissionDenied => PreviewError::PermissionDenied,
         AccessError::HistoryRequired => PreviewError::HistoryRequired,
         AccessError::NotPublished => PreviewError::NotPublished,
         AccessError::Database => PreviewError::Database,

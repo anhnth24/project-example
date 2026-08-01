@@ -130,9 +130,10 @@ pub async fn revalidate_job_stream(
     let _authorized = access::resolve_job_access(pool, &context, job_id)
         .await
         .map_err(|error| match error {
-            AccessError::NotFound | AccessError::HistoryRequired | AccessError::NotPublished => {
-                StreamAuthError::JobDenied
-            }
+            AccessError::NotFound
+            | AccessError::PermissionDenied
+            | AccessError::HistoryRequired
+            | AccessError::NotPublished => StreamAuthError::JobDenied,
             AccessError::Database => StreamAuthError::Database,
         })?;
     let job = with_org_txn_typed(pool, &context, {
@@ -189,6 +190,7 @@ pub async fn revalidate_ask_stream(
             .await
             .map_err(|error| match error {
                 AccessError::NotFound
+                | AccessError::PermissionDenied
                 | AccessError::HistoryRequired
                 | AccessError::NotPublished => StreamAuthError::CitationDenied,
                 AccessError::Database => StreamAuthError::Database,

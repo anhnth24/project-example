@@ -28,6 +28,8 @@ pub struct AuthorizedVersion {
 pub enum AccessError {
     #[error("not found")]
     NotFound,
+    #[error("permission denied")]
+    PermissionDenied,
     #[error("history permission required")]
     HistoryRequired,
     #[error("version is not published")]
@@ -40,6 +42,7 @@ impl AccessError {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::NotFound => "not_found",
+            Self::PermissionDenied => "permission_denied",
             Self::HistoryRequired => "history_permission_required",
             Self::NotPublished => "version_not_published",
             Self::Database => "database_error",
@@ -306,7 +309,7 @@ pub async fn resolve_job_access(
                     }
                     None => {
                         if !ctx.has_permission(PERMISSION_JOBS_SYSTEM) {
-                            return Err(AccessError::NotFound);
+                            return Err(AccessError::PermissionDenied);
                         }
                     }
                 }
@@ -325,6 +328,7 @@ mod tests {
     #[test]
     fn access_error_codes_are_stable() {
         assert_eq!(AccessError::NotFound.code(), "not_found");
+        assert_eq!(AccessError::PermissionDenied.code(), "permission_denied");
         assert_eq!(
             AccessError::HistoryRequired.code(),
             "history_permission_required"

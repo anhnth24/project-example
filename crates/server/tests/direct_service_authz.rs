@@ -15,17 +15,18 @@ mod common;
 
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::db::audit::{self as db_audit, AuditListFilter};
+use fileconv_server::db::audit::AuditListFilter;
 use fileconv_server::db::collections::{self, NewCollection};
-use fileconv_server::db::document_versions;
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::models::{CollectionVisibility, DocumentState, JobType, MembershipRole};
 use fileconv_server::db::orgs;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs::{self, EnqueueJob, JobPayload};
 use fileconv_server::services::access;
+use fileconv_server::services::audit_query;
 use fileconv_server::services::deletion::{self, DeleteRequestOutcome};
 use fileconv_server::services::members;
+use fileconv_server::services::publish;
 use uuid::Uuid;
 
 use common::{
@@ -364,7 +365,7 @@ async fn doc_delete_permission_required_at_deletion_service() {
 }
 
 // ---------------------------------------------------------------------
-// doc.publish — direct DB publish_version bypass + audit gap
+// doc.publish — services::publish::publish_version (authz + atomic audit)
 // ---------------------------------------------------------------------
 
 #[tokio::test]
@@ -387,17 +388,13 @@ async fn doc_publish_permission_required_at_direct_db_publish() {
     assert_eq!(before_pub.0, "draft");
     assert!(!before_pub.1);
 
-    // Current inventory serviceEntry is the DB helper; Task 8 moves this behind
-    // services::publish with a dual-layer deny. Calling the DB entry directly
-    // exposes the missing service guard.
-    let denied = with_org_txn(&pool, &missing_publish, {
-        let ctx = missing_publish.clone();
-        move |txn| {
-            Box::pin(async move {
-                document_versions::publish_version(txn, &ctx, document_id, version_id).await
-            })
-        }
-    })
+    let denied = publish::publish_version(
+        &pool,
+        &missing_publish,
+        &Uuid::new_v4().to_string(),
+        document_id,
+        version_id,
+    )
     .await;
     assert_permission_denied(denied, "publish_version without doc.publish");
 
@@ -412,15 +409,14 @@ async fn doc_publish_permission_required_at_direct_db_publish() {
         "denied publish must not write document.publish audit"
     );
 
-    // Authorized path must reach the SQL publish precondition (fixture valid).
-    with_org_txn(&pool, &full_ctx, {
-        let ctx = full_ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                document_versions::publish_version(txn, &ctx, document_id, version_id).await
-            })
-        }
-    })
+    // Authorized path must publish and co-commit document.publish audit.
+    publish::publish_version(
+        &pool,
+        &full_ctx,
+        &Uuid::new_v4().to_string(),
+        document_id,
+        version_id,
+    )
     .await
     .expect("authorized publish_version must succeed — fixture was valid");
 
@@ -429,12 +425,10 @@ async fn doc_publish_permission_required_at_direct_db_publish() {
     assert_eq!(state, "published");
     assert!(is_current);
 
-    // Inventory requires document.publish audit on the mutation; the direct DB
-    // route currently records none — expose that gap for Task 8 GREEN.
     let publish_audits = count_action_audits(&pool, &full_ctx, "document.publish").await;
     assert!(
         publish_audits > before_audit,
-        "authorized publish must record document.publish audit (publish-audit absence)"
+        "authorized publish must record document.publish audit"
     );
 
     ephemeral.drop().await;
@@ -539,7 +533,7 @@ async fn member_manage_permission_required_at_direct_service_patch_and_delete() 
 }
 
 // ---------------------------------------------------------------------
-// audit.view — db::audit::list_page (current inventory serviceEntry)
+// audit.view — services::audit_query::list_page
 // ---------------------------------------------------------------------
 
 #[tokio::test]
@@ -577,14 +571,14 @@ async fn audit_view_permission_required_at_direct_list_page() {
     )
     .await
     .expect("seed audit row via authorized role change");
-    let seeded_rows = with_org_txn(&pool, &authorized, {
-        let ctx = authorized.clone();
-        move |txn| {
-            Box::pin(async move {
-                db_audit::list_page(txn, &ctx, &AuditListFilter::default(), 10, None, None).await
-            })
-        }
-    })
+    let seeded_rows = audit_query::list_page(
+        &pool,
+        &authorized,
+        &AuditListFilter::default(),
+        10,
+        None,
+        None,
+    )
     .await
     .expect("authorized list_page precondition");
     assert!(
@@ -593,14 +587,14 @@ async fn audit_view_permission_required_at_direct_list_page() {
     );
     let before_read_audits = count_action_audits(&pool, &authorized, "audit.read").await;
 
-    let denied = with_org_txn(&pool, &missing_view, {
-        let ctx = missing_view.clone();
-        move |txn| {
-            Box::pin(async move {
-                db_audit::list_page(txn, &ctx, &AuditListFilter::default(), 10, None, None).await
-            })
-        }
-    })
+    let denied = audit_query::list_page(
+        &pool,
+        &missing_view,
+        &AuditListFilter::default(),
+        10,
+        None,
+        None,
+    )
     .await;
     assert_permission_denied(denied, "list_page without audit.view");
 

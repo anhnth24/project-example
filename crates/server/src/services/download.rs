@@ -239,6 +239,7 @@ async fn authorize_version_access(
         .await
         .map_err(|error| match error {
             AccessError::NotFound => DownloadError::NotFound,
+            AccessError::PermissionDenied => DownloadError::PermissionDenied,
             AccessError::HistoryRequired => DownloadError::HistoryRequired,
             AccessError::NotPublished => DownloadError::NotPublished,
             AccessError::Database => DownloadError::Database,

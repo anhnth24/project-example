@@ -353,7 +353,7 @@
         "method": "post",
         "path": "/documents/{documentId}/versions/{versionId}/publish"
       },
-      "serviceEntry": "db::document_versions::publish_version",
+      "serviceEntry": "services::publish::publish_version",
       "identityKind": "user",
       "mutation": true,
       "audit": {
@@ -825,7 +825,7 @@
         "method": "get",
         "path": "/audit"
       },
-      "serviceEntry": "db::audit::list_page",
+      "serviceEntry": "services::audit_query::list_page",
       "identityKind": "user",
       "mutation": false,
       "audit": {
