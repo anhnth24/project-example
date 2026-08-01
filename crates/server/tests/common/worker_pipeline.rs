@@ -14,6 +14,7 @@ use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::config::Profile;
+use fileconv_server::db::models::JobStatus;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs;
 use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
@@ -439,6 +440,37 @@ impl WorkerPipeline {
         .await
     }
 
+    /// Upload a revision onto an existing org document and run convert/index workers.
+    ///
+    /// Preserves the caller's exact permission set — no superset injection.
+    pub async fn index_existing_document_revision(
+        &self,
+        access_token: &str,
+        org_id: Uuid,
+        user_id: Uuid,
+        collection_id: Uuid,
+        document_id: Uuid,
+        permissions: &[&str],
+        filename: &str,
+        content_type: &str,
+        source: &[u8],
+        label: &str,
+    ) -> WorkerProducedDoc {
+        let worker_ctx =
+            worker_org_context(org_id, user_id, collection_id, permissions.iter().copied());
+        self.upload_convert_index(
+            access_token,
+            &worker_ctx,
+            collection_id,
+            Some(document_id),
+            filename,
+            content_type,
+            source,
+            label,
+        )
+        .await
+    }
+
     /// Upload a revision onto an existing worker-produced document and re-index.
     pub async fn produce_revision(
         &self,
@@ -540,35 +572,20 @@ impl WorkerPipeline {
         );
         convert_config.heartbeat_interval = Duration::from_secs(5);
         convert_config.lease_ttl = Duration::from_secs(60);
-        let convert_worker =
-            ConvertWorker::new(self.pool.clone(), self.store.clone(), convert_config)
-                .expect("convert worker");
-        let convert_run = convert_worker
-            .run_once(worker_ctx)
-            .await
-            .unwrap_or_else(|error| panic!("{label} convert run: {error}"));
-        let worker_org_id = worker_ctx.org_id();
-        let convert_last_error = with_org_txn(&self.pool, worker_ctx, move |txn| {
-            Box::pin(async move {
-                let row = txn
-                    .query_one(
-                        "SELECT last_error FROM jobs WHERE org_id = $1 AND id = $2",
-                        &[&worker_org_id, &convert_job_id],
-                    )
-                    .await?;
-                Ok::<_, fileconv_server::db::error::DbError>(
-                    row.get::<_, Option<String>>("last_error"),
-                )
-            })
-        })
-        .await
-        .unwrap_or_else(|error| panic!("{label} load convert job: {error}"));
+        let convert_run = run_convert_worker_until_completed(
+            &self.pool,
+            &self.store,
+            worker_ctx,
+            convert_job_id,
+            convert_config,
+        )
+        .await;
         assert!(
             matches!(
                 convert_run,
                 ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
             ),
-            "{label} unexpected convert outcome: {convert_run:?}; last_error={convert_last_error:?}"
+            "{label} unexpected convert outcome: {convert_run:?}"
         );
 
         let (published_version_id, markdown_sha, source_sha) =
@@ -606,6 +623,68 @@ impl WorkerPipeline {
             permissions: worker_ctx.permissions().clone(),
         }
     }
+}
+
+async fn run_convert_worker_until_completed(
+    pool: &Pool,
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    convert_job_id: Uuid,
+    config: ConvertWorkerConfig,
+) -> ConvertWorkerRun {
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("convert worker");
+    for round in 0..12 {
+        let outcome = worker.run_once(ctx).await.expect("convert worker run");
+        if !matches!(outcome, ConvertWorkerRun::Completed { .. })
+            && job_status(pool, ctx, convert_job_id).await == JobStatus::Succeeded
+        {
+            return ConvertWorkerRun::Completed {
+                job_id: convert_job_id,
+                markdown_bytes: 0,
+            };
+        }
+        match outcome {
+            ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id => {
+                return outcome;
+            }
+            ConvertWorkerRun::Failed {
+                job_id,
+                terminal: true,
+                ..
+            } if job_id == convert_job_id => {
+                panic!("convert job {convert_job_id} dead-lettered on round {round}");
+            }
+            ConvertWorkerRun::NoJob if round + 1 < 12 => continue,
+            other if round + 1 < 12 => {
+                let _ = other;
+                continue;
+            }
+            other => panic!(
+                "convert job {convert_job_id} did not complete within run budget; last={other:?}"
+            ),
+        }
+    }
+    unreachable!("convert worker run budget exhausted");
+}
+
+async fn job_status(pool: &Pool, ctx: &OrgContext, job_id: Uuid) -> JobStatus {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT status FROM jobs WHERE org_id = $1 AND id = $2",
+                        &[&ctx.org_id(), &job_id],
+                    )
+                    .await?;
+                let status: String = row.get(0);
+                Ok(JobStatus::parse(&status).unwrap_or(JobStatus::Pending))
+            })
+        }
+    })
+    .await
+    .expect("job status")
 }
 
 pub async fn drain_index_jobs(worker: &IndexWorker, ctx: &OrgContext) -> usize {

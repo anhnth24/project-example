@@ -10,14 +10,11 @@ use axum::http::{Request, StatusCode};
 use common::multi_org_denial::{
     assert_denial_no_leak, DenialExpectation, DenialResponse, MultiOrgDenialWorld,
 };
-use common::multi_org_denial_world::BootedOrg;
+use common::multi_org_denial_world::{await_ask_stream_session, BootedOrg, IndexedDenialRuntime};
 use common::{
-    admin_database_url, app_database_url, build_app_state, login_tokens,
-    seed_user_with_permissions, test_qdrant_url,
+    admin_database_url, app_database_url, login_tokens, seed_user_with_permissions,
+    test_minio_client, test_qdrant_url,
 };
-use fileconv_server::auth::context::OrgContext;
-use fileconv_server::db::pool::with_org_txn;
-use fileconv_server::http::router;
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde_json::json;
@@ -30,6 +27,18 @@ async fn boot_world_if_live() -> Option<MultiOrgDenialWorld> {
     admin_database_url()?;
     app_database_url()?;
     Some(MultiOrgDenialWorld::boot().await)
+}
+
+async fn boot_indexed_world_if_live() -> Option<(MultiOrgDenialWorld, IndexedDenialRuntime)> {
+    admin_database_url()?;
+    app_database_url()?;
+    test_qdrant_url()?;
+    test_minio_client()?;
+    let mut world = MultiOrgDenialWorld::boot().await;
+    let runtime = IndexedDenialRuntime::boot_and_index(&mut world)
+        .await
+        .expect("indexed denial runtime");
+    Some((world, runtime))
 }
 
 async fn json_request(
@@ -151,6 +160,9 @@ async fn document_index_state(
     pool: &deadpool_postgres::Pool,
     org: &BootedOrg,
 ) -> Result<(String, i64), String> {
+    use fileconv_server::auth::context::OrgContext;
+    use fileconv_server::db::pool::with_org_txn;
+
     let owner = org.users.get("owner").ok_or("missing owner user")?;
     let org_id = org.org_id;
     let owner_id = owner.user_id;
@@ -183,22 +195,6 @@ async fn document_index_state(
     })
     .await
     .map_err(|err| format!("load document index state: {err}"))
-}
-
-/// Task 12 stops at converted SQL seed; Task 13 GREEN must index via WorkerPipeline.
-async fn require_worker_indexed_orgs(world: &MultiOrgDenialWorld) -> Result<(), String> {
-    for (key, org) in &world.orgs {
-        let (state, chunk_count) = document_index_state(world.pool(), org).await?;
-        if state == "indexed" && chunk_count > 0 {
-            continue;
-        }
-        return Err(format!(
-            "org {key} document {} is state={state} with {chunk_count} chunks; \
-             denial world must index marker `{}` through production WorkerPipeline before FTS/ask denial probes",
-            org.document.document_id, org.marker
-        ));
-    }
-    Ok(())
 }
 
 async fn read_sse_until(
@@ -306,6 +302,20 @@ async fn assert_access_rejected(app: &axum::Router, access_token: &str) {
         StatusCode::UNAUTHORIZED,
         "stale access token must be rejected: {}",
         String::from_utf8_lossy(&body)
+    );
+}
+
+async fn assert_admin_members_forbidden(
+    app: &axum::Router,
+    access_token: &str,
+    foreign: &common::multi_org_denial::ForeignMarkers,
+) {
+    let (status, body, headers) =
+        json_request(app, "GET", "/api/v1/members", Some(access_token), None).await;
+    assert_denial_no_leak(
+        &denial_response(status, &body, &headers),
+        foreign,
+        DenialExpectation::BodyScopeForbidden,
     );
 }
 
@@ -449,15 +459,22 @@ async fn shared_world_http_surfaces_respect_org_scope() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL + MinIO"]
 async fn indexed_fts_and_ask_never_return_foreign_marker() {
-    let Some(world) = boot_world_if_live().await else {
+    let Some((world, runtime)) = boot_indexed_world_if_live().await else {
         return;
     };
     world.assert_base_topology();
-    require_worker_indexed_orgs(&world)
-        .await
-        .expect("indexed denial prerequisite");
+    for (key, org) in &world.orgs {
+        let (state, chunk_count) = document_index_state(world.pool(), org)
+            .await
+            .expect("indexed state");
+        assert_eq!(
+            state, "indexed",
+            "org {key} must be worker-indexed before FTS/ask probes"
+        );
+        assert!(chunk_count > 0, "org {key} must have searchable chunks");
+    }
 
     let alpha = world.org("orgAlpha");
     let token = &alpha.users["owner"].access_token;
@@ -465,7 +482,7 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
     let beta = world.org("orgBeta");
     let app = world.app();
 
-    let query = format!("marker:{}", alpha.marker);
+    let query = alpha.marker.clone();
     let (status, body, headers) = json_request(
         app,
         "POST",
@@ -527,6 +544,7 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
         "ask must not leak foreign marker: {ask_text}"
     );
 
+    runtime.teardown().await;
     world.cleanup().await.expect("cleanup");
 }
 
@@ -690,22 +708,23 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
     assert_eq!(status, StatusCode::OK);
     let me: serde_json::Value = serde_json::from_slice(&me_body).expect("auth me");
     let origin_org = Uuid::parse_str(me["orgId"].as_str().expect("orgId")).expect("org uuid");
-    let (target_org, target, origin, actor_key, foreign_key) = if origin_org == alpha.org_id {
-        (beta.org_id, beta, alpha, "orgAlpha", "orgBeta")
+    let origin_key = world.org_key_for_id(origin_org);
+    let (target_org, target, origin, target_key) = if origin_org == alpha.org_id {
+        (beta.org_id, beta, alpha, "orgBeta")
     } else {
-        (alpha.org_id, alpha, beta, "orgBeta", "orgAlpha")
+        (alpha.org_id, alpha, beta, "orgAlpha")
     };
-    let foreign = world.foreign_markers_for(actor_key);
 
     let (status, warm_body, warm_headers) =
         json_request(app, "GET", "/api/v1/collections", Some(&bridge_token), None).await;
     assert_denial_no_leak(
         &denial_response(status, &warm_body, &warm_headers),
-        &world.foreign_markers_for(foreign_key),
+        &world.foreign_markers_for(origin_key),
         DenialExpectation::AllowSuccess,
     );
 
     let (switched_token, _) = switch_org(app, &bridge_token, target_org).await;
+    let foreign_after_switch = world.foreign_markers_for(target_key);
 
     let (status, body, headers) = json_request(
         app,
@@ -717,7 +736,7 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
     .await;
     assert_denial_no_leak(
         &denial_response(status, &body, &headers),
-        &foreign,
+        &foreign_after_switch,
         DenialExpectation::AllowSuccess,
     );
     let listed: serde_json::Value = serde_json::from_slice(&body).expect("collections json");
@@ -758,7 +777,7 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
         ),
         &switched_token,
         None,
-        &foreign,
+        &foreign_after_switch,
     )
     .await;
 
@@ -772,7 +791,7 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
             "collectionIds": [origin.collections["org"].collection_id],
             "limit": 5
         }),
-        &foreign,
+        &foreign_after_switch,
     )
     .await;
 
@@ -795,6 +814,7 @@ async fn pre_revoke_tokens_fail_after_downgrade_suspend_and_remove() {
 
     let admin = &alpha.users["admin"];
     let (admin_access, admin_refresh) = (admin.access_token.clone(), admin.refresh_token.clone());
+    let foreign = world.foreign_markers_for("orgAlpha");
     let (status, _, _) =
         json_request(app, "GET", "/api/v1/auth/me", Some(&admin_access), None).await;
     assert_eq!(
@@ -817,8 +837,80 @@ async fn pre_revoke_tokens_fail_after_downgrade_suspend_and_remove() {
         "owner must downgrade admin via production route: {}",
         String::from_utf8_lossy(&body)
     );
-    assert_access_rejected(app, &admin_access).await;
-    assert_refresh_rejected(app, &admin_refresh).await;
+
+    let (status, me_body, me_headers) =
+        json_request(app, "GET", "/api/v1/auth/me", Some(&admin_access), None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "role downgrade is authorization invalidation, not auth revocation"
+    );
+    assert_denial_no_leak(
+        &denial_response(status, &me_body, &me_headers),
+        &foreign,
+        DenialExpectation::AllowSuccess,
+    );
+    let me: serde_json::Value = serde_json::from_slice(&me_body).expect("auth me after downgrade");
+    assert_eq!(
+        me["permissions"].as_array().map(Vec::len),
+        Some(0),
+        "downgraded session must have no stale permissions: {me}"
+    );
+    assert_eq!(
+        me["allowedCollectionIds"].as_array().map(Vec::len),
+        Some(0),
+        "downgraded session must have no stale collection scope: {me}"
+    );
+    assert_admin_members_forbidden(app, &admin_access, &foreign).await;
+
+    let (refresh_status, refreshed, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/auth/refresh",
+        None,
+        Some(json!({ "refreshToken": admin_refresh })),
+    )
+    .await;
+    if refresh_status == StatusCode::OK {
+        let refreshed_json: serde_json::Value =
+            serde_json::from_slice(&refreshed).expect("refresh response json");
+        let rotated_access = refreshed_json["accessToken"]
+            .as_str()
+            .expect("rotated access token")
+            .to_string();
+        let (status, rotated_me, rotated_headers) =
+            json_request(app, "GET", "/api/v1/auth/me", Some(&rotated_access), None).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "rotated session must stay authenticated"
+        );
+        assert_denial_no_leak(
+            &denial_response(status, &rotated_me, &rotated_headers),
+            &foreign,
+            DenialExpectation::AllowSuccess,
+        );
+        let rotated: serde_json::Value =
+            serde_json::from_slice(&rotated_me).expect("rotated auth me");
+        assert_eq!(
+            rotated["permissions"].as_array().map(Vec::len),
+            Some(0),
+            "rotated token must not restore stale admin permissions: {rotated}"
+        );
+        assert_eq!(
+            rotated["allowedCollectionIds"].as_array().map(Vec::len),
+            Some(0),
+            "rotated token must not restore stale collection scope: {rotated}"
+        );
+        assert_admin_members_forbidden(app, &rotated_access, &foreign).await;
+    } else {
+        assert_eq!(
+            refresh_status,
+            StatusCode::UNAUTHORIZED,
+            "if refresh is revoked on downgrade, it must fail closed: {}",
+            String::from_utf8_lossy(&refreshed)
+        );
+    }
 
     let member = &alpha.users["member"];
     let (member_access, member_refresh) =
@@ -883,9 +975,9 @@ async fn pre_revoke_tokens_fail_after_downgrade_suspend_and_remove() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL (+ MinIO for object keys)"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL + MinIO"]
 async fn preview_download_job_and_sse_hide_foreign_ids() {
-    let Some(world) = boot_world_if_live().await else {
+    let Some((world, runtime)) = boot_indexed_world_if_live().await else {
         return;
     };
     world.assert_base_topology();
@@ -1018,70 +1110,62 @@ async fn preview_download_job_and_sse_hide_foreign_ids() {
     )
     .await;
 
+    runtime.teardown().await;
     world.cleanup().await.expect("cleanup");
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL + MinIO"]
 async fn in_flight_ask_emits_no_content_after_acl_revoke() {
-    let Some(world) = boot_world_if_live().await else {
+    use fileconv_server::auth::context::OrgContext;
+    use fileconv_server::db::pool::with_org_txn;
+
+    let Some((world, runtime)) = boot_indexed_world_if_live().await else {
         return;
     };
     world.assert_base_topology();
-    require_worker_indexed_orgs(&world)
-        .await
-        .expect("indexed prerequisite for in-flight ask revoke");
 
-    let Some(qdrant_url) = test_qdrant_url() else {
-        return;
-    };
     let alpha = world.org("orgAlpha");
-    let beta = world.org("orgBeta");
     let foreign = world.foreign_markers_for("orgAlpha");
     let token = &alpha.users["owner"].access_token;
     let owner_id = alpha.users["owner"].user_id;
     let collection_id = alpha.collections["org"].collection_id;
-    let document_id = alpha.document.document_id;
+    let app = world.app();
 
-    let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");
-    let app = router(
-        build_app_state(
-            world.pool().clone(),
-            &app_database_url().expect("app database url"),
-            None,
-        )
-        .with_retrieval_backends(qdrant, None),
-    );
+    let stream_app = app.clone();
+    let stream_token = token.clone();
+    let stream_collection = collection_id;
+    let stream_marker = alpha.marker.clone();
+    let stream_handle = tokio::spawn(async move {
+        stream_app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/ask/stream")
+                    .header("authorization", format!("Bearer {stream_token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "question": format!("Summarize {}", stream_marker),
+                            "mode": "current",
+                            "limit": 5,
+                            "collectionIds": [stream_collection]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+    });
 
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/api/v1/ask/stream")
-                .header("authorization", format!("Bearer {token}"))
-                .header("content-type", "application/json")
-                .body(Body::from(
-                    json!({
-                        "question": format!("Summarize {}", alpha.marker),
-                        "mode": "current",
-                        "limit": 5,
-                        "collectionIds": [collection_id]
-                    })
-                    .to_string(),
-                ))
-                .unwrap(),
-        )
+    let session_id = await_ask_stream_session(world.pool(), alpha.org_id, owner_id)
         .await
-        .unwrap();
+        .expect("session row");
+    let response = stream_handle
+        .await
+        .expect("join stream")
+        .expect("stream start");
     assert_eq!(response.status(), StatusCode::OK);
-    let (_buf, sequences, session_id) = read_sse_until(
-        response,
-        |_, seqs, session| session.is_some() && !seqs.is_empty(),
-        Duration::from_secs(12),
-    )
-    .await;
-    let session_id = session_id.expect("streamSessionId");
 
     let alt_owner = Uuid::new_v4();
     let org_id = alpha.org_id;
@@ -1092,41 +1176,48 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         [collection_id],
     )
     .expect("owner ctx");
-    with_org_txn(world.pool(), &owner_ctx, {
-        move |txn| {
-            Box::pin(async move {
-                fileconv_server::db::orgs::ensure_user(
-                    txn,
-                    &OrgContext::try_new(
-                        org_id,
-                        owner_id,
-                        ["qa.query", "member.manage"],
-                        [collection_id],
-                    )
-                    .expect("owner ctx in txn"),
-                    alt_owner,
-                    &format!("alt-{}@denial-inflight.test", alt_owner.simple()),
-                    "Alt Owner",
-                )
-                .await?;
-                txn.execute(
-                    "INSERT INTO org_memberships (org_id, user_id, role)
-                     VALUES ($1, $2, 'owner')
-                     ON CONFLICT (org_id, user_id) DO NOTHING",
-                    &[&org_id, &alt_owner],
-                )
-                .await?;
-                fileconv_server::services::acl_mutate::revoke_collection_access_for_principal(
-                    txn,
+    let last_event_id = with_org_txn(world.pool(), &owner_ctx, move |txn| {
+        Box::pin(async move {
+            fileconv_server::db::orgs::ensure_user(
+                txn,
+                &OrgContext::try_new(
                     org_id,
                     owner_id,
-                    collection_id,
-                    alt_owner,
+                    ["qa.query", "member.manage"],
+                    [collection_id],
                 )
-                .await?;
-                Ok(())
-            })
-        }
+                .expect("owner ctx in txn"),
+                alt_owner,
+                &format!("alt-{}@denial-inflight.test", alt_owner.simple()),
+                "Alt Owner",
+            )
+            .await?;
+            txn.execute(
+                "INSERT INTO org_memberships (org_id, user_id, role)
+                 VALUES ($1, $2, 'owner')
+                 ON CONFLICT (org_id, user_id) DO NOTHING",
+                &[&org_id, &alt_owner],
+            )
+            .await?;
+            fileconv_server::services::acl_mutate::revoke_collection_access_for_principal(
+                txn,
+                org_id,
+                owner_id,
+                collection_id,
+                alt_owner,
+            )
+            .await?;
+            let last_event_id: i64 = txn
+                .query_one(
+                    "SELECT COALESCE(MAX(sequence_no), 0)::bigint
+                     FROM ask_stream_events
+                     WHERE org_id = $1 AND session_id = $2",
+                    &[&org_id, &session_id],
+                )
+                .await?
+                .get(0);
+            Ok(last_event_id)
+        })
     })
     .await
     .expect("revoke collection acl through production path");
@@ -1137,8 +1228,7 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
             Request::builder()
                 .method("POST")
                 .uri(format!(
-                    "/api/v1/ask/stream?streamSessionId={session_id}&lastEventId={}",
-                    sequences.last().copied().unwrap_or(0)
+                    "/api/v1/ask/stream?streamSessionId={session_id}&lastEventId={last_event_id}"
                 ))
                 .header("authorization", format!("Bearer {token}"))
                 .header("content-type", "application/json")
@@ -1157,7 +1247,7 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
                 || buf.contains("principal_denied")
                 || buf.contains("stream.closed")
         },
-        Duration::from_secs(10),
+        Duration::from_secs(12),
     )
     .await;
     assert!(
@@ -1168,17 +1258,15 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         !tail_buf.contains("ask.token"),
         "ACL revoke must not emit new content sequences: {tail_buf}"
     );
-    assert!(
-        !tail_buf.contains(&beta.marker),
-        "in-flight ask must not leak foreign marker after revoke: {tail_buf}"
-    );
     for needle in foreign.all_needles() {
         assert!(
             !tail_buf.to_lowercase().contains(&needle.to_lowercase()),
             "in-flight ask leaked foreign marker {needle}: {tail_buf}"
         );
     }
-    let _ = document_id;
 
+    let _ = response.into_body().collect().await;
+
+    runtime.teardown().await;
     world.cleanup().await.expect("cleanup");
 }

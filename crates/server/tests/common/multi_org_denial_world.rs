@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use deadpool_postgres::Pool;
+use fileconv_knowledge::ask::AnswerMode;
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
@@ -19,11 +20,15 @@ use crate::common::multi_org_denial::{
     DenialFixtureOrg, ForeignMarkers, MultiOrgDenialWorld, PanicSafeWorldResources,
     COLLECTION_VISIBILITY_LABELS, DENIAL_FIXTURE_REL_PATH,
 };
+use crate::common::worker_pipeline::{WorkerPipeline, WorkerProducedDoc};
 use crate::common::{
-    admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_tokens, put_bytes, seed_user_with_permissions, sha256_hex, test_minio_client,
+    admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_app_state,
+    build_router, login_tokens, put_bytes, seed_user_with_permissions, sha256_hex,
+    test_minio_client, test_qdrant_client,
 };
 use fileconv_server::db::models::DocumentState;
+use fileconv_server::http::router;
+use fileconv_server::services::qa::provider::{ChatProvider, StreamingStaticProvider};
 
 const PASSWORD: &str = "correct-password-1";
 
@@ -85,6 +90,181 @@ impl MultiOrgDenialWorld {
     }
 }
 
+/// Live worker/Qdrant/chat runtime for indexed denial probes.
+///
+/// Cleans up the Qdrant collection before the world releases pool/MinIO handles.
+pub struct IndexedDenialRuntime {
+    pipeline: Option<WorkerPipeline>,
+    chat_provider: ChatProvider,
+}
+
+impl IndexedDenialRuntime {
+    /// Index both org markers through production upload + workers, then wire retrieval.
+    pub async fn boot_and_index(world: &mut MultiOrgDenialWorld) -> Result<Self, String> {
+        let store = world
+            .store
+            .clone()
+            .ok_or("indexed denial runtime requires MinIO (MARKHAND_TEST_MINIO_*)")?;
+        let app_database_url = world.app_database_url.clone();
+        let pool = world.pool().clone();
+
+        let pipeline = WorkerPipeline::boot(pool.clone(), store.clone(), &app_database_url).await;
+        let chat_provider = ChatProvider::StreamingStatic(StreamingStaticProvider::new(
+            std::iter::repeat_n("denial ".to_string(), 4_096).collect(),
+            AnswerMode::LocalLlm,
+        ));
+        let runtime = Self {
+            pipeline: Some(pipeline),
+            chat_provider,
+        };
+
+        for (org_key, org) in world.orgs.iter_mut() {
+            let owner = org.users.get("owner").ok_or("missing owner user")?;
+            let collection_id = org.collections["org"].collection_id;
+            let document_id = org.document.document_id;
+            let source = format!("# {}\n\n{}\n", org.document.title, org.marker);
+            let produced = runtime
+                .pipeline
+                .as_ref()
+                .expect("indexed pipeline")
+                .index_existing_document_revision(
+                    &owner.access_token,
+                    org.org_id,
+                    owner.user_id,
+                    collection_id,
+                    document_id,
+                    OWNER_PERMISSIONS,
+                    &format!("{org_key}-marker.txt"),
+                    "text/plain",
+                    source.as_bytes(),
+                    &format!("denial-index-{org_key}"),
+                )
+                .await;
+            apply_indexed_revision(&pool, org, &produced).await?;
+        }
+
+        let qdrant = test_qdrant_client()
+            .ok_or("indexed denial runtime requires MARKHAND_TEST_QDRANT_URL")?;
+        let retrieval_app = router(
+            build_app_state(pool, &app_database_url, Some(store))
+                .with_retrieval_backends(qdrant, None)
+                .with_chat_provider(runtime.chat_provider.clone()),
+        );
+        world.app = Some(retrieval_app);
+
+        Ok(runtime)
+    }
+
+    pub fn chat_provider(&self) -> &ChatProvider {
+        &self.chat_provider
+    }
+
+    pub async fn teardown(mut self) {
+        if let Some(pipeline) = self.pipeline.take() {
+            pipeline.cleanup_qdrant().await;
+        }
+    }
+}
+
+impl Drop for IndexedDenialRuntime {
+    fn drop(&mut self) {
+        let Some(pipeline) = self.pipeline.take() else {
+            return;
+        };
+        let _ = std::thread::spawn(move || {
+            if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                runtime.block_on(pipeline.cleanup_qdrant());
+            }
+        })
+        .join();
+    }
+}
+
+async fn apply_indexed_revision(
+    pool: &Pool,
+    org: &mut BootedOrg,
+    produced: &WorkerProducedDoc,
+) -> Result<(), String> {
+    org.document.version_id = produced.version_id;
+    let owner = org.users.get("owner").ok_or("missing owner user")?;
+    let ctx = OrgContext::try_new(
+        org.org_id,
+        owner.user_id,
+        OWNER_PERMISSIONS.iter().copied(),
+        [org.collections["org"].collection_id],
+    )
+    .map_err(|err| err.to_string())?;
+    let (object_key, state): (String, String) = with_org_txn(pool, &ctx, {
+        let document_id = org.document.document_id;
+        let org_id = ctx.org_id();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT dv.original_object_key, d.state::text
+                         FROM documents d
+                         JOIN document_versions dv
+                           ON dv.org_id = d.org_id AND dv.id = d.current_version_id
+                         WHERE d.org_id = $1 AND d.id = $2",
+                        &[&org_id, &document_id],
+                    )
+                    .await?;
+                Ok((row.get::<_, String>(0), row.get::<_, String>(1)))
+            })
+        }
+    })
+    .await
+    .map_err(|err| format!("load indexed revision identity: {err}"))?;
+    org.object_key = object_key;
+    assert_object_key_identity(org);
+    if state != DocumentState::Indexed.as_str() {
+        return Err(format!(
+            "org {} document {} expected indexed state after worker pipeline, got {state}",
+            org.slug, org.document.document_id
+        ));
+    }
+    Ok(())
+}
+
+async fn poll_latest_ask_stream_session(
+    pool: &Pool,
+    org_id: Uuid,
+    user_id: Uuid,
+) -> Result<Uuid, String> {
+    for attempt in 0..60 {
+        let client = pool.get().await.map_err(|err| err.to_string())?;
+        let row = client
+            .query_opt(
+                "SELECT id FROM ask_stream_sessions
+                 WHERE org_id = $1 AND user_id = $2
+                 ORDER BY created_at DESC
+                 LIMIT 1",
+                &[&org_id, &user_id],
+            )
+            .await
+            .map_err(|err| err.to_string())?;
+        if let Some(row) = row {
+            return Ok(row.get(0));
+        }
+        if attempt + 1 < 60 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }
+    Err("timed out waiting for ask_stream_sessions row".into())
+}
+
+/// Poll durable session state instead of draining SSE before ACL revoke.
+pub async fn await_ask_stream_session(
+    pool: &Pool,
+    org_id: Uuid,
+    user_id: Uuid,
+) -> Result<Uuid, String> {
+    poll_latest_ask_stream_session(pool, org_id, user_id).await
+}
+
 /// Boot when live DB URLs are configured; callers in `#[ignore]` tests should gate
 /// on [`crate::admin_database_url`] / [`crate::app_database_url`] first when not in
 /// required mode so missing deps skip cleanly instead of panicking twice.
@@ -126,6 +306,7 @@ pub async fn boot_world_with_urls(admin: &str, app_url: &str) -> MultiOrgDenialW
         store,
         app: Some(app),
         pool: Some(pool),
+        app_database_url: router_app_url,
         resources,
     }
 }

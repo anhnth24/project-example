@@ -1,44 +1,55 @@
-# Task 13 Report — RED: indexed/cache/stale-token denial gaps
+# Task 13 Report — Unified multi-org denial coverage
 
 **Branch:** `cursor/phase1c-denial-suite-6ddb`  
 **Base:** `b3df83a`  
-**Status:** RED_CHECKPOINT  
+**Status:** GREEN_IMPLEMENTED — verification pending  
 **Date:** 2026-08-01
 
-## Commit
+## Commits
 
 | SHA | Message |
 |-----|---------|
-| _(pending push)_ | `test(server): expose remaining multi-org denial gaps` |
+| `b8d7b56` | `test(server): expose remaining multi-org denial gaps` |
+| this GREEN commit | `test(server): complete unified multi-org denial coverage` |
 
-## Contracts implemented
+## Formal RED evidence
 
-| Test | Contract | Expected RED | Rationale |
-|------|----------|--------------|-----------|
-| `indexed_fts_and_ask_never_return_foreign_marker` | Both org markers indexed via production `WorkerPipeline`; actor `/search` and `/ask` return own marker, never foreign IDs/keys/markers in body or headers | **FAIL** | `require_worker_indexed_orgs` asserts Task 12 world documents remain `converted` with zero `chunks` rows — no worker-produced FTS artifacts yet |
-| `duplicate_names_across_orgs_do_not_create_an_oracle` | Shared display names list only actor-org IDs/counts; foreign path IDs → 404; foreign vs ghost UUID denial envelopes match (no existence oracle) | **PASS** | Uses existing SQL-seeded world + production list/get routes; no indexing prerequisite |
-| `org_switch_never_reuses_previous_org_cache_scope` | Bridge user warms cache, `POST /orgs/switch` mints new session; post-switch collections exclude previous-org IDs; foreign path + body-scope search deny without leak | **PASS** | Production switch + `AuthenticatedOrg` cache path; test-local cross-org bridge user only |
-| `pre_revoke_tokens_fail_after_downgrade_suspend_and_remove` | Tokens minted at boot fail on both `/auth/me` (access) and `/auth/refresh` after production PATCH downgrade/suspend and DELETE remove | **PASS** (verify live) | Mirrors `members.rs` refresh contracts plus access-token stale window; uses world pre-revoke tokens |
-| `preview_download_job_and_sse_hide_foreign_ids` | Foreign preview, download-capability, job, job-events SSE, and cross-tenant capability redeem → 404 IDOR; body-scope search with foreign `collectionIds` → 403 | **PASS** | World exposes foreign job/document/version IDs + MinIO keys; denial paths do not need indexed chunks |
-| `in_flight_ask_emits_no_content_after_acl_revoke` | Production `/ask/stream`, then `acl_mutate::revoke_collection_access_for_principal`; tail emits `citation_revoked`/`principal_denied`, no `ask.token` or foreign markers | **FAIL** | Blocked by same `require_worker_indexed_orgs` prerequisite before stream can ground |
+CI run `30690584586`, job `91344530694`: five exact failures and one exact
+pass (`duplicate_names_across_orgs_do_not_create_an_oracle`).
 
-## Verification (local VM)
+## GREEN implementation
 
-| Check | Result |
-|-------|--------|
-| `cargo test -p fileconv-server --test multi_org_denial --no-run` | **OK** (compiles) |
-| `cargo test -p fileconv-server --test multi_org_denial_manifest` | **15 passed** |
-| `cargo test -p fileconv-server --test multi_org_denial -- --include-ignored` | Soft-skip (no `MARKHAND_TEST_DATABASE_URL` in Cloud VM) |
-| `cargo fmt --all -- --check` | **OK** after format |
+- `WorkerPipeline::index_existing_document_revision` uploads a revision to each
+  existing world document through production HTTP, then runs ConvertWorker,
+  IndexWorker, and EmbeddingWorker with the exact caller permission set.
+- Convert completion accepts designed reconciliation/acknowledgement outcomes
+  only after the durable job status is `succeeded`.
+- `IndexedDenialRuntime` keeps the mock embedding server, Qdrant collection,
+  hermetic streaming chat provider, and retrieval router alive. Explicit
+  teardown deletes Qdrant before world DB/MinIO cleanup; Drop provides
+  panic-path best-effort Qdrant cleanup.
+- Booted document version and trusted object key are refreshed from the
+  worker-produced current version.
+- Org-switch leakage needles are oriented independently: origin while warming,
+  target after switching.
+- Downgrade semantics preserve authentication but re-resolve to zero permissions
+  and zero allowed collections; old and rotated tokens cannot list members.
+  Suspend/remove still reject old access and refresh tokens with 401.
+- Preview/download/job/SSE probes run against the live Qdrant/hermetic-provider
+  router, so body-scope denial is 403 before retrieval rather than 503.
+- In-flight ask obtains its session ID by bounded durable DB polling. The
+  production ACL mutation records the committed event high-water under the
+  principal authz lock; resume starts after that high-water and permits only a
+  revocation terminal event, never post-revoke `ask.token` content.
 
 ## Manifest
 
-Deferred rows **not** promoted (RED only). Six `task13:*` guard refs remain `status: deferred`.
+All six Task 13 rows are executable and point to the exact
+`multi_org_denial` tests. Counts: 79 total rows, 74 executable, 0 deferred,
+5 N/A. Supplemental HTTP/SSE evidence is marked `secondary`; primary coverage
+remains exactly 52 HTTP + 1 SSE for 53 business operations.
 
-## Concerns
+## Verification
 
-- **Indexed/in-flight RED depends on live DB**: failure message is explicit (`state=converted`, `0 chunks`) rather than `todo!` or compile errors; GREEN must wire `WorkerPipeline` indexing for both org markers without test-only production bypasses.
-- **Pre-revoke access-token leg**: `members.rs` already proves refresh revocation; this test adds `/auth/me` access-token denial — if production allows JWT until expiry without membership re-check, this contract may flip from expected PASS to FAIL (would be a real gap).
-- **Ask stream in-flight test** needs Qdrant when live; duplicates `sse_stream_readiness` ACL-revoke pattern but binds to `MultiOrgDenialWorld` + indexed prerequisite.
-- **Org-switch bridge user** is test-local seeding (allowed in RED); GREEN may fold into world builder to avoid per-test membership setup.
-- Cloud VM lacks live Postgres/MinIO/Qdrant — full `--include-ignored` RED run must happen in CI or contributor environment per task brief Step 2.
+Post-push checks pending. The Cloud VM has no live test service URLs, so CI is
+authoritative for the ignored integration suite.

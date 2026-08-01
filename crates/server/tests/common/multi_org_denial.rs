@@ -33,24 +33,14 @@ pub const REQUIRED_NA_CATEGORIES: &[&str] = &[
     NA_CATEGORY_EMBEDDING_TOKEN_METERING_LOCAL_MOCK,
 ];
 
-/// Task 13 scaffold tests — must not certify executable manifest rows in Task 12.
-pub const TASK13_SCAFFOLD_TEST_NAMES: &[&str] = &[
+/// Former Task 13 scaffold names — now full executable denial contracts.
+pub const TASK13_EXECUTABLE_TEST_NAMES: &[&str] = &[
     "indexed_fts_and_ask_never_return_foreign_marker",
     "duplicate_names_across_orgs_do_not_create_an_oracle",
     "org_switch_never_reuses_previous_org_cache_scope",
     "pre_revoke_tokens_fail_after_downgrade_suspend_and_remove",
     "preview_download_job_and_sse_hide_foreign_ids",
     "in_flight_ask_emits_no_content_after_acl_revoke",
-];
-
-/// Deferred gap guard refs — explicit incomplete Task 13 coverage.
-pub const REQUIRED_DEFERRED_GUARD_REFS: &[&str] = &[
-    "task13:indexed_fts_ask",
-    "task13:duplicate_names",
-    "task13:org_switch_cache",
-    "task13:stale_tokens",
-    "task13:preview_download_sse",
-    "task13:in_flight_ask_revoke",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -379,6 +369,7 @@ pub struct MultiOrgDenialWorld {
     pub(crate) store: Option<fileconv_server::storage::minio::MinioClient>,
     pub(crate) app: Option<axum::Router>,
     pub(crate) pool: Option<deadpool_postgres::Pool>,
+    pub(crate) app_database_url: String,
     pub(crate) resources: PanicSafeWorldResources,
 }
 
@@ -424,6 +415,14 @@ impl MultiOrgDenialWorld {
 
     pub fn assert_base_topology(&self) {
         crate::common::multi_org_denial_world::assert_base_topology(self);
+    }
+
+    pub fn org_key_for_id(&self, org_id: uuid::Uuid) -> &str {
+        self.orgs
+            .iter()
+            .find(|(_, org)| org.org_id == org_id)
+            .map(|(key, _)| key.as_str())
+            .unwrap_or_else(|| panic!("unknown org id {org_id}"))
     }
 }
 
@@ -670,17 +669,12 @@ pub fn extract_test_function_body(source: &str, test_name: &str) -> Option<Strin
     Some(after_sig[brace_start..end].to_string())
 }
 
-pub fn is_task13_scaffold_test_name(test_name: &str) -> bool {
-    TASK13_SCAFFOLD_TEST_NAMES.contains(&test_name)
-}
-
 pub fn is_trivial_or_scaffold_test_body(body: &str) -> bool {
     let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
     if compact.len() < 80 {
         return true;
     }
     compact.contains("assert_world_boots_for_task13_scaffold")
-        && !compact.contains("assert_denial_no_leak")
 }
 
 pub fn has_denial_evidence_heuristic(body: &str) -> bool {
@@ -717,11 +711,6 @@ pub fn validate_executable_test_evidence(
     test_name: &str,
     layer: DenialLayer,
 ) -> Result<(), String> {
-    if is_task13_scaffold_test_name(test_name) {
-        return Err(format!(
-            "Task 13 scaffold test {binary}::{test_name} cannot certify executable manifest rows in Task 12"
-        ));
-    }
     let source = load_test_source(binary)?;
     let body = extract_test_function_body(&source, test_name)
         .ok_or_else(|| format!("unable to extract body for test {binary}::{test_name}"))?;
@@ -815,8 +804,7 @@ pub fn validate_denial_manifest(
     let mut test_cache: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     let mut na_categories_manifest: BTreeSet<String> = BTreeSet::new();
-    let mut deferred_guard_refs: BTreeSet<String> = BTreeSet::new();
-    let mut primary_http_by_operation: BTreeMap<String, String> = BTreeMap::new();
+    let mut primary_route_by_operation: BTreeMap<String, String> = BTreeMap::new();
     let mut evidence_validated: BTreeSet<(String, String)> = BTreeSet::new();
 
     for row in &manifest.rows {
@@ -885,13 +873,6 @@ pub fn validate_denial_manifest(
                     }
                 };
 
-                if is_task13_scaffold_test_name(test_name) {
-                    errors.push(format!(
-                        "executable manifest row {} must not map to Task 13 scaffold test {binary}::{test_name}",
-                        row.id
-                    ));
-                }
-
                 let registered = test_cache.entry(binary.to_string()).or_insert_with(|| {
                     registered_test_functions(binary).unwrap_or_else(|err| {
                         errors.push(err);
@@ -917,17 +898,17 @@ pub fn validate_denial_manifest(
                     }
                 }
 
-                if matches!(row.layer, DenialLayer::Http)
+                if matches!(row.layer, DenialLayer::Http | DenialLayer::Sse)
                     && !matches!(row.evidence_role, Some(DenialEvidenceRole::Secondary))
                 {
                     if let Some(operation_id) = &row.operation_id {
-                        if let Some(existing) = primary_http_by_operation.get(operation_id) {
+                        if let Some(existing) = primary_route_by_operation.get(operation_id) {
                             errors.push(format!(
-                                "multiple primary HTTP manifest rows for operationId {operation_id}: {existing} and {}",
+                                "multiple primary HTTP/SSE manifest rows for operationId {operation_id}: {existing} and {}",
                                 row.id
                             ));
                         } else {
-                            primary_http_by_operation.insert(operation_id.clone(), row.id.clone());
+                            primary_route_by_operation.insert(operation_id.clone(), row.id.clone());
                         }
                     }
                 }
@@ -943,49 +924,10 @@ pub fn validate_denial_manifest(
                 }
             }
             DenialRowStatus::Deferred => {
-                if !matches!(row.coverage_state, Some(DenialCoverageState::Deferred)) {
-                    errors.push(format!(
-                        "deferred manifest row {} must declare coverageState=deferred",
-                        row.id
-                    ));
-                }
-                if row.deferred_task.as_deref() != Some("task13") {
-                    errors.push(format!(
-                        "deferred manifest row {} must declare deferredTask=task13",
-                        row.id
-                    ));
-                }
-                if row
-                    .coverage_note
-                    .as_deref()
-                    .is_none_or(|note| note.trim().is_empty())
-                {
-                    errors.push(format!(
-                        "deferred manifest row {} must declare coverageNote",
-                        row.id
-                    ));
-                }
-                if row.binary.is_some() || row.test_name.is_some() || row.operation_id.is_some() {
-                    errors.push(format!(
-                        "deferred manifest row {} must not declare binary/testName/operationId",
-                        row.id
-                    ));
-                }
-                if !REQUIRED_DEFERRED_GUARD_REFS.contains(&row.guard_inventory_ref.as_str()) {
-                    errors.push(format!(
-                        "deferred manifest row {} has unknown guardInventoryRef {}",
-                        row.id, row.guard_inventory_ref
-                    ));
-                }
-                deferred_guard_refs.insert(row.guard_inventory_ref.clone());
-                for related in &row.related_operation_ids {
-                    if !business_ops.contains_key(related.as_str()) {
-                        errors.push(format!(
-                            "deferred manifest row {} references unknown relatedOperationId: {related}",
-                            row.id
-                        ));
-                    }
-                }
+                errors.push(format!(
+                    "deferred manifest row {} is no longer allowed after Task 13 GREEN; promote to executable or remove",
+                    row.id
+                ));
             }
             DenialRowStatus::Na => {
                 let category = match row.na_category.as_deref() {
@@ -1035,21 +977,6 @@ pub fn validate_denial_manifest(
             "manifest must contain exactly {} N/A rows, found {}",
             REQUIRED_NA_CATEGORIES.len(),
             na_categories_manifest.len()
-        ));
-    }
-
-    for required in REQUIRED_DEFERRED_GUARD_REFS {
-        if !deferred_guard_refs.contains(*required) {
-            errors.push(format!(
-                "missing deferred manifest row for guardInventoryRef: {required}"
-            ));
-        }
-    }
-    if deferred_guard_refs.len() != REQUIRED_DEFERRED_GUARD_REFS.len() {
-        errors.push(format!(
-            "manifest must contain exactly {} deferred rows, found {}",
-            REQUIRED_DEFERRED_GUARD_REFS.len(),
-            deferred_guard_refs.len()
         ));
     }
 
@@ -1511,14 +1438,18 @@ mod unit_tests {
     }
 
     #[test]
-    fn scaffold_test_cannot_self_certify_executable_manifest() {
-        let err = validate_executable_test_evidence(
-            "multi_org_denial",
-            "indexed_fts_and_ask_never_return_foreign_marker",
-            DenialLayer::Http,
-        )
-        .expect_err("scaffold must be rejected");
-        assert!(err.contains("Task 13 scaffold"));
+    fn task13_executable_tests_certify_manifest_rows() {
+        for test_name in TASK13_EXECUTABLE_TEST_NAMES {
+            let layer = if *test_name == "in_flight_ask_emits_no_content_after_acl_revoke" {
+                DenialLayer::Sse
+            } else if *test_name == "org_switch_never_reuses_previous_org_cache_scope" {
+                DenialLayer::Cache
+            } else {
+                DenialLayer::Http
+            };
+            validate_executable_test_evidence("multi_org_denial", test_name, layer)
+                .unwrap_or_else(|err| panic!("{test_name}: {err}"));
+        }
     }
 
     #[test]

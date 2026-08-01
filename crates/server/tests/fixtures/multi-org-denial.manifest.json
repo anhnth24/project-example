@@ -738,85 +738,69 @@
       "evidenceRole": "secondary"
     },
     {
-      "id": "deferred-task13-indexed-fts-ask",
-      "guardInventoryRef": "task13:indexed_fts_ask",
+      "id": "denial-task13-indexed-fts-ask",
+      "binary": "multi_org_denial",
+      "testName": "indexed_fts_and_ask_never_return_foreign_marker",
+      "operationId": "ask",
+      "guardInventoryRef": "ask",
       "layer": "http",
-      "status": "deferred",
-      "coverageState": "deferred",
-      "deferredTask": "task13",
-      "coverageNote": "Indexed FTS/Q&A must not return foreign marker strings after full index artifacts exist",
-      "relatedOperationIds": [
-        "search",
-        "ask",
-        "askStream"
-      ]
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "secondary"
     },
     {
-      "id": "deferred-task13-duplicate-names",
-      "guardInventoryRef": "task13:duplicate_names",
+      "id": "denial-task13-duplicate-names",
+      "binary": "multi_org_denial",
+      "testName": "duplicate_names_across_orgs_do_not_create_an_oracle",
+      "operationId": "getCollection",
+      "guardInventoryRef": "getCollection",
       "layer": "http",
-      "status": "deferred",
-      "coverageState": "deferred",
-      "deferredTask": "task13",
-      "coverageNote": "Same display names across orgs must not create existence oracles",
-      "relatedOperationIds": [
-        "listCollections",
-        "getCollection",
-        "listDocuments",
-        "getDocument"
-      ]
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "secondary"
     },
     {
-      "id": "deferred-task13-org-switch-cache",
-      "guardInventoryRef": "task13:org_switch_cache",
+      "id": "denial-task13-org-switch-cache",
+      "binary": "multi_org_denial",
+      "testName": "org_switch_never_reuses_previous_org_cache_scope",
+      "operationId": "switchOrg",
+      "guardInventoryRef": "switchOrg",
       "layer": "cache",
-      "status": "deferred",
-      "coverageState": "deferred",
-      "deferredTask": "task13",
-      "coverageNote": "Org switch must not reuse previous org ACL/cache scope",
-      "relatedOperationIds": [
-        "switchOrg"
-      ]
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
-      "id": "deferred-task13-stale-tokens",
-      "guardInventoryRef": "task13:stale_tokens",
+      "id": "denial-task13-stale-tokens",
+      "binary": "multi_org_denial",
+      "testName": "pre_revoke_tokens_fail_after_downgrade_suspend_and_remove",
+      "operationId": "authMe",
+      "guardInventoryRef": "authMe",
       "layer": "http",
-      "status": "deferred",
-      "coverageState": "deferred",
-      "deferredTask": "task13",
-      "coverageNote": "Pre-revoke tokens must fail after downgrade, suspend, and remove",
-      "relatedOperationIds": [
-        "authMe"
-      ]
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "secondary"
     },
     {
-      "id": "deferred-task13-preview-download-sse",
-      "guardInventoryRef": "task13:preview_download_sse",
+      "id": "denial-task13-preview-download-sse",
+      "binary": "multi_org_denial",
+      "testName": "preview_download_job_and_sse_hide_foreign_ids",
+      "operationId": "redeemDownload",
+      "guardInventoryRef": "redeemDownload",
       "layer": "http",
-      "status": "deferred",
-      "coverageState": "deferred",
-      "deferredTask": "task13",
-      "coverageNote": "Preview, download, job, and SSE surfaces must hide foreign IDs",
-      "relatedOperationIds": [
-        "previewDocument",
-        "issueDownloadCapability",
-        "redeemDownload",
-        "getJob",
-        "jobEvents"
-      ]
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "secondary"
     },
     {
-      "id": "deferred-task13-in-flight-ask-revoke",
-      "guardInventoryRef": "task13:in_flight_ask_revoke",
+      "id": "denial-task13-in-flight-ask-revoke",
+      "binary": "multi_org_denial",
+      "testName": "in_flight_ask_emits_no_content_after_acl_revoke",
+      "operationId": "askStream",
+      "guardInventoryRef": "askStream",
       "layer": "sse",
-      "status": "deferred",
-      "coverageState": "deferred",
-      "deferredTask": "task13",
-      "coverageNote": "In-flight ask must emit no foreign content after ACL revoke",
-      "relatedOperationIds": [
-        "askStream"
-      ]
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "secondary"
     },
     {
       "id": "na-export-route-absent",
