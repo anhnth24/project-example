@@ -2499,3 +2499,110 @@ async fn live_reindex_audit_failure_rolls_back_enqueue() {
 
     ephemeral.drop().await;
 }
+
+/// Strict prerequisite mode contract for integration CI (`MARKHAND_TEST_REQUIRED=1`).
+mod required_mode {
+    use super::common::{
+        admin_database_url, markhand_e2e_required, markhand_test_required, take_live,
+        SavedEnvVars, test_env_lock,
+    };
+
+    const PREREQ_ENV_VARS: &[&str] = &[
+        "MARKHAND_TEST_REQUIRED",
+        "MARKHAND_E2E",
+        "MARKHAND_TEST_DATABASE_URL",
+    ];
+
+    fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            message.to_string()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            String::new()
+        }
+    }
+
+    #[test]
+    fn markhand_test_required_honors_markhand_test_required_env() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(PREREQ_ENV_VARS);
+        std::env::remove_var("MARKHAND_E2E");
+        std::env::set_var("MARKHAND_TEST_REQUIRED", "1");
+
+        assert!(
+            markhand_test_required(),
+            "MARKHAND_TEST_REQUIRED=1 must enable required mode without MARKHAND_E2E"
+        );
+        assert!(
+            !markhand_e2e_required(),
+            "test must not conflate required mode with MARKHAND_E2E"
+        );
+    }
+
+    #[test]
+    fn take_live_panics_when_markhand_test_required_without_prerequisite() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(PREREQ_ENV_VARS);
+        std::env::set_var("MARKHAND_TEST_REQUIRED", "1");
+        std::env::remove_var("MARKHAND_E2E");
+        std::env::remove_var("MARKHAND_TEST_DATABASE_URL");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL");
+        });
+        assert!(
+            outcome.is_err(),
+            "take_live must panic when MARKHAND_TEST_REQUIRED=1 and DATABASE_URL is missing"
+        );
+    }
+
+    #[test]
+    fn take_live_panic_message_names_markhand_test_required() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(PREREQ_ENV_VARS);
+        std::env::set_var("MARKHAND_TEST_REQUIRED", "1");
+        std::env::remove_var("MARKHAND_E2E");
+        std::env::remove_var("MARKHAND_TEST_DATABASE_URL");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL");
+        });
+        let message = panic_payload_message(outcome.expect_err("expected prerequisite panic"));
+        assert!(
+            message.contains("MARKHAND_TEST_REQUIRED=1 requires MARKHAND_TEST_DATABASE_URL"),
+            "panic must name the missing prerequisite in required mode, got: {message}"
+        );
+    }
+
+    #[test]
+    fn take_live_soft_skips_without_required_flags() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(PREREQ_ENV_VARS);
+        std::env::remove_var("MARKHAND_TEST_REQUIRED");
+        std::env::remove_var("MARKHAND_E2E");
+        std::env::remove_var("MARKHAND_TEST_DATABASE_URL");
+
+        assert!(
+            take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL").is_none(),
+            "local runs without required mode must remain explicitly skippable"
+        );
+    }
+
+    #[test]
+    fn take_live_still_panics_under_markhand_e2e() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(PREREQ_ENV_VARS);
+        std::env::remove_var("MARKHAND_TEST_REQUIRED");
+        std::env::set_var("MARKHAND_E2E", "1");
+        std::env::remove_var("MARKHAND_TEST_DATABASE_URL");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL");
+        });
+        assert!(
+            outcome.is_err(),
+            "existing MARKHAND_E2E=1 strict path must keep panicking on missing prerequisites"
+        );
+    }
+}

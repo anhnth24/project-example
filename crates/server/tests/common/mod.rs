@@ -29,9 +29,49 @@ use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
+/// Serialize env-mutating integration tests so parallel binaries cannot interleave
+/// `set_var`/`remove_var` windows.
+pub fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Restores prior process env values on drop; pair with [`test_env_lock`].
+pub struct SavedEnvVars {
+    vars: Vec<(String, Option<String>)>,
+}
+
+impl SavedEnvVars {
+    pub fn save(names: &[&str]) -> Self {
+        let vars = names
+            .iter()
+            .map(|name| ((*name).to_string(), std::env::var(name).ok()))
+            .collect();
+        Self { vars }
+    }
+}
+
+impl Drop for SavedEnvVars {
+    fn drop(&mut self) {
+        for (name, value) in &self.vars {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
 /// When `MARKHAND_E2E=1`, soft-skips are forbidden — missing live deps must panic.
 pub fn markhand_e2e_required() -> bool {
     std::env::var("MARKHAND_E2E").ok().as_deref() == Some("1")
+}
+
+/// Whether integration prerequisites must be live (CI gate or explicit E2E opt-in).
+///
+/// GREEN step wires `MARKHAND_TEST_REQUIRED=1` and strict [`take_live`].
+pub fn markhand_test_required() -> bool {
+    markhand_e2e_required()
 }
 
 /// Pass through `Some`, panic under `MARKHAND_E2E=1` when missing, else `None` (soft-skip).
