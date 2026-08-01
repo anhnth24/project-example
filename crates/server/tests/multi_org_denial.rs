@@ -1285,17 +1285,35 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         )
         .await
         .unwrap();
-    assert_eq!(tail.status(), StatusCode::OK);
-    let (tail_buf, _tail_seqs, _) = read_sse_until(
-        tail,
-        |buf, _, _| {
-            buf.contains("citation_revoked")
-                || buf.contains("principal_denied")
-                || buf.contains("stream.closed")
-        },
-        Duration::from_secs(12),
-    )
-    .await;
+    let tail_status = tail.status();
+    let tail_buf = if tail_status == StatusCode::OK {
+        read_sse_until(
+            tail,
+            |buf, _, _| {
+                buf.contains("citation_revoked")
+                    || buf.contains("principal_denied")
+                    || buf.contains("stream.closed")
+            },
+            Duration::from_secs(12),
+        )
+        .await
+        .0
+    } else {
+        assert_eq!(
+            tail_status,
+            StatusCode::UNAUTHORIZED,
+            "resumed stream must fail closed after ACL revoke"
+        );
+        String::from_utf8_lossy(
+            &tail
+                .into_body()
+                .collect()
+                .await
+                .expect("stream denial body")
+                .to_bytes(),
+        )
+        .into_owned()
+    };
     assert!(
         tail_buf.contains("citation_revoked") || tail_buf.contains("principal_denied"),
         "in-flight ask must close after ACL revoke: {tail_buf}"
