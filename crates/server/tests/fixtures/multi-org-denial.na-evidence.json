@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "categories": [
+    {
+      "id": "export_route_absent",
+      "description": "export.run is reserved; no runtime export route exists in ROUTE_INVENTORY or OpenAPI",
+      "proofKind": "source_scan",
+      "permissionKeys": ["export.run"],
+      "operationIds": [],
+      "scan": {
+        "absentRoutePathPatterns": ["/export"],
+        "absentOperationIdPatterns": ["export"],
+        "catalogPermissionStatus": "reserved"
+      }
+    },
+    {
+      "id": "autocomplete_route_absent",
+      "description": "No autocomplete surface is registered in ROUTE_INVENTORY or guard inventory",
+      "proofKind": "source_scan",
+      "permissionKeys": [],
+      "operationIds": [],
+      "scan": {
+        "absentRoutePathPatterns": ["/autocomplete"],
+        "absentOperationIdPatterns": ["autocomplete"]
+      }
+    },
+    {
+      "id": "signed_url_capability_substitution",
+      "description": "Signed URL download surface is replaced by capability-token issue/redeem tests",
+      "proofKind": "capability_substitution",
+      "permissionKeys": [],
+      "operationIds": ["issueDownloadCapability", "redeemDownload"],
+      "substitution": {
+        "binary": "api_http_contracts",
+        "testNames": [
+          "live_http_unauthenticated_and_cross_tenant_are_consistent"
+        ],
+        "absentRoutePathPatterns": ["/signed", "/signed-url"]
+      }
+    },
+    {
+      "id": "reserved_permission_no_runtime",
+      "description": "settings.manage, intel.use, pii.manage, export.run are reserved with zero guard-inventory permission operations",
+      "proofKind": "source_scan",
+      "permissionKeys": [
+        "settings.manage",
+        "intel.use",
+        "pii.manage",
+        "export.run"
+      ],
+      "operationIds": [],
+      "scan": {
+        "catalogPermissionStatus": "reserved",
+        "absentOperationIdPatterns": [
+          "settings",
+          "intel",
+          "pii",
+          "export"
+        ]
+      }
+    },
+    {
+      "id": "embedding_token_metering_local_mock",
+      "description": "Qualifying Phase 1C profile uses local/mock embedding; token metering is out of scope until billable provider exists",
+      "proofKind": "source_scan",
+      "permissionKeys": [],
+      "operationIds": [],
+      "scan": {
+        "environmentProfile": "phase1c-multi-org-poc",
+        "embeddingProfile": "mock",
+        "absentOperationIdPatterns": ["embeddingToken", "tokenMeter"]
+      }
+    }
+  ]
+}

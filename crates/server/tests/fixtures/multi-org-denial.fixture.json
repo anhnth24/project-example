@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "description": "Phase 1C shared multi-org denial world (RED scaffold — GREEN fills orgs/users/artifacts)",
+  "orgs": [],
+  "usersPerOrg": 3,
+  "collectionVisibilities": ["private", "org", "groups"],
+  "duplicateNames": {
+    "collection": "Shared Collection Name",
+    "document": "Shared Document Title"
+  },
+  "indexedMarkers": {},
+  "preRevokeTokens": true
+}

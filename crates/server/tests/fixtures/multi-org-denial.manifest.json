@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "rows": [
+    {
+      "id": "http-cross-tenant-get-collection",
+      "binary": "api_http_contracts",
+      "testName": "live_http_unauthenticated_and_cross_tenant_are_consistent",
+      "operationId": "getCollection",
+      "guardInventoryRef": "getCollection",
+      "layer": "http",
+      "status": "executable"
+    }
+  ]
+}

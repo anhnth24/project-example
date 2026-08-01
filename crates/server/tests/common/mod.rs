@@ -7,6 +7,7 @@
 
 pub mod acl_fixture;
 pub mod fixtures;
+pub mod multi_org_denial;
 pub mod worker_pipeline;
 
 use bytes::Bytes;
