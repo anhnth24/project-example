@@ -1,0 +1,950 @@
+{
+  "version": 1,
+  "operations": [
+    {
+      "operationId": "healthLive",
+      "authzKind": "public",
+      "route": {
+        "method": "get",
+        "path": "/health/live"
+      },
+      "serviceEntry": "routes::health::liveness",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "non-sensitive public liveness probe; no tenant mutation"
+      }
+    },
+    {
+      "operationId": "healthReady",
+      "authzKind": "public",
+      "route": {
+        "method": "get",
+        "path": "/health/ready"
+      },
+      "serviceEntry": "routes::health::readiness_route",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "non-sensitive public readiness probe; no tenant mutation"
+      }
+    },
+    {
+      "operationId": "healthStart",
+      "authzKind": "public",
+      "route": {
+        "method": "get",
+        "path": "/health/start"
+      },
+      "serviceEntry": "routes::health::startup_route",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "non-sensitive public startup probe; no tenant mutation"
+      }
+    },
+    {
+      "operationId": "authLogin",
+      "authzKind": "public",
+      "route": {
+        "method": "post",
+        "path": "/auth/login"
+      },
+      "serviceEntry": "auth::session::login_with_password",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "auth.login"
+      }
+    },
+    {
+      "operationId": "authRefresh",
+      "authzKind": "public",
+      "route": {
+        "method": "post",
+        "path": "/auth/refresh"
+      },
+      "serviceEntry": "auth::session::refresh_session",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "auth.refresh"
+      }
+    },
+    {
+      "operationId": "authLogout",
+      "authzKind": "public",
+      "route": {
+        "method": "post",
+        "path": "/auth/logout"
+      },
+      "serviceEntry": "auth::session::logout_session",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "auth.logout"
+      }
+    },
+    {
+      "operationId": "authMe",
+      "authzKind": "authenticated",
+      "route": {
+        "method": "get",
+        "path": "/auth/me"
+      },
+      "serviceEntry": "auth::session::load_user_profile",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "authenticated session profile read; no tenant mutation"
+      }
+    },
+    {
+      "operationId": "createUpload",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/uploads"
+      },
+      "serviceEntry": "services::upload::saga::run_upload_saga",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "document.upload"
+      },
+      "permission": "doc.upload"
+    },
+    {
+      "operationId": "listCollections",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/collections"
+      },
+      "serviceEntry": "db::collections::list",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "collection allow-list read; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "createCollection",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/collections"
+      },
+      "serviceEntry": "db::collections::insert",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "collection.create"
+      },
+      "permission": "doc.upload"
+    },
+    {
+      "operationId": "getCollection",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/collections/{collectionId}"
+      },
+      "serviceEntry": "db::collections::get_by_id",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "collection allow-list read; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "updateCollection",
+      "authzKind": "permission",
+      "route": {
+        "method": "patch",
+        "path": "/collections/{collectionId}"
+      },
+      "serviceEntry": "db::collections::update_metadata",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "collection.update"
+      },
+      "permission": "doc.upload"
+    },
+    {
+      "operationId": "deleteCollection",
+      "authzKind": "permission",
+      "route": {
+        "method": "delete",
+        "path": "/collections/{collectionId}"
+      },
+      "serviceEntry": "db::collections::soft_delete",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "collection.delete"
+      },
+      "permission": "doc.delete"
+    },
+    {
+      "operationId": "assignCollectionProject",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/collections/{collectionId}/assign-project"
+      },
+      "serviceEntry": "db::collections::assign_project",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "collection.assign_project"
+      },
+      "permission": "doc.upload"
+    },
+    {
+      "operationId": "listDocuments",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/collections/{collectionId}/documents"
+      },
+      "serviceEntry": "db::documents::list_in_collection",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "collection allow-list document list; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "approveIntake",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/collections/{collectionId}/documents/{documentId}/approve-intake"
+      },
+      "serviceEntry": "services::upload::saga::approve_quarantined_upload",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "upload.approve_intake"
+      },
+      "permission": "doc.quarantine.review"
+    },
+    {
+      "operationId": "getDocument",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/documents/{documentId}"
+      },
+      "serviceEntry": "services::access::resolve_document",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "document metadata read via collection ACL; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "deleteDocument",
+      "authzKind": "permission",
+      "route": {
+        "method": "delete",
+        "path": "/documents/{documentId}"
+      },
+      "serviceEntry": "services::deletion::request_delete",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "document.delete"
+      },
+      "permission": "doc.delete"
+    },
+    {
+      "operationId": "previewDocument",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/documents/{documentId}/preview"
+      },
+      "serviceEntry": "services::preview::preview_markdown",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "required",
+        "action": "document.preview"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "listDocumentVersions",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/documents/{documentId}/versions"
+      },
+      "serviceEntry": "db::document_versions::list_published_for_document",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "published version list; historical filter uses qa.history inside route; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "getDocumentVersion",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/documents/{documentId}/versions/{versionId}"
+      },
+      "serviceEntry": "services::access::resolve_published_version",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "published version read; non-current additionally requires qa.history inside access resolver; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "diffDocumentVersions",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/documents/{documentId}/versions/{versionId}/diff"
+      },
+      "serviceEntry": "services::access::resolve_published_version",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "historical version diff metadata; no mutation"
+      },
+      "permission": "qa.history"
+    },
+    {
+      "operationId": "publishDocumentVersion",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/documents/{documentId}/versions/{versionId}/publish"
+      },
+      "serviceEntry": "db::document_versions::publish_version",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "document.publish"
+      },
+      "permission": "doc.publish"
+    },
+    {
+      "operationId": "issueDownloadCapability",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/documents/{documentId}/versions/{versionId}/download-capability"
+      },
+      "serviceEntry": "services::download::issue_capability",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "na",
+        "reason": "capability mint currently unaudited; no AuditAction registered for download capability issue"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "redeemDownload",
+      "authzKind": "capability",
+      "route": {
+        "method": "get",
+        "path": "/downloads/{capability}"
+      },
+      "serviceEntry": "services::download::redeem_capability",
+      "identityKind": "capability",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "capability-authenticated byte redemption; redemption marker is separate from business audit trail"
+      }
+    },
+    {
+      "operationId": "reindexDocument",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/documents/{documentId}/reindex"
+      },
+      "serviceEntry": "jobs::enqueue_within_txn",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "document.reindex"
+      },
+      "permission": "doc.upload"
+    },
+    {
+      "operationId": "resolveCitation",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/citations/resolve"
+      },
+      "serviceEntry": "services::citation::resolve_citation",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "citation pin read/validate; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "listConflicts",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/conflicts"
+      },
+      "serviceEntry": "services::access::list_authorized_conflicts",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "conflict list read; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "getConflict",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/conflicts/{conflictId}"
+      },
+      "serviceEntry": "services::access::resolve_conflict",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "conflict detail read; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "getConflictEvidence",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/conflicts/{conflictId}/evidence"
+      },
+      "serviceEntry": "services::access::resolve_conflict",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "conflict evidence read; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "triageConflict",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/conflicts/{conflictId}/triage"
+      },
+      "serviceEntry": "services::access::triage_authorized_conflict",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "conflict.triage"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "getJob",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/jobs/{jobId}"
+      },
+      "serviceEntry": "services::access::resolve_job_access",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "job status read for document-scoped jobs via collection ACL; documentless jobs additionally require jobs.system inside resolver; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "jobEvents",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/jobs/{jobId}/events"
+      },
+      "serviceEntry": "services::access::resolve_job_access",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "job SSE status stream; documentless jobs additionally require jobs.system inside events authorizer; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "search",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/search"
+      },
+      "serviceEntry": "services::retrieval::hybrid_search",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "required",
+        "action": "search.query"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "ask",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/ask"
+      },
+      "serviceEntry": "services::qa::ask",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "required",
+        "action": "ask.query"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "askStream",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/ask/stream"
+      },
+      "serviceEntry": "services::qa::ask_stream::start_ask_stream",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "required",
+        "action": "ask.stream"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "openapiYaml",
+      "authzKind": "public",
+      "route": {
+        "method": "get",
+        "path": "/openapi.yaml"
+      },
+      "serviceEntry": "http::openapi_yaml",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "public OpenAPI contract document; no tenant mutation"
+      }
+    },
+    {
+      "operationId": "listOrgs",
+      "authzKind": "authenticated",
+      "route": {
+        "method": "get",
+        "path": "/orgs"
+      },
+      "serviceEntry": "services::orgs::list_user_orgs",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "caller org membership list; auth-only; no mutation"
+      }
+    },
+    {
+      "operationId": "createOrg",
+      "authzKind": "authenticated",
+      "route": {
+        "method": "post",
+        "path": "/orgs"
+      },
+      "serviceEntry": "services::orgs::create_org",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "org.create"
+      }
+    },
+    {
+      "operationId": "switchOrg",
+      "authzKind": "authenticated",
+      "route": {
+        "method": "post",
+        "path": "/orgs/switch"
+      },
+      "serviceEntry": "auth::session::switch_org",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "org.switch"
+      }
+    },
+    {
+      "operationId": "getOrg",
+      "authzKind": "authenticated",
+      "route": {
+        "method": "get",
+        "path": "/orgs/{orgId}"
+      },
+      "serviceEntry": "services::orgs::get_org_detail",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "org detail for active member; auth-only; no mutation"
+      }
+    },
+    {
+      "operationId": "listProjects",
+      "authzKind": "authenticated",
+      "route": {
+        "method": "get",
+        "path": "/projects"
+      },
+      "serviceEntry": "db::projects::list",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "org project list gated by membership only; no permission key; no mutation"
+      }
+    },
+    {
+      "operationId": "createProject",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/projects"
+      },
+      "serviceEntry": "db::projects::insert",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "project.create"
+      },
+      "permission": "doc.upload"
+    },
+    {
+      "operationId": "updateProject",
+      "authzKind": "permission",
+      "route": {
+        "method": "patch",
+        "path": "/projects/{projectId}"
+      },
+      "serviceEntry": "db::projects::update_name",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "project.update"
+      },
+      "permission": "doc.upload"
+    },
+    {
+      "operationId": "listMembers",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/members"
+      },
+      "serviceEntry": "services::members::list_members",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "member admin list read; no mutation"
+      },
+      "permission": "member.manage"
+    },
+    {
+      "operationId": "listMemberInvites",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/members/invites"
+      },
+      "serviceEntry": "services::members::list_invites",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "invite admin list read; no mutation"
+      },
+      "permission": "member.manage"
+    },
+    {
+      "operationId": "createMemberInvite",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/members/invites"
+      },
+      "serviceEntry": "services::members::create_invite",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "member.invite"
+      },
+      "permission": "member.manage"
+    },
+    {
+      "operationId": "acceptMemberInvite",
+      "authzKind": "authenticated",
+      "route": {
+        "method": "post",
+        "path": "/members/invites/accept"
+      },
+      "serviceEntry": "services::members::accept_invite",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "member.invite_accept"
+      }
+    },
+    {
+      "operationId": "revokeMemberInvite",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/members/invites/{inviteId}/revoke"
+      },
+      "serviceEntry": "services::members::revoke_invite",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "member.invite_revoke"
+      },
+      "permission": "member.manage"
+    },
+    {
+      "operationId": "patchMember",
+      "authzKind": "permission",
+      "route": {
+        "method": "patch",
+        "path": "/members/{userId}"
+      },
+      "serviceEntry": "services::members::change_role",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "member.role_change"
+      },
+      "permission": "member.manage"
+    },
+    {
+      "operationId": "deleteMember",
+      "authzKind": "permission",
+      "route": {
+        "method": "delete",
+        "path": "/members/{userId}"
+      },
+      "serviceEntry": "services::members::remove_member",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "member.remove"
+      },
+      "permission": "member.manage"
+    },
+    {
+      "operationId": "getUsage",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/usage"
+      },
+      "serviceEntry": "services::members::usage_overview",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "usage admin read; no mutation"
+      },
+      "permission": "member.manage"
+    },
+    {
+      "operationId": "listAudit",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/audit"
+      },
+      "serviceEntry": "db::audit::list_page",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "required",
+        "action": "audit.read"
+      },
+      "permission": "audit.view"
+    },
+    {
+      "operationId": "getGraph",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/graph"
+      },
+      "serviceEntry": "services::graph::build_org_graph",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "document graph read; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "listChatSessions",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/chat-sessions"
+      },
+      "serviceEntry": "db::chat_sessions::list_owned_sessions_page",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "private chat session list; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "createChatSession",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/chat-sessions"
+      },
+      "serviceEntry": "db::chat_sessions::insert_session",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "chat_session.create"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "getChatSession",
+      "authzKind": "permission",
+      "route": {
+        "method": "get",
+        "path": "/chat-sessions/{sessionId}"
+      },
+      "serviceEntry": "db::chat_sessions::get_owned_session",
+      "identityKind": "user",
+      "mutation": false,
+      "audit": {
+        "status": "na",
+        "reason": "private chat session read; no mutation"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "updateChatSession",
+      "authzKind": "permission",
+      "route": {
+        "method": "patch",
+        "path": "/chat-sessions/{sessionId}"
+      },
+      "serviceEntry": "db::chat_sessions::update_title",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "na",
+        "reason": "P2-19 intentional: chat rename is metadata-only and deliberately not audited (see routes::chat_sessions)"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "deleteChatSession",
+      "authzKind": "permission",
+      "route": {
+        "method": "delete",
+        "path": "/chat-sessions/{sessionId}"
+      },
+      "serviceEntry": "db::chat_sessions::delete_owned_session",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "required",
+        "action": "chat_session.delete"
+      },
+      "permission": "qa.query"
+    },
+    {
+      "operationId": "appendChatTurn",
+      "authzKind": "permission",
+      "route": {
+        "method": "post",
+        "path": "/chat-sessions/{sessionId}/turns"
+      },
+      "serviceEntry": "db::chat_sessions::append_turn",
+      "identityKind": "user",
+      "mutation": true,
+      "audit": {
+        "status": "na",
+        "reason": "P2-19 intentional: append-turn is deliberately not audited (never question/answer content; see routes::chat_sessions)"
+      },
+      "permission": "qa.query"
+    }
+  ]
+}

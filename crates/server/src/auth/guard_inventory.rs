@@ -194,24 +194,35 @@ pub fn validate_guard_inventory_invariants(
         }
 
         match op.authz_kind {
-            AuthzKind::Permission => match op.permission.as_deref() {
-                None | Some("") => {
+            AuthzKind::Permission => {
+                match op.permission.as_deref() {
+                    None | Some("") => {
+                        errors.push(format!(
+                            "permission operation {label} must declare an active permission key"
+                        ));
+                    }
+                    Some(key) if reserved_keys.contains(key) => {
+                        errors.push(format!(
+                            "permission operation {label} references reserved permission {key}"
+                        ));
+                    }
+                    Some(key) if !active_keys.contains(key) => {
+                        errors.push(format!(
+                            "permission operation {label} references unknown or inactive permission {key}"
+                        ));
+                    }
+                    Some(_) => {}
+                }
+                // Permission rows must carry an exact route + service pair (no silent omit).
+                if op.route.method.trim().is_empty()
+                    || op.route.path.trim().is_empty()
+                    || !op.service_entry.contains("::")
+                {
                     errors.push(format!(
-                        "permission operation {label} must declare an active permission key"
+                        "permission operation {label} must include exact route method/path and a serviceEntry path (module::fn)"
                     ));
                 }
-                Some(key) if reserved_keys.contains(key) => {
-                    errors.push(format!(
-                        "permission operation {label} references reserved permission {key}"
-                    ));
-                }
-                Some(key) if !active_keys.contains(key) => {
-                    errors.push(format!(
-                        "permission operation {label} references unknown or inactive permission {key}"
-                    ));
-                }
-                Some(_) => {}
-            },
+            }
             _ => {
                 if let Some(key) = op.permission.as_deref() {
                     errors.push(format!(
@@ -222,6 +233,8 @@ pub fn validate_guard_inventory_invariants(
             }
         }
 
+        // Every inventory row must declare audit semantics (required+action or na+reason).
+        // Serde requires the `audit` object; these rules reject hollow dispositions.
         match op.audit.status {
             AuditStatus::Required => match op.audit.action.as_deref() {
                 None | Some("") => {
@@ -262,9 +275,6 @@ pub fn validate_guard_inventory_invariants(
                 }
             },
         }
-
-        // Mutations must carry audit.status=required (+ action) or audit.status=na
-        // (+ documented non-sensitive reason). Those field rules are enforced above.
     }
 
     errors.sort();
@@ -311,6 +321,12 @@ pub fn validate_guard_completeness(
         .iter()
         .map(|(_, _, operation_id)| operation_id.as_str())
         .collect();
+    let openapi_by_id: BTreeMap<&str, (&str, &str)> = openapi_ops
+        .iter()
+        .map(|(method, path, operation_id)| {
+            (operation_id.as_str(), (method.as_str(), path.as_str()))
+        })
+        .collect();
     let openapi_routes: BTreeSet<(&str, &str)> = openapi_ops
         .iter()
         .map(|(method, path, _)| (method.as_str(), path.as_str()))
@@ -319,6 +335,18 @@ pub fn validate_guard_completeness(
         .iter()
         .map(|&(method, path, _)| (method, path))
         .collect();
+
+    for op in &inventory.operations {
+        if let Some(&(method, path)) = openapi_by_id.get(op.operation_id.as_str()) {
+            let guard_method = op.route.method.to_ascii_lowercase();
+            if guard_method != method || op.route.path != path {
+                errors.push(format!(
+                    "operation {} route/service pair mismatch: guard route is {} {} but OpenAPI is {} {}",
+                    op.operation_id, op.route.method, op.route.path, method, path
+                ));
+            }
+        }
+    }
 
     for operation_id in &openapi_ids {
         match by_operation_id.get(operation_id).copied().unwrap_or(0) {
@@ -383,11 +411,32 @@ mod tests {
             "method": "post",
             "path": "/documents/{documentId}/versions/{versionId}/publish"
           },
-          "serviceEntry": "services::publish::publish_version",
+          "serviceEntry": "db::document_versions::publish_version",
           "identityKind": "user",
           "mutation": true,
           "audit": {"status": "required", "action": "document.publish"}
         }"#
+    }
+
+    #[test]
+    fn invariants_reject_permission_row_without_service_path() {
+        let raw = format!(
+            r#"{{"version":1,"operations":[{}]}}"#,
+            sample_permission_row().replace(
+                r#""serviceEntry": "db::document_versions::publish_version""#,
+                r#""serviceEntry": "publish_version""#
+            )
+        );
+        let inventory = parse_guard_inventory_json(&raw).expect("schema ok");
+        let catalog = load_builtin_role_catalog();
+        let errors = validate_guard_inventory_invariants(&inventory, &catalog)
+            .expect_err("serviceEntry path required");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("exact route method/path and a serviceEntry path")),
+            "expected serviceEntry path failure, got: {errors:?}"
+        );
     }
 
     #[test]
@@ -403,7 +452,7 @@ mod tests {
               "method": "post",
               "path": "/documents/{documentId}/versions/{versionId}/publish"
             },
-            "serviceEntry": "services::publish::publish_version",
+            "serviceEntry": "db::document_versions::publish_version",
             "identityKind": "user",
             "mutation": true,
             "audit": {"status": "required", "action": "document.publish"}
