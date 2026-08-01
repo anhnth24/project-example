@@ -156,22 +156,18 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
     // because the rotation serves at most one job per org turn.
     let org_ids = env_uuid_list("MARKHAND_WORKER_ORG_ID")?;
     let user_id = env_uuid("MARKHAND_WORKER_USER_ID")?;
-    let mut contexts = Vec::with_capacity(org_ids.len());
-    for org_id in org_ids {
-        contexts.push(
-            OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
-                .map_err(|error| format!("invalid worker tenant context: {error}"))?,
-        );
-    }
+    let kind = std::env::var("MARKHAND_WORKER_KIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "convert".into());
+    // Validate kind → permissions before any OrgContext is constructed so an
+    // unknown MARKHAND_WORKER_KIND cannot start or claim work.
+    let contexts = worker_contexts_for_kind(&org_ids, user_id, &kind)?;
     let rotation = Arc::new(OrgRotation::new(contexts)?);
     let worker_id = std::env::var("MARKHAND_WORKER_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("fileconv-worker-{}", std::process::id()));
-    let kind = std::env::var("MARKHAND_WORKER_KIND")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "convert".into());
     // Reconcile oneshot: require a valid document UUID *before* opening a DB pool
     // so missing/empty/malformed IDs exit without contacting Postgres.
     let oneshot = env_truthy("MARKHAND_WORKER_ONESHOT");
@@ -900,12 +896,11 @@ fn exit_with_error(error: String) -> ! {
 /// Unknown kinds are a configuration error: the process must not construct an
 /// `OrgContext` or claim work until the kind is validated.
 fn worker_permissions(kind: &str) -> Result<&'static [&'static str], String> {
-    // RED stub: known kinds intentionally return an empty set so identity tests
-    // fail until GREEN wires the exact convert/index/embedding and
-    // delete/reconcile allow-lists. Unknown kinds also return Ok([]) so the
-    // unknown-kind denial assertion fails for the expected reason.
-    let _ = kind;
-    Ok(&[])
+    match kind {
+        "convert" | "index" | "embedding" => Ok(&["jobs.system", "doc.upload"]),
+        "delete" | "reconcile" => Ok(&["jobs.system", "doc.delete"]),
+        other => Err(format!("unknown MARKHAND_WORKER_KIND: {other}")),
+    }
 }
 
 /// Build org contexts only after `worker_permissions` accepts the kind.
@@ -941,10 +936,7 @@ mod worker_permissions_tests {
             );
             let forbidden = ["member.manage", "audit.view", "doc.delete", "qa.query"];
             for code in forbidden {
-                assert!(
-                    !perms.contains(&code),
-                    "{kind} must not include {code}"
-                );
+                assert!(!perms.contains(&code), "{kind} must not include {code}");
             }
         }
     }
@@ -960,10 +952,7 @@ mod worker_permissions_tests {
             );
             let forbidden = ["member.manage", "audit.view", "doc.upload", "qa.query"];
             for code in forbidden {
-                assert!(
-                    !perms.contains(&code),
-                    "{kind} must not include {code}"
-                );
+                assert!(!perms.contains(&code), "{kind} must not include {code}");
             }
         }
     }

@@ -253,7 +253,7 @@ require_regex "$ROOT/deploy/poc/postgres-init.sh" 'NOBYPASSRLS' \
 forbid_regex "$ROOT/deploy/poc/postgres-init.sh" "PASSWORD[[:space:]]+'[^'$]*change_me" \
   "postgres-init must not embed disposable password literals for roles"
 # Every qualifying worker service must receive MARKHAND_WORKER_DATABASE_URL.
-for svc in worker-convert worker-index worker-embedding worker-delete worker-reconcile; do
+for svc in worker-convert worker-index worker-embedding worker-delete worker-reconcile worker-reconcile-oneshot; do
   if awk -v svc="$svc:" '
     $0 ~ "^  "svc {found=1; next}
     found && /^  [a-z0-9-]+:/ {exit}
@@ -332,4 +332,21 @@ if [[ "$FAIL" -ne 0 ]]; then
   exit 1
 fi
 echo "POC isolation smoke PASSED"
+
+# Optional live privilege probe when a POC postgres container is already up.
+# Does not boot infrastructure; deployed proof remains PR 5 / G1C.
+if command -v docker >/dev/null 2>&1; then
+  PG_CID="$(docker ps --filter "name=postgres" --format '{{.ID}}' 2>/dev/null | head -n1 || true)"
+  if [[ -n "$PG_CID" ]]; then
+    if docker exec "$PG_CID" psql -U "${MARKHAND_POSTGRES_USER:-markhand}" -d "${MARKHAND_POSTGRES_DB:-markhand}" -Atqc \
+      "SELECT rolname||':'||rolsuper::text||':'||rolbypassrls::text
+       FROM pg_roles WHERE rolname = 'markhand_worker'" 2>/dev/null \
+      | grep -qx 'markhand_worker:f:f'; then
+      echo "PASS: live markhand_worker is non-superuser and non-BYPASSRLS"
+    else
+      echo "NOTE: live markhand_worker privilege probe skipped or role not ready"
+    fi
+  fi
+fi
+
 echo "Runtime boot/preflight evidence: bench/markhand_web/reports/poc-f02-boot.md"

@@ -59,7 +59,7 @@ Server
   deploy/scripts/bootstrap-server-role.sh   # once per fresh PG volume
   cargo run -p fileconv-server
 
-Workers (Linux/WSL — separate terminals)
+Workers (Linux/WSL — separate terminals; worker.env sets ALLOW_APP_DB_FALLBACK for local)
   export MARKHAND_WORKER_KIND=convert   # + MARKHAND_CONVERTER_ARGV_JSON
   export MARKHAND_WORKER_KIND=index
   export MARKHAND_WORKER_KIND=embedding

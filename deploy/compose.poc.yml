@@ -45,6 +45,8 @@ services:
       MARKHAND_APP_DB_PASSWORD: ${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}
       MARKHAND_MIGRATOR_DB_USER: ${MARKHAND_MIGRATOR_DB_USER:-markhand_migrator}
       MARKHAND_MIGRATOR_DB_PASSWORD: ${MARKHAND_MIGRATOR_DB_PASSWORD:-markhand_migrator_poc_change_me}
+      MARKHAND_WORKER_DB_USER: ${MARKHAND_WORKER_DB_USER:-markhand_worker}
+      MARKHAND_WORKER_DB_PASSWORD: ${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}
     ports:
       - "127.0.0.1:${MARKHAND_POSTGRES_PORT:-54330}:5432"
     volumes:
@@ -315,6 +317,8 @@ services:
       MARKHAND_APP_DB_PASSWORD: ${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}
       MARKHAND_MIGRATOR_DB_USER: ${MARKHAND_MIGRATOR_DB_USER:-markhand_migrator}
       MARKHAND_MIGRATOR_DB_PASSWORD: ${MARKHAND_MIGRATOR_DB_PASSWORD:-markhand_migrator_poc_change_me}
+      MARKHAND_WORKER_DB_USER: ${MARKHAND_WORKER_DB_USER:-markhand_worker}
+      MARKHAND_WORKER_DB_PASSWORD: ${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}
     volumes:
       - ./poc/bootstrap-roles.sh:/bootstrap-roles.sh:ro
     entrypoint: ["/bin/bash", "/bootstrap-roles.sh"]
@@ -514,7 +518,7 @@ services:
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
       MARKHAND_OTEL_SERVICE_NAME: markhand-worker-convert
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
-      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_WORKER_DATABASE_URL: postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       # Config requires a URL; convert network has no Qdrant — blackhole keeps
       # validation happy without granting convert egress to the vector store.
       MARKHAND_QDRANT_URL: http://127.0.0.1:9
@@ -574,7 +578,7 @@ services:
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
       MARKHAND_OTEL_SERVICE_NAME: markhand-worker-index
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
-      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_WORKER_DATABASE_URL: postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
       MARKHAND_MINIO_URL: http://minio:9000
       MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
@@ -620,7 +624,7 @@ services:
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
       MARKHAND_OTEL_SERVICE_NAME: markhand-worker-embedding
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
-      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_WORKER_DATABASE_URL: postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
       MARKHAND_MINIO_URL: http://minio:9000
       MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
@@ -672,7 +676,7 @@ services:
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
       MARKHAND_OTEL_SERVICE_NAME: markhand-worker-delete
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
-      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_WORKER_DATABASE_URL: postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
       MARKHAND_MINIO_URL: http://minio:9000
       MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
@@ -724,7 +728,7 @@ services:
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
       MARKHAND_OTEL_SERVICE_NAME: markhand-worker-reconcile
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
-      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_WORKER_DATABASE_URL: postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
       MARKHAND_MINIO_URL: http://minio:9000
       MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
@@ -782,7 +786,7 @@ services:
       MARKHAND_PROFILE: ${MARKHAND_PROFILE:-dev}
       MARKHAND_OTEL_SERVICE_NAME: markhand-worker-reconcile
       MARKHAND_BIND_ADDR: 127.0.0.1:8787
-      MARKHAND_DATABASE_URL: postgres://${MARKHAND_APP_DB_USER:-markhand_app}:${MARKHAND_APP_DB_PASSWORD:-markhand_app_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
+      MARKHAND_WORKER_DATABASE_URL: postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_poc_change_me}@postgres:5432/${MARKHAND_POSTGRES_DB:-markhand}
       MARKHAND_QDRANT_URL: http://qdrant:6333
       MARKHAND_MINIO_URL: http://minio:9000
       MARKHAND_MINIO_ACCESS_KEY: ${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}
