@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::multi_org_denial::{
@@ -114,9 +116,37 @@ async fn shared_world_http_surfaces_respect_org_scope() {
         DenialExpectation::AllowSuccess,
     );
     let listed: serde_json::Value = serde_json::from_slice(&body).expect("collections json");
-    assert!(!listed
-        .to_string()
-        .contains(&beta.collections["org"].collection_id.to_string()));
+    let alpha_collection_ids: BTreeSet<String> = alpha
+        .collections
+        .values()
+        .map(|c| c.collection_id.to_string())
+        .collect();
+    let beta_collection_ids: BTreeSet<String> = beta
+        .collections
+        .values()
+        .map(|c| c.collection_id.to_string())
+        .collect();
+    let listed_ids: Vec<String> = listed
+        .get("items")
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default();
+    for id in &listed_ids {
+        assert!(
+            alpha_collection_ids.contains(id),
+            "collections list must only include actor org ids; foreign id leaked: {id}"
+        );
+        assert!(
+            !beta_collection_ids.contains(id),
+            "collections list must not include foreign org id: {id}"
+        );
+    }
 
     let (status, body, headers) = json_request(
         &world.app,

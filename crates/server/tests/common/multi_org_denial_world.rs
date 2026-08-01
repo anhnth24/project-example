@@ -133,18 +133,35 @@ pub fn foreign_markers_for(world: &MultiOrgDenialWorld, actor_org_key: &str) -> 
         .map(|org| org.key.as_str())
         .find(|key| *key != actor_org_key)
         .expect("foreign org key");
-    let foreign = world.org(foreign_key);
+    foreign_markers_between_orgs(
+        world.org(actor_org_key),
+        world.org(foreign_key),
+        &world.fixture,
+    )
+}
+
+/// Build foreign-identifying markers for leakage scans.
+///
+/// Display names shared with the actor org (cross-org duplicate oracles) are
+/// excluded — they cannot distinguish foreign tenancy. IDs, object keys, and
+/// unique marker strings always remain.
+pub fn foreign_markers_between_orgs(
+    actor: &BootedOrg,
+    foreign: &BootedOrg,
+    fixture: &DenialFixture,
+) -> ForeignMarkers {
+    let local_names = local_display_name_needles(actor, fixture);
     let mut markers = ForeignMarkers::default();
     markers.org_ids.push(foreign.org_id.to_string());
     for user in foreign.users.values() {
         markers.user_ids.push(user.user_id.to_string());
-        markers.names.push(user.email.clone());
+        push_foreign_display_name(&mut markers.names, &local_names, &user.email);
     }
     for collection in foreign.collections.values() {
         markers
             .collection_ids
             .push(collection.collection_id.to_string());
-        markers.names.push(collection.name.clone());
+        push_foreign_display_name(&mut markers.names, &local_names, &collection.name);
     }
     markers
         .document_ids
@@ -152,14 +169,39 @@ pub fn foreign_markers_for(world: &MultiOrgDenialWorld, actor_org_key: &str) -> 
     markers
         .version_ids
         .push(foreign.document.version_id.to_string());
-    markers
-        .names
-        .push(world.fixture.duplicate_names.document.clone());
+    push_foreign_display_name(
+        &mut markers.names,
+        &local_names,
+        &fixture.duplicate_names.document,
+    );
     markers.job_ids.push(foreign.job_id.to_string());
     markers.conflict_ids.push(foreign.conflict_id.to_string());
     markers.object_keys.push(foreign.object_key.clone());
     markers.marker_strings.push(foreign.marker.clone());
     markers
+}
+
+fn local_display_name_needles(actor: &BootedOrg, fixture: &DenialFixture) -> BTreeSet<String> {
+    let mut needles = BTreeSet::new();
+    for user in actor.users.values() {
+        needles.insert(user.email.to_lowercase());
+    }
+    for collection in actor.collections.values() {
+        needles.insert(collection.name.to_lowercase());
+    }
+    needles.insert(actor.document.title.to_lowercase());
+    needles.insert(fixture.duplicate_names.document.to_lowercase());
+    needles
+}
+
+fn push_foreign_display_name(
+    names: &mut Vec<String>,
+    local_needles: &BTreeSet<String>,
+    candidate: &str,
+) {
+    if !local_needles.contains(&candidate.to_lowercase()) {
+        names.push(candidate.to_string());
+    }
 }
 
 pub async fn cleanup_world(world: MultiOrgDenialWorld) -> Result<(), String> {

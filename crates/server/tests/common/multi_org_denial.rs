@@ -907,7 +907,10 @@ fn validate_na_evidence_shape(
 
 #[cfg(test)]
 mod unit_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn extract_rust_test_function_names_finds_sync_and_async() {
@@ -944,5 +947,124 @@ mod unit_tests {
             "fixture topology invalid: {}",
             errors.join("; ")
         );
+    }
+
+    #[test]
+    fn foreign_markers_exclude_shared_display_names_but_keep_foreign_ids() {
+        use crate::common::multi_org_denial_world::{
+            foreign_markers_between_orgs, BootedCollection, BootedDocument, BootedOrg, BootedUser,
+        };
+
+        let fixture = load_denial_fixture().expect("fixture");
+        let shared_private =
+            collection_name_for_visibility(&fixture.duplicate_names, "private").to_string();
+        let shared_org =
+            collection_name_for_visibility(&fixture.duplicate_names, "org").to_string();
+        let shared_doc = fixture.duplicate_names.document.clone();
+        let alpha_org_id = Uuid::new_v4();
+        let beta_org_id = Uuid::new_v4();
+        let alpha_collection_id = Uuid::new_v4();
+        let beta_collection_id = Uuid::new_v4();
+        let beta_user_id = Uuid::new_v4();
+        let beta_email = format!("owner-{beta_user_id}@beta.denial.test");
+
+        let actor = BootedOrg {
+            org_id: alpha_org_id,
+            slug: "alpha".into(),
+            marker: "alpha-marker-unique".into(),
+            object_key: "denial/orgAlpha/alpha-marker-unique.txt".into(),
+            users: BTreeMap::from([(
+                "owner".into(),
+                BootedUser {
+                    user_id: Uuid::new_v4(),
+                    email: "owner@alpha.denial.test".into(),
+                    role: "owner".into(),
+                    access_token: String::new(),
+                    refresh_token: String::new(),
+                },
+            )]),
+            collections: BTreeMap::from([
+                (
+                    "private".into(),
+                    BootedCollection {
+                        collection_id: Uuid::new_v4(),
+                        visibility: "private".into(),
+                        name: shared_private.clone(),
+                    },
+                ),
+                (
+                    "org".into(),
+                    BootedCollection {
+                        collection_id: alpha_collection_id,
+                        visibility: "org".into(),
+                        name: shared_org.clone(),
+                    },
+                ),
+            ]),
+            document: BootedDocument {
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+                title: shared_doc.clone(),
+            },
+            job_id: Uuid::new_v4(),
+            conflict_id: Uuid::new_v4(),
+        };
+        let foreign = BootedOrg {
+            org_id: beta_org_id,
+            slug: "beta".into(),
+            marker: "beta-marker-unique".into(),
+            object_key: "denial/orgBeta/beta-marker-unique.txt".into(),
+            users: BTreeMap::from([(
+                "owner".into(),
+                BootedUser {
+                    user_id: beta_user_id,
+                    email: beta_email.clone(),
+                    role: "owner".into(),
+                    access_token: String::new(),
+                    refresh_token: String::new(),
+                },
+            )]),
+            collections: BTreeMap::from([
+                (
+                    "private".into(),
+                    BootedCollection {
+                        collection_id: Uuid::new_v4(),
+                        visibility: "private".into(),
+                        name: shared_private.clone(),
+                    },
+                ),
+                (
+                    "org".into(),
+                    BootedCollection {
+                        collection_id: beta_collection_id,
+                        visibility: "org".into(),
+                        name: shared_org.clone(),
+                    },
+                ),
+            ]),
+            document: BootedDocument {
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+                title: shared_doc.clone(),
+            },
+            job_id: Uuid::new_v4(),
+            conflict_id: Uuid::new_v4(),
+        };
+
+        let markers = foreign_markers_between_orgs(&actor, &foreign, &fixture);
+        let name_needles: BTreeSet<String> =
+            markers.names.iter().map(|n| n.to_lowercase()).collect();
+
+        assert!(!name_needles.contains(&shared_org.to_lowercase()));
+        assert!(!name_needles.contains(&shared_private.to_lowercase()));
+        assert!(!name_needles.contains(&shared_doc.to_lowercase()));
+        assert!(name_needles.contains(&beta_email.to_lowercase()));
+
+        assert!(markers.org_ids.contains(&beta_org_id.to_string()));
+        assert!(markers
+            .collection_ids
+            .contains(&beta_collection_id.to_string()));
+        assert!(markers.object_keys.contains(&foreign.object_key));
+        assert!(markers.marker_strings.contains(&foreign.marker));
     }
 }
