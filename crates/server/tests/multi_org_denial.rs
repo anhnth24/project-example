@@ -3,16 +3,28 @@
 mod common;
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use common::multi_org_denial::{
     assert_denial_no_leak, DenialExpectation, DenialResponse, MultiOrgDenialWorld,
 };
-use common::{admin_database_url, app_database_url};
+use common::multi_org_denial_world::BootedOrg;
+use common::{
+    admin_database_url, app_database_url, build_app_state, login_tokens,
+    seed_user_with_permissions, test_qdrant_url,
+};
+use fileconv_server::auth::context::OrgContext;
+use fileconv_server::db::pool::with_org_txn;
+use fileconv_server::http::router;
+use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde_json::json;
 use tower::ServiceExt;
+use uuid::Uuid;
+
+const PASSWORD: &str = "correct-password-1";
 
 async fn boot_world_if_live() -> Option<MultiOrgDenialWorld> {
     admin_database_url()?;
@@ -62,6 +74,258 @@ async fn json_request(
     (status, body, headers)
 }
 
+fn header_refs(headers: &[(String, String)]) -> Vec<(&str, &str)> {
+    headers
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect()
+}
+
+fn denial_response<'a>(
+    status: StatusCode,
+    body: &'a [u8],
+    headers: &'a [(String, String)],
+) -> DenialResponse<'a> {
+    DenialResponse {
+        status: status.as_u16(),
+        body,
+        headers: header_refs(headers),
+    }
+}
+
+/// Stable path-denial envelope fields — avoids wall-clock timing oracles.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PathDenialShape {
+    status: u16,
+    code: Option<String>,
+    has_request_id: bool,
+}
+
+fn path_denial_shape(status: StatusCode, body: &[u8]) -> PathDenialShape {
+    let json: serde_json::Value =
+        serde_json::from_slice(body).unwrap_or_else(|_| json!({ "raw": true }));
+    PathDenialShape {
+        status: status.as_u16(),
+        code: json
+            .get("code")
+            .and_then(|value| value.as_str())
+            .map(str::to_string),
+        has_request_id: json.get("requestId").is_some(),
+    }
+}
+
+async fn assert_path_idor_not_found(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    body: Option<serde_json::Value>,
+    foreign: &common::multi_org_denial::ForeignMarkers,
+) {
+    let (status, response_body, headers) = json_request(app, method, uri, Some(token), body).await;
+    assert_denial_no_leak(
+        &denial_response(status, &response_body, &headers),
+        foreign,
+        DenialExpectation::PathIdorNotFound,
+    );
+}
+
+async fn assert_body_scope_forbidden(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    token: &str,
+    body: serde_json::Value,
+    foreign: &common::multi_org_denial::ForeignMarkers,
+) {
+    let (status, response_body, headers) =
+        json_request(app, method, uri, Some(token), Some(body)).await;
+    assert_denial_no_leak(
+        &denial_response(status, &response_body, &headers),
+        foreign,
+        DenialExpectation::BodyScopeForbidden,
+    );
+}
+
+async fn document_index_state(
+    pool: &deadpool_postgres::Pool,
+    org: &BootedOrg,
+) -> Result<(String, i64), String> {
+    let owner = org.users.get("owner").ok_or("missing owner user")?;
+    let org_id = org.org_id;
+    let owner_id = owner.user_id;
+    let collection_id = org.collections["org"].collection_id;
+    let ctx = OrgContext::try_new(
+        org_id,
+        owner_id,
+        ["qa.query", "doc.upload"],
+        [collection_id],
+    )
+    .map_err(|err| err.to_string())?;
+    with_org_txn(pool, &ctx, {
+        let document_id = org.document.document_id;
+        let org_id = ctx.org_id();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT d.state::text,
+                                (SELECT COUNT(*)::bigint FROM chunks c
+                                 WHERE c.org_id = d.org_id AND c.document_id = d.id) AS chunk_count
+                         FROM documents d
+                         WHERE d.org_id = $1 AND d.id = $2",
+                        &[&org_id, &document_id],
+                    )
+                    .await?;
+                Ok((row.get::<_, String>(0), row.get::<_, i64>(1)))
+            })
+        }
+    })
+    .await
+    .map_err(|err| format!("load document index state: {err}"))
+}
+
+/// Task 12 stops at converted SQL seed; Task 13 GREEN must index via WorkerPipeline.
+async fn require_worker_indexed_orgs(world: &MultiOrgDenialWorld) -> Result<(), String> {
+    for (key, org) in &world.orgs {
+        let (state, chunk_count) = document_index_state(world.pool(), org).await?;
+        if state == "indexed" && chunk_count > 0 {
+            continue;
+        }
+        return Err(format!(
+            "org {key} document {} is state={state} with {chunk_count} chunks; \
+             denial world must index marker `{}` through production WorkerPipeline before FTS/ask denial probes",
+            org.document.document_id, org.marker
+        ));
+    }
+    Ok(())
+}
+
+async fn read_sse_until(
+    response: axum::response::Response,
+    predicate: impl Fn(&str, &[u64], Option<Uuid>) -> bool,
+    timeout: Duration,
+) -> (String, Vec<u64>, Option<Uuid>) {
+    let mut body = response.into_body().into_data_stream();
+    let mut buf = String::new();
+    let mut sequences = Vec::new();
+    let mut session_id = None;
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline {
+        tokio::select! {
+            next = body.next() => {
+                let Some(Ok(chunk)) = next else { break; };
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+                for line in buf.lines() {
+                    if let Some(data) = line.strip_prefix("data:") {
+                        if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(data.trim()) {
+                            if let Some(seq) = envelope["sequence"].as_u64() {
+                                if !sequences.contains(&seq) {
+                                    sequences.push(seq);
+                                }
+                            }
+                            if session_id.is_none() {
+                                if let Some(id) = envelope["data"]["streamSessionId"].as_str() {
+                                    session_id = Uuid::parse_str(id).ok();
+                                }
+                            }
+                        }
+                    }
+                }
+                if predicate(&buf, &sequences, session_id) {
+                    break;
+                }
+            }
+            _ = tokio::time::sleep_until(deadline) => break,
+        }
+    }
+    (buf, sequences, session_id)
+}
+
+async fn seed_cross_org_bridge_user(world: &MultiOrgDenialWorld) -> (String, Uuid) {
+    let alpha = world.org("orgAlpha");
+    let beta = world.org("orgBeta");
+    let bridge_user = Uuid::new_v4();
+    let email = format!("bridge-{}@denial.test", bridge_user.simple());
+    let perms = ["qa.query", "doc.upload", "member.manage"];
+    seed_user_with_permissions(
+        world.pool(),
+        alpha.org_id,
+        bridge_user,
+        &email,
+        PASSWORD,
+        &perms,
+    )
+    .await;
+    seed_user_with_permissions(
+        world.pool(),
+        beta.org_id,
+        bridge_user,
+        &email,
+        PASSWORD,
+        &perms,
+    )
+    .await;
+    let (token, _) = login_tokens(world.pool(), &email, PASSWORD).await;
+    (token, bridge_user)
+}
+
+async fn switch_org(app: &axum::Router, token: &str, target_org_id: Uuid) -> (String, String) {
+    let (status, body, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/orgs/switch",
+        Some(token),
+        Some(json!({ "orgId": target_org_id })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "org switch must succeed: {}",
+        String::from_utf8_lossy(&body)
+    );
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("switch json");
+    (
+        json["accessToken"]
+            .as_str()
+            .expect("accessToken")
+            .to_string(),
+        json["refreshToken"]
+            .as_str()
+            .expect("refreshToken")
+            .to_string(),
+    )
+}
+
+async fn assert_access_rejected(app: &axum::Router, access_token: &str) {
+    let (status, body, _) =
+        json_request(app, "GET", "/api/v1/auth/me", Some(access_token), None).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "stale access token must be rejected: {}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
+async fn assert_refresh_rejected(app: &axum::Router, refresh_token: &str) {
+    let (status, body, _) = json_request(
+        app,
+        "POST",
+        "/api/v1/auth/refresh",
+        None,
+        Some(json!({ "refreshToken": refresh_token })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "stale refresh token must be rejected: {}",
+        String::from_utf8_lossy(&body)
+    );
+}
+
 /// Cross-org HTTP surfaces that lack a dedicated legacy integration test.
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
@@ -78,16 +342,8 @@ async fn shared_world_http_surfaces_respect_org_scope() {
 
     let (status, body, headers) =
         json_request(world.app(), "GET", "/api/v1/auth/me", Some(token_a), None).await;
-    let header_refs: Vec<(&str, &str)> = headers
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
     assert_denial_no_leak(
-        &DenialResponse {
-            status: status.as_u16(),
-            body: &body,
-            headers: header_refs,
-        },
+        &denial_response(status, &body, &headers),
         &foreign,
         DenialExpectation::AllowSuccess,
     );
@@ -102,16 +358,8 @@ async fn shared_world_http_surfaces_respect_org_scope() {
         None,
     )
     .await;
-    let header_refs: Vec<(&str, &str)> = headers
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
     assert_denial_no_leak(
-        &DenialResponse {
-            status: status.as_u16(),
-            body: &body,
-            headers: header_refs,
-        },
+        &denial_response(status, &body, &headers),
         &foreign,
         DenialExpectation::AllowSuccess,
     );
@@ -161,16 +409,8 @@ async fn shared_world_http_surfaces_respect_org_scope() {
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
-    let header_refs: Vec<(&str, &str)> = headers
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
     assert_denial_no_leak(
-        &DenialResponse {
-            status: status.as_u16(),
-            body: &body,
-            headers: header_refs,
-        },
+        &denial_response(status, &body, &headers),
         &foreign,
         DenialExpectation::AllowSuccess,
     );
@@ -184,16 +424,8 @@ async fn shared_world_http_surfaces_respect_org_scope() {
         Some(json!({ "projectId": null })),
     )
     .await;
-    let header_refs: Vec<(&str, &str)> = headers
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
     assert_denial_no_leak(
-        &DenialResponse {
-            status: status.as_u16(),
-            body: &body,
-            headers: header_refs,
-        },
+        &denial_response(status, &body, &headers),
         &foreign,
         DenialExpectation::PathIdorNotFound,
     );
@@ -207,16 +439,8 @@ async fn shared_world_http_surfaces_respect_org_scope() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let header_refs: Vec<(&str, &str)> = headers
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
     assert_denial_no_leak(
-        &DenialResponse {
-            status: status.as_u16(),
-            body: &body,
-            headers: header_refs,
-        },
+        &denial_response(status, &body, &headers),
         &foreign,
         DenialExpectation::AllowSuccess,
     );
@@ -224,24 +448,85 @@ async fn shared_world_http_surfaces_respect_org_scope() {
     world.cleanup().await.expect("cleanup");
 }
 
-fn assert_world_boots_for_task13_scaffold(world: &MultiOrgDenialWorld) {
-    world.assert_base_topology();
-    assert_eq!(world.orgs.len(), 2);
-    assert!(world.fixture.pre_revoke_tokens);
-    for org in world.orgs.values() {
-        assert!(!org.marker.is_empty());
-        assert!(!org.object_key.is_empty());
-        assert_eq!(org.users.len(), 3);
-    }
-}
-
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL"]
 async fn indexed_fts_and_ask_never_return_foreign_marker() {
     let Some(world) = boot_world_if_live().await else {
         return;
     };
-    assert_world_boots_for_task13_scaffold(&world);
+    world.assert_base_topology();
+    require_worker_indexed_orgs(&world)
+        .await
+        .expect("indexed denial prerequisite");
+
+    let alpha = world.org("orgAlpha");
+    let token = &alpha.users["owner"].access_token;
+    let foreign = world.foreign_markers_for("orgAlpha");
+    let beta = world.org("orgBeta");
+    let app = world.app();
+
+    let query = format!("marker:{}", alpha.marker);
+    let (status, body, headers) = json_request(
+        app,
+        "POST",
+        "/api/v1/search",
+        Some(token),
+        Some(json!({ "query": query, "mode": "current", "limit": 10 })),
+    )
+    .await;
+    assert_denial_no_leak(
+        &denial_response(status, &body, &headers),
+        &foreign,
+        DenialExpectation::AllowSuccess,
+    );
+    let search: serde_json::Value = serde_json::from_slice(&body).expect("search json");
+    let hits = search["hits"].as_array().expect("hits array");
+    assert!(
+        hits.iter().any(|hit| {
+            hit["documentId"].as_str() == Some(alpha.document.document_id.to_string().as_str())
+                || hit["quote"]
+                    .as_str()
+                    .is_some_and(|quote| quote.contains(&alpha.marker))
+        }),
+        "actor search must surface own indexed marker: {search}"
+    );
+    assert!(
+        !hits.iter().any(|hit| {
+            hit["documentId"].as_str() == Some(beta.document.document_id.to_string().as_str())
+                || hit["quote"]
+                    .as_str()
+                    .is_some_and(|quote| quote.contains(&beta.marker))
+        }),
+        "search must not return foreign indexed marker: {search}"
+    );
+
+    let (status, body, headers) = json_request(
+        app,
+        "POST",
+        "/api/v1/ask",
+        Some(token),
+        Some(json!({
+            "question": format!("Where is {} recorded?", alpha.marker),
+            "mode": "current",
+            "limit": 5
+        })),
+    )
+    .await;
+    assert_denial_no_leak(
+        &denial_response(status, &body, &headers),
+        &foreign,
+        DenialExpectation::AllowSuccess,
+    );
+    let ask_text = String::from_utf8_lossy(&body);
+    assert!(
+        ask_text.contains(&alpha.marker),
+        "ask answer must reference actor marker when grounded: {ask_text}"
+    );
+    assert!(
+        !ask_text.contains(&beta.marker),
+        "ask must not leak foreign marker: {ask_text}"
+    );
+
     world.cleanup().await.expect("cleanup");
 }
 
@@ -251,31 +536,139 @@ async fn duplicate_names_across_orgs_do_not_create_an_oracle() {
     let Some(world) = boot_world_if_live().await else {
         return;
     };
-    assert_world_boots_for_task13_scaffold(&world);
-    assert_eq!(
-        world.org("orgAlpha").document.title,
-        world.fixture.duplicate_names.document
+    world.assert_base_topology();
+
+    let alpha = world.org("orgAlpha");
+    let beta = world.org("orgBeta");
+    let token = &alpha.users["owner"].access_token;
+    let foreign = world.foreign_markers_for("orgAlpha");
+    let app = world.app();
+    let shared_collection_name = &world.fixture.duplicate_names.collection;
+    let shared_document_title = &world.fixture.duplicate_names.document;
+
+    let (status, body, headers) =
+        json_request(app, "GET", "/api/v1/collections", Some(token), None).await;
+    assert_denial_no_leak(
+        &denial_response(status, &body, &headers),
+        &foreign,
+        DenialExpectation::AllowSuccess,
     );
+    let listed: serde_json::Value = serde_json::from_slice(&body).expect("collections json");
+    let items = listed["items"].as_array().expect("collection items");
+    let alpha_ids: BTreeSet<String> = alpha
+        .collections
+        .values()
+        .map(|c| c.collection_id.to_string())
+        .collect();
+    let matching_names: Vec<_> = items
+        .iter()
+        .filter(|item| item["name"].as_str() == Some(shared_collection_name.as_str()))
+        .collect();
     assert_eq!(
-        world.org("orgBeta").document.title,
-        world.fixture.duplicate_names.document
+        matching_names.len(),
+        1,
+        "duplicate collection name must resolve to exactly one actor-org row: {listed}"
     );
-    for label in ["private", "org", "groups"] {
-        assert_eq!(
-            world.org("orgAlpha").collections[label].name,
-            world.org("orgBeta").collections[label].name,
-            "cross-org collection name oracle for {label}"
-        );
+    let matched_id = matching_names[0]["id"].as_str().expect("collection id");
+    assert!(
+        alpha_ids.contains(matched_id),
+        "name collision must not surface foreign collection id: {listed}"
+    );
+
+    let (status, body, headers) = json_request(
+        app,
+        "GET",
+        &format!(
+            "/api/v1/collections/{}/documents",
+            alpha.collections["org"].collection_id
+        ),
+        Some(token),
+        None,
+    )
+    .await;
+    assert_denial_no_leak(
+        &denial_response(status, &body, &headers),
+        &foreign,
+        DenialExpectation::AllowSuccess,
+    );
+    let docs: serde_json::Value = serde_json::from_slice(&body).expect("documents json");
+    let doc_items = docs["items"].as_array().expect("document items");
+    let titles: Vec<_> = doc_items
+        .iter()
+        .filter_map(|item| item["title"].as_str())
+        .collect();
+    assert!(
+        titles
+            .iter()
+            .any(|title| *title == shared_document_title.as_str()),
+        "actor document list must include shared title: {docs}"
+    );
+    for item in doc_items {
+        let id = item["id"].as_str().expect("document id");
         assert_ne!(
-            world.org("orgAlpha").collections[label].collection_id,
-            world.org("orgBeta").collections[label].collection_id,
-            "collection ids must differ for {label}"
+            id,
+            beta.document.document_id.to_string(),
+            "duplicate document title must not expose foreign document id: {docs}"
         );
     }
+
+    let foreign_collection = beta.collections["org"].collection_id;
+    let ghost_collection = Uuid::new_v4();
+    let (foreign_status, foreign_collection_body, _) = json_request(
+        app,
+        "GET",
+        &format!("/api/v1/collections/{foreign_collection}"),
+        Some(token),
+        None,
+    )
+    .await;
+    let foreign_probe = path_denial_shape(foreign_status, &foreign_collection_body);
+    let (ghost_status, ghost_collection_body, _) = json_request(
+        app,
+        "GET",
+        &format!("/api/v1/collections/{ghost_collection}"),
+        Some(token),
+        None,
+    )
+    .await;
+    let ghost_probe = path_denial_shape(ghost_status, &ghost_collection_body);
+    assert_eq!(foreign_probe.status, StatusCode::NOT_FOUND.as_u16());
+    assert_eq!(ghost_probe.status, StatusCode::NOT_FOUND.as_u16());
     assert_eq!(
-        world.org("orgAlpha").collections["org"].name,
-        world.fixture.duplicate_names.collection
+        foreign_probe, ghost_probe,
+        "foreign collection path must be indistinguishable from unknown id"
     );
+
+    let foreign_doc = beta.document.document_id;
+    let ghost_doc = Uuid::new_v4();
+    let (foreign_status, foreign_body, foreign_headers) = json_request(
+        app,
+        "GET",
+        &format!("/api/v1/documents/{foreign_doc}"),
+        Some(token),
+        None,
+    )
+    .await;
+    assert_denial_no_leak(
+        &denial_response(foreign_status, &foreign_body, &foreign_headers),
+        &foreign,
+        DenialExpectation::PathIdorNotFound,
+    );
+    let foreign_doc_shape = path_denial_shape(foreign_status, &foreign_body);
+    let (ghost_status, ghost_body, _) = json_request(
+        app,
+        "GET",
+        &format!("/api/v1/documents/{ghost_doc}"),
+        Some(token),
+        None,
+    )
+    .await;
+    let ghost_doc_shape = path_denial_shape(ghost_status, &ghost_body);
+    assert_eq!(
+        foreign_doc_shape, ghost_doc_shape,
+        "foreign document path must be indistinguishable from unknown id"
+    );
+
     world.cleanup().await.expect("cleanup");
 }
 
@@ -285,11 +678,104 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
     let Some(world) = boot_world_if_live().await else {
         return;
     };
-    assert_world_boots_for_task13_scaffold(&world);
-    assert!(
-        world.org("orgAlpha").users["owner"].access_token
-            != world.org("orgBeta").users["owner"].access_token
+    world.assert_base_topology();
+
+    let alpha = world.org("orgAlpha");
+    let beta = world.org("orgBeta");
+    let (bridge_token, _) = seed_cross_org_bridge_user(&world).await;
+    let app = world.app();
+
+    let (status, me_body, _) =
+        json_request(app, "GET", "/api/v1/auth/me", Some(&bridge_token), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let me: serde_json::Value = serde_json::from_slice(&me_body).expect("auth me");
+    let origin_org = Uuid::parse_str(me["orgId"].as_str().expect("orgId")).expect("org uuid");
+    let (target_org, target, origin, actor_key, foreign_key) = if origin_org == alpha.org_id {
+        (beta.org_id, beta, alpha, "orgAlpha", "orgBeta")
+    } else {
+        (alpha.org_id, alpha, beta, "orgBeta", "orgAlpha")
+    };
+    let foreign = world.foreign_markers_for(actor_key);
+
+    let (status, warm_body, warm_headers) =
+        json_request(app, "GET", "/api/v1/collections", Some(&bridge_token), None).await;
+    assert_denial_no_leak(
+        &denial_response(status, &warm_body, &warm_headers),
+        &world.foreign_markers_for(foreign_key),
+        DenialExpectation::AllowSuccess,
     );
+
+    let (switched_token, _) = switch_org(app, &bridge_token, target_org).await;
+
+    let (status, body, headers) = json_request(
+        app,
+        "GET",
+        "/api/v1/collections",
+        Some(&switched_token),
+        None,
+    )
+    .await;
+    assert_denial_no_leak(
+        &denial_response(status, &body, &headers),
+        &foreign,
+        DenialExpectation::AllowSuccess,
+    );
+    let listed: serde_json::Value = serde_json::from_slice(&body).expect("collections json");
+    let listed_ids: BTreeSet<String> = listed["items"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
+        .map(str::to_string)
+        .collect();
+    let target_ids: BTreeSet<String> = target
+        .collections
+        .values()
+        .map(|c| c.collection_id.to_string())
+        .collect();
+    let origin_ids: BTreeSet<String> = origin
+        .collections
+        .values()
+        .map(|c| c.collection_id.to_string())
+        .collect();
+    assert_eq!(
+        listed_ids, target_ids,
+        "switched session must list only target org collections"
+    );
+    for origin_id in &origin_ids {
+        assert!(
+            !listed_ids.contains(origin_id),
+            "switched session leaked previous-org collection id: {listed}"
+        );
+    }
+
+    assert_path_idor_not_found(
+        app,
+        "GET",
+        &format!(
+            "/api/v1/collections/{}",
+            origin.collections["org"].collection_id
+        ),
+        &switched_token,
+        None,
+        &foreign,
+    )
+    .await;
+
+    assert_body_scope_forbidden(
+        app,
+        "POST",
+        "/api/v1/search",
+        &switched_token,
+        json!({
+            "query": origin.marker,
+            "collectionIds": [origin.collections["org"].collection_id],
+            "limit": 5
+        }),
+        &foreign,
+    )
+    .await;
+
     world.cleanup().await.expect("cleanup");
 }
 
@@ -299,10 +785,100 @@ async fn pre_revoke_tokens_fail_after_downgrade_suspend_and_remove() {
     let Some(world) = boot_world_if_live().await else {
         return;
     };
-    assert_world_boots_for_task13_scaffold(&world);
-    assert!(!world.org("orgAlpha").users["owner"]
-        .refresh_token
-        .is_empty());
+    world.assert_base_topology();
+    assert!(world.fixture.pre_revoke_tokens);
+
+    let alpha = world.org("orgAlpha");
+    let beta = world.org("orgBeta");
+    let owner_token = &alpha.users["owner"].access_token;
+    let app = world.app();
+
+    let admin = &alpha.users["admin"];
+    let (admin_access, admin_refresh) = (admin.access_token.clone(), admin.refresh_token.clone());
+    let (status, _, _) =
+        json_request(app, "GET", "/api/v1/auth/me", Some(&admin_access), None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "admin access token must work before downgrade"
+    );
+
+    let (status, body, _) = json_request(
+        app,
+        "PATCH",
+        &format!("/api/v1/members/{}", admin.user_id),
+        Some(owner_token),
+        Some(json!({ "role": "viewer" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "owner must downgrade admin via production route: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_access_rejected(app, &admin_access).await;
+    assert_refresh_rejected(app, &admin_refresh).await;
+
+    let member = &alpha.users["member"];
+    let (member_access, member_refresh) =
+        (member.access_token.clone(), member.refresh_token.clone());
+    let (status, _, _) =
+        json_request(app, "GET", "/api/v1/auth/me", Some(&member_access), None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "member access token must work before suspend"
+    );
+
+    let (status, body, _) = json_request(
+        app,
+        "PATCH",
+        &format!("/api/v1/members/{}", member.user_id),
+        Some(owner_token),
+        Some(json!({ "state": "suspended" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "owner must suspend member via production route: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_access_rejected(app, &member_access).await;
+    assert_refresh_rejected(app, &member_refresh).await;
+
+    let remove_target = &beta.users["member"];
+    let beta_owner = &beta.users["owner"].access_token;
+    let (remove_access, remove_refresh) = (
+        remove_target.access_token.clone(),
+        remove_target.refresh_token.clone(),
+    );
+    let (status, _, _) =
+        json_request(app, "GET", "/api/v1/auth/me", Some(&remove_access), None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "remove-target access token must work before removal"
+    );
+
+    let (status, body, _) = json_request(
+        app,
+        "DELETE",
+        &format!("/api/v1/members/{}", remove_target.user_id),
+        Some(beta_owner),
+        None,
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NO_CONTENT,
+        "owner must remove member via production route: {}",
+        String::from_utf8_lossy(&body)
+    );
+    assert_access_rejected(app, &remove_access).await;
+    assert_refresh_rejected(app, &remove_refresh).await;
+
     world.cleanup().await.expect("cleanup");
 }
 
@@ -312,18 +888,297 @@ async fn preview_download_job_and_sse_hide_foreign_ids() {
     let Some(world) = boot_world_if_live().await else {
         return;
     };
-    assert_world_boots_for_task13_scaffold(&world);
+    world.assert_base_topology();
+
+    let alpha = world.org("orgAlpha");
+    let beta = world.org("orgBeta");
+    let token = &alpha.users["owner"].access_token;
     let foreign = world.foreign_markers_for("orgAlpha");
-    assert!(!foreign.job_ids.is_empty());
+    let app = world.app();
+
+    assert_path_idor_not_found(
+        app,
+        "GET",
+        &format!(
+            "/api/v1/documents/{}/preview?version_id={}",
+            beta.document.document_id, beta.document.version_id
+        ),
+        token,
+        None,
+        &foreign,
+    )
+    .await;
+
+    assert_path_idor_not_found(
+        app,
+        "POST",
+        &format!(
+            "/api/v1/documents/{}/versions/{}/download-capability",
+            beta.document.document_id, beta.document.version_id
+        ),
+        token,
+        Some(json!({ "purpose": "original" })),
+        &foreign,
+    )
+    .await;
+
+    assert_path_idor_not_found(
+        app,
+        "GET",
+        &format!("/api/v1/jobs/{}", beta.job_id),
+        token,
+        None,
+        &foreign,
+    )
+    .await;
+
+    let job_events = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/api/v1/jobs/{}/events?lastEventId=0", beta.job_id))
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let job_status = job_events.status();
+    let job_body = job_events
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes()
+        .to_vec();
+    assert_denial_no_leak(
+        &DenialResponse {
+            status: job_status.as_u16(),
+            body: &job_body,
+            headers: vec![],
+        },
+        &foreign,
+        DenialExpectation::PathIdorNotFound,
+    );
+
+    let foreign_token = &beta.users["owner"].access_token;
+    let (status, issued, headers) = json_request(
+        app,
+        "POST",
+        &format!(
+            "/api/v1/documents/{}/versions/{}/download-capability",
+            beta.document.document_id, beta.document.version_id
+        ),
+        Some(foreign_token),
+        Some(json!({ "purpose": "original" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "foreign tenant must mint capability via production route: {}",
+        String::from_utf8_lossy(&issued)
+    );
+    let issued_json: serde_json::Value = serde_json::from_slice(&issued).expect("issued json");
+    let capability = issued_json["capability"]
+        .as_str()
+        .expect("capability")
+        .to_string();
+    let (status, body, redeem_headers) = json_request(
+        app,
+        "GET",
+        &format!("/api/v1/downloads/{capability}"),
+        Some(token),
+        None,
+    )
+    .await;
+    assert_denial_no_leak(
+        &denial_response(status, &body, &redeem_headers),
+        &foreign,
+        DenialExpectation::PathIdorNotFound,
+    );
+    assert!(
+        !String::from_utf8_lossy(&body).contains(&beta.marker),
+        "download denial leaked foreign marker"
+    );
+    let _ = headers;
+
+    assert_body_scope_forbidden(
+        app,
+        "POST",
+        "/api/v1/search",
+        token,
+        json!({
+            "query": beta.marker,
+            "collectionIds": [beta.collections["org"].collection_id],
+            "limit": 5
+        }),
+        &foreign,
+    )
+    .await;
+
     world.cleanup().await.expect("cleanup");
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL"]
 async fn in_flight_ask_emits_no_content_after_acl_revoke() {
     let Some(world) = boot_world_if_live().await else {
         return;
     };
-    assert_world_boots_for_task13_scaffold(&world);
+    world.assert_base_topology();
+    require_worker_indexed_orgs(&world)
+        .await
+        .expect("indexed prerequisite for in-flight ask revoke");
+
+    let Some(qdrant_url) = test_qdrant_url() else {
+        return;
+    };
+    let alpha = world.org("orgAlpha");
+    let beta = world.org("orgBeta");
+    let foreign = world.foreign_markers_for("orgAlpha");
+    let token = &alpha.users["owner"].access_token;
+    let owner_id = alpha.users["owner"].user_id;
+    let collection_id = alpha.collections["org"].collection_id;
+    let document_id = alpha.document.document_id;
+
+    let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");
+    let app = router(
+        build_app_state(
+            world.pool().clone(),
+            &app_database_url().expect("app database url"),
+            None,
+        )
+        .with_retrieval_backends(qdrant, None),
+    );
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ask/stream")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "question": format!("Summarize {}", alpha.marker),
+                        "mode": "current",
+                        "limit": 5,
+                        "collectionIds": [collection_id]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let (_buf, sequences, session_id) = read_sse_until(
+        response,
+        |_, seqs, session| session.is_some() && !seqs.is_empty(),
+        Duration::from_secs(12),
+    )
+    .await;
+    let session_id = session_id.expect("streamSessionId");
+
+    let alt_owner = Uuid::new_v4();
+    let org_id = alpha.org_id;
+    let owner_ctx = OrgContext::try_new(
+        org_id,
+        owner_id,
+        ["qa.query", "member.manage"],
+        [collection_id],
+    )
+    .expect("owner ctx");
+    with_org_txn(world.pool(), &owner_ctx, {
+        move |txn| {
+            Box::pin(async move {
+                fileconv_server::db::orgs::ensure_user(
+                    txn,
+                    &OrgContext::try_new(
+                        org_id,
+                        owner_id,
+                        ["qa.query", "member.manage"],
+                        [collection_id],
+                    )
+                    .expect("owner ctx in txn"),
+                    alt_owner,
+                    &format!("alt-{}@denial-inflight.test", alt_owner.simple()),
+                    "Alt Owner",
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO org_memberships (org_id, user_id, role)
+                     VALUES ($1, $2, 'owner')
+                     ON CONFLICT (org_id, user_id) DO NOTHING",
+                    &[&org_id, &alt_owner],
+                )
+                .await?;
+                fileconv_server::services::acl_mutate::revoke_collection_access_for_principal(
+                    txn,
+                    org_id,
+                    owner_id,
+                    collection_id,
+                    alt_owner,
+                )
+                .await?;
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("revoke collection acl through production path");
+
+    let tail = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/api/v1/ask/stream?streamSessionId={session_id}&lastEventId={}",
+                    sequences.last().copied().unwrap_or(0)
+                ))
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"question":"ignored","mode":"current"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(tail.status(), StatusCode::OK);
+    let (tail_buf, _tail_seqs, _) = read_sse_until(
+        tail,
+        |buf, _, _| {
+            buf.contains("citation_revoked")
+                || buf.contains("principal_denied")
+                || buf.contains("stream.closed")
+        },
+        Duration::from_secs(10),
+    )
+    .await;
+    assert!(
+        tail_buf.contains("citation_revoked") || tail_buf.contains("principal_denied"),
+        "in-flight ask must close after ACL revoke: {tail_buf}"
+    );
+    assert!(
+        !tail_buf.contains("ask.token"),
+        "ACL revoke must not emit new content sequences: {tail_buf}"
+    );
+    assert!(
+        !tail_buf.contains(&beta.marker),
+        "in-flight ask must not leak foreign marker after revoke: {tail_buf}"
+    );
+    for needle in foreign.all_needles() {
+        assert!(
+            !tail_buf.to_lowercase().contains(&needle.to_lowercase()),
+            "in-flight ask leaked foreign marker {needle}: {tail_buf}"
+        );
+    }
+    let _ = document_id;
+
     world.cleanup().await.expect("cleanup");
 }
