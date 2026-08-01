@@ -216,9 +216,35 @@ jobs:
           cargo test -p fileconv-server --no-fail-fast --
           --include-ignored
           --skip e2e_live_vertical_slice
+      - name: Run Phase 1C denial suite
+        id: phase1c_denial_suite
+        if: steps.integration_tests.outcome == 'success'
+        # Re-run manifest-scoped integration binaries for a sanitized artifact.
+        # fileconv-cli is already built by the broad integration step above.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/phase1c-denial"
+          python3 scripts/run-phase1c-denial-suite.py \
+            --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json \
+            --output "$RUNNER_TEMP/phase1c-denial/manifest-run.json"
       - name: Dump service logs on failure
-        if: steps.integration_tests.outcome == 'failure'
+        if: >-
+          steps.integration_tests.outcome == 'failure' ||
+          steps.phase1c_denial_suite.outcome == 'failure'
         run: docker compose -f deploy/dev/compose.yml logs --tail=200
+      - name: Verify Phase 1C denial artifact
+        if: always() && steps.integration_tests.outcome == 'success'
+        run: |
+          set -euo pipefail
+          test -f "$RUNNER_TEMP/phase1c-denial/manifest-run.json"
+      - name: Upload Phase 1C denial artifact
+        if: always() && steps.integration_tests.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase1c-denial-${{ github.sha }}
+          path: ${{ runner.temp }}/phase1c-denial/manifest-run.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Tear down dev services
         if: always()
         run: docker compose -f deploy/dev/compose.yml down -v

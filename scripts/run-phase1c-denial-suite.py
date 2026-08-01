@@ -6,6 +6,20 @@ sources, groups rows by binary, runs each unique binary once via cargo test with
 ``--include-ignored``, scans bounded child output for foreign-marker leakage and
 secret-shaped material, and writes a sanitized deterministic JSON report.
 
+Leakage scanning limits
+-----------------------
+The runner scans child stdout/stderr for **fixture-declared indexed marker strings**
+(``indexedMarkers``) and the ``objectKeyTemplate`` label. It deliberately does **not**
+treat cross-org duplicate display names (shared collection/document titles) as leak
+needles — those names are intentional oracles and may appear in ordinary passing
+cargo output without indicating a tenancy breach.
+
+Runtime UUIDs and other boot-time foreign identifiers are **not** inferred from
+fixture or child output. Per-test ``assert_denial_no_leak`` in Rust remains the
+authoritative runtime ID/name/key scan inside each integration test. This runner's
+foreign-marker signal is: (1) nonzero child exit / timeout, plus (2) explicit
+indexed marker strings or template needles appearing in captured output.
+
 Hermetic ``--self-test`` uses temporary manifests/sources and a fake executor;
 it never runs cargo, network, or real repo integration tests.
 """
@@ -13,10 +27,12 @@ it never runs cargo, network, or real repo integration tests.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -27,36 +43,30 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json"
-SERVER_TESTS_ROOT = REPO_ROOT / "crates/server/tests"
+SERVER_TESTS_REL = Path("crates/server/tests")
 CARGO_PACKAGE = "fileconv-server"
 REQUIRED_ENV_VAR = "MARKHAND_TEST_REQUIRED"
 REQUIRED_ENV_VALUE = "1"
 MAX_CAPTURE_BYTES = 256 * 1024
+SNIPPET_HASH_BYTES = 4096
 REPORT_SCHEMA_VERSION = 1
+DEFAULT_BINARY_TIMEOUT_SECS = int(
+    os.environ.get("PHASE1C_DENIAL_BINARY_TIMEOUT_SECS", "1800")
+)
 
 BINARY_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 ALLOWED_STATUSES = frozenset({"executable", "na", "deferred"})
-RUST_TEST_FN_RE = re.compile(
-    r"^\s*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)",
-    re.MULTILINE,
+RUST_FN_DECL_RE = re.compile(
+    r"(?:#\[[^\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"
 )
 
-# Foreign-marker categories aligned with crates/server/tests/common/multi_org_denial.rs.
-FOREIGN_MARKER_CATEGORIES = (
-    "org_id",
-    "user_id",
-    "collection_id",
-    "document_id",
-    "version_id",
-    "chunk_id",
-    "job_id",
-    "conflict_id",
-    "object_key",
-    "name",
-    "marker_string",
+SENSITIVE_JSON_KEY_RE = re.compile(
+    r"(?i)^(?:password|passwd|secret|token|authorization|api[_-]?key|access[_-]?key|"
+    r"private[_-]?key|signing[_-]?key|client[_-]?secret|refresh[_-]?token|"
+    r"database_url|jwt_secret|env|environment|"
+    r"markhand_[a-z0-9_]*(?:secret|password|token|api_key|access_key|private_key|signing_key))$"
 )
 
-# Redaction patterns — labels only in findings; never emit matched secret values.
 BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-+=/]{8,}")
 JWT_RE = re.compile(
     r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"
@@ -65,16 +75,18 @@ ASSIGN_SECRET_RE = re.compile(
     r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[=:]\s*"
     r"([^\s'\"\\]+|'[^']*'|\"[^\"]*\")"
 )
-DB_URL_RE = re.compile(
-    r"(?i)\b(postgres(?:ql)?|mysql|mongodb|redis)://[^\s'\"]+"
-)
+DB_URL_RE = re.compile(r"(?i)\b(postgres(?:ql)?|mysql|mongodb|redis)://[^\s'\"]+")
 CI_SECRET_RE = re.compile(
     r"(?i)\b(GITHUB_TOKEN|AWS_SECRET_ACCESS_KEY|NPM_TOKEN|PYPI_API_TOKEN)\s*[=:]\s*\S+"
 )
-
-
-class RunnerNotImplemented(RuntimeError):
-    """Raised for RED-stubbed execution/redaction/report paths."""
+PEM_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+MARKHAND_ENV_ASSIGN_RE = re.compile(
+    r"(?i)\b(MARKHAND_[A-Z0-9_]*(?:SECRET|PASSWORD|TOKEN|API_KEY|ACCESS_KEY|PRIVATE_KEY|SIGNING_KEY|DATABASE_URL)[A-Z0-9_]*)\s*[=:]\s*"
+    r"([^\s'\"\\]+|'[^']*'|\"[^\"]*\")"
+)
 
 
 @dataclass(frozen=True)
@@ -113,9 +125,7 @@ class DenialManifest:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> DenialManifest:
-        version = int(raw["version"])
-        rows = tuple(ManifestRow.from_dict(row) for row in raw["rows"])
-        return cls(version=version, rows=rows)
+        return cls(version=int(raw["version"]), rows=tuple(ManifestRow.from_dict(row) for row in raw["rows"]))
 
 
 @dataclass(frozen=True)
@@ -160,6 +170,7 @@ class ChildResult:
     exit_code: int
     stdout: str
     stderr: str
+    timed_out: bool = False
 
 
 @dataclass
@@ -175,7 +186,7 @@ class RunReport:
     leakage_count: int = 0
     findings: list[LeakFinding] = field(default_factory=list)
     redaction_scan: dict[str, Any] = field(
-        default_factory=lambda: {"passed": False, "findings": []}
+        default_factory=lambda: {"passed": True, "findings": []}
     )
 
 
@@ -186,11 +197,12 @@ class CommandExecutor(Protocol):
         *,
         cwd: Path,
         env: Mapping[str, str],
+        timeout_secs: int,
     ) -> ChildResult: ...
 
 
 class SubprocessExecutor:
-    """Real cargo executor — RED: not wired into ``run_suite`` yet."""
+    """Run cargo via argv list with bounded capture, timeout, and process-group kill."""
 
     def run(
         self,
@@ -198,8 +210,35 @@ class SubprocessExecutor:
         *,
         cwd: Path,
         env: Mapping[str, str],
+        timeout_secs: int,
     ) -> ChildResult:
-        raise RunnerNotImplemented("subprocess execution is not implemented in RED")
+        binary = _command_binary(command)
+        process = subprocess.Popen(
+            list(command),
+            cwd=str(cwd),
+            env=dict(env),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        timed_out = False
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_secs)
+            exit_code = int(process.returncode or 0)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_process_group(process.pid)
+            stdout, stderr = process.communicate()
+            exit_code = 124
+
+        return ChildResult(
+            binary=binary,
+            exit_code=exit_code,
+            stdout=bound_capture(stdout or ""),
+            stderr=bound_capture(stderr or ""),
+            timed_out=timed_out,
+        )
 
 
 @dataclass(frozen=True)
@@ -222,7 +261,9 @@ class FakeExecutor:
         *,
         cwd: Path,
         env: Mapping[str, str],
+        timeout_secs: int,
     ) -> ChildResult:
+        del cwd, env, timeout_secs
         self.calls.append(list(command))
         binary = _command_binary(command)
         outcome = self.outcomes.get(binary, FakeExecutorOutcome())
@@ -255,6 +296,16 @@ def _command_binary(command: Sequence[str]) -> str:
         raise ValueError(f"command missing --test binary: {args!r}") from exc
 
 
+def _kill_process_group(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 def required_env_satisfied(env: Mapping[str, str] | None = None) -> bool:
     mapping = env if env is not None else os.environ
     return mapping.get(REQUIRED_ENV_VAR) == REQUIRED_ENV_VALUE
@@ -269,6 +320,10 @@ def validate_required_env(env: Mapping[str, str] | None = None) -> None:
 
 def is_safe_binary_identifier(binary: str) -> bool:
     return bool(BINARY_ID_RE.fullmatch(binary))
+
+
+def resolve_tests_root(repo_root: Path) -> Path:
+    return (repo_root / SERVER_TESTS_REL).resolve()
 
 
 def load_manifest(path: Path) -> DenialManifest:
@@ -330,8 +385,88 @@ def validate_manifest_schema(manifest: DenialManifest) -> list[str]:
     return errors
 
 
+def strip_rust_comments_and_strings(source: str) -> str:
+    """Remove comments and string/char literals so fn declarations are not false positives."""
+    out: list[str] = []
+    index = 0
+    length = len(source)
+    while index < length:
+        ch = source[index]
+        nxt = source[index + 1] if index + 1 < length else ""
+        if ch == "/" and nxt == "/":
+            index += 2
+            while index < length and source[index] != "\n":
+                index += 1
+            continue
+        if ch == "/" and nxt == "*":
+            index += 2
+            while index + 1 < length and not (source[index] == "*" and source[index + 1] == "/"):
+                index += 1
+            index = min(length, index + 2)
+            continue
+        if ch == "b" and nxt in {"'", '"'}:
+            quote = nxt
+            index += 2
+            while index < length:
+                if source[index] == "\\":
+                    index += 2
+                    continue
+                if source[index] == quote:
+                    index += 1
+                    break
+                index += 1
+            out.append(" ")
+            continue
+        if ch in {"'", '"'}:
+            quote = ch
+            index += 1
+            while index < length:
+                if source[index] == "\\":
+                    index += 2
+                    continue
+                if source[index] == quote:
+                    index += 1
+                    break
+                index += 1
+            out.append(" ")
+            continue
+        if ch == "r" and nxt in {"#", '"'}:
+            if nxt == "#":
+                hash_count = 0
+                pos = index + 1
+                while pos < length and source[pos] == "#":
+                    hash_count += 1
+                    pos += 1
+                if pos < length and source[pos] == '"':
+                    end = f'"{"#" * hash_count}'
+                    index = pos + 1
+                    while index < length:
+                        if source.startswith(end, index):
+                            index += len(end)
+                            break
+                        index += 1
+                    out.append(" ")
+                    continue
+            quote = '"'
+            index += 2
+            while index < length:
+                if source[index] == "\\":
+                    index += 2
+                    continue
+                if source[index] == quote:
+                    index += 1
+                    break
+                index += 1
+            out.append(" ")
+            continue
+        out.append(ch)
+        index += 1
+    return "".join(out)
+
+
 def extract_rust_test_names(source: str) -> set[str]:
-    return set(RUST_TEST_FN_RE.findall(source))
+    cleaned = strip_rust_comments_and_strings(source)
+    return set(RUST_FN_DECL_RE.findall(cleaned))
 
 
 def integration_test_source_path(tests_root: Path, binary: str) -> Path:
@@ -360,9 +495,7 @@ def validate_executable_sources(
 
         source_path = integration_test_source_path(tests_root, row.binary)
         if not source_path.is_file():
-            errors.append(
-                f"manifest row {row.id} missing integration source at {source_path}"
-            )
+            errors.append(f"manifest row {row.id} missing integration source at {source_path}")
             continue
 
         if row.binary not in cache:
@@ -429,35 +562,13 @@ def resolve_git_sha_full(repo_root: Path) -> str:
 
 
 def static_foreign_needles(fixture: DenialFixture) -> list[ForeignNeedle]:
+    """Indexed marker strings and object-key template only — not shared display names."""
     needles: list[ForeignNeedle] = []
     for value in fixture.indexed_markers.values():
-        needles.append(ForeignNeedle("marker_string", value))
-    document = str(fixture.duplicate_names.get("document") or "")
-    if document:
-        needles.append(ForeignNeedle("name", document))
-    collections_by_visibility = fixture.duplicate_names.get("collectionsByVisibility") or {}
-    if isinstance(collections_by_visibility, dict):
-        for value in collections_by_visibility.values():
-            needles.append(ForeignNeedle("name", str(value)))
-    private_name = collections_by_visibility.get("private") if isinstance(
-        collections_by_visibility, dict
-    ) else None
-    org_name = str(fixture.duplicate_names.get("collection") or "")
-    if org_name and org_name != str(private_name or ""):
-        needles.append(ForeignNeedle("name", org_name))
+        if value:
+            needles.append(ForeignNeedle("marker_string", value))
     if fixture.object_key_template:
         needles.append(ForeignNeedle("object_key", fixture.object_key_template))
-    return needles
-
-
-def extract_runtime_foreign_needles(text: str) -> list[ForeignNeedle]:
-    """RED: runtime marker extraction from child output is not implemented."""
-    raise RunnerNotImplemented("runtime foreign-marker extraction is not implemented in RED")
-
-
-def collect_foreign_needles(fixture: DenialFixture, child_output: str) -> list[ForeignNeedle]:
-    needles = static_foreign_needles(fixture)
-    needles.extend(extract_runtime_foreign_needles(child_output))
     return needles
 
 
@@ -468,8 +579,10 @@ def scan_for_foreign_markers(
     findings: list[LeakFinding] = []
     lowered = text.lower()
     for needle in needles:
+        if not needle.value:
+            continue
         variants = {needle.value, needle.value.lower(), needle.value.upper()}
-        if any(variant and variant.lower() in lowered for variant in variants):
+        if any(variant in lowered for variant in variants if variant):
             digest = hashlib.sha256(needle.value.encode("utf-8")).hexdigest()
             findings.append(
                 LeakFinding(
@@ -493,17 +606,65 @@ def scan_for_secret_shapes(text: str) -> list[str]:
         labels.append("database_url")
     if CI_SECRET_RE.search(text):
         labels.append("ci_secret_assignment")
+    if PEM_RE.search(text):
+        labels.append("pem_private_key")
+    if MARKHAND_ENV_ASSIGN_RE.search(text):
+        labels.append("markhand_env_assignment")
     return labels
 
 
-def redact_text(text: str) -> str:
-    """RED: deterministic secret redaction is not implemented."""
-    raise RunnerNotImplemented("secret redaction is not implemented in RED")
+def redact_text(text: str, *, fixture: DenialFixture | None = None) -> str:
+    out = PEM_RE.sub("<REDACTED_PEM>", text)
+    out = BEARER_RE.sub("Bearer <REDACTED_BEARER>", out)
+    out = JWT_RE.sub("<REDACTED_JWT>", out)
+    out = ASSIGN_SECRET_RE.sub(r"\1=<REDACTED_SECRET>", out)
+    out = MARKHAND_ENV_ASSIGN_RE.sub(r"\1=<REDACTED_ENV>", out)
+    out = DB_URL_RE.sub("<REDACTED_DATABASE_URL>", out)
+    out = CI_SECRET_RE.sub(r"\1=<REDACTED_CI_SECRET>", out)
+    if fixture is not None:
+        for needle in static_foreign_needles(fixture):
+            if needle.value:
+                pattern = re.compile(re.escape(needle.value), re.IGNORECASE)
+                out = pattern.sub(f"<REDACTED_{needle.category.upper()}>", out)
+    return out
 
 
-def redact_report_dict(report: dict[str, Any]) -> dict[str, Any]:
-    """RED: recursive report redaction is not implemented."""
-    raise RunnerNotImplemented("report redaction is not implemented in RED")
+def _redact_json_value(value: Any, *, fixture: DenialFixture | None) -> Any:
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, str) and SENSITIVE_JSON_KEY_RE.match(key):
+                out[key] = "<REDACTED>"
+            else:
+                out[key] = _redact_json_value(item, fixture=fixture)
+        return out
+    if isinstance(value, list):
+        return [_redact_json_value(item, fixture=fixture) for item in value]
+    if isinstance(value, str):
+        return redact_text(value, fixture=fixture)
+    return value
+
+
+def redact_report_dict(
+    report: dict[str, Any],
+    *,
+    fixture: DenialFixture | None = None,
+) -> dict[str, Any]:
+    redacted = _redact_json_value(copy.deepcopy(report), fixture=fixture)
+    serialized = json.dumps(redacted, sort_keys=True)
+    residual = scan_for_secret_shapes(serialized)
+    if fixture is not None:
+        for needle in static_foreign_needles(fixture):
+            if needle.value and needle.value.lower() in serialized.lower():
+                residual.append(needle.label())
+    if residual:
+        redacted.setdefault("redactionScan", {})
+        if isinstance(redacted["redactionScan"], dict):
+            redacted["redactionScan"]["passed"] = False
+            findings = set(redacted["redactionScan"].get("findings") or [])
+            findings.update(sorted(set(residual)))
+            redacted["redactionScan"]["findings"] = sorted(findings)
+    return redacted
 
 
 def bound_capture(text: str, *, limit: int = MAX_CAPTURE_BYTES) -> str:
@@ -514,23 +675,64 @@ def bound_capture(text: str, *, limit: int = MAX_CAPTURE_BYTES) -> str:
     return truncated + "\n<output truncated>"
 
 
+def sanitized_output_digest(text: str, *, fixture: DenialFixture | None = None) -> tuple[str, str]:
+    redacted = redact_text(bound_capture(text), fixture=fixture)
+    full_hash = _sha256_bytes(redacted.encode("utf-8"))
+    snippet_hash = _short_hash(redacted[:SNIPPET_HASH_BYTES])
+    return full_hash, snippet_hash
+
+
 def build_deterministic_report_dict(report: RunReport) -> dict[str, Any]:
-    """RED: canonical deterministic report assembly is not implemented."""
-    raise RunnerNotImplemented("deterministic report assembly is not implemented in RED")
+    findings = sorted(
+        [finding.as_dict() for finding in report.findings],
+        key=lambda item: (item["category"], item["label"], item["hash"]),
+    )
+    redaction_findings = sorted(report.redaction_scan.get("findings") or [])
+    return {
+        "schemaVersion": report.schema_version,
+        "gitShaFull": report.git_sha_full,
+        "manifestSha256": report.manifest_sha256,
+        "executableCount": report.executable_count,
+        "naCount": report.na_count,
+        "deferredCount": report.deferred_count,
+        "binariesRun": sorted(report.binaries_run),
+        "failures": sorted(report.failures),
+        "leakageCount": report.leakage_count,
+        "findings": findings,
+        "redactionScan": {
+            "passed": bool(report.redaction_scan.get("passed", True)),
+            "findings": redaction_findings,
+        },
+    }
 
 
 def write_report_atomic(path: Path, report_dict: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(report_dict, indent=2, sort_keys=True) + "\n"
-    with tempfile.NamedTemporaryFile(
-        "w",
-        encoding="utf-8",
-        dir=path.parent,
-        delete=False,
-    ) as handle:
-        handle.write(payload)
-        temp_name = handle.name
-    os.replace(temp_name, path)
+    temp_name: str | None = None
+    try:
+        fd, temp_name = tempfile.mkstemp(
+            prefix=".manifest-run-",
+            suffix=".json",
+            dir=path.parent,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_name, path)
+        dir_fd = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        temp_name = None
+    finally:
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name)
+            except OSError:
+                pass
 
 
 def execute_grouped_binaries(
@@ -539,22 +741,100 @@ def execute_grouped_binaries(
     executor: CommandExecutor,
     cwd: Path,
     env: Mapping[str, str],
+    timeout_secs: int = DEFAULT_BINARY_TIMEOUT_SECS,
 ) -> list[ChildResult]:
-    """RED: grouped binary execution is not implemented."""
-    raise RunnerNotImplemented("grouped binary execution is not implemented in RED")
+    results: list[ChildResult] = []
+    for binary in binaries:
+        command = build_cargo_command(binary)
+        results.append(
+            executor.run(command, cwd=cwd, env=env, timeout_secs=timeout_secs)
+        )
+    return results
 
 
 def assemble_report(
     *,
     manifest: DenialManifest,
-    manifest_path: Path,
     fixture: DenialFixture,
     child_results: Sequence[ChildResult],
-    validation_errors: Sequence[str],
-    repo_root: Path,
+    git_sha_full: str,
+    manifest_sha256: str,
 ) -> RunReport:
-    """RED: full report assembly with leakage scanning is not implemented."""
-    raise RunnerNotImplemented("report assembly is not implemented in RED")
+    executable_count, na_count, deferred_count = count_rows_by_status(manifest)
+    report = RunReport(
+        git_sha_full=git_sha_full,
+        manifest_sha256=manifest_sha256,
+        executable_count=executable_count,
+        na_count=na_count,
+        deferred_count=deferred_count,
+    )
+
+    static_needles = static_foreign_needles(fixture)
+    findings_map: dict[tuple[str, str, str], LeakFinding] = {}
+
+    for result in child_results:
+        report.binaries_run.append(result.binary)
+        combined = result.stdout + result.stderr
+
+        for finding in scan_for_foreign_markers(combined, static_needles):
+            findings_map[(finding.category, finding.label, finding.hash)] = finding
+
+        if result.timed_out or result.exit_code != 0:
+            output_hash, snippet_hash = sanitized_output_digest(combined, fixture=fixture)
+            suffix = " (timed out)" if result.timed_out else ""
+            report.failures.append(
+                f"binary {result.binary} exited {result.exit_code}{suffix}; "
+                f"outputSha256={output_hash}; snippetHash={snippet_hash}"
+            )
+
+    report.findings = sorted(
+        findings_map.values(),
+        key=lambda item: (item.category, item.label, item.hash),
+    )
+    report.leakage_count = len(report.findings)
+
+    payload = build_deterministic_report_dict(report)
+    redacted = redact_report_dict(payload, fixture=fixture)
+    serialized = json.dumps(redacted, sort_keys=True)
+    secret_labels = scan_for_secret_shapes(serialized)
+    marker_residuals: list[str] = []
+    for needle in static_needles:
+        if needle.value and needle.value.lower() in serialized.lower():
+            marker_residuals.append(needle.label())
+    redaction_findings = sorted(set(secret_labels + marker_residuals))
+    report.redaction_scan = {
+        "passed": not redaction_findings,
+        "findings": redaction_findings,
+    }
+    if redaction_findings:
+        report.failures.append(
+            "redaction scan detected residual secret or marker material: "
+            + ", ".join(redaction_findings)
+        )
+
+    return report
+
+
+def _safe_manifest_sha256(manifest_path: Path) -> str:
+    try:
+        return _sha256_file(manifest_path)
+    except OSError:
+        return ""
+
+
+def _write_sanitized_report(
+    report: RunReport,
+    output_path: Path,
+    *,
+    fixture: DenialFixture | None,
+) -> bool:
+    try:
+        payload = build_deterministic_report_dict(report)
+        redacted = redact_report_dict(payload, fixture=fixture)
+        write_report_atomic(output_path, redacted)
+        return True
+    except OSError:
+        return False
 
 
 def run_suite(
@@ -568,105 +848,66 @@ def run_suite(
     git_sha_resolver: Callable[[Path], str] = resolve_git_sha_full,
 ) -> tuple[int, RunReport | None]:
     runtime_env = dict(env if env is not None else os.environ)
-    report = RunReport(
-        git_sha_full=git_sha_resolver(repo_root),
-        manifest_sha256=_sha256_file(manifest_path),
-    )
+    git_sha_full = git_sha_resolver(repo_root)
+    manifest_sha256 = _safe_manifest_sha256(manifest_path)
+    report = RunReport(git_sha_full=git_sha_full, manifest_sha256=manifest_sha256)
+    fixture: DenialFixture | None = None
+    write_ok = output_path is None
+
+    def finalize(exit_code: int) -> tuple[int, RunReport]:
+        nonlocal write_ok
+        if output_path is not None:
+            write_ok = _write_sanitized_report(report, output_path, fixture=fixture)
+            if not write_ok:
+                report.failures.append("failed to write sanitized report artifact")
+        if exit_code == 0 and (report.failures or report.leakage_count > 0):
+            exit_code = 1
+        if exit_code == 0 and not write_ok:
+            exit_code = 1
+        return exit_code, report
 
     try:
         validate_required_env(runtime_env)
     except ValueError as exc:
         report.failures.append(str(exc))
-        exit_code = 2
-        if output_path is not None:
-            try:
-                payload = build_deterministic_report_dict(report)
-                write_report_atomic(output_path, redact_report_dict(payload))
-            except RunnerNotImplemented:
-                pass
-        return exit_code, report
+        return finalize(2)
 
     try:
         manifest = load_manifest(manifest_path)
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-        report.failures.append(f"manifest load failed: {exc}")
-        exit_code = 2
-        if output_path is not None:
-            try:
-                payload = build_deterministic_report_dict(report)
-                write_report_atomic(output_path, redact_report_dict(payload))
-            except RunnerNotImplemented:
-                pass
-        return exit_code, report
+        report.failures.append(f"manifest load failed: {type(exc).__name__}")
+        return finalize(2)
 
-    executable_count, na_count, deferred_count = count_rows_by_status(manifest)
-    report.executable_count = executable_count
-    report.na_count = na_count
-    report.deferred_count = deferred_count
+    report.executable_count, report.na_count, report.deferred_count = count_rows_by_status(manifest)
 
     validation_errors = validate_manifest_schema(manifest)
-    validation_errors.extend(
-        validate_executable_sources(manifest, tests_root=tests_root)
-    )
+    validation_errors.extend(validate_executable_sources(manifest, tests_root=tests_root))
     if validation_errors:
         report.failures.extend(sorted(validation_errors))
-        exit_code = 2
-        if output_path is not None:
-            try:
-                payload = build_deterministic_report_dict(report)
-                write_report_atomic(output_path, redact_report_dict(payload))
-            except RunnerNotImplemented:
-                pass
-        return exit_code, report
+        return finalize(2)
 
     fixture_path = fixture_path_for_manifest(manifest_path)
     try:
         fixture = load_fixture(fixture_path)
     except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-        report.failures.append(f"fixture load failed: {exc}")
-        exit_code = 2
-        if output_path is not None:
-            try:
-                payload = build_deterministic_report_dict(report)
-                write_report_atomic(output_path, redact_report_dict(payload))
-            except RunnerNotImplemented:
-                pass
-        return exit_code, report
+        report.failures.append(f"fixture load failed: {type(exc).__name__}")
+        return finalize(2)
 
     grouped = group_executable_rows_by_binary(manifest)
-    try:
-        child_results = execute_grouped_binaries(
-            list(grouped.keys()),
-            executor=executor,
-            cwd=repo_root,
-            env=runtime_env,
-        )
-        report = assemble_report(
-            manifest=manifest,
-            manifest_path=manifest_path,
-            fixture=fixture,
-            child_results=child_results,
-            validation_errors=[],
-            repo_root=repo_root,
-        )
-    except RunnerNotImplemented as exc:
-        report.failures.append(str(exc))
-        exit_code = 1
-        if output_path is not None:
-            try:
-                payload = build_deterministic_report_dict(report)
-                write_report_atomic(output_path, redact_report_dict(payload))
-            except RunnerNotImplemented:
-                pass
-        return exit_code, report
-
-    exit_code = 0
-    if report.failures or report.leakage_count > 0:
-        exit_code = 1
-    if output_path is not None:
-        payload = build_deterministic_report_dict(report)
-        write_report_atomic(output_path, redact_report_dict(payload))
-    return exit_code, report
+    child_results = execute_grouped_binaries(
+        list(grouped.keys()),
+        executor=executor,
+        cwd=repo_root,
+        env=runtime_env,
+    )
+    report = assemble_report(
+        manifest=manifest,
+        fixture=fixture,
+        child_results=child_results,
+        git_sha_full=git_sha_full,
+        manifest_sha256=manifest_sha256,
+    )
+    return finalize(0 if not report.failures and report.leakage_count == 0 else 1)
 
 
 # ---------------------------------------------------------------------------
@@ -776,8 +1017,39 @@ class DenialRunnerSelfTests(unittest.TestCase):
         errors = validate_executable_sources(manifest, tests_root=self.tests_root)
         self.assertTrue(any("testName" in error for error in errors))
 
+    def test_rust_test_name_parser_ignores_comments_and_strings(self) -> None:
+        source = '''
+// async fn decoy_in_comment() {}
+const IGNORED = "fn fake_in_string() {}";
+#[tokio::test]
+async fn real_integration_test() {}
+fn helper_only() {}
+'''
+        names = extract_rust_test_names(source)
+        self.assertIn("real_integration_test", names)
+        self.assertNotIn("decoy_in_comment", names)
+        self.assertNotIn("fake_in_string", names)
+
+    def test_shared_display_names_are_not_static_leak_needles(self) -> None:
+        fixture = load_fixture(self.fixture_path)
+        needles = static_foreign_needles(fixture)
+        values = {needle.value for needle in needles}
+        self.assertIn("phase1c-marker-beta", values)
+        self.assertNotIn("Shared Contract Collection", values)
+        self.assertNotIn("Shared Contract Document", values)
+
     def test_missing_required_env_fails_closed(self) -> None:
-        manifest_path = self.write_manifest([])
+        manifest_path = self.write_manifest(
+            [
+                {
+                    "id": "na-export",
+                    "guardInventoryRef": "export_route_absent",
+                    "layer": "http",
+                    "status": "na",
+                    "naCategory": "export_route_absent",
+                }
+            ]
+        )
         exit_code, report = run_suite(
             manifest_path=manifest_path,
             output_path=self.root / "report.json",
@@ -791,6 +1063,8 @@ class DenialRunnerSelfTests(unittest.TestCase):
         self.assertIsNotNone(report)
         assert report is not None
         self.assertTrue(any(REQUIRED_ENV_VAR in failure for failure in report.failures))
+        payload = json.loads((self.root / "report.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["gitShaFull"], "a" * 40)
 
     def test_nonzero_child_exit_is_failure(self) -> None:
         self.write_source("api_http_contracts", ["live_http_retrieval_refuses_foreign_collection_scope"])
@@ -829,7 +1103,7 @@ class DenialRunnerSelfTests(unittest.TestCase):
         self.assertIsNotNone(report)
         assert report is not None
         self.assertTrue(
-            any("api_http_contracts" in failure or "101" in failure for failure in report.failures),
+            any("api_http_contracts" in failure and "101" in failure for failure in report.failures),
             report.failures,
         )
 
@@ -869,6 +1143,8 @@ class DenialRunnerSelfTests(unittest.TestCase):
         assert report is not None
         self.assertGreater(report.leakage_count, 0)
         self.assertTrue(report.findings)
+        serialized = (self.root / "report.json").read_text(encoding="utf-8")
+        self.assertNotIn("phase1c-marker-beta", serialized)
 
     def test_command_grouping_runs_each_binary_once_in_sorted_order(self) -> None:
         self.write_source("alpha_binary", ["alpha_test"])
@@ -917,15 +1193,16 @@ class DenialRunnerSelfTests(unittest.TestCase):
         self.assertEqual(len(grouped["zebra_binary"]), 2)
 
         executor = FakeExecutor()
-        with self.assertRaises(RunnerNotImplemented):
-            execute_grouped_binaries(
-                list(grouped.keys()),
-                executor=executor,
-                cwd=self.root,
-                env=self.required_env,
-            )
+        results = execute_grouped_binaries(
+            list(grouped.keys()),
+            executor=executor,
+            cwd=self.root,
+            env=self.required_env,
+        )
+        self.assertEqual([result.binary for result in results], ["alpha_binary", "zebra_binary"])
+        self.assertEqual(len(executor.calls), 2)
+        self.assertEqual(_command_binary(executor.calls[0]), "alpha_binary")
 
-        # Contract: cargo command uses argv list without shell metacharacters.
         command = build_cargo_command("alpha_binary")
         self.assertEqual(
             command,
@@ -952,6 +1229,7 @@ class DenialRunnerSelfTests(unittest.TestCase):
             "failures": [f"child stderr mentioned {canary}"],
             "findings": [],
             "leakageCount": 0,
+            "redactionScan": {"passed": True, "findings": []},
         }
         redacted = redact_report_dict(raw_report)
         serialized = json.dumps(redacted, sort_keys=True)
@@ -968,9 +1246,8 @@ class DenialRunnerSelfTests(unittest.TestCase):
             binaries_run=["beta_binary", "alpha_binary"],
             failures=["zebra failure", "alpha failure"],
             leakage_count=1,
-            findings=[
-                LeakFinding("foreign_marker", "marker_string:abc", "a" * 64),
-            ],
+            findings=[LeakFinding("foreign_marker", "marker_string:abc", "a" * 64)],
+            redaction_scan={"passed": True, "findings": []},
         )
         first = json.dumps(build_deterministic_report_dict(report), sort_keys=True)
         second = json.dumps(build_deterministic_report_dict(report), sort_keys=True)
@@ -1024,37 +1301,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--manifest",
         type=Path,
         default=DEFAULT_MANIFEST,
-        help="Path to multi-org denial manifest JSON",
+        help="Path to multi-org denial manifest JSON (relative to invocation cwd)",
     )
     parser.add_argument(
         "--output",
         type=Path,
         default=None,
-        help="Sanitized manifest-run.json output path",
+        help="Sanitized manifest-run.json output path (relative to invocation cwd)",
     )
     parser.add_argument(
-        "--repo-root",
-        type=Path,
-        default=REPO_ROOT,
-        help="Repository root for git SHA resolution and cargo cwd",
+        "--self-test",
+        action="store_true",
+        help="Run hermetic contract tests",
     )
-    parser.add_argument(
-        "--tests-root",
-        type=Path,
-        default=SERVER_TESTS_ROOT,
-        help="Integration tests directory containing {{binary}}.rs sources",
-    )
-    parser.add_argument("--self-test", action="store_true", help="Run hermetic contract tests")
     args = parser.parse_args(argv)
 
     if args.self_test:
         return run_self_tests()
 
+    cwd = Path.cwd()
+    manifest_path = args.manifest if args.manifest.is_absolute() else cwd / args.manifest
+    manifest_path = manifest_path.resolve()
+
+    output_path: Path | None = None
+    if args.output is not None:
+        output_path = args.output if args.output.is_absolute() else cwd / args.output
+        output_path = output_path.resolve()
+
+    repo_root = REPO_ROOT
+    tests_root = resolve_tests_root(repo_root)
+
     exit_code, _report = run_suite(
-        manifest_path=args.manifest.resolve(),
-        output_path=args.output.resolve() if args.output else None,
-        repo_root=args.repo_root.resolve(),
-        tests_root=args.tests_root.resolve(),
+        manifest_path=manifest_path,
+        output_path=output_path,
+        repo_root=repo_root,
+        tests_root=tests_root,
         executor=SubprocessExecutor(),
         env=os.environ.copy(),
     )
