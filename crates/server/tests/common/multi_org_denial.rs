@@ -403,9 +403,7 @@ pub fn business_guard_operations(inventory: &GuardInventory) -> Vec<&GuardOperat
 }
 
 /// Join ROUTE_INVENTORY routes to guard rows; only business-classified routes need denial rows.
-pub fn business_route_inventory(
-    inventory: &GuardInventory,
-) -> Vec<(&str, &str, &GuardOperation)> {
+pub fn business_route_inventory(inventory: &GuardInventory) -> Vec<(&str, &str, &GuardOperation)> {
     let by_route: BTreeMap<(String, String), &GuardOperation> = inventory
         .operations
         .iter()
