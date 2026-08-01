@@ -64,8 +64,69 @@ pub struct DenialFixtureOrg {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DenialDuplicateNames {
+    /// Cross-org oracle name for the primary (`org`) visibility collection.
     pub collection: String,
     pub document: String,
+    /// Display names per visibility label — unique within an org, equal across orgs.
+    #[serde(default)]
+    pub collections_by_visibility: BTreeMap<String, String>,
+}
+
+/// Visibility labels seeded in every org world.
+pub const COLLECTION_VISIBILITY_LABELS: &[&str] = &["private", "org", "groups"];
+
+/// Resolve the collection display name for a visibility label from the fixture.
+pub fn collection_name_for_visibility<'a>(
+    duplicate_names: &'a DenialDuplicateNames,
+    visibility: &str,
+) -> &'a str {
+    duplicate_names
+        .collections_by_visibility
+        .get(visibility)
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            if visibility == "org" {
+                duplicate_names.collection.as_str()
+            } else {
+                panic!("missing collectionsByVisibility.{visibility} in denial fixture")
+            }
+        })
+}
+
+/// Hermetic guard: names are distinct within an org and the org oracle matches `collection`.
+pub fn validate_duplicate_collection_topology(
+    duplicate_names: &DenialDuplicateNames,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for label in COLLECTION_VISIBILITY_LABELS {
+        if !duplicate_names
+            .collections_by_visibility
+            .contains_key(*label)
+        {
+            errors.push(format!(
+                "denial fixture duplicateNames.collectionsByVisibility missing {label}"
+            ));
+        }
+    }
+    let names: Vec<&str> = COLLECTION_VISIBILITY_LABELS
+        .iter()
+        .map(|label| collection_name_for_visibility(duplicate_names, label))
+        .collect();
+    let unique: BTreeSet<&str> = names.iter().copied().collect();
+    if unique.len() != names.len() {
+        errors.push(
+            "denial fixture collection names must be unique within each org (private/org/groups)"
+                .into(),
+        );
+    }
+    if collection_name_for_visibility(duplicate_names, "org") != duplicate_names.collection.as_str()
+    {
+        errors.push(
+            "denial fixture duplicateNames.collection must match collectionsByVisibility.org"
+                .into(),
+        );
+    }
+    errors
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -689,6 +750,9 @@ fn validate_fixture_shape(fixture: &DenialFixture, errors: &mut Vec<String>) {
     {
         errors.push("denial fixture duplicateNames must be non-empty".into());
     }
+    errors.extend(validate_duplicate_collection_topology(
+        &fixture.duplicate_names,
+    ));
     if fixture.role_topology.len() < 3 {
         errors.push(format!(
             "denial fixture roleTopology must include owner/admin/member; found {}",
@@ -869,5 +933,16 @@ mod unit_tests {
         assert!(!business.contains("authLogin"));
         assert!(business.contains("getCollection"));
         assert!(business.contains("redeemDownload"));
+    }
+
+    #[test]
+    fn duplicate_collection_topology_requires_unique_per_org_and_cross_org_oracle() {
+        let fixture = load_denial_fixture().expect("fixture");
+        let errors = validate_duplicate_collection_topology(&fixture.duplicate_names);
+        assert!(
+            errors.is_empty(),
+            "fixture topology invalid: {}",
+            errors.join("; ")
+        );
     }
 }

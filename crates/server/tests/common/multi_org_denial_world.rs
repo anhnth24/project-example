@@ -1,6 +1,6 @@
 //! Live bootstrapping for [`super::MultiOrgDenialWorld`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
@@ -15,8 +15,8 @@ use fileconv_server::storage::ObjectIdentityMeta;
 use uuid::Uuid;
 
 use crate::common::multi_org_denial::{
-    load_denial_fixture, DenialFixture, DenialFixtureOrg, ForeignMarkers, MultiOrgDenialWorld,
-    DENIAL_FIXTURE_REL_PATH,
+    collection_name_for_visibility, load_denial_fixture, DenialFixture, DenialFixtureOrg,
+    ForeignMarkers, MultiOrgDenialWorld, COLLECTION_VISIBILITY_LABELS, DENIAL_FIXTURE_REL_PATH,
 };
 use crate::common::{
     admin_database_url, app_database_url, boot_app_pool, build_router, login_tokens, put_bytes,
@@ -52,6 +52,7 @@ pub struct BootedUser {
 pub struct BootedCollection {
     pub collection_id: Uuid,
     pub visibility: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -143,10 +144,8 @@ pub fn foreign_markers_for(world: &MultiOrgDenialWorld, actor_org_key: &str) -> 
         markers
             .collection_ids
             .push(collection.collection_id.to_string());
+        markers.names.push(collection.name.clone());
     }
-    markers
-        .names
-        .push(world.fixture.duplicate_names.collection.clone());
     markers
         .document_ids
         .push(foreign.document.document_id.to_string());
@@ -183,11 +182,38 @@ pub fn assert_base_topology(world: &MultiOrgDenialWorld) {
             3,
             "expected private/org/groups collections"
         );
-        assert!(
-            org.collections.contains_key("private")
-                && org.collections.contains_key("org")
-                && org.collections.contains_key("groups"),
-            "visibility matrix incomplete"
+        for label in COLLECTION_VISIBILITY_LABELS {
+            assert!(
+                org.collections.contains_key(*label),
+                "visibility matrix missing {label}"
+            );
+        }
+        let names: BTreeSet<&str> = org.collections.values().map(|c| c.name.as_str()).collect();
+        assert_eq!(
+            names.len(),
+            org.collections.len(),
+            "collection names must be unique within org {}",
+            org.slug
+        );
+        for label in COLLECTION_VISIBILITY_LABELS {
+            let expected = collection_name_for_visibility(&world.fixture.duplicate_names, label);
+            assert_eq!(
+                org.collections[*label].name, expected,
+                "org {} collection {label} name mismatch",
+                org.slug
+            );
+        }
+    }
+    let alpha = world.org("orgAlpha");
+    let beta = world.org("orgBeta");
+    for label in COLLECTION_VISIBILITY_LABELS {
+        assert_eq!(
+            alpha.collections[*label].name, beta.collections[*label].name,
+            "cross-org duplicate oracle for {label}"
+        );
+        assert_ne!(
+            alpha.collections[*label].collection_id, beta.collections[*label].collection_id,
+            "same-name collections must not share ids for {label}"
         );
     }
     assert!(world.fixture.pre_revoke_tokens);
@@ -247,7 +273,12 @@ async fn seed_org_world(
     let job_id = Uuid::new_v4();
     let conflict_id = Uuid::new_v4();
 
-    let duplicate_collection_name = fixture.duplicate_names.collection.clone();
+    let private_collection_name =
+        collection_name_for_visibility(&fixture.duplicate_names, "private").to_string();
+    let org_collection_name =
+        collection_name_for_visibility(&fixture.duplicate_names, "org").to_string();
+    let groups_collection_name =
+        collection_name_for_visibility(&fixture.duplicate_names, "groups").to_string();
     let duplicate_document_title = fixture.duplicate_names.document.clone();
     let content_sha = sha256_hex(marker.as_bytes());
 
@@ -278,7 +309,9 @@ async fn seed_org_world(
         let slug = slug.clone();
         let marker = marker.clone();
         let owner_ctx = owner_ctx.clone();
-        let duplicate_collection_name = duplicate_collection_name.clone();
+        let private_collection_name = private_collection_name.clone();
+        let org_collection_name = org_collection_name.clone();
+        let groups_collection_name = groups_collection_name.clone();
         let duplicate_document_title = duplicate_document_title.clone();
         move |txn| {
             Box::pin(async move {
@@ -294,7 +327,7 @@ async fn seed_org_world(
                     txn,
                     &owner_ctx,
                     private_id,
-                    &duplicate_collection_name,
+                    &private_collection_name,
                     "private",
                     CollectionVisibility::Private,
                 )
@@ -303,7 +336,7 @@ async fn seed_org_world(
                     txn,
                     &owner_ctx,
                     org_collection_id,
-                    &duplicate_collection_name,
+                    &org_collection_name,
                     "org",
                     CollectionVisibility::Org,
                 )
@@ -312,7 +345,7 @@ async fn seed_org_world(
                     txn,
                     &owner_ctx,
                     groups_id,
-                    &duplicate_collection_name,
+                    &groups_collection_name,
                     "groups",
                     CollectionVisibility::Groups,
                 )
@@ -473,6 +506,7 @@ async fn seed_org_world(
         BootedCollection {
             collection_id: private_id,
             visibility: "private".into(),
+            name: private_collection_name,
         },
     );
     collections_map.insert(
@@ -480,6 +514,7 @@ async fn seed_org_world(
         BootedCollection {
             collection_id: org_collection_id,
             visibility: "org".into(),
+            name: org_collection_name,
         },
     );
     collections_map.insert(
@@ -487,6 +522,7 @@ async fn seed_org_world(
         BootedCollection {
             collection_id: groups_id,
             visibility: "groups".into(),
+            name: groups_collection_name,
         },
     );
 

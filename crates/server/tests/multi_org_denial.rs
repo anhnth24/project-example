@@ -230,9 +230,21 @@ async fn duplicate_names_across_orgs_do_not_create_an_oracle() {
         world.org("orgBeta").document.title,
         world.fixture.duplicate_names.document
     );
-    assert_ne!(
-        world.org("orgAlpha").collections["org"].collection_id,
-        world.org("orgBeta").collections["org"].collection_id
+    for label in ["private", "org", "groups"] {
+        assert_eq!(
+            world.org("orgAlpha").collections[label].name,
+            world.org("orgBeta").collections[label].name,
+            "cross-org collection name oracle for {label}"
+        );
+        assert_ne!(
+            world.org("orgAlpha").collections[label].collection_id,
+            world.org("orgBeta").collections[label].collection_id,
+            "collection ids must differ for {label}"
+        );
+    }
+    assert_eq!(
+        world.org("orgAlpha").collections["org"].name,
+        world.fixture.duplicate_names.collection
     );
     world.cleanup().await.expect("cleanup");
 }

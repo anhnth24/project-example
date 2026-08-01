@@ -10,7 +10,12 @@
   "collectionVisibilities": ["private", "org", "groups"],
   "duplicateNames": {
     "collection": "Shared Contract Collection",
-    "document": "Shared Contract Document"
+    "document": "Shared Contract Document",
+    "collectionsByVisibility": {
+      "private": "Shared Private Collection",
+      "org": "Shared Contract Collection",
+      "groups": "Shared Groups Collection"
+    }
   },
   "indexedMarkers": {
     "orgAlpha": "phase1c-marker-alpha",
