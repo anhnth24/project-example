@@ -42,10 +42,14 @@ pub struct DenialFixture {
     #[serde(default)]
     pub orgs: Vec<DenialFixtureOrg>,
     pub users_per_org: u32,
+    #[serde(default)]
+    pub role_topology: Vec<String>,
     pub collection_visibilities: Vec<String>,
     pub duplicate_names: DenialDuplicateNames,
     #[serde(default)]
     pub indexed_markers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub object_key_template: String,
     pub pre_revoke_tokens: bool,
 }
 
@@ -176,7 +180,20 @@ pub struct ForeignMarkers {
     pub marker_strings: Vec<String>,
 }
 
-/// Minimal HTTP response view for leakage assertions (GREEN implements full scan).
+/// HTTP denial semantics expected from production routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenialExpectation {
+    /// Successful or non-denial response must not leak foreign markers.
+    AllowSuccess,
+    /// Foreign id in request body scope → 403 without foreign markers.
+    BodyScopeForbidden,
+    /// Addressed foreign resource → 404 without existence oracle.
+    PathIdorNotFound,
+    /// Missing/invalid session → 401.
+    Unauthorized,
+}
+
+/// Minimal HTTP response view for leakage assertions.
 #[derive(Debug, Clone)]
 pub struct DenialResponse<'a> {
     pub status: u16,
@@ -184,55 +201,106 @@ pub struct DenialResponse<'a> {
     pub headers: Vec<(&'a str, &'a str)>,
 }
 
-/// Shared multi-org world for executable denial tests (GREEN implements boot).
-#[derive(Debug)]
+use crate::common::{DualRoleEphemeralDb, MinioCleanupGuard};
+
+/// Shared multi-org world for executable denial tests.
 pub struct MultiOrgDenialWorld {
     pub fixture: DenialFixture,
+    pub(crate) ephemeral: DualRoleEphemeralDb,
+    pub pool: deadpool_postgres::Pool,
+    pub app: axum::Router,
+    pub(crate) store: Option<fileconv_server::storage::minio::MinioClient>,
+    pub(crate) minio_guard: Option<MinioCleanupGuard>,
+    pub orgs: BTreeMap<String, crate::common::multi_org_denial_world::BootedOrg>,
 }
 
 impl MultiOrgDenialWorld {
-    /// Boot two orgs × three users, visibility matrix, duplicate names, indexed markers,
-    /// and pre-revoke tokens. RED intentionally panics — implementation lands in GREEN.
     pub async fn boot() -> Self {
-        let fixture = load_denial_fixture().expect("denial fixture must parse in boot");
-        if fixture.orgs.len() < 2 {
-            panic!(
-                "MultiOrgDenialWorld::boot requires two orgs in {}; found {}",
-                DENIAL_FIXTURE_REL_PATH,
-                fixture.orgs.len()
-            );
-        }
-        unimplemented!(
-            "MultiOrgDenialWorld::boot lands in GREEN — use referenced cross-org tests until then"
-        );
+        crate::common::multi_org_denial_world::boot_world().await
     }
 
-    pub fn foreign_markers(&self) -> ForeignMarkers {
-        ForeignMarkers::default()
+    pub fn foreign_markers_for(&self, actor_org_key: &str) -> ForeignMarkers {
+        crate::common::multi_org_denial_world::foreign_markers_for(self, actor_org_key)
+    }
+
+    pub async fn cleanup(self) -> Result<(), String> {
+        crate::common::multi_org_denial_world::cleanup_world(self).await
+    }
+
+    pub fn assert_base_topology(&self) {
+        crate::common::multi_org_denial_world::assert_base_topology(self);
     }
 }
 
 /// Assert denial responses contain no foreign IDs, names, keys, or marker strings.
-pub fn assert_denial_no_leak(response: &DenialResponse<'_>, foreign_markers: &ForeignMarkers) {
+pub fn assert_denial_no_leak(
+    response: &DenialResponse<'_>,
+    foreign_markers: &ForeignMarkers,
+    expectation: DenialExpectation,
+) {
     let body = String::from_utf8_lossy(response.body);
+    let body_lower = body.to_lowercase();
     let mut leaks = Vec::new();
 
-    for marker in foreign_markers.all_strings() {
-        if body.contains(marker) {
-            leaks.push(format!("body contains foreign marker: {marker}"));
+    match expectation {
+        DenialExpectation::AllowSuccess => {
+            if !(200..300).contains(&response.status) && response.status != 401 {
+                leaks.push(format!(
+                    "expected success response, got {}",
+                    response.status
+                ));
+            }
         }
-        for (name, value) in &response.headers {
-            if value.contains(marker) {
-                leaks.push(format!("header {name} contains foreign marker: {marker}"));
+        DenialExpectation::BodyScopeForbidden => {
+            if response.status != 403 {
+                leaks.push(format!(
+                    "body-scope denial expected 403, got {}",
+                    response.status
+                ));
+            }
+        }
+        DenialExpectation::PathIdorNotFound => {
+            if response.status != 404 {
+                leaks.push(format!(
+                    "path-IDOR denial expected 404, got {}",
+                    response.status
+                ));
+            }
+        }
+        DenialExpectation::Unauthorized => {
+            if response.status != 401 {
+                leaks.push(format!(
+                    "unauthorized denial expected 401, got {}",
+                    response.status
+                ));
             }
         }
     }
 
+    if (200..300).contains(&response.status)
+        && !matches!(expectation, DenialExpectation::AllowSuccess)
+    {
+        leaks.push(format!(
+            "denial must not return success status {}",
+            response.status
+        ));
+    }
     if response.status >= 500 {
         leaks.push(format!(
             "denial must not surface as server error: status {}",
             response.status
         ));
+    }
+
+    for needle in foreign_markers.all_needles() {
+        if body_lower.contains(&needle.to_lowercase()) {
+            leaks.push(format!("body contains foreign marker: {needle}"));
+        }
+        for (name, value) in &response.headers {
+            if value.to_lowercase().contains(&needle.to_lowercase()) {
+                leaks.push(format!("header {name} contains foreign marker: {needle}"));
+            }
+        }
     }
 
     if !leaks.is_empty() {
@@ -265,6 +333,21 @@ impl ForeignMarkers {
             }
         }
         out
+    }
+
+    /// Canonical and normalized variants for case/substring-resistant scanning.
+    pub fn all_needles(&self) -> Vec<String> {
+        let mut needles = BTreeSet::new();
+        for value in self.all_strings() {
+            needles.insert(value.to_string());
+            needles.insert(value.to_lowercase());
+            needles.insert(value.to_uppercase());
+            if let Ok(uuid) = uuid::Uuid::parse_str(value) {
+                needles.insert(uuid.simple().to_string());
+                needles.insert(uuid.to_string());
+            }
+        }
+        needles.into_iter().collect()
     }
 }
 
@@ -311,7 +394,7 @@ pub fn is_business_guard_operation(op: &GuardOperation) -> bool {
     !matches!(op.authz_kind, AuthzKind::Public)
 }
 
-pub fn business_guard_operations<'a>(inventory: &'a GuardInventory) -> Vec<&'a GuardOperation> {
+pub fn business_guard_operations(inventory: &GuardInventory) -> Vec<&GuardOperation> {
     inventory
         .operations
         .iter()
@@ -320,9 +403,9 @@ pub fn business_guard_operations<'a>(inventory: &'a GuardInventory) -> Vec<&'a G
 }
 
 /// Join ROUTE_INVENTORY routes to guard rows; only business-classified routes need denial rows.
-pub fn business_route_inventory<'a>(
-    inventory: &'a GuardInventory,
-) -> Vec<(&'a str, &'a str, &'a GuardOperation)> {
+pub fn business_route_inventory(
+    inventory: &GuardInventory,
+) -> Vec<(&str, &str, &GuardOperation)> {
     let by_route: BTreeMap<(String, String), &GuardOperation> = inventory
         .operations
         .iter()
@@ -406,6 +489,8 @@ pub fn validate_denial_manifest(
     let mut covered_routes: BTreeSet<(String, String)> = BTreeSet::new();
     let mut test_cache: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
+    let mut na_categories_manifest: BTreeSet<String> = BTreeSet::new();
+
     for row in &manifest.rows {
         *rows_by_id.entry(row.id.as_str()).or_insert(0) += 1;
 
@@ -423,10 +508,11 @@ pub fn validate_denial_manifest(
                 "manifest row {} is missing guardInventoryRef",
                 row.id
             ));
-        } else if !inventory
-            .operations
-            .iter()
-            .any(|op| op.operation_id == row.guard_inventory_ref)
+        } else if matches!(row.status, DenialRowStatus::Executable)
+            && !inventory
+                .operations
+                .iter()
+                .any(|op| op.operation_id == row.guard_inventory_ref)
         {
             errors.push(format!(
                 "manifest row {} references unknown guardInventoryRef: {}",
@@ -436,6 +522,20 @@ pub fn validate_denial_manifest(
 
         match row.status {
             DenialRowStatus::Executable => {
+                if let Some(operation_id) = &row.operation_id {
+                    if row.guard_inventory_ref != *operation_id {
+                        errors.push(format!(
+                            "executable manifest row {} guardInventoryRef {} must equal operationId {operation_id}",
+                            row.id, row.guard_inventory_ref
+                        ));
+                    }
+                } else {
+                    errors.push(format!(
+                        "executable manifest row {} must declare operationId",
+                        row.id
+                    ));
+                }
+
                 let (binary, test_name) = match (&row.binary, &row.test_name) {
                     (Some(binary), Some(test_name))
                         if !binary.trim().is_empty() && !test_name.trim().is_empty() =>
@@ -476,7 +576,7 @@ pub fn validate_denial_manifest(
             }
             DenialRowStatus::Na => {
                 let category = match row.na_category.as_deref() {
-                    Some(category) if !category.trim().is_empty() => category,
+                    Some(category) if !category.trim().is_empty() => category.to_string(),
                     _ => {
                         errors.push(format!(
                             "N/A manifest row {} must declare naCategory",
@@ -485,6 +585,19 @@ pub fn validate_denial_manifest(
                         continue;
                     }
                 };
+                na_categories_manifest.insert(category.clone());
+                if row.guard_inventory_ref != category {
+                    errors.push(format!(
+                        "N/A manifest row {} guardInventoryRef must equal naCategory {category}",
+                        row.id
+                    ));
+                }
+                if row.binary.is_some() || row.test_name.is_some() || row.operation_id.is_some() {
+                    errors.push(format!(
+                        "N/A manifest row {} must not declare binary/testName/operationId",
+                        row.id
+                    ));
+                }
                 if !na_evidence
                     .categories
                     .iter()
@@ -495,11 +608,21 @@ pub fn validate_denial_manifest(
                         row.id
                     ));
                 }
-                if let Some(operation_id) = &row.operation_id {
-                    covered_operation_ids.insert(operation_id.clone());
-                }
             }
         }
+    }
+
+    for required in REQUIRED_NA_CATEGORIES {
+        if !na_categories_manifest.contains(*required) {
+            errors.push(format!("missing N/A manifest row for category: {required}"));
+        }
+    }
+    if na_categories_manifest.len() != REQUIRED_NA_CATEGORIES.len() {
+        errors.push(format!(
+            "manifest must contain exactly {} N/A rows, found {}",
+            REQUIRED_NA_CATEGORIES.len(),
+            na_categories_manifest.len()
+        ));
     }
 
     for (id, count) in &rows_by_id {
@@ -508,7 +631,7 @@ pub fn validate_denial_manifest(
         }
     }
 
-    for (operation_id, _) in &business_ops {
+    for operation_id in business_ops.keys() {
         if !covered_operation_ids.contains(*operation_id) {
             errors.push(format!(
                 "missing denial manifest row for business operationId: {operation_id}"
@@ -567,6 +690,23 @@ fn validate_fixture_shape(fixture: &DenialFixture, errors: &mut Vec<String>) {
         || fixture.duplicate_names.document.trim().is_empty()
     {
         errors.push("denial fixture duplicateNames must be non-empty".into());
+    }
+    if fixture.role_topology.len() < 3 {
+        errors.push(format!(
+            "denial fixture roleTopology must include owner/admin/member; found {}",
+            fixture.role_topology.len()
+        ));
+    }
+    for org in &fixture.orgs {
+        if !fixture.indexed_markers.contains_key(&org.key) {
+            errors.push(format!(
+                "denial fixture indexedMarkers missing entry for org {}",
+                org.key
+            ));
+        }
+    }
+    if fixture.object_key_template.trim().is_empty() {
+        errors.push("denial fixture objectKeyTemplate must be non-empty".into());
     }
     if !fixture.pre_revoke_tokens {
         errors.push("denial fixture preRevokeTokens must be true".into());
