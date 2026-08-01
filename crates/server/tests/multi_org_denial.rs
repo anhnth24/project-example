@@ -1206,41 +1206,33 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         .document_id;
     let app = world.app();
 
-    let stream_app = app.clone();
-    let stream_token = token.clone();
-    let stream_collection = collection_id;
-    let stream_marker = alpha.marker.clone();
-    let stream_handle = tokio::spawn(async move {
-        stream_app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/api/v1/ask/stream")
-                    .header("authorization", format!("Bearer {stream_token}"))
-                    .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({
-                            "question": stream_marker,
-                            "mode": "current",
-                            "limit": 5,
-                            "collectionIds": [stream_collection]
-                        })
-                        .to_string(),
-                    ))
-                    .unwrap(),
-            )
-            .await
-    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/ask/stream")
+                .header("authorization", format!("Bearer {token}"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "question": alpha.marker.clone(),
+                        "mode": "current",
+                        "limit": 5,
+                        "collectionIds": [collection_id]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .expect("stream start");
+    assert_eq!(response.status(), StatusCode::OK);
 
     let session_id =
         await_ask_stream_session(world.pool(), alpha.org_id, owner_id, indexed_document_id)
             .await
             .expect("session row citing worker-indexed document");
-    let response = stream_handle
-        .await
-        .expect("join stream")
-        .expect("stream start");
-    assert_eq!(response.status(), StatusCode::OK);
 
     let org_id = alpha.org_id;
     let owner_ctx = OrgContext::try_new(
