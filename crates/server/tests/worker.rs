@@ -2000,14 +2000,16 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
         .expect("attempt one exists"));
 
     make_job_available(&pool, &ctx, job.id).await;
-    let retry_worker = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
+    let retry_outcome = run_convert_worker_until_completed(
+        &pool,
+        &storage,
+        &ctx,
+        job.id,
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
-    .expect("retry worker");
+    .await;
     assert!(matches!(
-        retry_worker.run_once(&ctx).await.expect("retry attempt"),
+        retry_outcome,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
     ));
 
@@ -2117,19 +2119,20 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
     assert_eq!(reclaimed.id, job.id);
     assert_eq!(reclaimed.status, JobStatus::Pending);
 
-    let worker_b = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
+    let worker_b_outcome = run_convert_worker_until_completed(
+        &pool,
+        &storage,
+        &ctx,
+        job.id,
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
-    .expect("worker b");
-    let worker_b_result = worker_b.run_once(&ctx).await.expect("worker b promote");
+    .await;
     assert!(
         matches!(
-            &worker_b_result,
-            ConvertWorkerRun::Completed { job_id, .. } if *job_id == job.id
+            worker_b_outcome,
+            ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
         ),
-        "worker b promote: {worker_b_result:?}"
+        "worker b promote: {worker_b_outcome:?}"
     );
     let committed_key = first_markdown_artifact_key(&pool, &ctx, document_id).await;
     assert_ne!(committed_key, key_a.as_str());
@@ -2221,14 +2224,16 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
     }
 
     make_job_available(&pool, &ctx, job.id).await;
-    let retry_worker = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
+    let retry_outcome = run_convert_worker_until_completed(
+        &pool,
+        &storage,
+        &ctx,
+        job.id,
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
-    .expect("retry worker");
+    .await;
     assert!(matches!(
-        retry_worker.run_once(&ctx).await.expect("retry"),
+        retry_outcome,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
     ));
     assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
@@ -2299,14 +2304,16 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
         .expect("left for retry"));
 
     make_job_available(&pool, &ctx, job.id).await;
-    let retry_worker = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
+    let retry_outcome = run_convert_worker_until_completed(
+        &pool,
+        &storage,
+        &ctx,
+        job.id,
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
-    .expect("retry worker");
+    .await;
     assert!(matches!(
-        retry_worker.run_once(&ctx).await.expect("retry"),
+        retry_outcome,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
     ));
     assert!(!storage
