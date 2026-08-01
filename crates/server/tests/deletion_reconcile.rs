@@ -712,6 +712,9 @@ struct LiveEnv {
 }
 
 impl LiveEnv {
+    /// Boots an ephemeral org whose principal is authorized for deletion flows
+    /// (`doc.delete` on the context and, via [`ensure_org`], on the owner role).
+    /// Do not reuse this fixture for intentional permission-deny probes.
     async fn boot() -> Option<Self> {
         let base_url = test_database_url()?;
         let storage = test_minio_client()?;
@@ -720,8 +723,16 @@ impl LiveEnv {
         let db = EphemeralDb::create(&base_url).await;
         apply_migrations(&db.url).await.expect("apply migrations");
         let pool = create_pool(&db.url).expect("pool");
-        let ctx = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], [])
-            .expect("org context");
+        // Authorized deletion principal: OrgContext must carry doc.delete so the
+        // service-layer require_permission gate passes. DB role grant is seeded
+        // in ensure_org for the collection Admin ACL check.
+        let ctx = OrgContext::try_new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            ["doc.upload", "doc.delete"],
+            [],
+        )
+        .expect("org context");
         Some(Self {
             db,
             pool,
@@ -762,6 +773,47 @@ async fn ensure_org(pool: &Pool, ctx: &OrgContext) {
                     &[&ctx.org_id()],
                 )
                 .await?;
+                // Dual-layer delete authz: collection Admin ACL joins
+                // roles → role_permissions → permissions for doc.delete.
+                // Private collections seeded below are owned by this user, so
+                // visibility passes via owner_user_id once the permission exists.
+                for code in ["doc.upload", "doc.delete"] {
+                    txn.execute(
+                        "INSERT INTO permissions (id, code, description)
+                         VALUES ($1, $2, $2)
+                         ON CONFLICT (code) DO NOTHING",
+                        &[&Uuid::new_v4(), &code],
+                    )
+                    .await?;
+                }
+                let role_id = Uuid::new_v4();
+                txn.execute(
+                    "INSERT INTO roles (id, org_id, code, name, is_system)
+                     VALUES ($1, $2, 'owner', 'Owner', true)
+                     ON CONFLICT (org_id, code) DO NOTHING",
+                    &[&role_id, &ctx.org_id()],
+                )
+                .await?;
+                let role_id: Uuid = txn
+                    .query_one(
+                        "SELECT id FROM roles WHERE org_id = $1 AND code = 'owner'",
+                        &[&ctx.org_id()],
+                    )
+                    .await?
+                    .get(0);
+                for code in ["doc.upload", "doc.delete"] {
+                    let perm_id: Uuid = txn
+                        .query_one("SELECT id FROM permissions WHERE code = $1", &[&code])
+                        .await?
+                        .get(0);
+                    txn.execute(
+                        "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                         VALUES ($1, $2, $3)
+                         ON CONFLICT DO NOTHING",
+                        &[&ctx.org_id(), &role_id, &perm_id],
+                    )
+                    .await?;
+                }
                 Ok(())
             })
         }
@@ -1276,6 +1328,10 @@ async fn reset_delete_job_to_pending(env: &LiveEnv) {
 }
 
 async fn tombstone_directly(env: &LiveEnv, document_id: Uuid) {
+    assert!(
+        env.ctx.has_permission("doc.delete"),
+        "LiveEnv principal must carry doc.delete for authorized tombstone helpers"
+    );
     request_delete(&env.pool, &env.ctx, document_id)
         .await
         .expect("request delete");
