@@ -33,6 +33,26 @@ pub const REQUIRED_NA_CATEGORIES: &[&str] = &[
     NA_CATEGORY_EMBEDDING_TOKEN_METERING_LOCAL_MOCK,
 ];
 
+/// Task 13 scaffold tests — must not certify executable manifest rows in Task 12.
+pub const TASK13_SCAFFOLD_TEST_NAMES: &[&str] = &[
+    "indexed_fts_and_ask_never_return_foreign_marker",
+    "duplicate_names_across_orgs_do_not_create_an_oracle",
+    "org_switch_never_reuses_previous_org_cache_scope",
+    "pre_revoke_tokens_fail_after_downgrade_suspend_and_remove",
+    "preview_download_job_and_sse_hide_foreign_ids",
+    "in_flight_ask_emits_no_content_after_acl_revoke",
+];
+
+/// Deferred gap guard refs — explicit incomplete Task 13 coverage.
+pub const REQUIRED_DEFERRED_GUARD_REFS: &[&str] = &[
+    "task13:indexed_fts_ask",
+    "task13:duplicate_names",
+    "task13:org_switch_cache",
+    "task13:stale_tokens",
+    "task13:preview_download_sse",
+    "task13:in_flight_ask_revoke",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DenialFixture {
@@ -151,6 +171,30 @@ pub struct DenialManifestRow {
     pub status: DenialRowStatus,
     #[serde(default)]
     pub na_category: Option<String>,
+    #[serde(default)]
+    pub coverage_state: Option<DenialCoverageState>,
+    #[serde(default)]
+    pub coverage_note: Option<String>,
+    #[serde(default)]
+    pub deferred_task: Option<String>,
+    #[serde(default)]
+    pub evidence_role: Option<DenialEvidenceRole>,
+    #[serde(default)]
+    pub related_operation_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialCoverageState {
+    Complete,
+    Deferred,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialEvidenceRole {
+    Primary,
+    Secondary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -170,6 +214,7 @@ pub enum DenialLayer {
 pub enum DenialRowStatus {
     Executable,
     Na,
+    Deferred,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -215,6 +260,10 @@ pub struct NaSourceScanProof {
     pub environment_profile: Option<String>,
     #[serde(default)]
     pub embedding_profile: Option<String>,
+    #[serde(default)]
+    pub present_source_path_patterns: Vec<String>,
+    #[serde(default)]
+    pub present_source_substrings: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -264,18 +313,86 @@ pub struct DenialResponse<'a> {
 
 use crate::common::{DualRoleEphemeralDb, MinioCleanupGuard};
 
+/// Best-effort cleanup of ephemeral DB and MinIO when a test panics before explicit cleanup.
+pub(crate) struct PanicSafeWorldResources {
+    pub ephemeral: Option<DualRoleEphemeralDb>,
+    pub minio_guard: Option<MinioCleanupGuard>,
+}
+
+impl PanicSafeWorldResources {
+    pub fn new(ephemeral: DualRoleEphemeralDb, minio_guard: Option<MinioCleanupGuard>) -> Self {
+        Self {
+            ephemeral: Some(ephemeral),
+            minio_guard,
+        }
+    }
+
+    pub async fn cleanup(mut self) -> Result<(), String> {
+        if let Some(guard) = self.minio_guard.take() {
+            guard
+                .cleanup()
+                .await
+                .map_err(|err| format!("minio cleanup: {err:?}"))?;
+        }
+        if let Some(ephemeral) = self.ephemeral.take() {
+            ephemeral.drop().await;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PanicSafeWorldResources {
+    fn drop(&mut self) {
+        drop(self.minio_guard.take());
+        if let Some(ephemeral) = self.ephemeral.take() {
+            best_effort_ephemeral_drop(ephemeral);
+        }
+    }
+}
+
+fn best_effort_ephemeral_drop(ephemeral: DualRoleEphemeralDb) {
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        handle.block_on(ephemeral.drop());
+        return;
+    }
+    let _ = std::thread::spawn(move || {
+        if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            runtime.block_on(ephemeral.drop());
+        }
+    })
+    .join();
+}
+
 /// Shared multi-org world for executable denial tests.
 pub struct MultiOrgDenialWorld {
     pub fixture: DenialFixture,
-    pub(crate) ephemeral: DualRoleEphemeralDb,
-    pub pool: deadpool_postgres::Pool,
-    pub app: axum::Router,
+    pub(crate) resources: PanicSafeWorldResources,
+    pub(crate) pool: Option<deadpool_postgres::Pool>,
+    pub(crate) app: Option<axum::Router>,
     pub(crate) store: Option<fileconv_server::storage::minio::MinioClient>,
-    pub(crate) minio_guard: Option<MinioCleanupGuard>,
     pub orgs: BTreeMap<String, crate::common::multi_org_denial_world::BootedOrg>,
 }
 
 impl MultiOrgDenialWorld {
+    pub fn pool(&self) -> &deadpool_postgres::Pool {
+        self.pool
+            .as_ref()
+            .expect("MultiOrgDenialWorld pool already released")
+    }
+
+    pub fn app(&self) -> &axum::Router {
+        self.app
+            .as_ref()
+            .expect("MultiOrgDenialWorld app already released")
+    }
+
+    pub(crate) fn take_runtime_handles(&mut self) {
+        self.app.take();
+        self.pool.take();
+    }
     pub async fn boot() -> Self {
         crate::common::multi_org_denial_world::boot_world().await
     }
@@ -305,9 +422,9 @@ pub fn assert_denial_no_leak(
 
     match expectation {
         DenialExpectation::AllowSuccess => {
-            if !(200..300).contains(&response.status) && response.status != 401 {
+            if !(200..300).contains(&response.status) {
                 leaks.push(format!(
-                    "expected success response, got {}",
+                    "expected success response (2xx), got {}",
                     response.status
                 ));
             }
@@ -502,6 +619,137 @@ pub fn registered_test_functions(binary: &str) -> Result<BTreeSet<String>, Strin
     Ok(extract_rust_test_function_names(&raw))
 }
 
+pub fn load_test_source(binary: &str) -> Result<String, String> {
+    let path = tests_root().join(format!("{binary}.rs"));
+    std::fs::read_to_string(&path).map_err(|err| {
+        format!(
+            "integration test source missing for binary {binary} at {}: {err}",
+            path.display()
+        )
+    })
+}
+
+pub fn extract_test_function_body(source: &str, test_name: &str) -> Option<String> {
+    let signatures = [format!("async fn {test_name}"), format!("fn {test_name}")];
+    let start = signatures.iter().find_map(|sig| source.find(sig))?;
+    let after_sig = &source[start..];
+    let brace_start = after_sig.find('{')?;
+    let mut depth = 0usize;
+    let mut end = None;
+    for (idx, ch) in after_sig[brace_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    end = Some(brace_start + idx + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    Some(after_sig[brace_start..end].to_string())
+}
+
+pub fn is_task13_scaffold_test_name(test_name: &str) -> bool {
+    TASK13_SCAFFOLD_TEST_NAMES.contains(&test_name)
+}
+
+pub fn is_trivial_or_scaffold_test_body(body: &str) -> bool {
+    let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.len() < 80 {
+        return true;
+    }
+    compact.contains("assert_world_boots_for_task13_scaffold")
+        && !compact.contains("assert_denial_no_leak")
+}
+
+pub fn has_denial_evidence_heuristic(body: &str) -> bool {
+    const NEEDLES: &[&str] = &[
+        "assert_denial_no_leak",
+        "cross_tenant",
+        "cross_org",
+        "foreign",
+        "403",
+        "404",
+        "deny",
+        "leak",
+        "isolation",
+        "not_a_member",
+        "refuses_foreign",
+        "org_b",
+        "PathIdor",
+        "BodyScope",
+        "Unauthorized",
+        "never_leaks",
+        "cannot_see",
+        "FORBIDDEN",
+        "permission",
+        "denied",
+        "denies",
+        "isolation",
+    ];
+    NEEDLES.iter().any(|needle| body.contains(needle))
+}
+
+pub fn validate_executable_test_evidence(
+    binary: &str,
+    test_name: &str,
+    layer: DenialLayer,
+) -> Result<(), String> {
+    if is_task13_scaffold_test_name(test_name) {
+        return Err(format!(
+            "Task 13 scaffold test {binary}::{test_name} cannot certify executable manifest rows in Task 12"
+        ));
+    }
+    let source = load_test_source(binary)?;
+    let body = extract_test_function_body(&source, test_name)
+        .ok_or_else(|| format!("unable to extract body for test {binary}::{test_name}"))?;
+    if is_trivial_or_scaffold_test_body(&body) {
+        return Err(format!(
+            "test {binary}::{test_name} body is trivial or scaffold-only"
+        ));
+    }
+    match layer {
+        DenialLayer::Http | DenialLayer::Sse => {
+            if !has_denial_evidence_heuristic(&body) {
+                return Err(format!(
+                    "test {binary}::{test_name} body lacks cross-org denial evidence heuristics"
+                ));
+            }
+        }
+        _ => {
+            let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            if compact.len() < 80 {
+                return Err(format!(
+                    "test {binary}::{test_name} supplemental layer body is too small to be meaningful evidence"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Runtime object key must be the trusted key persisted for the version, not the fixture template.
+pub fn assert_object_key_identity(org: &crate::common::multi_org_denial_world::BootedOrg) {
+    assert!(
+        !org.object_key.is_empty(),
+        "booted org must record a runtime object key"
+    );
+    assert!(
+        !org.object_key.contains('{') && !org.object_key.contains('}'),
+        "runtime object key must not be an unresolved fixture template: {}",
+        org.object_key
+    );
+    assert!(
+        org.object_key.starts_with("trusted/"),
+        "runtime object key must be a trusted storage path: {}",
+        org.object_key
+    );
+}
+
 fn extract_rust_test_function_names(source: &str) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for line in source.lines() {
@@ -549,6 +797,9 @@ pub fn validate_denial_manifest(
     let mut test_cache: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     let mut na_categories_manifest: BTreeSet<String> = BTreeSet::new();
+    let mut deferred_guard_refs: BTreeSet<String> = BTreeSet::new();
+    let mut primary_http_by_operation: BTreeMap<String, String> = BTreeMap::new();
+    let mut evidence_validated: BTreeSet<(String, String)> = BTreeSet::new();
 
     for row in &manifest.rows {
         *rows_by_id.entry(row.id.as_str()).or_insert(0) += 1;
@@ -581,6 +832,12 @@ pub fn validate_denial_manifest(
 
         match row.status {
             DenialRowStatus::Executable => {
+                if matches!(row.coverage_state, Some(DenialCoverageState::Deferred)) {
+                    errors.push(format!(
+                        "executable manifest row {} cannot declare coverageState=deferred",
+                        row.id
+                    ));
+                }
                 if let Some(operation_id) = &row.operation_id {
                     if row.guard_inventory_ref != *operation_id {
                         errors.push(format!(
@@ -610,6 +867,13 @@ pub fn validate_denial_manifest(
                     }
                 };
 
+                if is_task13_scaffold_test_name(test_name) {
+                    errors.push(format!(
+                        "executable manifest row {} must not map to Task 13 scaffold test {binary}::{test_name}",
+                        row.id
+                    ));
+                }
+
                 let registered = test_cache.entry(binary.to_string()).or_insert_with(|| {
                     registered_test_functions(binary).unwrap_or_else(|err| {
                         errors.push(err);
@@ -623,12 +887,84 @@ pub fn validate_denial_manifest(
                     ));
                 }
 
+                let evidence_key = (binary.to_string(), test_name.to_string());
+                if evidence_validated.insert(evidence_key.clone()) {
+                    if let Err(err) =
+                        validate_executable_test_evidence(binary, test_name, row.layer)
+                    {
+                        errors.push(format!(
+                            "executable manifest row {} invalid test evidence: {err}",
+                            row.id
+                        ));
+                    }
+                }
+
+                if matches!(row.layer, DenialLayer::Http)
+                    && !matches!(row.evidence_role, Some(DenialEvidenceRole::Secondary))
+                {
+                    if let Some(operation_id) = &row.operation_id {
+                        if let Some(existing) = primary_http_by_operation.get(operation_id) {
+                            errors.push(format!(
+                                "multiple primary HTTP manifest rows for operationId {operation_id}: {existing} and {}",
+                                row.id
+                            ));
+                        } else {
+                            primary_http_by_operation.insert(operation_id.clone(), row.id.clone());
+                        }
+                    }
+                }
+
                 if let Some(operation_id) = &row.operation_id {
                     covered_operation_ids.insert(operation_id.clone());
                     if let Some(guard) = business_ops.get(operation_id.as_str()) {
                         covered_routes.insert((
                             guard.route.method.to_ascii_lowercase(),
                             guard.route.path.clone(),
+                        ));
+                    }
+                }
+            }
+            DenialRowStatus::Deferred => {
+                if !matches!(row.coverage_state, Some(DenialCoverageState::Deferred)) {
+                    errors.push(format!(
+                        "deferred manifest row {} must declare coverageState=deferred",
+                        row.id
+                    ));
+                }
+                if row.deferred_task.as_deref() != Some("task13") {
+                    errors.push(format!(
+                        "deferred manifest row {} must declare deferredTask=task13",
+                        row.id
+                    ));
+                }
+                if row
+                    .coverage_note
+                    .as_deref()
+                    .is_none_or(|note| note.trim().is_empty())
+                {
+                    errors.push(format!(
+                        "deferred manifest row {} must declare coverageNote",
+                        row.id
+                    ));
+                }
+                if row.binary.is_some() || row.test_name.is_some() || row.operation_id.is_some() {
+                    errors.push(format!(
+                        "deferred manifest row {} must not declare binary/testName/operationId",
+                        row.id
+                    ));
+                }
+                if !REQUIRED_DEFERRED_GUARD_REFS.contains(&row.guard_inventory_ref.as_str()) {
+                    errors.push(format!(
+                        "deferred manifest row {} has unknown guardInventoryRef {}",
+                        row.id, row.guard_inventory_ref
+                    ));
+                }
+                deferred_guard_refs.insert(row.guard_inventory_ref.clone());
+                for related in &row.related_operation_ids {
+                    if !business_ops.contains_key(related.as_str()) {
+                        errors.push(format!(
+                            "deferred manifest row {} references unknown relatedOperationId: {related}",
+                            row.id
                         ));
                     }
                 }
@@ -681,6 +1017,21 @@ pub fn validate_denial_manifest(
             "manifest must contain exactly {} N/A rows, found {}",
             REQUIRED_NA_CATEGORIES.len(),
             na_categories_manifest.len()
+        ));
+    }
+
+    for required in REQUIRED_DEFERRED_GUARD_REFS {
+        if !deferred_guard_refs.contains(*required) {
+            errors.push(format!(
+                "missing deferred manifest row for guardInventoryRef: {required}"
+            ));
+        }
+    }
+    if deferred_guard_refs.len() != REQUIRED_DEFERRED_GUARD_REFS.len() {
+        errors.push(format!(
+            "manifest must contain exactly {} deferred rows, found {}",
+            REQUIRED_DEFERRED_GUARD_REFS.len(),
+            deferred_guard_refs.len()
         ));
     }
 
@@ -769,6 +1120,12 @@ fn validate_fixture_shape(fixture: &DenialFixture, errors: &mut Vec<String>) {
     }
     if fixture.object_key_template.trim().is_empty() {
         errors.push("denial fixture objectKeyTemplate must be non-empty".into());
+    } else if !fixture.object_key_template.contains("{orgKey}")
+        || !fixture.object_key_template.contains("{marker}")
+    {
+        errors.push(
+            "denial fixture objectKeyTemplate is a naming hint only and must include {orgKey} and {marker} placeholders".into(),
+        );
     }
     if !fixture.pre_revoke_tokens {
         errors.push("denial fixture preRevokeTokens must be true".into());
@@ -833,6 +1190,45 @@ fn validate_na_evidence_shape(
                             "N/A category {} source_scan proof stale: operationId pattern {pattern} now present",
                             category.id
                         ));
+                    }
+                }
+                if category.id == NA_CATEGORY_EMBEDDING_TOKEN_METERING_LOCAL_MOCK {
+                    if scan.present_source_path_patterns.is_empty()
+                        || scan.present_source_substrings.is_empty()
+                    {
+                        errors.push(format!(
+                            "N/A category {} must declare presentSourcePathPatterns and presentSourceSubstrings for qualifying workflow proof",
+                            category.id
+                        ));
+                    }
+                    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+                    for path_pattern in &scan.present_source_path_patterns {
+                        let path = manifest_dir.join(path_pattern);
+                        if !path.is_file() {
+                            errors.push(format!(
+                                "N/A category {} present source missing: {}",
+                                category.id,
+                                path.display()
+                            ));
+                        }
+                    }
+                    for substring in &scan.present_source_substrings {
+                        let mut found = false;
+                        for path_pattern in &scan.present_source_path_patterns {
+                            let path = manifest_dir.join(path_pattern);
+                            if let Ok(raw) = std::fs::read_to_string(&path) {
+                                if raw.contains(substring) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if !found {
+                            errors.push(format!(
+                                "N/A category {} present source proof missing substring: {substring}",
+                                category.id
+                            ));
+                        }
                     }
                 }
             }
@@ -1066,5 +1462,78 @@ mod unit_tests {
             .contains(&beta_collection_id.to_string()));
         assert!(markers.object_keys.contains(&foreign.object_key));
         assert!(markers.marker_strings.contains(&foreign.marker));
+    }
+
+    #[test]
+    fn allow_success_rejects_401_but_accepts_2xx() {
+        let foreign = ForeignMarkers::default();
+        let body = b"ok";
+        let headers = Vec::new();
+        assert_denial_no_leak(
+            &DenialResponse {
+                status: 200,
+                body,
+                headers,
+            },
+            &foreign,
+            DenialExpectation::AllowSuccess,
+        );
+        let err = std::panic::catch_unwind(|| {
+            assert_denial_no_leak(
+                &DenialResponse {
+                    status: 401,
+                    body,
+                    headers: Vec::new(),
+                },
+                &foreign,
+                DenialExpectation::AllowSuccess,
+            );
+        });
+        assert!(err.is_err(), "AllowSuccess must not accept 401");
+    }
+
+    #[test]
+    fn scaffold_test_cannot_self_certify_executable_manifest() {
+        let err = validate_executable_test_evidence(
+            "multi_org_denial",
+            "indexed_fts_and_ask_never_return_foreign_marker",
+            DenialLayer::Http,
+        )
+        .expect_err("scaffold must be rejected");
+        assert!(err.contains("Task 13 scaffold"));
+    }
+
+    #[test]
+    fn empty_test_body_cannot_self_certify_executable_manifest() {
+        let source = r#"
+            #[test]
+            fn hollow_denial_probe() {}
+        "#;
+        let body = extract_test_function_body(source, "hollow_denial_probe").expect("body");
+        assert!(is_trivial_or_scaffold_test_body(&body));
+        assert!(!has_denial_evidence_heuristic(&body));
+    }
+
+    #[test]
+    fn object_key_identity_rejects_fixture_template() {
+        use crate::common::multi_org_denial_world::BootedOrg;
+
+        let org = BootedOrg {
+            org_id: Uuid::new_v4(),
+            slug: "alpha".into(),
+            marker: "marker".into(),
+            object_key: "denial/{orgKey}/{marker}.txt".into(),
+            users: BTreeMap::new(),
+            collections: BTreeMap::new(),
+            document: crate::common::multi_org_denial_world::BootedDocument {
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+                title: "doc".into(),
+            },
+            job_id: Uuid::new_v4(),
+            conflict_id: Uuid::new_v4(),
+        };
+        let err = std::panic::catch_unwind(|| assert_object_key_identity(&org));
+        assert!(err.is_err());
     }
 }

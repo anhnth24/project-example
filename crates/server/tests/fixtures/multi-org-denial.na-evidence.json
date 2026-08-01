@@ -68,7 +68,16 @@
       "scan": {
         "environmentProfile": "phase1c-multi-org-poc",
         "embeddingProfile": "mock",
-        "absentOperationIdPatterns": ["embeddingToken", "tokenMeter"]
+        "absentOperationIdPatterns": ["embeddingToken", "tokenMeter"],
+        "presentSourcePathPatterns": [
+          "src/services/embedding.rs",
+          "tests/graph.rs"
+        ],
+        "presentSourceSubstrings": [
+          "MARKHAND_EMBEDDING_",
+          "CloudRuntimeNotAllowed",
+          "HTTP-route coverage is still out of scope"
+        ]
       }
     }
   ]

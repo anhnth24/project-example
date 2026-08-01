@@ -8,7 +8,9 @@
       "operationId": "acceptMemberInvite",
       "guardInventoryRef": "acceptMemberInvite",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-appendChatTurn",
@@ -17,7 +19,9 @@
       "operationId": "appendChatTurn",
       "guardInventoryRef": "appendChatTurn",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-approveIntake",
@@ -26,7 +30,9 @@
       "operationId": "approveIntake",
       "guardInventoryRef": "approveIntake",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-ask",
@@ -35,7 +41,9 @@
       "operationId": "ask",
       "guardInventoryRef": "ask",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-askStream",
@@ -44,7 +52,9 @@
       "operationId": "askStream",
       "guardInventoryRef": "askStream",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-assignCollectionProject",
@@ -53,16 +63,20 @@
       "operationId": "assignCollectionProject",
       "guardInventoryRef": "assignCollectionProject",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-authMe",
-      "binary": "auth",
-      "testName": "login_me_refresh_logout_and_audit",
+      "binary": "multi_org_denial",
+      "testName": "shared_world_http_surfaces_respect_org_scope",
       "operationId": "authMe",
       "guardInventoryRef": "authMe",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-createChatSession",
@@ -71,7 +85,9 @@
       "operationId": "createChatSession",
       "guardInventoryRef": "createChatSession",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-createCollection",
@@ -80,7 +96,9 @@
       "operationId": "createCollection",
       "guardInventoryRef": "createCollection",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-createMemberInvite",
@@ -89,7 +107,9 @@
       "operationId": "createMemberInvite",
       "guardInventoryRef": "createMemberInvite",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-createOrg",
@@ -98,7 +118,9 @@
       "operationId": "createOrg",
       "guardInventoryRef": "createOrg",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-createProject",
@@ -107,16 +129,20 @@
       "operationId": "createProject",
       "guardInventoryRef": "createProject",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-createUpload",
-      "binary": "multi_org_denial",
-      "testName": "shared_world_http_surfaces_respect_org_scope",
+      "binary": "api_http_contracts",
+      "testName": "live_http_unauthenticated_and_cross_tenant_are_consistent",
       "operationId": "createUpload",
       "guardInventoryRef": "createUpload",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-deleteChatSession",
@@ -125,7 +151,9 @@
       "operationId": "deleteChatSession",
       "guardInventoryRef": "deleteChatSession",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-deleteCollection",
@@ -134,7 +162,9 @@
       "operationId": "deleteCollection",
       "guardInventoryRef": "deleteCollection",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-deleteDocument",
@@ -143,7 +173,9 @@
       "operationId": "deleteDocument",
       "guardInventoryRef": "deleteDocument",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-deleteMember",
@@ -152,7 +184,9 @@
       "operationId": "deleteMember",
       "guardInventoryRef": "deleteMember",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-diffDocumentVersions",
@@ -161,7 +195,9 @@
       "operationId": "diffDocumentVersions",
       "guardInventoryRef": "diffDocumentVersions",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getChatSession",
@@ -170,7 +206,9 @@
       "operationId": "getChatSession",
       "guardInventoryRef": "getChatSession",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getCollection",
@@ -179,7 +217,9 @@
       "operationId": "getCollection",
       "guardInventoryRef": "getCollection",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getConflict",
@@ -188,7 +228,9 @@
       "operationId": "getConflict",
       "guardInventoryRef": "getConflict",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getConflictEvidence",
@@ -197,7 +239,9 @@
       "operationId": "getConflictEvidence",
       "guardInventoryRef": "getConflictEvidence",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getDocument",
@@ -206,7 +250,9 @@
       "operationId": "getDocument",
       "guardInventoryRef": "getDocument",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getDocumentVersion",
@@ -215,7 +261,9 @@
       "operationId": "getDocumentVersion",
       "guardInventoryRef": "getDocumentVersion",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getGraph",
@@ -224,7 +272,9 @@
       "operationId": "getGraph",
       "guardInventoryRef": "getGraph",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getJob",
@@ -233,7 +283,9 @@
       "operationId": "getJob",
       "guardInventoryRef": "getJob",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getOrg",
@@ -242,7 +294,9 @@
       "operationId": "getOrg",
       "guardInventoryRef": "getOrg",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-getUsage",
@@ -251,7 +305,9 @@
       "operationId": "getUsage",
       "guardInventoryRef": "getUsage",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-issueDownloadCapability",
@@ -260,7 +316,9 @@
       "operationId": "issueDownloadCapability",
       "guardInventoryRef": "issueDownloadCapability",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-jobEvents",
@@ -269,7 +327,9 @@
       "operationId": "jobEvents",
       "guardInventoryRef": "jobEvents",
       "layer": "sse",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listAudit",
@@ -278,7 +338,9 @@
       "operationId": "listAudit",
       "guardInventoryRef": "listAudit",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listChatSessions",
@@ -287,7 +349,9 @@
       "operationId": "listChatSessions",
       "guardInventoryRef": "listChatSessions",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listCollections",
@@ -296,7 +360,9 @@
       "operationId": "listCollections",
       "guardInventoryRef": "listCollections",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listConflicts",
@@ -305,7 +371,9 @@
       "operationId": "listConflicts",
       "guardInventoryRef": "listConflicts",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listDocumentVersions",
@@ -314,7 +382,9 @@
       "operationId": "listDocumentVersions",
       "guardInventoryRef": "listDocumentVersions",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listDocuments",
@@ -323,7 +393,9 @@
       "operationId": "listDocuments",
       "guardInventoryRef": "listDocuments",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listMemberInvites",
@@ -332,7 +404,9 @@
       "operationId": "listMemberInvites",
       "guardInventoryRef": "listMemberInvites",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listMembers",
@@ -341,7 +415,9 @@
       "operationId": "listMembers",
       "guardInventoryRef": "listMembers",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listOrgs",
@@ -350,7 +426,9 @@
       "operationId": "listOrgs",
       "guardInventoryRef": "listOrgs",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-listProjects",
@@ -359,7 +437,9 @@
       "operationId": "listProjects",
       "guardInventoryRef": "listProjects",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-patchMember",
@@ -368,7 +448,9 @@
       "operationId": "patchMember",
       "guardInventoryRef": "patchMember",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-previewDocument",
@@ -377,7 +459,9 @@
       "operationId": "previewDocument",
       "guardInventoryRef": "previewDocument",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-publishDocumentVersion",
@@ -386,7 +470,9 @@
       "operationId": "publishDocumentVersion",
       "guardInventoryRef": "publishDocumentVersion",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-redeemDownload",
@@ -395,7 +481,9 @@
       "operationId": "redeemDownload",
       "guardInventoryRef": "redeemDownload",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-reindexDocument",
@@ -404,7 +492,9 @@
       "operationId": "reindexDocument",
       "guardInventoryRef": "reindexDocument",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-resolveCitation",
@@ -413,7 +503,9 @@
       "operationId": "resolveCitation",
       "guardInventoryRef": "resolveCitation",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-revokeMemberInvite",
@@ -422,7 +514,9 @@
       "operationId": "revokeMemberInvite",
       "guardInventoryRef": "revokeMemberInvite",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-search",
@@ -431,7 +525,9 @@
       "operationId": "search",
       "guardInventoryRef": "search",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-switchOrg",
@@ -440,7 +536,9 @@
       "operationId": "switchOrg",
       "guardInventoryRef": "switchOrg",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-triageConflict",
@@ -449,7 +547,9 @@
       "operationId": "triageConflict",
       "guardInventoryRef": "triageConflict",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-updateChatSession",
@@ -458,7 +558,9 @@
       "operationId": "updateChatSession",
       "guardInventoryRef": "updateChatSession",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-updateCollection",
@@ -467,7 +569,9 @@
       "operationId": "updateCollection",
       "guardInventoryRef": "updateCollection",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-updateProject",
@@ -476,7 +580,9 @@
       "operationId": "updateProject",
       "guardInventoryRef": "updateProject",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "primary"
     },
     {
       "id": "denial-deleteDocument-service",
@@ -485,7 +591,8 @@
       "operationId": "deleteDocument",
       "guardInventoryRef": "deleteDocument",
       "layer": "service",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-publishDocumentVersion-service",
@@ -494,7 +601,8 @@
       "operationId": "publishDocumentVersion",
       "guardInventoryRef": "publishDocumentVersion",
       "layer": "service",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-patchMember-service",
@@ -503,7 +611,8 @@
       "operationId": "patchMember",
       "guardInventoryRef": "patchMember",
       "layer": "service",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-deleteMember-service",
@@ -512,7 +621,8 @@
       "operationId": "deleteMember",
       "guardInventoryRef": "deleteMember",
       "layer": "service",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-listAudit-service",
@@ -521,7 +631,8 @@
       "operationId": "listAudit",
       "guardInventoryRef": "listAudit",
       "layer": "service",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-getJob-service",
@@ -530,7 +641,8 @@
       "operationId": "getJob",
       "guardInventoryRef": "getJob",
       "layer": "service",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-search-repository",
@@ -539,7 +651,8 @@
       "operationId": "search",
       "guardInventoryRef": "search",
       "layer": "repository",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-ask-repository",
@@ -548,7 +661,8 @@
       "operationId": "ask",
       "guardInventoryRef": "ask",
       "layer": "repository",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-reindexDocument-worker",
@@ -557,7 +671,8 @@
       "operationId": "reindexDocument",
       "guardInventoryRef": "reindexDocument",
       "layer": "worker",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-getJob-worker",
@@ -566,7 +681,8 @@
       "operationId": "getJob",
       "guardInventoryRef": "getJob",
       "layer": "worker",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-search-storage",
@@ -575,7 +691,8 @@
       "operationId": "search",
       "guardInventoryRef": "search",
       "layer": "storage",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-createUpload-storage",
@@ -584,7 +701,8 @@
       "operationId": "createUpload",
       "guardInventoryRef": "createUpload",
       "layer": "storage",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-switchOrg-cache",
@@ -593,7 +711,8 @@
       "operationId": "switchOrg",
       "guardInventoryRef": "switchOrg",
       "layer": "cache",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete"
     },
     {
       "id": "denial-resolveCitation-citation",
@@ -602,7 +721,9 @@
       "operationId": "resolveCitation",
       "guardInventoryRef": "resolveCitation",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "secondary"
     },
     {
       "id": "denial-previewDocument-citation",
@@ -611,16 +732,90 @@
       "operationId": "previewDocument",
       "guardInventoryRef": "previewDocument",
       "layer": "http",
-      "status": "executable"
+      "status": "executable",
+      "coverageState": "complete",
+      "evidenceRole": "secondary"
     },
     {
-      "id": "denial-search-index-worker",
-      "binary": "index_worker",
-      "testName": "live_index_worker_indexes_converted_document",
-      "operationId": "search",
-      "guardInventoryRef": "search",
-      "layer": "worker",
-      "status": "executable"
+      "id": "deferred-task13-indexed-fts-ask",
+      "guardInventoryRef": "task13:indexed_fts_ask",
+      "layer": "http",
+      "status": "deferred",
+      "coverageState": "deferred",
+      "deferredTask": "task13",
+      "coverageNote": "Indexed FTS/Q&A must not return foreign marker strings after full index artifacts exist",
+      "relatedOperationIds": [
+        "search",
+        "ask",
+        "askStream"
+      ]
+    },
+    {
+      "id": "deferred-task13-duplicate-names",
+      "guardInventoryRef": "task13:duplicate_names",
+      "layer": "http",
+      "status": "deferred",
+      "coverageState": "deferred",
+      "deferredTask": "task13",
+      "coverageNote": "Same display names across orgs must not create existence oracles",
+      "relatedOperationIds": [
+        "listCollections",
+        "getCollection",
+        "listDocuments",
+        "getDocument"
+      ]
+    },
+    {
+      "id": "deferred-task13-org-switch-cache",
+      "guardInventoryRef": "task13:org_switch_cache",
+      "layer": "cache",
+      "status": "deferred",
+      "coverageState": "deferred",
+      "deferredTask": "task13",
+      "coverageNote": "Org switch must not reuse previous org ACL/cache scope",
+      "relatedOperationIds": [
+        "switchOrg"
+      ]
+    },
+    {
+      "id": "deferred-task13-stale-tokens",
+      "guardInventoryRef": "task13:stale_tokens",
+      "layer": "http",
+      "status": "deferred",
+      "coverageState": "deferred",
+      "deferredTask": "task13",
+      "coverageNote": "Pre-revoke tokens must fail after downgrade, suspend, and remove",
+      "relatedOperationIds": [
+        "authMe"
+      ]
+    },
+    {
+      "id": "deferred-task13-preview-download-sse",
+      "guardInventoryRef": "task13:preview_download_sse",
+      "layer": "http",
+      "status": "deferred",
+      "coverageState": "deferred",
+      "deferredTask": "task13",
+      "coverageNote": "Preview, download, job, and SSE surfaces must hide foreign IDs",
+      "relatedOperationIds": [
+        "previewDocument",
+        "issueDownloadCapability",
+        "redeemDownload",
+        "getJob",
+        "jobEvents"
+      ]
+    },
+    {
+      "id": "deferred-task13-in-flight-ask-revoke",
+      "guardInventoryRef": "task13:in_flight_ask_revoke",
+      "layer": "sse",
+      "status": "deferred",
+      "coverageState": "deferred",
+      "deferredTask": "task13",
+      "coverageNote": "In-flight ask must emit no foreign content after ACL revoke",
+      "relatedOperationIds": [
+        "askStream"
+      ]
     },
     {
       "id": "na-export-route-absent",

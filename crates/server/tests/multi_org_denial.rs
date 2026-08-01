@@ -77,7 +77,7 @@ async fn shared_world_http_surfaces_respect_org_scope() {
     let foreign = world.foreign_markers_for("orgAlpha");
 
     let (status, body, headers) =
-        json_request(&world.app, "GET", "/api/v1/auth/me", Some(token_a), None).await;
+        json_request(world.app(), "GET", "/api/v1/auth/me", Some(token_a), None).await;
     let header_refs: Vec<(&str, &str)> = headers
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -95,7 +95,7 @@ async fn shared_world_http_surfaces_respect_org_scope() {
     assert!(!me.to_string().contains(&beta.org_id.to_string()));
 
     let (status, body, headers) = json_request(
-        &world.app,
+        world.app(),
         "GET",
         "/api/v1/collections",
         Some(token_a),
@@ -149,7 +149,7 @@ async fn shared_world_http_surfaces_respect_org_scope() {
     }
 
     let (status, body, headers) = json_request(
-        &world.app,
+        world.app(),
         "POST",
         "/api/v1/collections",
         Some(token_a),
@@ -177,7 +177,7 @@ async fn shared_world_http_surfaces_respect_org_scope() {
 
     let foreign_collection = beta.collections["org"].collection_id;
     let (status, body, headers) = json_request(
-        &world.app,
+        world.app(),
         "POST",
         &format!("/api/v1/collections/{foreign_collection}/assign-project"),
         Some(token_a),
@@ -199,7 +199,7 @@ async fn shared_world_http_surfaces_respect_org_scope() {
     );
 
     let (status, body, headers) = json_request(
-        &world.app,
+        world.app(),
         "GET",
         "/api/v1/members/invites",
         Some(token_a),

@@ -15,13 +15,15 @@ use fileconv_server::storage::ObjectIdentityMeta;
 use uuid::Uuid;
 
 use crate::common::multi_org_denial::{
-    collection_name_for_visibility, load_denial_fixture, DenialFixture, DenialFixtureOrg,
-    ForeignMarkers, MultiOrgDenialWorld, COLLECTION_VISIBILITY_LABELS, DENIAL_FIXTURE_REL_PATH,
+    assert_object_key_identity, collection_name_for_visibility, load_denial_fixture, DenialFixture,
+    DenialFixtureOrg, ForeignMarkers, MultiOrgDenialWorld, PanicSafeWorldResources,
+    COLLECTION_VISIBILITY_LABELS, DENIAL_FIXTURE_REL_PATH,
 };
 use crate::common::{
-    admin_database_url, app_database_url, boot_app_pool, build_router, login_tokens, put_bytes,
-    seed_user_with_permissions, sha256_hex, test_minio_client, MinioCleanupGuard,
+    admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
+    login_tokens, put_bytes, seed_user_with_permissions, sha256_hex, test_minio_client,
 };
+use fileconv_server::db::models::DocumentState;
 
 const PASSWORD: &str = "correct-password-1";
 
@@ -103,24 +105,27 @@ pub async fn boot_world_with_urls(admin: &str, app_url: &str) -> MultiOrgDenialW
     }
 
     let (ephemeral, pool) = boot_app_pool(admin, app_url).await;
+    assert_markhand_app_role(&pool).await;
+    let router_app_url = ephemeral.app_url.clone();
 
     let store = test_minio_client();
-    let minio_guard = store.clone().map(MinioCleanupGuard::new);
-    let app = build_router(pool.clone(), &ephemeral.app_url, store.clone());
+    let minio_guard = store.clone().map(crate::common::MinioCleanupGuard::new);
+    let app = build_router(pool.clone(), &router_app_url, store.clone());
+    let resources = PanicSafeWorldResources::new(ephemeral, minio_guard);
 
     let mut orgs = BTreeMap::new();
     for org_template in &fixture.orgs {
         let booted = seed_org_world(&pool, store.as_ref(), org_template, &fixture).await;
+        assert_object_key_identity(&booted);
         orgs.insert(org_template.key.clone(), booted);
     }
 
     MultiOrgDenialWorld {
         fixture,
-        ephemeral,
-        pool,
-        app,
+        resources,
+        pool: Some(pool),
+        app: Some(app),
         store,
-        minio_guard,
         orgs,
     }
 }
@@ -204,15 +209,9 @@ fn push_foreign_display_name(
     }
 }
 
-pub async fn cleanup_world(world: MultiOrgDenialWorld) -> Result<(), String> {
-    if let Some(guard) = world.minio_guard {
-        guard
-            .cleanup()
-            .await
-            .map_err(|err| format!("minio cleanup: {err:?}"))?;
-    }
-    world.ephemeral.drop().await;
-    Ok(())
+pub async fn cleanup_world(mut world: MultiOrgDenialWorld) -> Result<(), String> {
+    world.take_runtime_handles();
+    world.resources.cleanup().await
 }
 
 pub fn assert_base_topology(world: &MultiOrgDenialWorld) {
@@ -278,10 +277,6 @@ async fn seed_org_world(
         .cloned()
         .unwrap_or_else(|| format!("phase1c-marker-{}", org_template.key));
     let marker = format!("{marker_base}-{}", Uuid::new_v4().simple());
-    let object_key = fixture
-        .object_key_template
-        .replace("{orgKey}", &org_template.key)
-        .replace("{marker}", &marker);
 
     let owner_id = Uuid::new_v4();
     let admin_id = Uuid::new_v4();
@@ -314,6 +309,10 @@ async fn seed_org_world(
     let version_id = Uuid::new_v4();
     let job_id = Uuid::new_v4();
     let conflict_id = Uuid::new_v4();
+    let object_id = Uuid::new_v4();
+    let trusted_object_key =
+        trusted_key(org_id, version_id, object_id, None).expect("trusted object key");
+    let object_key_str = trusted_object_key.as_str().to_string();
 
     let private_collection_name =
         collection_name_for_visibility(&fixture.duplicate_names, "private").to_string();
@@ -325,11 +324,10 @@ async fn seed_org_world(
     let content_sha = sha256_hex(marker.as_bytes());
 
     if let Some(store) = store {
-        let key = trusted_key(org_id, version_id, Uuid::new_v4(), None).expect("trusted key");
         put_bytes(
             store,
             org_id,
-            &key,
+            &trusted_object_key,
             marker.as_bytes(),
             "text/plain",
             ObjectIdentityMeta {
@@ -355,6 +353,8 @@ async fn seed_org_world(
         let org_collection_name = org_collection_name.clone();
         let groups_collection_name = groups_collection_name.clone();
         let duplicate_document_title = duplicate_document_title.clone();
+        let object_key_str = object_key_str.clone();
+        let document_state = DocumentState::Converted.as_str().to_string();
         move |txn| {
             Box::pin(async move {
                 orgs::ensure_exists(txn, &owner_ctx, &slug, &format!("Denial {slug}")).await?;
@@ -416,10 +416,7 @@ async fn seed_org_world(
                 )
                 .await?;
 
-                let object_key_str = trusted_key(org_id, version_id, Uuid::new_v4(), None)
-                    .expect("trusted key")
-                    .as_str()
-                    .to_string();
+                let object_key_str = object_key_str.clone();
                 txn.execute(
                     "INSERT INTO document_versions (
                         id, org_id, document_id, version_number, publication_state,
@@ -438,9 +435,9 @@ async fn seed_org_world(
                 )
                 .await?;
                 txn.execute(
-                    "UPDATE documents SET state='indexed', current_version_id=$3
+                    "UPDATE documents SET state=$3, current_version_id=$4
                      WHERE org_id=$1 AND id=$2",
-                    &[&org_id, &document_id, &version_id],
+                    &[&org_id, &document_id, &document_state, &version_id],
                 )
                 .await?;
 
@@ -572,7 +569,7 @@ async fn seed_org_world(
         org_id,
         slug,
         marker,
-        object_key,
+        object_key: object_key_str,
         users,
         collections: collections_map,
         document: BootedDocument {
@@ -626,6 +623,7 @@ async fn seed_admin_member(pool: &Pool, org: Uuid, user: Uuid, email: &str) {
 }
 
 async fn seed_viewer_member(pool: &Pool, org: Uuid, user: Uuid, email: &str) {
+    // Fixture role label `member` maps to DB membership role `viewer`.
     seed_user_with_permissions(pool, org, user, email, PASSWORD, MEMBER_PERMISSIONS).await;
     let ctx = OrgContext::try_new(org, user, MEMBER_PERMISSIONS.iter().copied(), []).unwrap();
     with_org_txn(pool, &ctx, move |txn| {
