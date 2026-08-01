@@ -21,8 +21,8 @@ use uuid::Uuid;
 
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, take_live,
-    test_minio_client, trusted_key, MinioCleanupGuard,
+    login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, test_minio_client,
+    trusted_key, MinioCleanupGuard,
 };
 
 const BOUNDARY: &str = "----markhandHttpContractBoundary";
@@ -2499,7 +2499,8 @@ async fn live_reindex_audit_failure_rolls_back_enqueue() {
 mod required_mode {
     use super::common::{
         admin_database_url, app_database_url, markhand_e2e_required, markhand_test_required,
-        minio_test_credentials, take_live, test_env_lock, test_qdrant_url, SavedEnvVars,
+        minio_test_credentials, take_live, test_env_lock, test_qdrant_url, MinioTestCredentials,
+        SavedEnvVars,
     };
 
     const STRICT_FLAG_VARS: &[&str] = &["MARKHAND_TEST_REQUIRED", "MARKHAND_E2E"];
@@ -2507,7 +2508,7 @@ mod required_mode {
     const _: fn() -> Option<String> = admin_database_url;
     const _: fn() -> Option<String> = app_database_url;
     const _: fn() -> Option<String> = test_qdrant_url;
-    const _: fn() -> Option<common::MinioTestCredentials> = minio_test_credentials;
+    const _: fn() -> Option<MinioTestCredentials> = minio_test_credentials;
 
     fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
         if let Some(message) = payload.downcast_ref::<&str>() {

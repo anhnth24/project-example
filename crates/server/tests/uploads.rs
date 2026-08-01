@@ -20,8 +20,7 @@ use fileconv_server::auth::jwt::JwtKeys;
 use fileconv_server::auth::provider::{AuthProvider, AuthRequestMeta, PasswordAuthProvider};
 use fileconv_server::auth::session;
 use fileconv_server::config::{
-    Argon2Config, AuthConfig, JwtAlgorithm, MinioConfig, RuntimeEndpoints, SecretString,
-    ServerConfig,
+    Argon2Config, AuthConfig, JwtAlgorithm, RuntimeEndpoints, SecretString, ServerConfig,
 };
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::orgs;

@@ -18,8 +18,8 @@ use fileconv_server::services::index_signature::parse_collection_name;
 use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key, trusted_key};
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::storage::qdrant::{
-    point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantAdminApiKey,
-    QdrantAdminClient, QdrantClient, UpsertPoint, VectorScope,
+    point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantAdminClient, QdrantClient,
+    UpsertPoint, VectorScope,
 };
 use fileconv_server::storage::StorageError;
 use uuid::Uuid;
@@ -28,7 +28,7 @@ fn test_qdrant_url() -> Option<String> {
     common::test_qdrant_url()
 }
 
-fn test_admin_client(url: &str) -> QdrantAdminClient {
+fn test_admin_client(_url: &str) -> QdrantAdminClient {
     common::test_qdrant_admin_client()
         .expect("admin client configured with MARKHAND_TEST_QDRANT_URL")
 }

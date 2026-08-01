@@ -33,10 +33,10 @@ use common::{
     assert_minio_cleanup_soak_params, assert_minio_cleanup_soak_round_succeeded, boot_app_pool,
     build_router, collect_minio_cleanup_soak_round, convert_to_markdown, login_access_token,
     minio_cleanup_soak_lane, put_bytes, quarantine_key, seed_user_with_permissions, sha256_hex,
-    take_live, test_auth_config, test_minio_client, tiny_pdf_bytes, tiny_pptx_bytes,
-    tiny_xlsx_bytes, trusted_key, MinioCleanupGuard, MinioCleanupSoakLaneFailure,
-    MinioCleanupSoakLaneOutcome, MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY,
-    MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET, MINIO_CLEANUP_GUARD_SOAK_ROUNDS,
+    test_auth_config, test_minio_client, tiny_pdf_bytes, tiny_pptx_bytes, tiny_xlsx_bytes,
+    trusted_key, MinioCleanupGuard, MinioCleanupSoakLaneFailure, MinioCleanupSoakLaneOutcome,
+    MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY, MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET,
+    MINIO_CLEANUP_GUARD_SOAK_ROUNDS,
 };
 
 struct IndexedDoc {

@@ -8,14 +8,13 @@ use common::{
 };
 use std::fs;
 use std::net::TcpListener;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{MinioConfig, SecretString};
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
@@ -2897,11 +2896,11 @@ fn assert_process_exits(pid: u32, timeout: Duration) {
 mod worker_required_mode {
     use super::common::{
         admin_database_url, markhand_test_required, minio_test_credentials, take_live,
-        test_env_lock, SavedEnvVars,
+        test_env_lock, MinioTestCredentials, SavedEnvVars,
     };
 
     const _: fn() -> Option<String> = admin_database_url;
-    const _: fn() -> Option<common::MinioTestCredentials> = minio_test_credentials;
+    const _: fn() -> Option<MinioTestCredentials> = minio_test_credentials;
 
     #[test]
     fn worker_getters_panic_via_common_take_live_when_required() {

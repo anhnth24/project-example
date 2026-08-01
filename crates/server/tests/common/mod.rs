@@ -139,10 +139,7 @@ fn minio_test_credentials_raw() -> Option<MinioTestCredentials> {
 
 /// Strict MinIO credentials for integration tests (`MARKHAND_TEST_MINIO_*`).
 pub fn minio_test_credentials() -> Option<MinioTestCredentials> {
-    take_live(
-        minio_test_credentials_raw(),
-        "MARKHAND_TEST_MINIO_*",
-    )
+    take_live(minio_test_credentials_raw(), "MARKHAND_TEST_MINIO_*")
 }
 
 fn build_minio_client(creds: MinioTestCredentials, bucket: String) -> MinioClient {

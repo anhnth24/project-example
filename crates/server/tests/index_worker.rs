@@ -16,7 +16,7 @@ use common::{
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{MinioConfig, Profile, SecretString};
+use fileconv_server::config::Profile;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
 use fileconv_server::db::models::{ArtifactKind, CollectionVisibility, DocumentState};

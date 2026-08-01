@@ -13,14 +13,14 @@ use axum::http::{Request, StatusCode};
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{Profile, SecretString};
+use fileconv_server::config::Profile;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs;
 use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::index_signature::{collection_name_for_signature, CollectionName};
 use fileconv_server::services::indexing::IndexingOutboxSink;
 use fileconv_server::storage::minio::MinioClient;
-use fileconv_server::storage::qdrant::{QdrantAdminApiKey, QdrantAdminClient, QdrantClient};
+use fileconv_server::storage::qdrant::{QdrantAdminClient, QdrantClient};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
 use fileconv_server::workers::embedding::{
     EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,

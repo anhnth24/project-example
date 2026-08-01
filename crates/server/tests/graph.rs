@@ -27,7 +27,7 @@ use fileconv_knowledge::identity::{
     chunk_identity, IndexSignature, BODY_TEXT_VERSION, RUNTIME_VLLM_LOCAL,
 };
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{Profile, SecretString};
+use fileconv_server::config::Profile;
 use fileconv_server::db::ask_streams::{self, NewAskStreamSession};
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
@@ -39,7 +39,7 @@ use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::graph::{build_org_graph, SimilarityDeps};
 use fileconv_server::services::index_signature::CollectionName;
 use fileconv_server::storage::qdrant::{
-    ChunkPointPayload, QdrantAdminApiKey, QdrantAdminClient, QdrantClient, UpsertPoint, VectorScope,
+    ChunkPointPayload, QdrantAdminClient, QdrantClient, UpsertPoint, VectorScope,
 };
 use http_body_util::BodyExt;
 use serde_json::Value;
