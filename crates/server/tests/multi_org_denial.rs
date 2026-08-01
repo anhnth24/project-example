@@ -616,9 +616,7 @@ async fn duplicate_names_across_orgs_do_not_create_an_oracle() {
         .filter_map(|item| item["title"].as_str())
         .collect();
     assert!(
-        titles
-            .iter()
-            .any(|title| *title == shared_document_title.as_str()),
+        titles.contains(&shared_document_title.as_str()),
         "actor document list must include shared title: {docs}"
     );
     for item in doc_items {

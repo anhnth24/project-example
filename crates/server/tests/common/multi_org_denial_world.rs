@@ -20,7 +20,7 @@ use crate::common::multi_org_denial::{
     DenialFixtureOrg, ForeignMarkers, MultiOrgDenialWorld, PanicSafeWorldResources,
     COLLECTION_VISIBILITY_LABELS, DENIAL_FIXTURE_REL_PATH,
 };
-use crate::common::worker_pipeline::{WorkerPipeline, WorkerProducedDoc};
+use crate::common::worker_pipeline::{ExistingDocumentRevision, WorkerPipeline, WorkerProducedDoc};
 use crate::common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_app_state,
     build_router, login_tokens, put_bytes, seed_user_with_permissions, sha256_hex,
@@ -127,18 +127,18 @@ impl IndexedDenialRuntime {
                 .pipeline
                 .as_ref()
                 .expect("indexed pipeline")
-                .index_existing_document_revision(
-                    &owner.access_token,
-                    org.org_id,
-                    owner.user_id,
+                .index_existing_document_revision(ExistingDocumentRevision {
+                    access_token: &owner.access_token,
+                    org_id: org.org_id,
+                    user_id: owner.user_id,
                     collection_id,
                     document_id,
-                    OWNER_PERMISSIONS,
-                    &format!("{org_key}-marker.txt"),
-                    "text/plain",
-                    source.as_bytes(),
-                    &format!("denial-index-{org_key}"),
-                )
+                    permissions: OWNER_PERMISSIONS,
+                    filename: &format!("{org_key}-marker.txt"),
+                    content_type: "text/plain",
+                    source: source.as_bytes(),
+                    label: &format!("denial-index-{org_key}"),
+                })
                 .await;
             apply_indexed_revision(&pool, org, &produced).await?;
         }

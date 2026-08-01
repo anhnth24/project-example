@@ -128,6 +128,20 @@ pub struct WorkerProducedDoc {
     pub permissions: BTreeSet<String>,
 }
 
+/// Existing document identity and source submitted through the production upload route.
+pub struct ExistingDocumentRevision<'a> {
+    pub access_token: &'a str,
+    pub org_id: Uuid,
+    pub user_id: Uuid,
+    pub collection_id: Uuid,
+    pub document_id: Uuid,
+    pub permissions: &'a [&'a str],
+    pub filename: &'a str,
+    pub content_type: &'a str,
+    pub source: &'a [u8],
+    pub label: &'a str,
+}
+
 /// Build the worker `OrgContext` from the caller's effective permission set only.
 ///
 /// Does not inject an unrequested permission superset — regressions that drop
@@ -445,28 +459,23 @@ impl WorkerPipeline {
     /// Preserves the caller's exact permission set — no superset injection.
     pub async fn index_existing_document_revision(
         &self,
-        access_token: &str,
-        org_id: Uuid,
-        user_id: Uuid,
-        collection_id: Uuid,
-        document_id: Uuid,
-        permissions: &[&str],
-        filename: &str,
-        content_type: &str,
-        source: &[u8],
-        label: &str,
+        revision: ExistingDocumentRevision<'_>,
     ) -> WorkerProducedDoc {
-        let worker_ctx =
-            worker_org_context(org_id, user_id, collection_id, permissions.iter().copied());
+        let worker_ctx = worker_org_context(
+            revision.org_id,
+            revision.user_id,
+            revision.collection_id,
+            revision.permissions.iter().copied(),
+        );
         self.upload_convert_index(
-            access_token,
+            revision.access_token,
             &worker_ctx,
-            collection_id,
-            Some(document_id),
-            filename,
-            content_type,
-            source,
-            label,
+            revision.collection_id,
+            Some(revision.document_id),
+            revision.filename,
+            revision.content_type,
+            revision.source,
+            revision.label,
         )
         .await
     }
