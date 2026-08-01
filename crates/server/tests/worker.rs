@@ -2459,14 +2459,16 @@ async fn live_convert_worker_second_promotion_demotes_current_and_preserves_orig
     )
     .await;
     let first_job = enqueue_convert(&pool, &ctx, document_id, source_one).await;
-    let worker = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
-        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
-    )
-    .expect("worker");
+    let convert_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     assert!(matches!(
-        worker.run_once(&ctx).await.expect("first promotion"),
+        run_convert_worker_until_completed(
+            &pool,
+            &storage,
+            &ctx,
+            first_job.id,
+            convert_config.clone(),
+        )
+        .await,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == first_job.id
     ));
     let first_promoted = published_version_for_source(&pool, &ctx, source_one)
@@ -2499,7 +2501,14 @@ async fn live_convert_worker_second_promotion_demotes_current_and_preserves_orig
     .await;
     let second_job = enqueue_convert(&pool, &ctx, document_id, source_two).await;
     assert!(matches!(
-        worker.run_once(&ctx).await.expect("second promotion"),
+        run_convert_worker_until_completed(
+            &pool,
+            &storage,
+            &ctx,
+            second_job.id,
+            convert_config,
+        )
+        .await,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == second_job.id
     ));
     let second_promoted = published_version_for_source(&pool, &ctx, source_two)
@@ -2767,7 +2776,6 @@ async fn live_convert_worker_resource_failures_are_bounded_job_failures() {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
-    let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
     let cases = [
         (
             "ram",
@@ -2801,6 +2809,7 @@ while True:
         ),
     ];
     for (name, script) in cases {
+        let ctx = org_context(Uuid::new_v4(), Uuid::new_v4());
         let document_id = Uuid::new_v4();
         let version_id = Uuid::new_v4();
         let quarantine =
