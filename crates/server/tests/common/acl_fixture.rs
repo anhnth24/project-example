@@ -252,81 +252,79 @@ pub async fn seed_acl_collection_matrix(
         let fixture = fixture.clone();
         move |txn| {
             Box::pin(async move {
-                let mut matrix = AclCollectionMatrix::default();
-
-                matrix.org_visible =
+                let org_visible =
                     insert_collection(txn, fixture.org, fixture.owner, "org", "org").await?;
-                matrix.private_owned =
+                let private_owned =
                     insert_collection(txn, fixture.org, fixture.member, "private", "owned").await?;
-                matrix.private_foreign =
+                let private_foreign =
                     insert_collection(txn, fixture.org, fixture.owner, "private", "foreign")
                         .await?;
-                matrix.private_user_grant =
+                let private_user_grant =
                     insert_collection(txn, fixture.org, fixture.owner, "private", "user-grant")
                         .await?;
                 grant_user_access(
                     txn,
                     fixture.org,
-                    matrix.private_user_grant,
+                    private_user_grant,
                     fixture.member,
                     AccessLevel::Write,
                 )
                 .await?;
 
-                matrix.private_group_leak =
+                let private_group_leak =
                     insert_collection(txn, fixture.org, fixture.owner, "private", "group-leak")
                         .await?;
 
-                matrix.private_role_leak =
+                let private_role_leak =
                     insert_collection(txn, fixture.org, fixture.owner, "private", "role-leak")
                         .await?;
 
-                matrix.groups_via_group =
+                let groups_via_group =
                     insert_collection(txn, fixture.org, fixture.owner, "groups", "via-group")
                         .await?;
                 grant_group_access(
                     txn,
                     fixture.org,
-                    matrix.groups_via_group,
+                    groups_via_group,
                     fixture.group_id,
                     AccessLevel::Write,
                 )
                 .await?;
 
-                matrix.groups_via_role =
+                let groups_via_role =
                     insert_collection(txn, fixture.org, fixture.owner, "groups", "via-role")
                         .await?;
                 grant_role_access(
                     txn,
                     fixture.org,
-                    matrix.groups_via_role,
+                    groups_via_role,
                     fixture.viewer_role_id,
                     AccessLevel::Write,
                 )
                 .await?;
 
-                matrix.groups_denied =
+                let groups_denied =
                     insert_collection(txn, fixture.org, fixture.owner, "groups", "denied").await?;
 
-                matrix.groups_read_grant =
+                let groups_read_grant =
                     insert_collection(txn, fixture.org, fixture.owner, "groups", "read-grant")
                         .await?;
                 grant_user_access(
                     txn,
                     fixture.org,
-                    matrix.groups_read_grant,
+                    groups_read_grant,
                     fixture.member,
                     AccessLevel::Read,
                 )
                 .await?;
 
-                matrix.containment =
+                let containment =
                     insert_collection(txn, fixture.org, fixture.member, "groups", "contain")
                         .await?;
                 grant_group_access(
                     txn,
                     fixture.org,
-                    matrix.containment,
+                    containment,
                     fixture.group_id,
                     AccessLevel::Write,
                 )
@@ -334,7 +332,7 @@ pub async fn seed_acl_collection_matrix(
                 grant_role_access(
                     txn,
                     fixture.org,
-                    matrix.containment,
+                    containment,
                     fixture.viewer_role_id,
                     AccessLevel::Write,
                 )
@@ -342,7 +340,7 @@ pub async fn seed_acl_collection_matrix(
                 grant_user_access(
                     txn,
                     fixture.org,
-                    matrix.containment,
+                    containment,
                     fixture.member,
                     AccessLevel::Write,
                 )
@@ -350,13 +348,25 @@ pub async fn seed_acl_collection_matrix(
                 grant_user_access(
                     txn,
                     fixture.org,
-                    matrix.containment,
+                    containment,
                     fixture.other_user,
                     AccessLevel::Write,
                 )
                 .await?;
 
-                Ok(matrix)
+                Ok(AclCollectionMatrix {
+                    org_visible,
+                    private_owned,
+                    private_foreign,
+                    private_user_grant,
+                    private_group_leak,
+                    private_role_leak,
+                    groups_via_group,
+                    groups_via_role,
+                    groups_denied,
+                    groups_read_grant,
+                    containment,
+                })
             })
         }
     })
