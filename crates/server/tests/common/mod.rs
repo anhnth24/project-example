@@ -5,6 +5,7 @@
 //! - `MARKHAND_TEST_APP_DATABASE_URL` — non-superuser `markhand_app` for FORCE RLS
 #![allow(dead_code)] // not every integration binary uses every helper
 
+pub mod acl_fixture;
 pub mod fixtures;
 pub mod worker_pipeline;
 
@@ -506,6 +507,11 @@ pub async fn minio_cleanup_soak_lane(
 }
 
 /// Seed an org user with the given permission codes (owner role) + password.
+///
+/// Callers that need non-empty `allowed_collection_ids` under the 1C
+/// `(qa.query, read)` projection must include `qa.query` in `permissions`.
+/// Omit it only for fixtures that intentionally prove missing-query denial or
+/// that never assert collection scope (member/org/auth-only tests).
 pub async fn seed_user_with_permissions(
     pool: &Pool,
     org: Uuid,

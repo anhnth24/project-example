@@ -6,7 +6,12 @@ use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
+use crate::db::acl_sql::{acl_predicate_sql, allowed_collections_sql};
 use crate::db::error::DbError;
+use crate::db::models::AccessLevel;
+
+/// Base permission for the org-context collection allow-list (`read` access).
+pub const COLLECTION_SCOPE_PERMISSION: &str = "qa.query";
 
 /// Failures when resolving authorization from current PG membership state.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -86,28 +91,7 @@ pub async fn resolve_org_context(
         .map_err(|_| ResolveError::Database)?;
     let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
 
-    // POC collection allow-list (full ACL is Phase 1C): org-visible, owned, or direct user grant.
-    let collection_rows = client
-        .query(
-            "SELECT c.id
-             FROM collections c
-             WHERE c.org_id = $1
-               AND c.deleted_at IS NULL
-               AND (
-                 c.visibility = 'org'
-                 OR c.owner_user_id = $2
-                 OR EXISTS (
-                   SELECT 1 FROM collection_user_access cua
-                   WHERE cua.org_id = c.org_id
-                     AND cua.collection_id = c.id
-                     AND cua.user_id = $2
-                 )
-               )",
-            &[&org_id, &user_id],
-        )
-        .await
-        .map_err(|_| ResolveError::Database)?;
-    let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
+    let collections = query_allowed_collection_ids_client(client, org_id, user_id).await?;
 
     OrgContext::try_new(org_id, user_id, permissions, collections)
         .map_err(|_| ResolveError::InvalidContext)
@@ -185,29 +169,82 @@ pub async fn resolve_org_context_on_txn(
         .await
         .map_err(|_| ResolveError::Database)?;
     let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
-    let collection_rows = txn
-        .query(
-            "SELECT c.id
-             FROM collections c
-             WHERE c.org_id = $1
-               AND c.deleted_at IS NULL
-               AND (
-                 c.visibility = 'org'
-                 OR c.owner_user_id = $2
-                 OR EXISTS (
-                   SELECT 1 FROM collection_user_access cua
-                   WHERE cua.org_id = c.org_id
-                     AND cua.collection_id = c.id
-                     AND cua.user_id = $2
-                 )
-               )",
-            &[&org_id, &user_id],
-        )
-        .await
-        .map_err(|_| ResolveError::Database)?;
-    let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
+    let collections = query_allowed_collection_ids_on_txn(txn, org_id, user_id).await?;
     OrgContext::try_new(org_id, user_id, permissions, collections)
         .map_err(|_| ResolveError::InvalidContext)
+}
+
+/// Fail-closed collection ACL gate for write/admin services (PR 3 inventory).
+pub async fn require_operation_collection_access_on_txn(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    permission: &str,
+    required_access: AccessLevel,
+) -> Result<(), ResolveError> {
+    require_permission(ctx, permission)?;
+    let sql = format!(
+        "SELECT EXISTS (
+           SELECT 1 FROM collections c
+           WHERE c.org_id = $1 AND c.id = $2 AND c.deleted_at IS NULL AND ({})
+         )",
+        acl_predicate_sql("c.org_id", "c.id", "$3", "$4", "$5")
+    );
+    let allowed: bool = txn
+        .query_one(
+            &sql,
+            &[
+                &ctx.org_id(),
+                &collection_id,
+                &ctx.user_id(),
+                &permission,
+                &required_access.as_str(),
+            ],
+        )
+        .await
+        .map_err(|_| ResolveError::Database)?
+        .get(0);
+    if allowed {
+        Ok(())
+    } else {
+        Err(ResolveError::CollectionDenied)
+    }
+}
+
+async fn query_allowed_collection_ids_client(
+    client: &Client,
+    org_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, ResolveError> {
+    let sql = format!(
+        "SELECT c.id FROM collections c WHERE {}",
+        allowed_collections_sql("$1", "$2", "$3", "$4")
+    );
+    let permission = COLLECTION_SCOPE_PERMISSION;
+    let access = AccessLevel::Read.as_str();
+    let rows = client
+        .query(&sql, &[&org_id, &user_id, &permission, &access])
+        .await
+        .map_err(|_| ResolveError::Database)?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
+}
+
+async fn query_allowed_collection_ids_on_txn(
+    txn: &Transaction<'_>,
+    org_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<Uuid>, ResolveError> {
+    let sql = format!(
+        "SELECT c.id FROM collections c WHERE {}",
+        allowed_collections_sql("$1", "$2", "$3", "$4")
+    );
+    let permission = COLLECTION_SCOPE_PERMISSION;
+    let access = AccessLevel::Read.as_str();
+    let rows = txn
+        .query(&sql, &[&org_id, &user_id, &permission, &access])
+        .await
+        .map_err(|_| ResolveError::Database)?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
 /// Convenience: resolve inside a transaction-local org GUC scope.

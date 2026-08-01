@@ -528,6 +528,13 @@ async fn acl_cascade_and_lineage_fks() {
     .await
     .unwrap();
     tx.execute(
+        "UPDATE collections SET visibility = 'groups'
+         WHERE org_id = $1 AND id = $2",
+        &[&org, &collection],
+    )
+    .await
+    .unwrap();
+    tx.execute(
         "INSERT INTO collection_group_access (org_id, collection_id, group_id, access_level)
          VALUES ($1,$2,$3,'read')",
         &[&org, &collection, &group_id],

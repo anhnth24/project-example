@@ -54,12 +54,13 @@
 Phase F, 0 và 1A **đã đóng** (32/32 issue). Phase 1B **24/24 Done — gate đóng**
 (R06 hanging soak pass 2026-07-31). R02–R05 Done với evidence CI rust-integration
 trên `b5cc92c` (run 30603158015). O-chain release (O01–O05) và soak qualification đã
-pass trên live infrastructure (2026-07-26). Phase 1C **3/13 Done** (1C-01/02/03 trên
-CI `a628504`, run 30629207747), **9 In progress**, **1 Backlog** — org/RBAC foundation
-đóng; P1C.3 ACL semantics và exit gate denial suite còn mở. Phase 2 **13/19 Done**
+pass trên live infrastructure (2026-07-26). Phase 1C **5/13 Done** (1C-01/02/03/05/06 trên
+CI `9074228`, run [30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)),
+**7 In progress**, **1 Backlog** — org/RBAC foundation và PostgreSQL ACL resolver/enforcement
+đóng (P1C.3 semantics resolved trên PR 2); exit gate denial suite còn mở. Phase 2 **13/19 Done**
 trên mock/CI (#311–#318, #327, #332); còn P2-10, P2-15, P2-16 và ba issue mở rộng
-P2-17…19. Phase 3–4 chưa activate (Backlog). Catalog aggregate: **72 Done**,
-**15 In progress**, **0 Review**, **29 Backlog**.
+P2-17…19. Phase 3–4 chưa activate (Backlog). Catalog aggregate: **74 Done**,
+**13 In progress**, **0 Review**, **29 Backlog**.
 
 Dashboard: [`../plans/markhand-web/roadmap.html`](../plans/markhand-web/roadmap.html) ·
 Issue catalog: [`../plans/markhand-web/backlog/`](../plans/markhand-web/backlog/)

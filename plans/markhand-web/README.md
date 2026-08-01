@@ -51,7 +51,7 @@ không bị local override cũ che mất.
 
 ## Tiến độ milestone (2026-07-31)
 
-Tổng **116 issue** trong catalog: **68 Done**, **19 In progress**, **0 Review**, **29 Backlog**.
+Tổng **116 issue** trong catalog: **74 Done**, **13 In progress**, **0 Review**, **29 Backlog**.
 Nguồn sự thật là `**Status:**` trong từng issue catalog; bảng dưới tóm tắt theo phase.
 GitHub milestone progress được đồng bộ bởi workflow
 [`Sync Markhand Web issues`](../../.github/workflows/sync-markhand-issues.yml) khi
@@ -63,7 +63,7 @@ GitHub milestone progress được đồng bộ bởi workflow
 | 0 | 10/10 | 0 | 0 | Discovery gates đạt |
 | 1A | 10/10 | 0 | 0 | Extraction gate đạt |
 | 1B | 24/24 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
-| 1C | 3/13 | 9 | 1 | 1C-01/02/03 Done (CI `a628504`); P1C.3 ACL + exit gate 1C-12/1C-13 còn mở |
+| 1C | 5/13 | 7 | 1 | 1C-05/06 Done (CI `9074228`, run 30649044974); exit gate 1C-12/1C-13 còn mở |
 | 2 | 13/19 | 6 | 0 | MVP mock/CI xanh; exit gate chờ 1C + E2E deploy thật |
 | 3 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
 | 4 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 3 |

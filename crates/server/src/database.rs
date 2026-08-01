@@ -146,6 +146,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0035_expand_worker_role.sql",
         include_str!("../migrations/0035_expand_worker_role.sql"),
     ),
+    (
+        "0036_expand_acl_groups_invariants.sql",
+        include_str!("../migrations/0036_expand_acl_groups_invariants.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.
@@ -433,5 +437,107 @@ mod tests {
             .1;
         assert!(source.contains("'pending', 'writing', 'cleaned', 'committed'"));
         assert!(source.contains("status = 'committed'"));
+    }
+
+    #[test]
+    fn acl_groups_invariants_migration_shape() {
+        let source = MIGRATIONS
+            .iter()
+            .find(|(name, _)| *name == "0036_expand_acl_groups_invariants.sql")
+            .expect("0036 ACL groups invariants migration")
+            .1;
+
+        assert!(
+            source.contains("ORDER BY bad.id"),
+            "preflight must report sorted collection IDs"
+        );
+        assert!(
+            source.contains("preflight"),
+            "migration must include a preflight guard for dormant grants"
+        );
+        assert!(
+            source.contains("FOR NO KEY UPDATE"),
+            "grant triggers must lock the parent collection row"
+        );
+        assert!(
+            source.contains("OLD.org_id IS DISTINCT FROM NEW.org_id"),
+            "grant trigger must reject in-place org_id retargeting"
+        );
+        assert!(
+            source.contains("OLD.collection_id IS DISTINCT FROM NEW.collection_id"),
+            "grant trigger must reject in-place collection_id retargeting"
+        );
+        assert!(
+            source.contains("delete and re-insert"),
+            "grant retarget rejection must direct callers to delete+insert"
+        );
+        assert!(
+            source.contains("CREATE OR REPLACE FUNCTION bump_org_acl_version()"),
+            "0036 must replace the shared bump_org_acl_version function"
+        );
+        assert!(
+            source.contains("OLD.org_id IS DISTINCT FROM NEW.org_id")
+                && source
+                    .matches("UPDATE orgs SET acl_version = acl_version + 1")
+                    .count()
+                    >= 2,
+            "bump_org_acl_version must bump both OLD and NEW orgs on cross-org UPDATE"
+        );
+
+        for (table, trigger) in [
+            (
+                "collection_group_access",
+                "collection_group_access_enforce_visibility",
+            ),
+            (
+                "collection_role_access",
+                "collection_role_access_enforce_visibility",
+            ),
+        ] {
+            assert!(
+                source.contains(&format!(
+                    "CREATE TRIGGER {trigger}\n    BEFORE INSERT OR UPDATE ON {table}"
+                )),
+                "{table} must have a named BEFORE INSERT OR UPDATE visibility guard"
+            );
+            assert!(
+                source.contains(&format!(
+                    "WHERE org_id = NEW.org_id AND id = NEW.collection_id\n    FOR NO KEY UPDATE"
+                )) || source.contains(
+                    "WHERE org_id = NEW.org_id AND id = NEW.collection_id FOR NO KEY UPDATE"
+                ),
+                "{table} grant trigger must lock parent by org_id + collection_id"
+            );
+        }
+
+        assert!(
+            source.contains(
+                "CREATE TRIGGER collections_enforce_visibility_grant_invariant\n    BEFORE UPDATE OF visibility ON collections"
+            ),
+            "collections must have a named visibility transition guard"
+        );
+        assert!(
+            source.contains("NEW.visibility <> 'groups'"),
+            "visibility guard must fire when leaving groups"
+        );
+
+        for (table, trigger) in [
+            (
+                "collection_group_access",
+                "collection_group_access_bump_acl_version",
+            ),
+            (
+                "collection_role_access",
+                "collection_role_access_bump_acl_version",
+            ),
+            ("group_memberships", "group_memberships_bump_acl_version"),
+        ] {
+            assert!(
+                source.contains(&format!(
+                    "CREATE TRIGGER {trigger}\n    AFTER INSERT OR UPDATE OR DELETE ON {table}\n    FOR EACH ROW EXECUTE FUNCTION bump_org_acl_version()"
+                )),
+                "{table} must have a named acl_version bump trigger"
+            );
+        }
     }
 }

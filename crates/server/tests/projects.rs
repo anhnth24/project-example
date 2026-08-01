@@ -89,6 +89,9 @@ async fn seed_caller(pool: &Pool, org: Uuid, user: Uuid, email: &str) -> (OrgCon
 /// (permitted) caller already granted that same role/org, same "seed a plain
 /// member in some other org" convention `tests/members.rs`'s
 /// `seed_plain_member` documents for the identical reason.
+///
+/// Intentionally omits `qa.query`: these tests assert permission-denied HTTP
+/// responses, not non-empty collection scope under the 1C `(qa.query, read)` projection.
 async fn seed_caller_without_permissions(
     pool: &Pool,
     org: Uuid,

@@ -52,6 +52,8 @@ async fn seed_admin(pool: &Pool, org: Uuid, user: Uuid, email: &str) -> String {
 
 /// Seeds a member with no special permissions (used purely as "some other
 /// org's authenticated user" for accept-invite auth-only tests).
+///
+/// Intentionally omits `qa.query`: invite acceptance tests do not need collection scope.
 async fn seed_plain_member(pool: &Pool, org: Uuid, user: Uuid, email: &str) -> String {
     seed_user_with_permissions(pool, org, user, email, PASSWORD, &[]).await;
     login_access_token(pool, email, PASSWORD).await

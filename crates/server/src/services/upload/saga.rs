@@ -9,10 +9,14 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
-use crate::auth::permissions::require_permission;
+use crate::auth::permissions::{
+    require_operation_collection_access_on_txn, require_permission, ResolveError,
+    COLLECTION_SCOPE_PERMISSION,
+};
+use crate::db::acl_sql::allowed_collections_sql;
 use crate::db::documents::{self, NewDocument};
 use crate::db::error::DbError;
-use crate::db::models::{AuditOutcome, DocumentState, JobType};
+use crate::db::models::{AccessLevel, AuditOutcome, DocumentState, JobType};
 use crate::db::pool::with_org_txn_typed;
 use crate::db::upload_operations::{
     self, NewUploadOperation, UploadOperation, UploadOperationState,
@@ -29,6 +33,7 @@ use crate::storage::{parse_key_for_org, ObjectKey};
 use super::{Disposition, QuarantineIdentity, UploadError, UploadOutcome};
 
 pub const PERMISSION_QUARANTINE_REVIEW: &str = "doc.quarantine.review";
+const PERMISSION_DOC_UPLOAD: &str = "doc.upload";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisteredUpload {
@@ -625,9 +630,13 @@ async fn begin_or_replay(
                     UploadOperationState::Completed => {
                         // Fresh-auth original operation collection before returning.
                         let fresh = reload_principal_locked(txn, &ctx).await?;
-                        require_permission(&fresh, "doc.upload")
-                            .map_err(|_| SagaError::PermissionDenied)?;
-                        ensure_collection_writable(txn, &fresh, op.collection_id).await?;
+                        ensure_collection_writable(
+                            txn,
+                            &fresh,
+                            op.collection_id,
+                            PERMISSION_DOC_UPLOAD,
+                        )
+                        .await?;
                         Ok(Some(replay_from_operation(&op)?))
                     }
                     UploadOperationState::Started
@@ -799,7 +808,13 @@ async fn commit_registration_and_finalize(
                     upload_operations::get_by_id_for_update(txn, &provisional_ctx, op_id).await?;
                 if op.state == UploadOperationState::Completed {
                     let fresh = reload_principal_locked(txn, &provisional_ctx).await?;
-                    ensure_collection_writable(txn, &fresh, op.collection_id).await?;
+                    ensure_collection_writable(
+                        txn,
+                        &fresh,
+                        op.collection_id,
+                        PERMISSION_DOC_UPLOAD,
+                    )
+                    .await?;
                     return replay_from_operation(&op);
                 }
                 if op.state == UploadOperationState::Reconciling
@@ -813,9 +828,8 @@ async fn commit_registration_and_finalize(
                 }
 
                 let fresh = reload_principal_locked(txn, &provisional_ctx).await?;
-                require_permission(&fresh, "doc.upload")
-                    .map_err(|_| SagaError::PermissionDenied)?;
-                ensure_collection_writable(txn, &fresh, collection_id).await?;
+                ensure_collection_writable(txn, &fresh, collection_id, PERMISSION_DOC_UPLOAD)
+                    .await?;
 
                 let registered = register_rows(
                     txn,
@@ -930,24 +944,14 @@ async fn reload_principal_locked(
         .map_err(DbError::from)?;
     let permissions: Vec<String> = permission_rows.iter().map(|row| row.get(0)).collect();
 
+    let collection_sql = format!(
+        "SELECT c.id FROM collections c WHERE {}",
+        allowed_collections_sql("$1", "$2", "$3", "$4")
+    );
+    let permission = COLLECTION_SCOPE_PERMISSION;
+    let access = AccessLevel::Read.as_str();
     let collection_rows = txn
-        .query(
-            "SELECT c.id
-             FROM collections c
-             WHERE c.org_id = $1
-               AND c.deleted_at IS NULL
-               AND (
-                 c.visibility = 'org'
-                 OR c.owner_user_id = $2
-                 OR EXISTS (
-                   SELECT 1 FROM collection_user_access cua
-                   WHERE cua.org_id = c.org_id
-                     AND cua.collection_id = c.id
-                     AND cua.user_id = $2
-                 )
-               )",
-            &[&org_id, &user_id],
-        )
+        .query(&collection_sql, &[&org_id, &user_id, &permission, &access])
         .await
         .map_err(DbError::from)?;
     let collections: Vec<Uuid> = collection_rows.iter().map(|row| row.get(0)).collect();
@@ -959,10 +963,18 @@ async fn ensure_collection_writable(
     txn: &tokio_postgres::Transaction<'_>,
     ctx: &OrgContext,
     collection_id: Uuid,
+    permission: &str,
 ) -> Result<(), SagaError> {
-    if !ctx.allows_collection(collection_id) {
-        return Err(SagaError::PermissionDenied);
-    }
+    require_operation_collection_access_on_txn(
+        txn,
+        ctx,
+        collection_id,
+        permission,
+        AccessLevel::Write,
+    )
+    .await
+    .map_err(collection_access_denied)?;
+
     let row = txn
         .query_opt(
             "SELECT id FROM collections
@@ -1145,9 +1157,13 @@ pub async fn approve_quarantined_upload(
             Box::pin(async move {
                 authz_lock::lock_principal_authz(txn, ctx.org_id(), ctx.user_id()).await?;
                 let fresh = reload_principal_locked(txn, &ctx).await?;
-                require_permission(&fresh, PERMISSION_QUARANTINE_REVIEW)
-                    .map_err(|_| SagaError::PermissionDenied)?;
-                ensure_collection_writable(txn, &fresh, collection_id).await?;
+                ensure_collection_writable(
+                    txn,
+                    &fresh,
+                    collection_id,
+                    PERMISSION_QUARANTINE_REVIEW,
+                )
+                .await?;
 
                 let op = upload_operations::get_by_collection_document_for_update(
                     txn,
@@ -1520,5 +1536,41 @@ fn mime_for(format: super::CanonicalFormat) -> &'static str {
         super::CanonicalFormat::Xls => "application/vnd.ms-excel",
         super::CanonicalFormat::Xlsb => "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
         super::CanonicalFormat::ZipContainer => "application/zip",
+    }
+}
+
+fn collection_access_denied(error: ResolveError) -> SagaError {
+    match error {
+        ResolveError::PermissionDenied | ResolveError::CollectionDenied => {
+            SagaError::PermissionDenied
+        }
+        _ => SagaError::Database(DbError::Config("collection_access_check".into())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ensure_collection_writable_uses_operation_guard_not_read_allow_list() {
+        let src = include_str!("saga.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+
+        assert!(
+            production.contains("require_operation_collection_access_on_txn"),
+            "upload write gate must use operation-scoped ACL SQL"
+        );
+        assert!(
+            !production.contains("ctx.allows_collection(collection_id)"),
+            "upload write gate must not consult qa.query read allow-list"
+        );
+        assert!(
+            production.matches("ensure_collection_writable(").count() >= 4,
+            "expected upload/quarantine call sites to route through ensure_collection_writable"
+        );
+        assert!(
+            production.contains("PERMISSION_DOC_UPLOAD")
+                && production.contains("PERMISSION_QUARANTINE_REVIEW"),
+            "upload and quarantine approval must pass distinct operation permissions"
+        );
     }
 }
