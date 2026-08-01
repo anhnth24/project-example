@@ -2,7 +2,7 @@
 
 **Branch:** `cursor/phase1c-denial-suite-6ddb`  
 **Base:** `b3df83a`  
-**Status:** GREEN_IMPLEMENTED — verification pending  
+**Status:** DONE_WITH_CONCERNS — local gates green; live CI pending  
 **Date:** 2026-08-01
 
 ## Commits
@@ -10,7 +10,8 @@
 | SHA | Message |
 |-----|---------|
 | `b8d7b56` | `test(server): expose remaining multi-org denial gaps` |
-| this GREEN commit | `test(server): complete unified multi-org denial coverage` |
+| `3a0d927` | `test(server): complete unified multi-org denial coverage` |
+| `7e22855` | `fix(server): satisfy denial helper lint policy` |
 
 ## Formal RED evidence
 
@@ -51,5 +52,21 @@ remains exactly 52 HTTP + 1 SSE for 53 business operations.
 
 ## Verification
 
-Post-push checks pending. The Cloud VM has no live test service URLs, so CI is
-authoritative for the ignored integration suite.
+| Post-push check | Result |
+|-----------------|--------|
+| `cargo build -p fileconv-cli --no-default-features` | PASS |
+| `cargo test -p fileconv-server --test multi_org_denial --no-run` | PASS |
+| `cargo test -p fileconv-server --test multi_org_denial_manifest` | 15 passed |
+| `cargo fmt --all -- --check` | PASS |
+| `cargo clippy -p fileconv-server --tests -- -D warnings` | PASS |
+| `cargo metadata --locked --format-version 1 --no-deps` | PASS |
+| `python3 scripts/check-dependency-policy.py` | PASS |
+
+The first full clippy run found the new worker helper exceeded the argument
+count policy and one `manual_contains` warning. Commit `7e22855` introduced a
+typed `ExistingDocumentRevision` request and corrected the assertion; the
+complete gate sequence then passed.
+
+The Cloud VM has no live Postgres/MinIO/Qdrant URLs, so the ignored live suite
+cannot be executed locally. CI is authoritative for the six production-path
+contracts.
