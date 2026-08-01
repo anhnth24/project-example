@@ -9,6 +9,7 @@ mod common;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use axum::body::Body;
@@ -109,6 +110,54 @@ fn record_peak(current: usize) {
             Err(next) => peak = next,
         }
     }
+}
+
+/// Test-only recursion guard: child re-invocation runs the measurement body in-process.
+const ALLOC_MEASURE_CHILD_ENV: &str = "MARKHAND_UPLOADS_ALLOC_MEASURE_CHILD";
+/// Must match the `#[tokio::test]` function name for `--exact` child selection.
+const LARGE_LAZY_STREAM_TEST: &str = "large_lazy_stream_keeps_memory_bounded";
+
+fn is_alloc_measure_child() -> bool {
+    std::env::var_os(ALLOC_MEASURE_CHILD_ENV).is_some()
+}
+
+fn spawn_isolated_alloc_measure_child() {
+    let exe = std::env::current_exe().expect("current test executable");
+    let output = Command::new(&exe)
+        .args([
+            "--exact",
+            LARGE_LAZY_STREAM_TEST,
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env(ALLOC_MEASURE_CHILD_ENV, "1")
+        .output()
+        .expect("spawn isolated alloc measure child");
+    assert!(
+        output.status.success(),
+        "isolated alloc measure child failed status={:?}\nstdout={}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn alloc_measure_child_env_is_test_scoped() {
+    assert!(ALLOC_MEASURE_CHILD_ENV.starts_with("MARKHAND_UPLOADS_"));
+}
+
+#[test]
+fn alloc_measure_exact_filter_matches_large_lazy_stream_test_name() {
+    assert_eq!(
+        LARGE_LAZY_STREAM_TEST,
+        "large_lazy_stream_keeps_memory_bounded"
+    );
+}
+
+#[test]
+fn alloc_measure_child_guard_prevents_nested_spawn() {
+    assert!(!is_alloc_measure_child());
 }
 
 const DOCX_CONTENT_TYPES_XML: &[u8] = br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
@@ -511,6 +560,14 @@ async fn zip_bomb_rejects_without_unbounded_decompress() {
 
 #[tokio::test]
 async fn large_lazy_stream_keeps_memory_bounded() {
+    if !is_alloc_measure_child() {
+        spawn_isolated_alloc_measure_child();
+        return;
+    }
+    large_lazy_stream_keeps_memory_bounded_body().await;
+}
+
+async fn large_lazy_stream_keeps_memory_bounded_body() {
     let limits = LimitsConfig::policy_defaults();
     let base = CURRENT_ALLOCATED.load(Ordering::Relaxed);
     PEAK_ALLOCATED.store(base, Ordering::Relaxed);
