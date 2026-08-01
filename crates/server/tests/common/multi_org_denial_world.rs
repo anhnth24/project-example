@@ -122,11 +122,11 @@ pub async fn boot_world_with_urls(admin: &str, app_url: &str) -> MultiOrgDenialW
 
     MultiOrgDenialWorld {
         fixture,
-        resources,
-        pool: Some(pool),
-        app: Some(app),
-        store,
         orgs,
+        store,
+        app: Some(app),
+        pool: Some(pool),
+        resources,
     }
 }
 
@@ -209,9 +209,13 @@ fn push_foreign_display_name(
     }
 }
 
-pub async fn cleanup_world(mut world: MultiOrgDenialWorld) -> Result<(), String> {
-    world.take_runtime_handles();
-    world.resources.cleanup().await
+pub async fn cleanup_world(world: MultiOrgDenialWorld) -> Result<(), String> {
+    let mut world = std::mem::ManuallyDrop::new(world);
+    world.release_runtime_handles();
+    let resources = std::mem::replace(&mut world.resources, PanicSafeWorldResources::empty());
+    let result = resources.cleanup().await;
+    let _ = std::mem::ManuallyDrop::into_inner(world);
+    result
 }
 
 pub fn assert_base_topology(world: &MultiOrgDenialWorld) {

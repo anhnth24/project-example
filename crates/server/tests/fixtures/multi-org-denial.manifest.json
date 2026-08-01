@@ -114,13 +114,14 @@
     {
       "id": "denial-createOrg",
       "binary": "orgs",
-      "testName": "create_org_succeeds_and_caller_becomes_owner",
+      "testName": "create_org_requires_a_bearer_token",
       "operationId": "createOrg",
       "guardInventoryRef": "createOrg",
       "layer": "http",
       "status": "executable",
       "coverageState": "complete",
-      "evidenceRole": "primary"
+      "evidenceRole": "primary",
+      "coverageNote": "createOrg has no foreign-org target; unauthenticated 401 is the applicable denial boundary"
     },
     {
       "id": "denial-createProject",

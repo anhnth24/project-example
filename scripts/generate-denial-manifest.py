@@ -165,7 +165,7 @@ EXECUTABLE: dict[str, tuple[str, str, str]] = {
         "http",
     ),
     "listOrgs": ("orgs", "list_orgs_shows_only_the_callers_own_orgs", "http"),
-    "createOrg": ("orgs", "create_org_succeeds_and_caller_becomes_owner", "http"),
+    "createOrg": ("orgs", "create_org_requires_a_bearer_token", "http"),
     "switchOrg": (
         "orgs",
         "switch_denies_and_audits_a_real_org_the_caller_is_not_a_member_of",
@@ -401,6 +401,13 @@ DEFERRED_GAPS: list[dict] = [
     },
 ]
 
+# Optional coverage notes for primary rows where denial boundary is not cross-org.
+PRIMARY_COVERAGE_NOTES: dict[str, str] = {
+    "createOrg": (
+        "createOrg has no foreign-org target; unauthenticated 401 is the applicable denial boundary"
+    ),
+}
+
 NA_ROWS = [
     {
         "id": "na-export-route-absent",
@@ -453,19 +460,20 @@ def main() -> None:
 
     for op_id in sorted(EXECUTABLE):
         binary, test_name, layer = EXECUTABLE[op_id]
-        rows.append(
-            {
-                "id": f"denial-{op_id}",
-                "binary": binary,
-                "testName": test_name,
-                "operationId": op_id,
-                "guardInventoryRef": op_id,
-                "layer": layer,
-                "status": "executable",
-                "coverageState": "complete",
-                "evidenceRole": "primary",
-            }
-        )
+        row = {
+            "id": f"denial-{op_id}",
+            "binary": binary,
+            "testName": test_name,
+            "operationId": op_id,
+            "guardInventoryRef": op_id,
+            "layer": layer,
+            "status": "executable",
+            "coverageState": "complete",
+            "evidenceRole": "primary",
+        }
+        if note := PRIMARY_COVERAGE_NOTES.get(op_id):
+            row["coverageNote"] = note
+        rows.append(row)
 
     for op_id, binary, test_name, layer, row_id, evidence_role in EXTRA_ROWS:
         row = {

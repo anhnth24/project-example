@@ -327,6 +327,13 @@ impl PanicSafeWorldResources {
         }
     }
 
+    pub(crate) fn empty() -> Self {
+        Self {
+            ephemeral: None,
+            minio_guard: None,
+        }
+    }
+
     pub async fn cleanup(mut self) -> Result<(), String> {
         if let Some(guard) = self.minio_guard.take() {
             guard
@@ -351,10 +358,6 @@ impl Drop for PanicSafeWorldResources {
 }
 
 fn best_effort_ephemeral_drop(ephemeral: DualRoleEphemeralDb) {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        handle.block_on(ephemeral.drop());
-        return;
-    }
     let _ = std::thread::spawn(move || {
         if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -367,13 +370,22 @@ fn best_effort_ephemeral_drop(ephemeral: DualRoleEphemeralDb) {
 }
 
 /// Shared multi-org world for executable denial tests.
+///
+/// Field order is intentional: `resources` is declared last so [`Drop`] can release
+/// pool/app/store handles before [`PanicSafeWorldResources`] auto-drop runs.
 pub struct MultiOrgDenialWorld {
     pub fixture: DenialFixture,
-    pub(crate) resources: PanicSafeWorldResources,
-    pub(crate) pool: Option<deadpool_postgres::Pool>,
-    pub(crate) app: Option<axum::Router>,
-    pub(crate) store: Option<fileconv_server::storage::minio::MinioClient>,
     pub orgs: BTreeMap<String, crate::common::multi_org_denial_world::BootedOrg>,
+    pub(crate) store: Option<fileconv_server::storage::minio::MinioClient>,
+    pub(crate) app: Option<axum::Router>,
+    pub(crate) pool: Option<deadpool_postgres::Pool>,
+    pub(crate) resources: PanicSafeWorldResources,
+}
+
+impl Drop for MultiOrgDenialWorld {
+    fn drop(&mut self) {
+        self.release_runtime_handles();
+    }
 }
 
 impl MultiOrgDenialWorld {
@@ -389,9 +401,14 @@ impl MultiOrgDenialWorld {
             .expect("MultiOrgDenialWorld app already released")
     }
 
-    pub(crate) fn take_runtime_handles(&mut self) {
+    pub(crate) fn release_runtime_handles(&mut self) {
         self.app.take();
         self.pool.take();
+        self.store.take();
+    }
+
+    pub(crate) fn take_runtime_handles(&mut self) {
+        self.release_runtime_handles();
     }
     pub async fn boot() -> Self {
         crate::common::multi_org_denial_world::boot_world().await
@@ -667,31 +684,32 @@ pub fn is_trivial_or_scaffold_test_body(body: &str) -> bool {
 }
 
 pub fn has_denial_evidence_heuristic(body: &str) -> bool {
-    const NEEDLES: &[&str] = &[
+    const CONCRETE_NEEDLES: &[&str] = &[
         "assert_denial_no_leak",
         "cross_tenant",
         "cross_org",
         "foreign",
         "403",
         "404",
-        "deny",
-        "leak",
-        "isolation",
-        "not_a_member",
-        "refuses_foreign",
-        "org_b",
+        "401",
+        "forbidden",
+        "not_found",
+        "unauthorized",
         "PathIdor",
         "BodyScope",
         "Unauthorized",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "NOT_FOUND",
         "never_leaks",
         "cannot_see",
-        "FORBIDDEN",
-        "permission",
-        "denied",
-        "denies",
-        "isolation",
+        "not_a_member",
+        "refuses_foreign",
+        "org_b",
+        "assert_permission_denied",
+        "LeaseLost",
     ];
-    NEEDLES.iter().any(|needle| body.contains(needle))
+    CONCRETE_NEEDLES.iter().any(|needle| body.contains(needle))
 }
 
 pub fn validate_executable_test_evidence(
@@ -1535,5 +1553,63 @@ mod unit_tests {
         };
         let err = std::panic::catch_unwind(|| assert_object_key_identity(&org));
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn best_effort_ephemeral_drop_never_uses_current_runtime_handle() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/multi_org_denial.rs");
+        let source = std::fs::read_to_string(path).expect("multi_org_denial source");
+        let start = source
+            .find("fn best_effort_ephemeral_drop")
+            .expect("best_effort_ephemeral_drop");
+        let end = source[start..]
+            .find("\nfn ")
+            .map(|idx| start + idx)
+            .unwrap_or(source.len());
+        let body = &source[start..end];
+        assert!(!body.contains("Handle::try_current"));
+        assert!(!body.contains("handle.block_on"));
+        assert!(body.contains("thread::spawn"));
+    }
+
+    #[test]
+    fn multi_org_denial_world_declares_resources_last_for_drop_order() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/multi_org_denial.rs");
+        let source = std::fs::read_to_string(path).expect("multi_org_denial source");
+        let start = source
+            .find("pub struct MultiOrgDenialWorld")
+            .expect("MultiOrgDenialWorld struct");
+        let end = source[start..]
+            .find("\n}\n\nimpl Drop for MultiOrgDenialWorld")
+            .map(|idx| start + idx)
+            .expect("struct end");
+        let struct_body = &source[start..end];
+        assert!(
+            struct_body
+                .trim_end()
+                .ends_with("pub(crate) resources: PanicSafeWorldResources,"),
+            "resources must be the last field for panic-safe teardown ordering"
+        );
+    }
+
+    #[test]
+    fn happy_path_create_org_body_is_not_denial_evidence() {
+        let err = validate_executable_test_evidence(
+            "orgs",
+            "create_org_succeeds_and_caller_becomes_owner",
+            DenialLayer::Http,
+        )
+        .expect_err("happy-path create must not certify denial evidence");
+        assert!(err.contains("lacks cross-org denial evidence heuristics"));
+    }
+
+    #[test]
+    fn create_org_bearer_token_denial_is_valid_http_evidence() {
+        validate_executable_test_evidence(
+            "orgs",
+            "create_org_requires_a_bearer_token",
+            DenialLayer::Http,
+        )
+        .expect("bearer-token denial must qualify as HTTP evidence");
     }
 }
