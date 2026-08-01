@@ -545,13 +545,13 @@ async fn live_pdf_pptx_xlsx_citation_preview_download_matrix() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MINIO + QDRANT + built fileconv"]
 async fn live_citation_authz_expiry_replay_idor_and_immediate_deny() {
-    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+    let Some(admin) = admin_database_url() else {
         return;
     };
-    let Some(app) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
+    let Some(app) = app_database_url() else {
         return;
     };
-    let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+    let Some(store) = test_minio_client() else {
         return;
     };
     let cleanup = MinioCleanupGuard::new(store.clone());
@@ -1036,7 +1036,7 @@ async fn minio_cleanup_soak_round_drains_all_lanes_before_asserting() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_MINIO_*"]
 async fn live_minio_cleanup_guard_soak() {
-    let Some(probe) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+    let Some(probe) = test_minio_client() else {
         return;
     };
     let probe_guard = MinioCleanupGuard::new(probe);

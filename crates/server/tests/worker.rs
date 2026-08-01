@@ -2,7 +2,10 @@
 
 mod common;
 
-use common::take_live;
+use common::{
+    admin_database_url, fileconv_binary, python3_binary, sandbox_isolation_available,
+    test_minio_client_with_bucket_prefix,
+};
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -49,13 +52,7 @@ fn sandbox_test_guard() -> MutexGuard<'static, ()> {
 }
 
 fn sandbox_available() -> bool {
-    match sandbox::preflight() {
-        Ok(()) => true,
-        Err(error) => {
-            eprintln!("skipped: sandbox isolation unavailable: {error}");
-            false
-        }
-    }
+    sandbox_isolation_available().is_some()
 }
 
 fn base_limits(timeout: Duration) -> ResourceLimits {
@@ -84,10 +81,7 @@ fn shell(script: &str, timeout: Duration) -> SandboxConfig {
 }
 
 fn python(script: &str, timeout: Duration) -> Option<SandboxConfig> {
-    if !Path::new("/usr/bin/python3").exists() {
-        eprintln!("skipped: /usr/bin/python3 missing");
-        return None;
-    }
+    python3_binary()?;
     Some(SandboxConfig {
         argv_template: vec![
             "/usr/bin/python3".into(),
@@ -109,16 +103,6 @@ fn input(ext: &str, bytes: &[u8]) -> SandboxInput {
 
 fn run(config: &SandboxConfig) -> fileconv_server::workers::sandbox::SandboxOutput {
     sandbox::run(config, input("txt", b"hello"), &SandboxCancel::default()).expect("sandbox run")
-}
-
-fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_DATABASE_URL unset");
-            None
-        }
-    }
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
@@ -194,32 +178,6 @@ async fn boot_pool(base_url: &str) -> (EphemeralDb, Pool) {
         .expect("apply migrations");
     let pool = create_pool(&ephemeral.url).expect("pool");
     (ephemeral, pool)
-}
-
-fn test_minio_client() -> Option<MinioClient> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_MINIO_ENDPOINT unset");
-            return None;
-        }
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY").ok()?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY").ok()?;
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION").unwrap_or_else(|_| "us-east-1".into());
-    let bucket = format!("markhand-worker-{}", Uuid::new_v4().simple());
-    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
-    let config = MinioConfig::new(
-        endpoint,
-        SecretString::new(access_key),
-        SecretString::new(secret_key),
-        bucket,
-        region,
-        true,
-    )
-    .expect("minio config");
-    let client = MinioClient::from_config(&config).expect("minio client");
-    Some(client)
 }
 
 fn org_context(org: Uuid, user: Uuid) -> OrgContext {
@@ -1195,7 +1153,6 @@ fn real_fileconv_smoke_for_simple_formats_when_built() {
         return;
     }
     let Some(fileconv) = fileconv_binary() else {
-        eprintln!("skipped: target/debug/fileconv not built");
         return;
     };
     let argv = vec![fileconv.display().to_string(), "one".into(), INPUT.into()];
@@ -1236,10 +1193,10 @@ fn real_fileconv_smoke_for_simple_formats_when_built() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_promotes_immutable_markdown_version() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -1330,10 +1287,10 @@ async fn live_convert_worker_promotes_immutable_markdown_version() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -1396,10 +1353,10 @@ async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() {
-    let Some(base_url) = take_live(test_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -1530,10 +1487,10 @@ async fn live_convert_worker_fault_injection_rolls_back_and_retries_promotion() 
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_post_commit_ack_loss_preserves_committed_artifact() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -1610,10 +1567,10 @@ async fn live_convert_worker_post_commit_ack_loss_preserves_committed_artifact()
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -1712,10 +1669,10 @@ async fn live_convert_worker_reconciliation_cleans_terminal_parent_leak() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -1876,10 +1833,10 @@ async fn live_convert_worker_reconciliation_runs_with_pending_convert_work() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_tombstone_before_promotion_does_not_regress_document_state() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -1965,10 +1922,10 @@ async fn live_convert_worker_tombstone_before_promotion_does_not_regress_documen
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_present() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2077,10 +2034,10 @@ async fn live_convert_worker_reclaim_style_retry_keeps_committed_attempt_object_
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_keeps_committed_object(
 ) {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2214,10 +2171,10 @@ async fn live_convert_worker_barrier_reclaim_promote_before_old_compensation_kee
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2284,10 +2241,10 @@ async fn live_convert_worker_checkpointed_key_cleans_ambiguous_after_put() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2366,10 +2323,10 @@ async fn live_convert_worker_delete_failure_is_surfaced_and_retry_cleans() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2462,10 +2419,10 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_second_promotion_demotes_current_and_preserves_original() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2571,10 +2528,10 @@ async fn live_convert_worker_second_promotion_demotes_current_and_preserves_orig
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_converter_error_retries_job() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2641,10 +2598,10 @@ async fn live_convert_worker_converter_error_retries_job() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_cancel_loses_lease_and_kills_sandbox() {
-    let Some(base_url) = take_live(test_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2718,10 +2675,10 @@ else:
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_cancel_after_upload_cleans_generated_object_via_reconciliation() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2797,10 +2754,10 @@ async fn live_convert_worker_cancel_after_upload_cleans_generated_object_via_rec
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
 async fn live_convert_worker_resource_failures_are_bounded_job_failures() {
-    let Some(base_url) = test_database_url() else {
+    let Some(base_url) = admin_database_url() else {
         return;
     };
-    let Some(storage) = test_minio_client() else {
+    let Some(storage) = test_minio_client_with_bucket_prefix("markhand-worker") else {
         return;
     };
     let (ephemeral, pool) = boot_pool(&base_url).await;
@@ -2924,11 +2881,6 @@ while True:
     ephemeral.drop().await;
 }
 
-fn fileconv_binary() -> Option<PathBuf> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv");
-    path.exists().then_some(path)
-}
-
 fn assert_process_exits(pid: u32, timeout: Duration) {
     let proc_path = PathBuf::from(format!("/proc/{pid}"));
     let deadline = Instant::now() + timeout;
@@ -2941,14 +2893,18 @@ fn assert_process_exits(pid: u32, timeout: Duration) {
     panic!("process {pid} survived sandbox kill");
 }
 
-/// Pins worker integration tests to shared required-mode helpers (no local duplicate).
+/// Pins worker integration tests to shared strict prerequisite getters.
 mod worker_required_mode {
-    use super::common::{markhand_test_required, take_live, test_env_lock, SavedEnvVars};
+    use super::common::{
+        admin_database_url, markhand_test_required, minio_test_credentials, take_live,
+        test_env_lock, SavedEnvVars,
+    };
 
-    const _: fn(Option<String>, &str) -> Option<String> = take_live;
+    const _: fn() -> Option<String> = admin_database_url;
+    const _: fn() -> Option<common::MinioTestCredentials> = minio_test_credentials;
 
     #[test]
-    fn worker_binary_uses_common_take_live_for_markhand_test_required() {
+    fn worker_getters_panic_via_common_take_live_when_required() {
         let _lock = test_env_lock();
         let _saved = SavedEnvVars::save(&["MARKHAND_TEST_REQUIRED", "MARKHAND_E2E"]);
         std::env::set_var("MARKHAND_TEST_REQUIRED", "1");

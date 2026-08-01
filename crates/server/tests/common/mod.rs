@@ -26,11 +26,13 @@ use fileconv_server::http::{router, AppState};
 use fileconv_server::services::download::CapabilityKeys;
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
+use fileconv_server::storage::qdrant::{QdrantAdminApiKey, QdrantAdminClient, QdrantClient};
+use std::path::PathBuf;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
-/// Serialize env-mutating integration tests so parallel binaries cannot interleave
-/// `set_var`/`remove_var` windows.
+/// Serialize env-mutating tests within one integration-test binary so parallel
+/// `#[test]` functions cannot interleave `set_var`/`remove_var` windows.
 pub fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -87,28 +89,155 @@ pub fn take_live<T>(value: Option<T>, name: &str) -> Option<T> {
     }
 }
 
-pub fn admin_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_DATABASE_URL unset — integration tests require PostgreSQL"
-            );
-            None
-        }
+fn non_empty_env(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn non_empty_env_first(vars: &[&str]) -> Option<String> {
+    vars.iter().find_map(|var| non_empty_env(var))
+}
+
+/// MinIO connection fields read from `MARKHAND_TEST_MINIO_*` (with object-store aliases).
+#[derive(Clone, Debug)]
+pub struct MinioTestCredentials {
+    pub endpoint: String,
+    pub access_key: String,
+    pub secret_key: String,
+    pub region: String,
+}
+
+fn minio_test_credentials_raw() -> Option<MinioTestCredentials> {
+    let endpoint = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_ENDPOINT",
+        "MARKHAND_TEST_OBJECT_STORE_ENDPOINT",
+    ])?;
+    let access_key = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_ACCESS_KEY",
+        "MARKHAND_TEST_OBJECT_STORE_ACCESS_KEY",
+    ])?;
+    let secret_key = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_SECRET_KEY",
+        "MARKHAND_TEST_OBJECT_STORE_SECRET_KEY",
+    ])?;
+    if access_key.is_empty() || secret_key.is_empty() {
+        return None;
     }
+    let region = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_REGION",
+        "MARKHAND_TEST_OBJECT_STORE_REGION",
+    ])
+    .unwrap_or_else(|| "us-east-1".into());
+    Some(MinioTestCredentials {
+        endpoint,
+        access_key,
+        secret_key,
+        region,
+    })
+}
+
+/// Strict MinIO credentials for integration tests (`MARKHAND_TEST_MINIO_*`).
+pub fn minio_test_credentials() -> Option<MinioTestCredentials> {
+    take_live(
+        minio_test_credentials_raw(),
+        "MARKHAND_TEST_MINIO_*",
+    )
+}
+
+fn build_minio_client(creds: MinioTestCredentials, bucket: String) -> MinioClient {
+    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
+    let config = MinioConfig::new(
+        creds.endpoint,
+        SecretString::new(creds.access_key),
+        SecretString::new(creds.secret_key),
+        bucket,
+        creds.region,
+        true,
+    )
+    .expect("minio config");
+    MinioClient::from_config(&config).expect("minio client")
+}
+
+/// Live MinIO client with an ephemeral bucket (`markhand-it-*` prefix).
+pub fn test_minio_client() -> Option<MinioClient> {
+    test_minio_client_with_bucket_prefix("markhand-it")
+}
+
+/// Live MinIO client with an ephemeral bucket using the given prefix.
+pub fn test_minio_client_with_bucket_prefix(prefix: &str) -> Option<MinioClient> {
+    let creds = minio_test_credentials()?;
+    let bucket = format!("{prefix}-{}", Uuid::new_v4().simple());
+    Some(build_minio_client(creds, bucket))
+}
+
+pub fn admin_database_url() -> Option<String> {
+    take_live(
+        non_empty_env("MARKHAND_TEST_DATABASE_URL"),
+        "MARKHAND_TEST_DATABASE_URL",
+    )
 }
 
 pub fn app_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_APP_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_APP_DATABASE_URL unset — FORCE RLS assertions require markhand_app"
-            );
-            None
-        }
-    }
+    take_live(
+        non_empty_env("MARKHAND_TEST_APP_DATABASE_URL"),
+        "MARKHAND_TEST_APP_DATABASE_URL",
+    )
+}
+
+pub fn test_qdrant_url() -> Option<String> {
+    take_live(
+        non_empty_env("MARKHAND_TEST_QDRANT_URL"),
+        "MARKHAND_TEST_QDRANT_URL",
+    )
+}
+
+/// Live Qdrant client when `MARKHAND_TEST_QDRANT_URL` is configured.
+pub fn test_qdrant_client() -> Option<QdrantClient> {
+    let url = test_qdrant_url()?;
+    let api_key = non_empty_env("MARKHAND_TEST_QDRANT_API_KEY").map(SecretString::new);
+    Some(QdrantClient::with_api_key(url, api_key).expect("qdrant client"))
+}
+
+/// Qdrant admin client for collection cleanup in integration tests.
+pub fn test_qdrant_admin_client() -> Option<QdrantAdminClient> {
+    let url = test_qdrant_url()?;
+    let key = non_empty_env("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
+        .unwrap_or_else(|| "test-operator-admin-key".into());
+    Some(
+        QdrantAdminClient::new(
+            url,
+            QdrantAdminApiKey::new(SecretString::new(key)).expect("admin key"),
+        )
+        .expect("qdrant admin client"),
+    )
+}
+
+/// `fileconv` binary used by ConvertWorker sandboxes.
+pub fn fileconv_binary() -> Option<PathBuf> {
+    let path = if let Ok(path) = std::env::var("MARKHAND_TEST_FILECONV_BIN") {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv")
+    };
+    take_live(path.exists().then_some(path), "target/debug/fileconv")
+}
+
+/// `/usr/bin/python3` for sandbox integration tests.
+pub fn python3_binary() -> Option<PathBuf> {
+    let path = PathBuf::from("/usr/bin/python3");
+    take_live(path.exists().then_some(path), "/usr/bin/python3")
+}
+
+/// Sandbox isolation available on the host (bubblewrap/firejail).
+pub fn sandbox_isolation_available() -> Option<()> {
+    take_live(
+        match fileconv_server::workers::sandbox::preflight() {
+            Ok(()) => Some(()),
+            Err(_) => None,
+        },
+        "sandbox isolation (bubblewrap/firejail)",
+    )
 }
 
 pub fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
@@ -279,48 +408,6 @@ pub fn test_auth_config() -> AuthConfig {
             parallelism: 1,
         },
     }
-}
-
-pub fn test_minio_client() -> Option<MinioClient> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var("MARKHAND_TEST_OBJECT_STORE_ENDPOINT")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        }) {
-        Some(url) => url,
-        None => {
-            eprintln!("skipped: MARKHAND_TEST_MINIO_ENDPOINT unset");
-            return None;
-        }
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY")
-        .ok()
-        .or_else(|| std::env::var("MARKHAND_TEST_OBJECT_STORE_ACCESS_KEY").ok())?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY")
-        .ok()
-        .or_else(|| std::env::var("MARKHAND_TEST_OBJECT_STORE_SECRET_KEY").ok())?;
-    if access_key.is_empty() || secret_key.is_empty() {
-        eprintln!("skipped: MinIO test credentials empty");
-        return None;
-    }
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION")
-        .or_else(|_| std::env::var("MARKHAND_TEST_OBJECT_STORE_REGION"))
-        .unwrap_or_else(|_| "us-east-1".into());
-    let bucket = format!("markhand-it-{}", Uuid::new_v4().simple());
-    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
-    let config = MinioConfig::new(
-        endpoint,
-        SecretString::new(access_key),
-        SecretString::new(secret_key),
-        bucket,
-        region,
-        true,
-    )
-    .expect("minio config");
-    Some(MinioClient::from_config(&config).expect("minio client"))
 }
 
 /// Deletes objects/bucket even if the owning test panics.

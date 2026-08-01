@@ -7,6 +7,8 @@
 //! `seed_user_with_permissions`) so FTS/hydration ACL predicates match the 1C
 //! `(qa.query, read)` projection without widening unrelated integration seeds.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::time::Instant;
 
@@ -24,10 +26,7 @@ use tokio_postgres::NoTls;
 use uuid::Uuid;
 
 fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => None,
-    }
+    common::admin_database_url()
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {

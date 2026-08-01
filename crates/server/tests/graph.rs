@@ -550,25 +550,12 @@ async fn graph_caps_nodes_at_the_documented_bound() {
 // ---------------------------------------------------------------------
 
 fn test_qdrant_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_QDRANT_URL unset — graph similarity integration test requires a live Qdrant instance"
-            );
-            None
-        }
-    }
+    common::test_qdrant_url()
 }
 
-fn test_qdrant_admin_client(url: &str) -> QdrantAdminClient {
-    // Local Qdrant ignores api-key when auth is disabled; construction still
-    // requires a distinct non-empty operator credential (same convention as
-    // `tests/storage.rs::test_admin_client`).
-    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
-        .unwrap_or_else(|_| "test-operator-admin-key".into());
-    QdrantAdminClient::new(url, QdrantAdminApiKey::new(SecretString::new(key)).unwrap())
-        .expect("admin client")
+fn test_qdrant_admin_client(_url: &str) -> QdrantAdminClient {
+    common::test_qdrant_admin_client()
+        .expect("admin client configured with MARKHAND_TEST_QDRANT_URL")
 }
 
 /// Seeds an active index generation for `collection_id` matching `signature`

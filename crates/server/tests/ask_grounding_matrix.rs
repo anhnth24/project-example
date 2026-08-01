@@ -238,12 +238,8 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
         return;
     };
     let cleanup = MinioCleanupGuard::new(store.clone());
-    let qdrant_url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_QDRANT_URL unset");
-            return;
-        }
+    let Some(qdrant_url) = common::test_qdrant_url() else {
+        return;
     };
     let (ephemeral, pool) = boot_app_pool(&admin, &app).await;
     assert_markhand_app_role(&pool).await;

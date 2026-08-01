@@ -201,13 +201,13 @@ async fn json_post(
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MINIO + QDRANT + built fileconv"]
 async fn live_upload_convert_index_citation_vertical_slice() {
-    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+    let Some(admin) = admin_database_url() else {
         return;
     };
-    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
+    let Some(app_url) = app_database_url() else {
         return;
     };
-    let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+    let Some(store) = test_minio_client() else {
         return;
     };
     // Once DB+MinIO are live (CI sets them), Qdrant is required — do not soft-skip

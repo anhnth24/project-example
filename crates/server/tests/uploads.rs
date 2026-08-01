@@ -4,6 +4,8 @@
 //! gated on `MARKHAND_TEST_MINIO_*` and skip cleanly when unset. Auth-backed
 //! HTTP tests also need `MARKHAND_TEST_DATABASE_URL`.
 
+mod common;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -121,43 +123,13 @@ fn golden_dir() -> PathBuf {
 }
 
 fn test_minio_client() -> Option<(MinioClient, String)> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_MINIO_ENDPOINT unset");
-            return None;
-        }
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY").ok()?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY").ok()?;
-    if access_key.is_empty() || secret_key.is_empty() {
-        eprintln!("skipped: MinIO test credentials empty");
-        return None;
-    }
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION").unwrap_or_else(|_| "us-east-1".into());
-    let bucket = format!("markhand-upload-{}", Uuid::new_v4().simple());
-    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
-    let config = MinioConfig::new(
-        endpoint,
-        SecretString::new(access_key),
-        SecretString::new(secret_key),
-        bucket.clone(),
-        region,
-        true,
-    )
-    .expect("minio config");
-    let client = MinioClient::from_config(&config).expect("client");
+    let client = common::test_minio_client_with_bucket_prefix("markhand-upload")?;
+    let bucket = client.bucket_name().to_string();
     Some((client, bucket))
 }
 
 fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_DATABASE_URL unset");
-            None
-        }
-    }
+    common::admin_database_url()
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {

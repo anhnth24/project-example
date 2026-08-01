@@ -38,43 +38,17 @@ const BOUNDARY: &str = "----markhandWorkerPipelineBoundary";
 
 /// Locate the `fileconv` binary used by ConvertWorker sandboxes.
 pub fn fileconv_binary() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("MARKHAND_TEST_FILECONV_BIN") {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv");
-    path.exists().then_some(path)
+    super::fileconv_binary()
 }
 
 /// Live Qdrant client when `MARKHAND_TEST_QDRANT_URL` is set.
 pub fn test_qdrant() -> Option<QdrantClient> {
-    let url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => return None,
-    };
-    Some(QdrantClient::with_api_key(url, None).expect("qdrant client"))
+    super::test_qdrant_client()
 }
 
 /// Admin client for collection cleanup.
-///
-/// Local Qdrant ignores api-key when auth is disabled; construction still needs
-/// a non-empty operator credential (same convention as `tests/storage.rs`).
 pub fn test_qdrant_admin() -> Option<QdrantAdminClient> {
-    let url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => return None,
-    };
-    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
-        .unwrap_or_else(|_| "test-operator-admin-key".into());
-    Some(
-        QdrantAdminClient::new(
-            url,
-            QdrantAdminApiKey::new(SecretString::new(key)).expect("admin key"),
-        )
-        .expect("qdrant admin client"),
-    )
+    super::test_qdrant_admin_client()
 }
 
 fn multipart(

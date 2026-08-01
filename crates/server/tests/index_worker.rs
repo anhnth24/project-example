@@ -11,7 +11,7 @@ mod common;
 use bytes::Bytes;
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool,
-    DualRoleEphemeralDb,
+    test_minio_client_with_bucket_prefix, test_qdrant_client, DualRoleEphemeralDb,
 };
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
@@ -46,42 +46,6 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use uuid::Uuid;
-
-fn test_minio_client() -> Result<MinioClient, String> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => return Err("MARKHAND_TEST_MINIO_ENDPOINT is required".into()),
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY")
-        .map_err(|_| "MARKHAND_TEST_MINIO_ACCESS_KEY is required".to_string())?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY")
-        .map_err(|_| "MARKHAND_TEST_MINIO_SECRET_KEY is required".to_string())?;
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION").unwrap_or_else(|_| "us-east-1".into());
-    let bucket = format!("markhand-index-worker-{}", Uuid::new_v4().simple());
-    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
-    let config = MinioConfig::new(
-        endpoint,
-        SecretString::new(access_key),
-        SecretString::new(secret_key),
-        bucket,
-        region,
-        true,
-    )
-    .map_err(|error| format!("invalid test MinIO configuration: {error}"))?;
-    MinioClient::from_config(&config).map_err(|error| format!("test MinIO client: {error}"))
-}
-
-fn test_qdrant_client() -> Result<QdrantClient, String> {
-    let url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => return Err("MARKHAND_TEST_QDRANT_URL is required".into()),
-    };
-    let api_key = std::env::var("MARKHAND_TEST_QDRANT_API_KEY")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(SecretString::new);
-    QdrantClient::with_api_key(url, api_key).map_err(|error| format!("test Qdrant client: {error}"))
-}
 
 fn test_embedding_plan(base_url: &str) -> EmbeddingPlan {
     EmbeddingPlan::provider(
@@ -220,21 +184,16 @@ struct LiveEnv {
 }
 
 impl LiveEnv {
-    async fn boot() -> Result<Self, String> {
-        let admin_url = admin_database_url()
-            .ok_or_else(|| "MARKHAND_TEST_DATABASE_URL is required".to_string())?;
-        let app_url = app_database_url()
-            .ok_or_else(|| "MARKHAND_TEST_APP_DATABASE_URL is required".to_string())?;
-        let storage = test_minio_client()?;
+    async fn boot() -> Option<Self> {
+        let admin_url = admin_database_url()?;
+        let app_url = app_database_url()?;
+        let storage = test_minio_client_with_bucket_prefix("markhand-index-worker")?;
         let qdrant = test_qdrant_client()?;
-        storage
-            .ensure_bucket()
-            .await
-            .map_err(|error| format!("ensure test bucket: {error}"))?;
+        storage.ensure_bucket().await.expect("ensure test bucket");
         let (db, pool) = boot_app_pool(&admin_url, &app_url).await;
         assert_markhand_app_role(&pool).await;
         let ctx = OrgContext::try_new(Uuid::new_v4(), Uuid::new_v4(), ["doc.upload"], [])
-            .map_err(|error| format!("create test org context: {error}"))?;
+            .expect("create test org context");
         let env = Self {
             db,
             pool,
@@ -243,7 +202,7 @@ impl LiveEnv {
             ctx,
         };
         assert_cross_org_raw_query_is_zero(&env).await;
-        Ok(env)
+        Some(env)
     }
 
     async fn drop(self) {
@@ -1198,12 +1157,8 @@ fn sample_markdown() -> &'static str {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_indexes_converted_document() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
@@ -1256,12 +1211,8 @@ async fn live_index_worker_indexes_converted_document() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_replay_is_idempotent() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
@@ -1306,12 +1257,8 @@ async fn live_index_worker_replay_is_idempotent() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_signature_mismatch_fails_closed() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let embedding_plan = test_embedding_plan("http://embedding.test/v1");
     let markdown = sample_markdown();
@@ -1342,12 +1289,8 @@ async fn live_index_worker_signature_mismatch_fails_closed() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
@@ -1425,12 +1368,8 @@ async fn live_index_worker_stale_version_does_not_mark_current_indexed() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_resumes_from_indexing_state() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
@@ -1480,12 +1419,8 @@ async fn live_index_worker_resumes_from_indexing_state() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_qdrant_set_payload_mixed_scope_ids_only_target_changes() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let embedding_plan = test_embedding_plan("http://embedding.test/v1");
     let signature = embedding_plan.index_signature(8).unwrap();
@@ -1637,12 +1572,8 @@ async fn live_qdrant_set_payload_mixed_scope_ids_only_target_changes() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_lifecycle_refresh_retries_converge_without_losing_work() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
@@ -1721,12 +1652,8 @@ async fn live_lifecycle_refresh_retries_converge_without_losing_work() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_replay_a_races_promotion_b_under_barrier() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
@@ -1803,12 +1730,8 @@ async fn live_replay_a_races_promotion_b_under_barrier() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_promotion_enqueues_lifecycle_per_materialized_generation() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
@@ -1970,12 +1893,8 @@ async fn live_promotion_enqueues_lifecycle_per_materialized_generation() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL, MARKHAND_TEST_MINIO_*, and MARKHAND_TEST_QDRANT_URL"]
 async fn live_index_worker_fairness_claims_lifecycle_within_two_run_once() {
-    let env = match LiveEnv::boot().await {
-        Ok(env) => env,
-        Err(error) => {
-            eprintln!("skipped: {error}");
-            return;
-        }
+    let Some(env) = LiveEnv::boot().await else {
+        return;
     };
     let provider = MockEmbeddingProvider::start();
     let embedding_plan = test_embedding_plan(provider.base_url());
