@@ -655,8 +655,11 @@ async fn seed_org_world(
                 txn.execute(
                     "INSERT INTO jobs (
                         id, org_id, job_type, status, payload_version, payload,
-                        idempotency_key, document_id, version_id, attempts, max_attempts
-                     ) VALUES ($1,$2,'index','pending',1,$6::jsonb,$3,$4,$5,0,5)",
+                        idempotency_key, document_id, version_id, attempts, max_attempts,
+                        started_at, finished_at
+                     ) VALUES (
+                        $1,$2,'index','succeeded',1,$6::jsonb,$3,$4,$5,1,5,now(),now()
+                     )",
                     &[
                         &job_id,
                         &org_id,

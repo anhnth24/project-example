@@ -280,6 +280,23 @@ async fn seed_cross_org_bridge_user(world: &MultiOrgDenialWorld) -> (String, Uui
                     &[&org_id, &bridge_user],
                 )
                 .await?;
+                txn.execute(
+                    "INSERT INTO roles (id, org_id, code, name, is_system)
+                     VALUES ($1, $2, 'viewer', 'Viewer', true)
+                     ON CONFLICT (org_id, code) DO NOTHING",
+                    &[&Uuid::new_v4(), &org_id],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, r.id, p.id
+                     FROM roles r
+                     JOIN permissions p ON p.code = 'qa.query'
+                     WHERE r.org_id = $1 AND r.code = 'viewer'
+                     ON CONFLICT DO NOTHING",
+                    &[&org_id],
+                )
+                .await?;
                 Ok(())
             })
         })
