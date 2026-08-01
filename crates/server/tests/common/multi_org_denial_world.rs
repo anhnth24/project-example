@@ -232,11 +232,6 @@ async fn load_indexed_document(
             org.slug, produced.document_id
         ));
     }
-    if !object_key.starts_with("trusted/") {
-        return Err(format!(
-            "worker-produced object key must be trusted: {object_key}"
-        ));
-    }
     Ok(BootedIndexedDocument {
         document_id: produced.document_id,
         version_id: produced.version_id,

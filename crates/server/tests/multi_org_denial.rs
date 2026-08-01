@@ -749,9 +749,9 @@ async fn duplicate_names_across_orgs_do_not_create_an_oracle() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL + MARKHAND_TEST_APP_DATABASE_URL + MARKHAND_TEST_QDRANT_URL + MinIO"]
 async fn org_switch_never_reuses_previous_org_cache_scope() {
-    let Some(world) = boot_world_if_live().await else {
+    let Some((world, runtime)) = boot_indexed_world_if_live().await else {
         return;
     };
     world.assert_base_topology();
@@ -863,6 +863,7 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
     )
     .await;
 
+    runtime.teardown().await;
     world.cleanup().await.expect("cleanup");
 }
 
