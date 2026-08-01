@@ -247,19 +247,25 @@ async fn poll_latest_ask_stream_session(
     user_id: Uuid,
     cited_document_id: Uuid,
 ) -> Result<Uuid, String> {
+    let ctx = OrgContext::try_new(org_id, user_id, ["qa.query"], [])
+        .map_err(|error| error.to_string())?;
     for attempt in 0..60 {
-        let client = pool.get().await.map_err(|err| err.to_string())?;
-        let row = client
-            .query_opt(
-                "SELECT id FROM ask_stream_sessions
-                 WHERE org_id = $1 AND user_id = $2
-                   AND $3 = ANY(cited_document_ids)
-                 ORDER BY created_at DESC
-                 LIMIT 1",
-                &[&org_id, &user_id, &cited_document_id],
-            )
-            .await
-            .map_err(|err| err.to_string())?;
+        let row = with_org_txn(pool, &ctx, move |txn| {
+            Box::pin(async move {
+                txn.query_opt(
+                    "SELECT id FROM ask_stream_sessions
+                     WHERE org_id = $1 AND user_id = $2
+                       AND $3 = ANY(cited_document_ids)
+                     ORDER BY created_at DESC
+                     LIMIT 1",
+                    &[&org_id, &user_id, &cited_document_id],
+                )
+                .await
+                .map_err(Into::into)
+            })
+        })
+        .await
+        .map_err(|error| error.to_string())?;
         if let Some(row) = row {
             return Ok(row.get(0));
         }
