@@ -156,22 +156,18 @@ async fn run_worker(state: fileconv_server::state::RuntimeState) -> Result<(), S
     // because the rotation serves at most one job per org turn.
     let org_ids = env_uuid_list("MARKHAND_WORKER_ORG_ID")?;
     let user_id = env_uuid("MARKHAND_WORKER_USER_ID")?;
-    let mut contexts = Vec::with_capacity(org_ids.len());
-    for org_id in org_ids {
-        contexts.push(
-            OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
-                .map_err(|error| format!("invalid worker tenant context: {error}"))?,
-        );
-    }
+    let kind = std::env::var("MARKHAND_WORKER_KIND")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "convert".into());
+    // Validate kind → permissions before any OrgContext is constructed so an
+    // unknown MARKHAND_WORKER_KIND cannot start or claim work.
+    let contexts = worker_contexts_for_kind(&org_ids, user_id, &kind)?;
     let rotation = Arc::new(OrgRotation::new(contexts)?);
     let worker_id = std::env::var("MARKHAND_WORKER_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("fileconv-worker-{}", std::process::id()));
-    let kind = std::env::var("MARKHAND_WORKER_KIND")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| "convert".into());
     // Reconcile oneshot: require a valid document UUID *before* opening a DB pool
     // so missing/empty/malformed IDs exit without contacting Postgres.
     let oneshot = env_truthy("MARKHAND_WORKER_ONESHOT");
@@ -893,6 +889,105 @@ fn parse_uuid_list(name: &str, raw: &str) -> Result<Vec<Uuid>, String> {
 fn exit_with_error(error: String) -> ! {
     eprintln!("fileconv-worker: {error}");
     std::process::exit(1);
+}
+
+/// Least-privilege permission set for a background worker kind (Phase 1C / 1C-08).
+///
+/// Unknown kinds are a configuration error: the process must not construct an
+/// `OrgContext` or claim work until the kind is validated.
+fn worker_permissions(kind: &str) -> Result<&'static [&'static str], String> {
+    match kind {
+        "convert" | "index" | "embedding" => Ok(&["jobs.system", "doc.upload"]),
+        "delete" | "reconcile" => Ok(&["jobs.system", "doc.delete"]),
+        other => Err(format!("unknown MARKHAND_WORKER_KIND: {other}")),
+    }
+}
+
+/// Build org contexts only after `worker_permissions` accepts the kind.
+fn worker_contexts_for_kind(
+    org_ids: &[Uuid],
+    user_id: Uuid,
+    kind: &str,
+) -> Result<Vec<OrgContext>, String> {
+    let permissions = worker_permissions(kind)?;
+    let mut contexts = Vec::with_capacity(org_ids.len());
+    for &org_id in org_ids {
+        contexts.push(
+            OrgContext::try_new(org_id, user_id, permissions.iter().copied(), [])
+                .map_err(|error| format!("invalid worker tenant context: {error}"))?,
+        );
+    }
+    Ok(contexts)
+}
+
+#[cfg(test)]
+mod worker_permissions_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn convert_index_embedding_get_jobs_system_and_doc_upload_only() {
+        for kind in ["convert", "index", "embedding"] {
+            let perms = worker_permissions(kind).expect(kind);
+            assert_eq!(
+                perms,
+                &["jobs.system", "doc.upload"][..],
+                "{kind} must be jobs.system + doc.upload exactly"
+            );
+            let forbidden = ["member.manage", "audit.view", "doc.delete", "qa.query"];
+            for code in forbidden {
+                assert!(!perms.contains(&code), "{kind} must not include {code}");
+            }
+        }
+    }
+
+    #[test]
+    fn delete_reconcile_get_jobs_system_and_doc_delete_only() {
+        for kind in ["delete", "reconcile"] {
+            let perms = worker_permissions(kind).expect(kind);
+            assert_eq!(
+                perms,
+                &["jobs.system", "doc.delete"][..],
+                "{kind} must be jobs.system + doc.delete exactly"
+            );
+            let forbidden = ["member.manage", "audit.view", "doc.upload", "qa.query"];
+            for code in forbidden {
+                assert!(!perms.contains(&code), "{kind} must not include {code}");
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_worker_kind_is_configuration_error() {
+        let err = worker_permissions("not-a-real-kind").expect_err("unknown kind");
+        assert!(
+            err.contains("unknown") || err.contains("MARKHAND_WORKER_KIND"),
+            "error should name the configuration problem, got: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_contexts_carry_exact_permissions_without_superset() {
+        let org = Uuid::from_u128(0x1111);
+        let user = Uuid::from_u128(0x2222);
+        let contexts = worker_contexts_for_kind(&[org], user, "convert").expect("convert");
+        assert_eq!(contexts.len(), 1);
+        let expected: BTreeSet<String> = ["jobs.system", "doc.upload"]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+        assert_eq!(contexts[0].permissions(), &expected);
+        assert!(!contexts[0].has_permission("member.manage"));
+        assert!(!contexts[0].has_permission("audit.view"));
+        assert!(!contexts[0].has_permission("doc.delete"));
+    }
+
+    #[test]
+    fn unknown_kind_cannot_build_worker_contexts() {
+        let org = Uuid::from_u128(0x1111);
+        let user = Uuid::from_u128(0x2222);
+        assert!(worker_contexts_for_kind(&[org], user, "ghost").is_err());
+    }
 }
 
 #[cfg(test)]

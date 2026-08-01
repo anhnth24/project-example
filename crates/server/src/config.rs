@@ -455,31 +455,43 @@ impl ServerConfig {
             .parse::<SocketAddr>()
             .map_err(|_| "MARKHAND_BIND_ADDR must be an IP address and port".to_string())?;
 
-        let database_url = env
+        let app_database_url = env
             .get("MARKHAND_DATABASE_URL")
             .or_else(|| file.and_then(|value| value.database_url.as_ref()))
             .filter(|value| !value.trim().is_empty())
             .cloned()
             .map(SecretString::new);
-        // 1C-08: dedicated DB role for workers. The worker process prefers
-        // `MARKHAND_WORKER_DATABASE_URL` (a `markhand_worker` least-privilege
-        // connection, see migration 0035) and deliberately FALLS BACK to
-        // `MARKHAND_DATABASE_URL` (the `markhand_app` role) when unset, so
-        // deployments that predate the worker role keep working unchanged.
-        // Trade-off (fail-open-config, matching the `markhand_app` grant
-        // precedent in 0027 where role provisioning is an ops concern): a
-        // deploy that forgets the variable silently runs the worker with the
-        // broader app role instead of failing. RLS + FORCE RLS still bound
-        // that blast radius; the separation-of-privilege win only requires
-        // setting one env var, and tests assert the worker role posture.
+        // 1C-08: dedicated DB role for workers. Qualifying / default startup
+        // requires `MARKHAND_WORKER_DATABASE_URL` (`markhand_worker`, see
+        // migration 0035). App-role fallback via `MARKHAND_DATABASE_URL` is
+        // allowed only with explicit `MARKHAND_WORKER_ALLOW_APP_DB_FALLBACK=1`
+        // on Dev/Test profiles — never silently, and never in Prod.
+        let allow_app_db_fallback = bool_value(
+            file,
+            env,
+            "MARKHAND_WORKER_ALLOW_APP_DB_FALLBACK",
+            |_| None,
+            false,
+        )?;
         let database_url = if role == RuntimeRole::Worker {
-            optional_value(file, env, "MARKHAND_WORKER_DATABASE_URL", |value| {
+            match optional_value(file, env, "MARKHAND_WORKER_DATABASE_URL", |value| {
                 value.worker_database_url.as_ref()
-            })
-            .map(SecretString::new)
-            .or(database_url)
+            }) {
+                Some(url) => Some(SecretString::new(url)),
+                None if allow_app_db_fallback
+                    && matches!(profile, Profile::Dev | Profile::Test) =>
+                {
+                    app_database_url
+                }
+                None => {
+                    return Err(
+                        "worker requires MARKHAND_WORKER_DATABASE_URL (set MARKHAND_WORKER_ALLOW_APP_DB_FALLBACK=1 only for explicit non-prod development compatibility)"
+                            .into(),
+                    );
+                }
+            }
         } else {
-            database_url
+            app_database_url
         };
         let qdrant_url = optional_value(file, env, "MARKHAND_QDRANT_URL", |value| {
             value.qdrant_url.as_ref()
@@ -1568,12 +1580,15 @@ mod tests {
 
     #[test]
     fn worker_role_prefers_dedicated_database_url_with_app_fallback() {
-        let base = BTreeMap::from([(
-            "MARKHAND_DATABASE_URL".into(),
-            "postgres://markhand_app@db.internal/markhand".into(),
-        )]);
-        // Fallback: without MARKHAND_WORKER_DATABASE_URL the worker keeps the
-        // app-role URL so pre-worker-role deployments do not break.
+        let base = BTreeMap::from([
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand_app@db.internal/markhand".into(),
+            ),
+            ("MARKHAND_WORKER_ALLOW_APP_DB_FALLBACK".into(), "1".into()),
+        ]);
+        // Explicit Dev/Test compatibility only: without the dedicated URL the
+        // worker may keep the app-role URL when the opt-in flag is set.
         let config = ServerConfig::from_sources_for_role(None, &base, RuntimeRole::Worker).unwrap();
         assert_eq!(
             config.database_url.as_ref().unwrap().expose(),
@@ -1600,13 +1615,104 @@ mod tests {
     }
 
     #[test]
+    fn worker_database_url_fail_closed_without_explicit_dev_fallback() {
+        // Qualifying / default worker startup must not silently use the app
+        // role when MARKHAND_WORKER_DATABASE_URL is unset.
+        let env = BTreeMap::from([
+            ("MARKHAND_PROFILE".into(), "dev".into()),
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand_app@db.internal/markhand".into(),
+            ),
+        ]);
+        let err = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker)
+            .expect_err("missing dedicated worker URL must fail closed");
+        assert!(
+            err.contains("MARKHAND_WORKER_DATABASE_URL"),
+            "error must name the required dedicated URL, got: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_app_db_fallback_requires_explicit_dev_compatibility_flag() {
+        let mut env = BTreeMap::from([
+            ("MARKHAND_PROFILE".into(), "dev".into()),
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand_app@db.internal/markhand".into(),
+            ),
+            ("MARKHAND_WORKER_ALLOW_APP_DB_FALLBACK".into(), "1".into()),
+        ]);
+        let config = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker)
+            .expect("explicit dev fallback");
+        assert_eq!(
+            config.database_url.as_ref().unwrap().expose(),
+            "postgres://markhand_app@db.internal/markhand"
+        );
+
+        // Prod must never accept the app-role fallback even with the flag.
+        env.insert("MARKHAND_PROFILE".into(), "prod".into());
+        env.insert("MARKHAND_BIND_ADDR".into(), "10.0.0.10:8787".into());
+        env.insert(
+            "MARKHAND_DATABASE_URL".into(),
+            "postgres://markhand_app:secret@postgres.internal/markhand?sslmode=require".into(),
+        );
+        env.insert(
+            "MARKHAND_QDRANT_URL".into(),
+            "https://qdrant.internal".into(),
+        );
+        env.insert("MARKHAND_MINIO_URL".into(), "https://minio.internal".into());
+        env.insert("MARKHAND_MINIO_ACCESS_KEY".into(), "minio-access".into());
+        env.insert("MARKHAND_MINIO_SECRET_KEY".into(), "minio-secret".into());
+        env.insert(
+            "MARKHAND_INDEX_SIGNATURE".into(),
+            "d54db7b6de20b51a416670927eeab346256c9b891732965e51586fac333c1835".into(),
+        );
+        let err = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker)
+            .expect_err("prod must reject app-role fallback");
+        assert!(
+            err.contains("MARKHAND_WORKER_DATABASE_URL"),
+            "prod error must require dedicated worker URL, got: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_dedicated_url_takes_precedence_over_app_url() {
+        let env = BTreeMap::from([
+            (
+                "MARKHAND_DATABASE_URL".into(),
+                "postgres://markhand_app@db.internal/markhand".into(),
+            ),
+            (
+                "MARKHAND_WORKER_DATABASE_URL".into(),
+                "postgres://markhand_worker:secret@db.internal/markhand".into(),
+            ),
+        ]);
+        let config = ServerConfig::from_sources_for_role(None, &env, RuntimeRole::Worker).unwrap();
+        assert_eq!(
+            config.database_url.as_ref().unwrap().expose(),
+            "postgres://markhand_worker:secret@db.internal/markhand"
+        );
+        let debug = format!("{config:?}");
+        assert!(
+            !debug.contains("markhand_worker:secret"),
+            "worker database password must not appear in Debug"
+        );
+        assert!(
+            !debug.contains("postgres://markhand_worker:secret"),
+            "full worker database URL must not appear in Debug"
+        );
+    }
+
+    #[test]
     fn worker_configuration_rejects_api_authentication() {
         let env = BTreeMap::from([
             ("MARKHAND_PROFILE".into(), "prod".into()),
             ("MARKHAND_BIND_ADDR".into(), "10.0.0.10:8787".into()),
             (
-                "MARKHAND_DATABASE_URL".into(),
-                "postgres://app:secret@postgres.internal/markhand?sslmode=require".into(),
+                "MARKHAND_WORKER_DATABASE_URL".into(),
+                "postgres://markhand_worker:secret@postgres.internal/markhand?sslmode=require"
+                    .into(),
             ),
             (
                 "MARKHAND_QDRANT_URL".into(),

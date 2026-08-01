@@ -241,6 +241,45 @@ require_regex "$ROOT/deploy/poc/postgres-init.sh" 'MARKHAND_APP_DB_PASSWORD' \
   "postgres init reads app password from env"
 require_regex "$COMPOSE_FILE" 'postgres-init\.sh' "compose mounts parameterized postgres-init.sh"
 
+# Phase 1C / 1C-08: dedicated least-privilege worker DB identity
+require_regex "$ENV_EXAMPLE" 'MARKHAND_WORKER_DB_USER' \
+  ".env.example documents worker DB user"
+require_regex "$ENV_EXAMPLE" 'MARKHAND_WORKER_DB_PASSWORD' \
+  ".env.example documents worker DB password"
+require_regex "$ROOT/deploy/poc/postgres-init.sh" 'markhand_worker|MARKHAND_WORKER_DB' \
+  "postgres init provisions markhand_worker"
+require_regex "$ROOT/deploy/poc/postgres-init.sh" 'NOBYPASSRLS' \
+  "postgres init creates worker without BYPASSRLS"
+forbid_regex "$ROOT/deploy/poc/postgres-init.sh" "PASSWORD[[:space:]]+'[^'$]*change_me" \
+  "postgres-init must not embed disposable password literals for roles"
+# Every qualifying worker service must receive MARKHAND_WORKER_DATABASE_URL.
+for svc in worker-convert worker-index worker-embedding worker-delete worker-reconcile worker-reconcile-oneshot; do
+  if awk -v svc="$svc:" '
+    $0 ~ "^  "svc {found=1; next}
+    found && /^  [a-z0-9-]+:/ {exit}
+    found && /MARKHAND_WORKER_DATABASE_URL:/ {url=1}
+    END { exit !(found && url) }
+  ' "$COMPOSE_FILE"; then
+    pass "$svc sets MARKHAND_WORKER_DATABASE_URL"
+  else
+    fail "$svc missing MARKHAND_WORKER_DATABASE_URL (qualifying workers must not use app-role silently)"
+  fi
+done
+# API keeps the app role URL and must not be switched onto the worker role.
+if awk '
+  /^  api:/ {found=1; next}
+  found && /^  [a-z0-9-]+:/ {exit}
+  found && /MARKHAND_DATABASE_URL:/ {app=1}
+  found && /MARKHAND_WORKER_DATABASE_URL:/ {worker=1}
+  END { exit !(found && app && !worker) }
+' "$COMPOSE_FILE"; then
+  pass "api keeps MARKHAND_DATABASE_URL and omits MARKHAND_WORKER_DATABASE_URL"
+else
+  fail "api must keep app DATABASE_URL and must not use MARKHAND_WORKER_DATABASE_URL"
+fi
+require_regex "$COMPOSE_FILE" 'markhand_worker' \
+  "compose interpolates markhand_worker into worker database URLs"
+
 # Embedding-cpu hardening
 require_regex "$COMPOSE_FILE" 'deploy/poc/Dockerfile\.embedding-cpu' \
   "POC embedding uses hardened Dockerfile"
@@ -293,4 +332,21 @@ if [[ "$FAIL" -ne 0 ]]; then
   exit 1
 fi
 echo "POC isolation smoke PASSED"
+
+# Optional live privilege probe when a POC postgres container is already up.
+# Does not boot infrastructure; deployed proof remains PR 5 / G1C.
+if command -v docker >/dev/null 2>&1; then
+  PG_CID="$(docker ps --filter "name=postgres" --format '{{.ID}}' 2>/dev/null | head -n1 || true)"
+  if [[ -n "$PG_CID" ]]; then
+    if docker exec "$PG_CID" psql -U "${MARKHAND_POSTGRES_USER:-markhand}" -d "${MARKHAND_POSTGRES_DB:-markhand}" -Atqc \
+      "SELECT rolname||':'||rolsuper::text||':'||rolbypassrls::text
+       FROM pg_roles WHERE rolname = 'markhand_worker'" 2>/dev/null \
+      | grep -qx 'markhand_worker:f:f'; then
+      echo "PASS: live markhand_worker is non-superuser and non-BYPASSRLS"
+    else
+      echo "NOTE: live markhand_worker privilege probe skipped or role not ready"
+    fi
+  fi
+fi
+
 echo "Runtime boot/preflight evidence: bench/markhand_web/reports/poc-f02-boot.md"

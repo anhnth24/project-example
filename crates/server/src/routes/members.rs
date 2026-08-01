@@ -664,6 +664,7 @@ impl RouteError {
             MemberError::OwnerRequiredForOwnerInvite | MemberError::OwnerRequiredToManageOwner => {
                 Self::Denied(request_id)
             }
+            MemberError::PermissionDenied => Self::Denied(request_id),
             MemberError::Database => Self::Database(request_id),
         }
     }
@@ -752,6 +753,10 @@ mod tests {
         );
         assert_eq!(
             status_of(MemberError::OwnerRequiredToManageOwner),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status_of(MemberError::PermissionDenied),
             StatusCode::FORBIDDEN
         );
         assert_eq!(

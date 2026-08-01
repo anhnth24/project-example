@@ -26,7 +26,11 @@ async fn get_job(
     let job = access::resolve_job_access(state.pool(), &auth.context, job_id)
         .await
         .map_err(|error| match error {
-            AccessError::NotFound => RouteError::NotFound(auth.request_id.clone()),
+            // Preserve no-oracle: missing/cross-org and documentless jobs.system
+            // absence both map to 404 (existing contract).
+            AccessError::NotFound | AccessError::PermissionDenied => {
+                RouteError::NotFound(auth.request_id.clone())
+            }
             _ => RouteError::Database(auth.request_id.clone()),
         })?;
     let request_id = crate::jobs::decode_job_payload(job.payload_version, job.payload.clone())

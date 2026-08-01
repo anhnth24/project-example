@@ -26,9 +26,10 @@ use crate::jobs::{self, EnqueueJob, JobPayload};
 use crate::services::access::{self, AccessError};
 use crate::services::audit;
 use crate::services::citation::{resolve_citation, ResolveCitationRequest};
-use crate::services::deletion;
+use crate::services::deletion::{self, DeletionError};
 use crate::services::download::{self, DownloadPurpose};
 use crate::services::preview;
+use crate::services::publish::{self, PublishError};
 use crate::services::retrieval::PERMISSION_QA_HISTORY;
 use crate::services::upload::{approve_quarantined_upload, ApproveIntakeRequest, SagaError};
 
@@ -265,7 +266,13 @@ async fn delete_document(
     let _ = load_document(&state, &auth, document_id).await?;
     deletion::request_delete(state.pool(), &auth.context, document_id)
         .await
-        .map_err(|_| RouteError::Database(auth.request_id.clone()))?;
+        .map_err(|error| match error {
+            // Route already enforced doc.delete → remaining deny is collection
+            // scope / dual-layer re-check; hide existence like other IDOR paths.
+            DeletionError::PermissionDenied => RouteError::NotFound(auth.request_id.clone()),
+            DeletionError::Db(DbError::NotFound) => RouteError::NotFound(auth.request_id.clone()),
+            _ => RouteError::Database(auth.request_id.clone()),
+        })?;
     let resource_id = document_id.to_string();
     audit::record(
         state.pool(),
@@ -433,16 +440,19 @@ async fn publish_version(
     require_permission(&auth.context, "doc.publish")
         .map_err(|_| RouteError::Denied(auth.request_id.clone()))?;
     let _ = load_document(&state, &auth, document_id).await?;
-    with_org_txn(state.pool(), &auth.context, {
-        let ctx = auth.context.clone();
-        move |txn| {
-            Box::pin(async move {
-                document_versions::publish_version(txn, &ctx, document_id, version_id).await
-            })
-        }
-    })
+    publish::publish_version(
+        state.pool(),
+        &auth.context,
+        &auth.request_id,
+        document_id,
+        version_id,
+    )
     .await
-    .map_err(|error| RouteError::from_db(error, &auth.request_id))?;
+    .map_err(|error| match error {
+        PublishError::PermissionDenied => RouteError::NotFound(auth.request_id.clone()),
+        PublishError::NotFound => RouteError::NotFound(auth.request_id.clone()),
+        PublishError::Database => RouteError::Database(auth.request_id.clone()),
+    })?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -936,7 +946,9 @@ impl RouteError {
             AccessError::NotFound | AccessError::NotPublished => {
                 Self::NotFound(request_id.to_string())
             }
-            AccessError::HistoryRequired => Self::Denied(request_id.to_string()),
+            AccessError::PermissionDenied | AccessError::HistoryRequired => {
+                Self::Denied(request_id.to_string())
+            }
             AccessError::Database => Self::Database(request_id.to_string()),
         }
     }

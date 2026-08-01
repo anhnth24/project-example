@@ -896,14 +896,14 @@
       "phase": "1C",
       "id": "1C-04",
       "title": "1C-04 — Route/service guards và service identities",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1C — Multi-org Security",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1c"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-04\n- Status: `in_progress`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-01/03.\nmissing-guard inventory, direct-service và worker misuse tests.\n\n## Required tests / evidence\n\nAllow/deny mỗi permission cả hai layer;\n\n## Security and migration notes\n\nKhông `internal=true` bypass.\n\n## Out of scope\n\ngeneric ABAC.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-04\n- Status: `done`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-01/03.\nmissing-guard inventory, direct-service và worker misuse tests.\n\n## Required tests / evidence\n\nAllow/deny mỗi permission cả hai layer;\n\n## Security and migration notes\n\nKhông `internal=true` bypass.\n\n## Out of scope\n\ngeneric ABAC.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1c/issues/README.md"
     },
     {
@@ -938,14 +938,14 @@
       "phase": "1C",
       "id": "1C-07",
       "title": "1C-07 — Qdrant/storage/jobs fail-closed enforcement",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1C — Multi-org Security",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1c"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-07\n- Status: `in_progress`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-05/06.\nQdrant failure, forged payload, job ID, stream revoke, signed URL replay tests.\n\n## Required tests / evidence\n\nMissing/malformed/timeout/mismatch deny;\n\n## Security and migration notes\n\nNo signed URL logs.\n\n## Out of scope\n\npublic sharing/CDN.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-07\n- Status: `done`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-05/06.\nQdrant failure, forged payload, job ID, stream revoke, signed URL replay tests.\n\n## Required tests / evidence\n\nMissing/malformed/timeout/mismatch deny;\n\n## Security and migration notes\n\nNo signed URL logs.\n\n## Out of scope\n\npublic sharing/CDN.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1c/issues/README.md"
     },
     {
@@ -966,42 +966,42 @@
       "phase": "1C",
       "id": "1C-09",
       "title": "1C-09 — Atomic quota lifecycle",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1C — Multi-org Security",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1c"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-09\n- Status: `in_progress`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\nPhase 1B jobs + 1C-01.\nkhông over-limit; crash/retry/cancel/timeout/actual-usage tests.\n\n## Required tests / evidence\n\n100 concurrent reservations\n\n## Security and migration notes\n\nChecked arithmetic, org/resource unique key.\n\n## Out of scope\n\nbilling.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-09\n- Status: `done`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\nPhase 1B jobs + 1C-01.\nkhông over-limit; crash/retry/cancel/timeout/actual-usage tests.\n\n## Required tests / evidence\n\n100 concurrent reservations\n\n## Security and migration notes\n\nChecked arithmetic, org/resource unique key.\n\n## Out of scope\n\nbilling.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1c/issues/README.md"
     },
     {
       "phase": "1C",
       "id": "1C-10",
       "title": "1C-10 — Rate limit và per-org fairness",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1C — Multi-org Security",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1c"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-10\n- Status: `in_progress`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-09 (dùng lại reservation `concurrent_jobs`) + Phase 0 SLO/capacity\n(chỉ còn cần cho phần SLO 1C-13). **Acceptance/tests:** Noisy org không bỏ đói org\nkhác — **done ở mức deterministic-count** (`tests/noisy_neighbor.rs` DB-gated + unit\nfairness/rate-limit fast); burst/window/crash-release/proxy tests đã có từ trước\n(`rate_limit.rs` tests, `sse_stream_readiness.rs` trusted-proxy 429); riêng\n**fairness SLO wall-clock** chuyển 1C-13.\n\n## Security and migration notes\n\nChỉ trusted proxy IP, bounded state (org bucket nằm trong\ncùng HashMap HARD_CAP 10k key, evictable như các key khác). Không migration mới.\n**Out:** multi-region; per-org tiered rate limit từ `org_quotas` (đợi yêu cầu tier\nthật); GPU semaphore (until-GPU).\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-10\n- Status: `done`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-09 (dùng lại reservation `concurrent_jobs`) + Phase 0 SLO/capacity\n(chỉ còn cần cho phần SLO 1C-13). **Acceptance/tests:** Noisy org không bỏ đói org\nkhác — **done ở mức deterministic-count** (`tests/noisy_neighbor.rs` DB-gated + unit\nfairness/rate-limit fast); burst/window/crash-release/proxy tests đã có từ trước\n(`rate_limit.rs` tests, `sse_stream_readiness.rs` trusted-proxy 429); riêng\n**fairness SLO wall-clock** chuyển 1C-13.\n\n## Security and migration notes\n\nChỉ trusted proxy IP, bounded state (org bucket nằm trong\ncùng HashMap HARD_CAP 10k key, evictable như các key khác). Không migration mới.\n**Out:** multi-region; per-org tiered rate limit từ `org_quotas` (đợi yêu cầu tier\nthật); GPU semaphore (until-GPU).\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1c/issues/README.md"
     },
     {
       "phase": "1C",
       "id": "1C-11",
       "title": "1C-11 — Audit/admin APIs",
-      "status": "in_progress",
+      "status": "done",
       "milestone": "Phase 1C — Multi-org Security",
       "labels": [
         "markhand-web",
         "docs",
         "web-p1c"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-11\n- Status: `in_progress`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-02…10.\nresult/request ID (pre-existing, không đổi ở đây); coverage (pre-existing, không\nđổi)/access (**done**: 403 + deny-audit test)/pagination (**done**: cursor stable\ntest)/redaction (**done**: no-leak-beyond-allowlist test)/retention (**out of\nscope**, chưa làm).\n\n## Required tests / evidence\n\nMọi mutation có actor/org/action/target/\n\n## Security and migration notes\n\nNo document/prompt/token/PII/URL (allowlist per-action giữ\nnguyên, `audit.read` chỉ thêm `result_count`). Không migration mới — RLS/seed\npermission đã có sẵn. **Out:** SIEM archive, retention/TTL, audit coverage mở\nrộng sang action mới cho ACL/config/quota/cloud mutation, owner-only admin\ncontrols khác ngoài đọc log.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 1C — Multi-org Security\n- Phase code: 1C\n- Issue ID: 1C-11\n- Status: `done`\n- Catalog: `backlog/phase-1c/issues/README.md`\n- Phase plan: `phase-1c-multi-org-security.md`\n\n## Dependencies / blocks\n\n1C-02…10.\nresult/request ID (pre-existing, không đổi ở đây); coverage (pre-existing, không\nđổi)/access (**done**: 403 + deny-audit test)/pagination (**done**: cursor stable\ntest)/redaction (**done**: no-leak-beyond-allowlist test)/retention (**out of\nscope**, chưa làm).\n\n## Required tests / evidence\n\nMọi mutation có actor/org/action/target/\n\n## Security and migration notes\n\nNo document/prompt/token/PII/URL (allowlist per-action giữ\nnguyên, `audit.read` chỉ thêm `result_count`). Không migration mới — RLS/seed\npermission đã có sẵn. **Out:** SIEM archive, retention/TTL, audit coverage mở\nrộng sang action mới cho ACL/config/quota/cloud mutation, owner-only admin\ncontrols khác ngoài đọc log.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-1c/issues/README.md"
     },
     {

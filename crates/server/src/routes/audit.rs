@@ -26,12 +26,11 @@ use crate::api::{
 };
 use crate::auth::middleware::AuthenticatedOrg;
 use crate::auth::permissions::require_permission;
-use crate::db::audit::{self as db_audit, AuditListFilter};
-use crate::db::error::DbError;
+use crate::db::audit::AuditListFilter;
 use crate::db::models::AuditLogEntry;
-use crate::db::pool::with_org_txn;
 use crate::http::AppState;
 use crate::services::audit::{self, AuditAction};
+use crate::services::audit_query::{self, AuditQueryError};
 
 /// Seeded in `migrations/0011` (POC catalog) and `migrations/0030` (global
 /// role catalog) — owner/admin roles hold it by default, matching the task's
@@ -127,18 +126,21 @@ async fn list_audit(
         to: query.to,
     };
 
-    let mut rows = with_org_txn(state.pool(), &auth.context, {
-        let ctx = auth.context.clone();
-        let filter = filter.clone();
-        move |txn| {
-            Box::pin(async move {
-                db_audit::list_page(txn, &ctx, &filter, pagination.limit + 1, after_at, after_id)
-                    .await
-            })
-        }
-    })
+    let mut rows = audit_query::list_page(
+        state.pool(),
+        &auth.context,
+        &filter,
+        pagination.limit + 1,
+        after_at,
+        after_id,
+    )
     .await
-    .map_err(|error| RouteError::from_db(error, &auth.request_id))?;
+    .map_err(|error| match error {
+        // Route already returned 403 on missing audit.view; dual-layer deny
+        // still maps to forbidden rather than inventing a new shape.
+        AuditQueryError::PermissionDenied => RouteError::Denied(auth.request_id.clone()),
+        AuditQueryError::Database => RouteError::Database(auth.request_id.clone()),
+    })?;
 
     let has_more = rows.len() as i64 > pagination.limit;
     if has_more {
@@ -175,13 +177,6 @@ enum RouteError {
     Denied(String),
     Validation(String, &'static str),
     Database(String),
-}
-
-impl RouteError {
-    fn from_db(error: DbError, request_id: &str) -> Self {
-        let _ = error;
-        Self::Database(request_id.to_string())
-    }
 }
 
 impl IntoResponse for RouteError {

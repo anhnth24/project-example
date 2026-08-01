@@ -217,6 +217,41 @@ pub fn embedded_openapi_yaml() -> &'static str {
     include_str!("../../openapi/openapi.yaml")
 }
 
+/// `(method, path, operationId)` for every [`ROUTE_INVENTORY`] entry present in `yaml`.
+///
+/// Used by the guard-inventory completeness check so every OpenAPI operation and
+/// every inventory route must map to exactly one guard row.
+pub fn openapi_operation_inventory(yaml: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for &(method, path, _) in ROUTE_INVENTORY {
+        let Some(path_block) = extract_path_block(yaml, path) else {
+            continue;
+        };
+        let Some(op_block) = extract_method_block(path_block, method) else {
+            continue;
+        };
+        let Some(operation_id) = extract_operation_id(op_block) else {
+            continue;
+        };
+        out.push((method.to_string(), path.to_string(), operation_id));
+    }
+    out
+}
+
+fn extract_operation_id(op_block: &str) -> Option<String> {
+    for line in op_block.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("operationId:") else {
+            continue;
+        };
+        let id = rest.trim();
+        if !id.is_empty() {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 pub fn openapi_path_count() -> usize {
     embedded_openapi_yaml()
         .lines()
@@ -474,6 +509,14 @@ mod tests {
         assert!(openapi_path_count() >= 20);
         assert!(yaml.contains("sourceContentSha256"));
         assert!(!yaml.contains("contentSha256:"));
+    }
+
+    #[test]
+    fn openapi_operation_inventory_exposes_every_route_operation_id() {
+        let ops = openapi_operation_inventory(embedded_openapi_yaml());
+        assert_eq!(ops.len(), ROUTE_INVENTORY.len());
+        assert!(ops.iter().any(|(_, _, id)| id == "publishDocumentVersion"));
+        assert!(ops.iter().any(|(_, _, id)| id == "authLogin"));
     }
 
     #[test]

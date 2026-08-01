@@ -4,6 +4,11 @@
 //! `MARKHAND_TEST_APP_DATABASE_URL` (markhand_app). The worker-role test
 //! provisions `markhand_worker` itself (deploy-role.rs precedent) so the
 //! grants in migration `0035_expand_worker_role.sql` actually apply.
+//!
+//! Contract pins (Phase 1C Task 9 / 1C-08 CI half):
+//! - runtime role is `markhand_worker`, NOSUPERUSER, NOBYPASSRLS, not table owner;
+//! - auth/ACL tables are unreachable (INSUFFICIENT_PRIVILEGE);
+//! - FORCE RLS hides cross-org jobs even when the role holds table DML grants.
 
 mod common;
 

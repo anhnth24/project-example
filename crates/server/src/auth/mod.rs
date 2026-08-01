@@ -3,6 +3,7 @@
 pub mod acl;
 pub mod context;
 pub mod context_cache;
+pub mod guard_inventory;
 pub mod jwt;
 pub mod middleware;
 pub mod password;
