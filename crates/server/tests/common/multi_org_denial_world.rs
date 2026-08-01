@@ -20,7 +20,7 @@ use crate::common::multi_org_denial::{
     DenialFixtureOrg, ForeignMarkers, MultiOrgDenialWorld, PanicSafeWorldResources,
     COLLECTION_VISIBILITY_LABELS, DENIAL_FIXTURE_REL_PATH,
 };
-use crate::common::worker_pipeline::{ExistingDocumentRevision, WorkerPipeline, WorkerProducedDoc};
+use crate::common::worker_pipeline::{ExistingScopeDocument, WorkerPipeline, WorkerProducedDoc};
 use crate::common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_app_state,
     build_router, login_tokens, put_bytes, seed_user_with_permissions, sha256_hex,
@@ -70,6 +70,15 @@ pub struct BootedDocument {
 }
 
 #[derive(Debug, Clone)]
+pub struct BootedIndexedDocument {
+    pub document_id: Uuid,
+    pub version_id: Uuid,
+    pub chunk_id: Uuid,
+    pub object_key: String,
+    pub quote: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct BootedOrg {
     pub org_id: Uuid,
     pub slug: String,
@@ -77,6 +86,8 @@ pub struct BootedOrg {
     pub object_key: String,
     pub users: BTreeMap<String, BootedUser>,
     pub collections: BTreeMap<String, BootedCollection>,
+    /// Worker-produced searchable document; base `document` remains the duplicate-name fixture.
+    pub indexed_document: Option<BootedIndexedDocument>,
     pub document: BootedDocument,
     pub job_id: Uuid,
     pub conflict_id: Uuid,
@@ -121,18 +132,16 @@ impl IndexedDenialRuntime {
         for (org_key, org) in world.orgs.iter_mut() {
             let owner = org.users.get("owner").ok_or("missing owner user")?;
             let collection_id = org.collections["org"].collection_id;
-            let document_id = org.document.document_id;
             let source = format!("# {}\n\n{}\n", org.document.title, org.marker);
             let produced = runtime
                 .pipeline
                 .as_ref()
                 .expect("indexed pipeline")
-                .index_existing_document_revision(ExistingDocumentRevision {
+                .produce_indexed_in_existing_scope(ExistingScopeDocument {
                     access_token: &owner.access_token,
                     org_id: org.org_id,
                     user_id: owner.user_id,
                     collection_id,
-                    document_id,
                     permissions: OWNER_PERMISSIONS,
                     filename: &format!("{org_key}-marker.txt"),
                     content_type: "text/plain",
@@ -140,7 +149,7 @@ impl IndexedDenialRuntime {
                     label: &format!("denial-index-{org_key}"),
                 })
                 .await;
-            apply_indexed_revision(&pool, org, &produced).await?;
+            org.indexed_document = Some(load_indexed_document(&pool, org, &produced).await?);
         }
 
         let qdrant = test_qdrant_client()
@@ -183,12 +192,11 @@ impl Drop for IndexedDenialRuntime {
     }
 }
 
-async fn apply_indexed_revision(
+async fn load_indexed_document(
     pool: &Pool,
-    org: &mut BootedOrg,
+    org: &BootedOrg,
     produced: &WorkerProducedDoc,
-) -> Result<(), String> {
-    org.document.version_id = produced.version_id;
+) -> Result<BootedIndexedDocument, String> {
     let owner = org.users.get("owner").ok_or("missing owner user")?;
     let ctx = OrgContext::try_new(
         org.org_id,
@@ -198,7 +206,7 @@ async fn apply_indexed_revision(
     )
     .map_err(|err| err.to_string())?;
     let (object_key, state): (String, String) = with_org_txn(pool, &ctx, {
-        let document_id = org.document.document_id;
+        let document_id = produced.document_id;
         let org_id = ctx.org_id();
         move |txn| {
             Box::pin(async move {
@@ -217,22 +225,32 @@ async fn apply_indexed_revision(
         }
     })
     .await
-    .map_err(|err| format!("load indexed revision identity: {err}"))?;
-    org.object_key = object_key;
-    assert_object_key_identity(org);
+    .map_err(|err| format!("load indexed document identity: {err}"))?;
     if state != DocumentState::Indexed.as_str() {
         return Err(format!(
             "org {} document {} expected indexed state after worker pipeline, got {state}",
-            org.slug, org.document.document_id
+            org.slug, produced.document_id
         ));
     }
-    Ok(())
+    if !object_key.starts_with("trusted/") {
+        return Err(format!(
+            "worker-produced object key must be trusted: {object_key}"
+        ));
+    }
+    Ok(BootedIndexedDocument {
+        document_id: produced.document_id,
+        version_id: produced.version_id,
+        chunk_id: produced.chunk_id,
+        object_key,
+        quote: produced.quote.clone(),
+    })
 }
 
 async fn poll_latest_ask_stream_session(
     pool: &Pool,
     org_id: Uuid,
     user_id: Uuid,
+    cited_document_id: Uuid,
 ) -> Result<Uuid, String> {
     for attempt in 0..60 {
         let client = pool.get().await.map_err(|err| err.to_string())?;
@@ -240,9 +258,10 @@ async fn poll_latest_ask_stream_session(
             .query_opt(
                 "SELECT id FROM ask_stream_sessions
                  WHERE org_id = $1 AND user_id = $2
+                   AND $3 = ANY(cited_document_ids)
                  ORDER BY created_at DESC
                  LIMIT 1",
-                &[&org_id, &user_id],
+                &[&org_id, &user_id, &cited_document_id],
             )
             .await
             .map_err(|err| err.to_string())?;
@@ -261,8 +280,9 @@ pub async fn await_ask_stream_session(
     pool: &Pool,
     org_id: Uuid,
     user_id: Uuid,
+    cited_document_id: Uuid,
 ) -> Result<Uuid, String> {
-    poll_latest_ask_stream_session(pool, org_id, user_id).await
+    poll_latest_ask_stream_session(pool, org_id, user_id, cited_document_id).await
 }
 
 /// Boot when live DB URLs are configured; callers in `#[ignore]` tests should gate
@@ -355,6 +375,12 @@ pub fn foreign_markers_between_orgs(
     markers
         .version_ids
         .push(foreign.document.version_id.to_string());
+    if let Some(indexed) = &foreign.indexed_document {
+        markers.document_ids.push(indexed.document_id.to_string());
+        markers.version_ids.push(indexed.version_id.to_string());
+        markers.chunk_ids.push(indexed.chunk_id.to_string());
+        markers.object_keys.push(indexed.object_key.clone());
+    }
     push_foreign_display_name(
         &mut markers.names,
         &local_names,
@@ -757,6 +783,7 @@ async fn seed_org_world(
         object_key: object_key_str,
         users,
         collections: collections_map,
+        indexed_document: None,
         document: BootedDocument {
             document_id,
             version_id,

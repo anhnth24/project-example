@@ -174,8 +174,12 @@ async fn document_index_state(
         [collection_id],
     )
     .map_err(|err| err.to_string())?;
+    let indexed = org
+        .indexed_document
+        .as_ref()
+        .ok_or_else(|| format!("org {} has no worker-produced indexed document", org.slug))?;
     with_org_txn(pool, &ctx, {
-        let document_id = org.document.document_id;
+        let document_id = indexed.document_id;
         let org_id = ctx.org_id();
         move |txn| {
             Box::pin(async move {
@@ -239,11 +243,14 @@ async fn read_sse_until(
 }
 
 async fn seed_cross_org_bridge_user(world: &MultiOrgDenialWorld) -> (String, Uuid) {
+    use fileconv_server::auth::context::OrgContext;
+    use fileconv_server::db::pool::with_org_txn;
+
     let alpha = world.org("orgAlpha");
     let beta = world.org("orgBeta");
     let bridge_user = Uuid::new_v4();
     let email = format!("bridge-{}@denial.test", bridge_user.simple());
-    let perms = ["qa.query", "doc.upload", "member.manage"];
+    let perms = ["qa.query"];
     seed_user_with_permissions(
         world.pool(),
         alpha.org_id,
@@ -262,6 +269,23 @@ async fn seed_cross_org_bridge_user(world: &MultiOrgDenialWorld) -> (String, Uui
         &perms,
     )
     .await;
+    for org_id in [alpha.org_id, beta.org_id] {
+        let ctx = OrgContext::try_new(org_id, bridge_user, perms, []).expect("bridge context");
+        with_org_txn(world.pool(), &ctx, move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "UPDATE org_memberships
+                     SET role = 'viewer'
+                     WHERE org_id = $1 AND user_id = $2",
+                    &[&org_id, &bridge_user],
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+        .expect("set bridge viewer membership");
+    }
     let (token, _) = login_tokens(world.pool(), &email, PASSWORD).await;
     (token, bridge_user)
 }
@@ -297,11 +321,22 @@ async fn switch_org(app: &axum::Router, token: &str, target_org_id: Uuid) -> (St
 async fn assert_access_rejected(app: &axum::Router, access_token: &str) {
     let (status, body, _) =
         json_request(app, "GET", "/api/v1/auth/me", Some(access_token), None).await;
+    if status == StatusCode::UNAUTHORIZED {
+        return;
+    }
     assert_eq!(
         status,
-        StatusCode::UNAUTHORIZED,
-        "stale access token must be rejected: {}",
+        StatusCode::FORBIDDEN,
+        "stale access token must fail closed with 401 or 403: {}",
         String::from_utf8_lossy(&body)
+    );
+    let error: serde_json::Value = serde_json::from_slice(&body).expect("stale access denial JSON");
+    assert!(
+        matches!(
+            error["code"].as_str(),
+            Some("membership_missing" | "membership_inactive")
+        ),
+        "403 stale access denial must explicitly report inactive/missing membership: {error}"
     );
 }
 
@@ -477,9 +512,17 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
     }
 
     let alpha = world.org("orgAlpha");
+    let alpha_indexed = alpha
+        .indexed_document
+        .as_ref()
+        .expect("alpha indexed document");
     let token = &alpha.users["owner"].access_token;
     let foreign = world.foreign_markers_for("orgAlpha");
     let beta = world.org("orgBeta");
+    let beta_indexed = beta
+        .indexed_document
+        .as_ref()
+        .expect("beta indexed document");
     let app = world.app();
 
     let query = alpha.marker.clone();
@@ -500,7 +543,7 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
     let hits = search["hits"].as_array().expect("hits array");
     assert!(
         hits.iter().any(|hit| {
-            hit["documentId"].as_str() == Some(alpha.document.document_id.to_string().as_str())
+            hit["documentId"].as_str() == Some(alpha_indexed.document_id.to_string().as_str())
                 || hit["quote"]
                     .as_str()
                     .is_some_and(|quote| quote.contains(&alpha.marker))
@@ -509,7 +552,7 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
     );
     assert!(
         !hits.iter().any(|hit| {
-            hit["documentId"].as_str() == Some(beta.document.document_id.to_string().as_str())
+            hit["documentId"].as_str() == Some(beta_indexed.document_id.to_string().as_str())
                 || hit["quote"]
                     .as_str()
                     .is_some_and(|quote| quote.contains(&beta.marker))
@@ -720,6 +763,20 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
         &world.foreign_markers_for(origin_key),
         DenialExpectation::AllowSuccess,
     );
+    let warm: serde_json::Value =
+        serde_json::from_slice(&warm_body).expect("origin collections JSON");
+    let warm_ids: BTreeSet<String> = warm["items"]
+        .as_array()
+        .expect("origin collection items")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        warm_ids,
+        BTreeSet::from([origin.collections["org"].collection_id.to_string()]),
+        "bridge viewer must warm only the origin org-visible collection"
+    );
 
     let (switched_token, _) = switch_org(app, &bridge_token, target_org).await;
     let foreign_after_switch = world.foreign_markers_for(target_key);
@@ -745,11 +802,7 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
         .filter_map(|item| item.get("id").and_then(|id| id.as_str()))
         .map(str::to_string)
         .collect();
-    let target_ids: BTreeSet<String> = target
-        .collections
-        .values()
-        .map(|c| c.collection_id.to_string())
-        .collect();
+    let target_ids = BTreeSet::from([target.collections["org"].collection_id.to_string()]);
     let origin_ids: BTreeSet<String> = origin
         .collections
         .values()
@@ -1128,6 +1181,11 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
     let token = &alpha.users["owner"].access_token;
     let owner_id = alpha.users["owner"].user_id;
     let collection_id = alpha.collections["org"].collection_id;
+    let indexed_document_id = alpha
+        .indexed_document
+        .as_ref()
+        .expect("alpha indexed document")
+        .document_id;
     let app = world.app();
 
     let stream_app = app.clone();
@@ -1156,16 +1214,16 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
             .await
     });
 
-    let session_id = await_ask_stream_session(world.pool(), alpha.org_id, owner_id)
-        .await
-        .expect("session row");
+    let session_id =
+        await_ask_stream_session(world.pool(), alpha.org_id, owner_id, indexed_document_id)
+            .await
+            .expect("session row citing worker-indexed document");
     let response = stream_handle
         .await
         .expect("join stream")
         .expect("stream start");
     assert_eq!(response.status(), StatusCode::OK);
 
-    let alt_owner = Uuid::new_v4();
     let org_id = alpha.org_id;
     let owner_ctx = OrgContext::try_new(
         org_id,
@@ -1176,35 +1234,15 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
     .expect("owner ctx");
     let last_event_id = with_org_txn(world.pool(), &owner_ctx, move |txn| {
         Box::pin(async move {
-            fileconv_server::db::orgs::ensure_user(
-                txn,
-                &OrgContext::try_new(
-                    org_id,
-                    owner_id,
-                    ["qa.query", "member.manage"],
-                    [collection_id],
+            let revoked =
+                fileconv_server::services::acl_mutate::revoke_role_permission_for_principal(
+                    txn, org_id, owner_id, "qa.query",
                 )
-                .expect("owner ctx in txn"),
-                alt_owner,
-                &format!("alt-{}@denial-inflight.test", alt_owner.simple()),
-                "Alt Owner",
-            )
-            .await?;
-            txn.execute(
-                "INSERT INTO org_memberships (org_id, user_id, role)
-                 VALUES ($1, $2, 'owner')
-                 ON CONFLICT (org_id, user_id) DO NOTHING",
-                &[&org_id, &alt_owner],
-            )
-            .await?;
-            fileconv_server::services::acl_mutate::revoke_collection_access_for_principal(
-                txn,
-                org_id,
-                owner_id,
-                collection_id,
-                alt_owner,
-            )
-            .await?;
+                .await?;
+            assert_eq!(
+                revoked, 1,
+                "production ACL mutation must revoke the token principal's qa.query permission"
+            );
             let last_event_id: i64 = txn
                 .query_one(
                     "SELECT COALESCE(MAX(sequence_no), 0)::bigint

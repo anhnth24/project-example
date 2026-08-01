@@ -273,6 +273,7 @@ pub struct ForeignMarkers {
     pub collection_ids: Vec<String>,
     pub document_ids: Vec<String>,
     pub version_ids: Vec<String>,
+    pub chunk_ids: Vec<String>,
     pub job_ids: Vec<String>,
     pub conflict_ids: Vec<String>,
     pub object_keys: Vec<String>,
@@ -516,6 +517,7 @@ impl ForeignMarkers {
             &self.collection_ids,
             &self.document_ids,
             &self.version_ids,
+            &self.chunk_ids,
             &self.job_ids,
             &self.conflict_ids,
             &self.object_keys,
@@ -1342,6 +1344,7 @@ mod unit_tests {
                     },
                 ),
             ]),
+            indexed_document: None,
             document: BootedDocument {
                 document_id: Uuid::new_v4(),
                 version_id: Uuid::new_v4(),
@@ -1383,6 +1386,7 @@ mod unit_tests {
                     },
                 ),
             ]),
+            indexed_document: None,
             document: BootedDocument {
                 document_id: Uuid::new_v4(),
                 version_id: Uuid::new_v4(),
@@ -1474,6 +1478,7 @@ mod unit_tests {
             object_key: "denial/{orgKey}/{marker}.txt".into(),
             users: BTreeMap::new(),
             collections: BTreeMap::new(),
+            indexed_document: None,
             document: crate::common::multi_org_denial_world::BootedDocument {
                 document_id: Uuid::new_v4(),
                 version_id: Uuid::new_v4(),

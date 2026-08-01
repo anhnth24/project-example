@@ -128,13 +128,12 @@ pub struct WorkerProducedDoc {
     pub permissions: BTreeSet<String>,
 }
 
-/// Existing document identity and source submitted through the production upload route.
-pub struct ExistingDocumentRevision<'a> {
+/// New document source submitted within an existing org/collection scope.
+pub struct ExistingScopeDocument<'a> {
     pub access_token: &'a str,
     pub org_id: Uuid,
     pub user_id: Uuid,
     pub collection_id: Uuid,
-    pub document_id: Uuid,
     pub permissions: &'a [&'a str],
     pub filename: &'a str,
     pub content_type: &'a str,
@@ -454,28 +453,28 @@ impl WorkerPipeline {
         .await
     }
 
-    /// Upload a revision onto an existing org document and run convert/index workers.
+    /// Create a document in an existing org collection and run all production workers.
     ///
     /// Preserves the caller's exact permission set — no superset injection.
-    pub async fn index_existing_document_revision(
+    pub async fn produce_indexed_in_existing_scope(
         &self,
-        revision: ExistingDocumentRevision<'_>,
+        document: ExistingScopeDocument<'_>,
     ) -> WorkerProducedDoc {
         let worker_ctx = worker_org_context(
-            revision.org_id,
-            revision.user_id,
-            revision.collection_id,
-            revision.permissions.iter().copied(),
+            document.org_id,
+            document.user_id,
+            document.collection_id,
+            document.permissions.iter().copied(),
         );
         self.upload_convert_index(
-            revision.access_token,
+            document.access_token,
             &worker_ctx,
-            revision.collection_id,
-            Some(revision.document_id),
-            revision.filename,
-            revision.content_type,
-            revision.source,
-            revision.label,
+            document.collection_id,
+            None,
+            document.filename,
+            document.content_type,
+            document.source,
+            document.label,
         )
         .await
     }
@@ -549,17 +548,19 @@ impl WorkerPipeline {
             )
             .await
             .unwrap();
-        assert_eq!(
-            upload_response.status(),
-            StatusCode::CREATED,
-            "{label} upload status"
-        );
+        let upload_status = upload_response.status();
         let upload_bytes = upload_response
             .into_body()
             .collect()
             .await
             .unwrap()
             .to_bytes();
+        assert_eq!(
+            upload_status,
+            StatusCode::CREATED,
+            "{label} upload status; body={}",
+            String::from_utf8_lossy(&upload_bytes)
+        );
         let upload: serde_json::Value = serde_json::from_slice(&upload_bytes).unwrap();
         assert_eq!(upload["disposition"], "accepted", "{label} disposition");
         let document_id = Uuid::parse_str(upload["documentId"].as_str().unwrap()).unwrap();
