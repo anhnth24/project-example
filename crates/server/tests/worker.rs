@@ -1238,23 +1238,18 @@ async fn live_convert_worker_promotes_immutable_markdown_version() {
     )
     .await;
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
-    let worker = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
-        stub_worker_config(
-            r#"while IFS= read -r line; do printf '%s\n' "$line"; done < "$1""#,
-            50,
-        ),
-    )
-    .expect("worker");
-
-    let outcome = worker.run_once(&ctx).await.expect("run once");
+    let convert_config = stub_worker_config(
+        r#"while IFS= read -r line; do printf '%s\n' "$line"; done < "$1""#,
+        50,
+    );
+    // Promotion can commit while acknowledgement races heartbeat/reconcile; the
+    // bounded helper treats DB `Succeeded` as completion and may synthesize
+    // `Completed { markdown_bytes: 0 }`. Byte length is asserted via object read.
+    let outcome =
+        run_convert_worker_until_completed(&pool, &storage, &ctx, job.id, convert_config).await;
     assert!(matches!(
         outcome,
-        ConvertWorkerRun::Completed {
-            job_id,
-            markdown_bytes: 22
-        } if job_id == job.id
+        ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
     ));
     assert_eq!(
         get_job(&pool, &ctx, job.id).await.status,
@@ -1334,19 +1329,19 @@ async fn live_convert_worker_duplicate_enqueue_converges_to_one_promotion() {
     let job = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     let duplicate = enqueue_convert(&pool, &ctx, document_id, version_id).await;
     assert_eq!(duplicate.id, job.id);
-    let worker = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
-        stub_worker_config(ECHO_INPUT_SCRIPT, 50),
-    )
-    .expect("worker");
-
+    let convert_config = stub_worker_config(ECHO_INPUT_SCRIPT, 50);
     assert!(matches!(
-        worker.run_once(&ctx).await.expect("first run"),
+        run_convert_worker_until_completed(&pool, &storage, &ctx, job.id, convert_config.clone())
+            .await,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
     ));
+    let idle_worker =
+        ConvertWorker::new(pool.clone(), storage.clone(), convert_config).expect("idle worker");
     assert_eq!(
-        worker.run_once(&ctx).await.expect("second run"),
+        idle_worker
+            .run_once(&ctx)
+            .await
+            .expect("post-completion run"),
         ConvertWorkerRun::NoJob
     );
     assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
