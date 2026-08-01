@@ -1,5 +1,8 @@
 //! Converter worker and sandbox tests.
 
+mod common;
+
+use common::take_live;
 use std::fs;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -106,18 +109,6 @@ fn input(ext: &str, bytes: &[u8]) -> SandboxInput {
 
 fn run(config: &SandboxConfig) -> fileconv_server::workers::sandbox::SandboxOutput {
     sandbox::run(config, input("txt", b"hello"), &SandboxCancel::default()).expect("sandbox run")
-}
-
-fn markhand_e2e_required() -> bool {
-    std::env::var("MARKHAND_E2E").ok().as_deref() == Some("1")
-}
-
-fn take_live<T>(value: Option<T>, name: &str) -> Option<T> {
-    match value {
-        Some(value) => Some(value),
-        None if markhand_e2e_required() => panic!("MARKHAND_E2E=1 requires {name}"),
-        None => None,
-    }
 }
 
 fn test_database_url() -> Option<String> {
@@ -2947,4 +2938,29 @@ fn assert_process_exits(pid: u32, timeout: Duration) {
         std::thread::sleep(Duration::from_millis(25));
     }
     panic!("process {pid} survived sandbox kill");
+}
+
+/// Pins worker integration tests to shared required-mode helpers (no local duplicate).
+mod worker_required_mode {
+    use super::common::{markhand_test_required, take_live, test_env_lock, SavedEnvVars};
+
+    const _: fn(Option<String>, &str) -> Option<String> = take_live;
+
+    #[test]
+    fn worker_binary_uses_common_take_live_for_markhand_test_required() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(&["MARKHAND_TEST_REQUIRED", "MARKHAND_E2E"]);
+        std::env::set_var("MARKHAND_TEST_REQUIRED", "1");
+        std::env::remove_var("MARKHAND_E2E");
+
+        assert!(markhand_test_required());
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(None::<String>, "MARKHAND_TEST_DATABASE_URL");
+        });
+        assert!(
+            outcome.is_err(),
+            "worker integration must panic via common::take_live when MARKHAND_TEST_REQUIRED=1"
+        );
+    }
 }

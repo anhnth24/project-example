@@ -132,6 +132,8 @@ jobs:
       # construction (see tests/common/worker_pipeline.rs). Missing this previously
       # soft-skipped retrieval_vertical_slice to a false green in CI.
       MARKHAND_TEST_QDRANT_ADMIN_API_KEY: test-operator-admin-key
+      # Forbid prerequisite soft-skips in this job — missing DB/app/MinIO must fail.
+      MARKHAND_TEST_REQUIRED: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install base build dependencies

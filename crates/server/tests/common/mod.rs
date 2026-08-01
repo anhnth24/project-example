@@ -68,18 +68,22 @@ pub fn markhand_e2e_required() -> bool {
 }
 
 /// Whether integration prerequisites must be live (CI gate or explicit E2E opt-in).
-///
-/// GREEN step wires `MARKHAND_TEST_REQUIRED=1` and strict [`take_live`].
 pub fn markhand_test_required() -> bool {
-    markhand_e2e_required()
+    std::env::var("MARKHAND_TEST_REQUIRED").ok().as_deref() == Some("1") || markhand_e2e_required()
 }
 
-/// Pass through `Some`, panic under `MARKHAND_E2E=1` when missing, else `None` (soft-skip).
+/// Pass through `Some`, panic in required mode when missing, else soft-skip with stderr.
 pub fn take_live<T>(value: Option<T>, name: &str) -> Option<T> {
     match value {
         Some(value) => Some(value),
+        None if std::env::var("MARKHAND_TEST_REQUIRED").ok().as_deref() == Some("1") => {
+            panic!("MARKHAND_TEST_REQUIRED=1 requires {name}");
+        }
         None if markhand_e2e_required() => panic!("MARKHAND_E2E=1 requires {name}"),
-        None => None,
+        None => {
+            eprintln!("skipped: {name} unset — integration test requires live dependency");
+            None
+        }
     }
 }
 

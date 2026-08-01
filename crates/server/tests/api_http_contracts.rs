@@ -2504,7 +2504,7 @@ async fn live_reindex_audit_failure_rolls_back_enqueue() {
 mod required_mode {
     use super::common::{
         admin_database_url, markhand_e2e_required, markhand_test_required, take_live,
-        SavedEnvVars, test_env_lock,
+        test_env_lock, SavedEnvVars,
     };
 
     const PREREQ_ENV_VARS: &[&str] = &[
@@ -2603,6 +2603,24 @@ mod required_mode {
         assert!(
             outcome.is_err(),
             "existing MARKHAND_E2E=1 strict path must keep panicking on missing prerequisites"
+        );
+    }
+
+    #[test]
+    fn take_live_panic_message_names_markhand_e2e_when_e2e_alone() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(PREREQ_ENV_VARS);
+        std::env::remove_var("MARKHAND_TEST_REQUIRED");
+        std::env::set_var("MARKHAND_E2E", "1");
+        std::env::remove_var("MARKHAND_TEST_DATABASE_URL");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL");
+        });
+        let message = panic_payload_message(outcome.expect_err("expected E2E prerequisite panic"));
+        assert!(
+            message.contains("MARKHAND_E2E=1 requires MARKHAND_TEST_DATABASE_URL"),
+            "E2E-only strict path must preserve legacy panic wording, got: {message}"
         );
     }
 }
