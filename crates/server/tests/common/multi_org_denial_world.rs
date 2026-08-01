@@ -1,6 +1,7 @@
 //! Live bootstrapping for [`super::MultiOrgDenialWorld`].
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use deadpool_postgres::Pool;
 use fileconv_knowledge::ask::AnswerMode;
@@ -31,6 +32,8 @@ use fileconv_server::http::router;
 use fileconv_server::services::qa::provider::{ChatProvider, StreamingStaticProvider};
 
 const PASSWORD: &str = "correct-password-1";
+const ASK_STREAM_EVIDENCE_POLL_TIMEOUT: Duration = Duration::from_secs(30);
+const ASK_STREAM_EVIDENCE_POLL_BACKOFF: Duration = Duration::from_millis(20);
 
 const OWNER_PERMISSIONS: &[&str] = &[
     "doc.upload",
@@ -284,7 +287,8 @@ async fn poll_latest_ask_stream_session(
 ) -> Result<AskStreamPreRevokeEvidence, String> {
     let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
         .map_err(|error| error.to_string())?;
-    tokio::time::timeout(std::time::Duration::from_secs(12), async {
+    let mut last_observed: Option<(String, usize)> = None;
+    let result = tokio::time::timeout(ASK_STREAM_EVIDENCE_POLL_TIMEOUT, async {
         loop {
             let row = with_org_txn(pool, &ctx, move |txn| {
                 Box::pin(async move {
@@ -316,6 +320,7 @@ async fn poll_latest_ask_stream_session(
                 let session_id: Uuid = row.get(0);
                 let status: String = row.get(1);
                 let token_sequences: Vec<i64> = row.get(2);
+                last_observed = Some((status.clone(), token_sequences.len()));
                 if status != "open" {
                     return Err(format!(
                         "ask stream session {session_id} closed before revoke with {token_sequences:?}"
@@ -328,11 +333,18 @@ async fn poll_latest_ask_stream_session(
                     });
                 }
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(ASK_STREAM_EVIDENCE_POLL_BACKOFF).await;
         }
     })
-    .await
-    .map_err(|_| "timed out waiting for cited ask stream with durable ask.token".to_string())?
+    .await;
+    result.unwrap_or_else(|_| {
+        let observed = last_observed
+            .map(|(status, token_count)| format!("status={status}, token_count={token_count}"))
+            .unwrap_or_else(|| "no cited session observed".to_string());
+        Err(format!(
+            "timed out waiting for cited ask stream with durable ask.token; last observed: {observed}"
+        ))
+    })
 }
 
 /// Poll durable session state until a terminal event and close reason are committed.
@@ -344,7 +356,8 @@ pub async fn await_ask_stream_terminal(
 ) -> Result<AskStreamTerminalEvidence, String> {
     let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
         .map_err(|error| error.to_string())?;
-    tokio::time::timeout(std::time::Duration::from_secs(12), async {
+    let mut last_observed: Option<(String, usize)> = None;
+    let result = tokio::time::timeout(ASK_STREAM_EVIDENCE_POLL_TIMEOUT, async {
         loop {
             let row = with_org_txn(pool, &ctx, move |txn| {
                 Box::pin(async move {
@@ -375,6 +388,7 @@ pub async fn await_ask_stream_terminal(
                 let terminal_event_reasons: Vec<Option<String>> = row.get(2);
                 let terminal_event_reasons: Vec<String> =
                     terminal_event_reasons.into_iter().flatten().collect();
+                last_observed = Some((status.clone(), terminal_event_reasons.len()));
                 if status != "open" && !terminal_event_reasons.is_empty() {
                     return Ok(AskStreamTerminalEvidence {
                         status,
@@ -383,11 +397,20 @@ pub async fn await_ask_stream_terminal(
                     });
                 }
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(ASK_STREAM_EVIDENCE_POLL_BACKOFF).await;
         }
     })
-    .await
-    .map_err(|_| format!("timed out waiting for terminal ask stream session {session_id}"))?
+    .await;
+    result.unwrap_or_else(|_| {
+        let observed = last_observed
+            .map(|(status, terminal_count)| {
+                format!("status={status}, terminal_event_count={terminal_count}")
+            })
+            .unwrap_or_else(|| "session not visible".to_string());
+        Err(format!(
+            "timed out waiting for terminal ask stream session {session_id}; last observed: {observed}"
+        ))
+    })
 }
 
 /// Query durable token sequence numbers strictly after the revoke high-water mark.
@@ -997,4 +1020,35 @@ async fn seed_viewer_member(pool: &Pool, org: Uuid, user: Uuid, email: &str) {
     })
     .await
     .expect("promote viewer membership");
+}
+
+#[cfg(test)]
+mod polling_tests {
+    #[test]
+    fn ask_stream_evidence_polling_has_bounded_backoff_for_parallel_load() {
+        let source = include_str!("multi_org_denial_world.rs");
+        let source = source
+            .split("#[cfg(test)]\nmod polling_tests")
+            .next()
+            .expect("production helper source");
+        assert!(
+            source.contains(
+                "const ASK_STREAM_EVIDENCE_POLL_TIMEOUT: Duration = Duration::from_secs(30);"
+            ),
+            "stream evidence polls need a 30s load-tolerant bound"
+        );
+        assert!(
+            source.contains(
+                "const ASK_STREAM_EVIDENCE_POLL_BACKOFF: Duration = Duration::from_millis(20);"
+            ),
+            "stream evidence polls need a nonzero DB backoff"
+        );
+        assert_eq!(
+            source
+                .matches("tokio::time::sleep(ASK_STREAM_EVIDENCE_POLL_BACKOFF).await;")
+                .count(),
+            2,
+            "both pre-revoke and terminal RLS polls must back off"
+        );
+    }
 }
