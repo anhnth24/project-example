@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::api::{openapi_operation_inventory, ROUTE_INVENTORY};
-use crate::auth::rbac_catalog::{load_builtin_role_catalog, BuiltinRoleCatalog, PermissionStatus};
+use crate::api::ROUTE_INVENTORY;
+use crate::auth::rbac_catalog::{BuiltinRoleCatalog, PermissionStatus};
 use crate::db::models::AccessLevel;
 
 /// Relative path (from the server crate root) of the canonical guard fixture.
@@ -400,7 +400,8 @@ pub fn validate_guard_completeness(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::embedded_openapi_yaml;
+    use crate::api::{embedded_openapi_yaml, openapi_operation_inventory};
+    use crate::auth::rbac_catalog::load_builtin_role_catalog;
 
     fn sample_permission_row() -> &'static str {
         r#"{
