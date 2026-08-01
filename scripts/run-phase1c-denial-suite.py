@@ -385,82 +385,164 @@ def validate_manifest_schema(manifest: DenialManifest) -> list[str]:
     return errors
 
 
-def strip_rust_comments_and_strings(source: str) -> str:
-    """Remove comments and string/char literals so fn declarations are not false positives."""
-    out: list[str] = []
-    index = 0
+def _is_rust_ident_continue(ch: str) -> bool:
+    return ch.isalnum() or ch == "_"
+
+
+def _skip_nested_block_comment(source: str, index: int) -> int:
+    """Return index after a nested ``/* ... */`` block (opening ``/*`` already consumed)."""
+    depth = 1
+    length = len(source)
+    while index < length and depth > 0:
+        if source[index] == "/" and index + 1 < length and source[index + 1] == "*":
+            depth += 1
+            index += 2
+            continue
+        if source[index] == "*" and index + 1 < length and source[index + 1] == "/":
+            depth -= 1
+            index += 2
+            continue
+        index += 1
+    return index
+
+
+def _skip_escaped_string_body(source: str, index: int, quote: str) -> int:
     length = len(source)
     while index < length:
         ch = source[index]
-        nxt = source[index + 1] if index + 1 < length else ""
-        if ch == "/" and nxt == "/":
+        if ch == "\\":
             index += 2
+            continue
+        if ch == quote:
+            return index + 1
+        index += 1
+    return length
+
+
+def _skip_raw_string(source: str, index: int, hash_count: int) -> int:
+    """Return index after ``r#*\"...\"#*`` (opening quote already consumed)."""
+    length = len(source)
+    end_marker = f'"{"#" * hash_count}'
+    while index < length:
+        if source.startswith(end_marker, index):
+            return index + len(end_marker)
+        index += 1
+    return length
+
+
+def _skip_prefixed_string(source: str, index: int) -> tuple[int, bool]:
+    """Skip ``b? r? #* \"...\" #*`` string forms; return (new_index, consumed)."""
+    length = len(source)
+    start = index
+    byte_prefix = False
+    if source[index] == "b":
+        byte_prefix = True
+        index += 1
+        if index >= length:
+            return index, False
+
+    raw = False
+    if source[index] == "r":
+        raw = True
+        index += 1
+        if index >= length:
+            return index, False
+
+    hash_count = 0
+    if raw:
+        while index < length and source[index] == "#":
+            hash_count += 1
+            index += 1
+
+    if index >= length or source[index] != '"':
+        return start, False
+
+    index += 1
+    if raw:
+        index = _skip_raw_string(source, index, hash_count)
+    else:
+        index = _skip_escaped_string_body(source, index, '"')
+    return index, True
+
+
+def _skip_char_or_lifetime(source: str, index: int) -> int:
+    """Skip ``'a'`` char/byte-char literals or ``'static`` / ``'a`` lifetime annotations."""
+    length = len(source)
+    index += 1  # opening quote
+    if index >= length:
+        return index
+
+    if source[index] == "\\":
+        index += 1
+        if index < length:
+            index += 1
+        if index < length and source[index] == "'":
+            index += 1
+        return index
+
+    # Lifetime: 'ident without closing quote (e.g. 'static, 'a, '_)
+    if source[index] == "_" or source[index].isalpha():
+        index += 1
+        while index < length and _is_rust_ident_continue(source[index]):
+            index += 1
+        return index
+
+    # Char literal: consume until closing quote (handles escapes).
+    return _skip_escaped_string_body(source, index, "'")
+
+
+def strip_rust_comments_and_strings(source: str) -> str:
+    """Remove comments and literals while preserving newlines and declaration structure."""
+    out: list[str] = []
+    index = 0
+    length = len(source)
+
+    while index < length:
+        ch = source[index]
+        nxt = source[index + 1] if index + 1 < length else ""
+
+        if ch == "/" and nxt == "/":
             while index < length and source[index] != "\n":
                 index += 1
             continue
+
         if ch == "/" and nxt == "*":
-            index += 2
-            while index + 1 < length and not (source[index] == "*" and source[index + 1] == "/"):
-                index += 1
-            index = min(length, index + 2)
+            index = _skip_nested_block_comment(source, index + 2)
             continue
+
         if ch == "b" and nxt in {"'", '"'}:
-            quote = nxt
-            index += 2
-            while index < length:
-                if source[index] == "\\":
-                    index += 2
-                    continue
-                if source[index] == quote:
-                    index += 1
-                    break
-                index += 1
-            out.append(" ")
-            continue
-        if ch in {"'", '"'}:
-            quote = ch
-            index += 1
-            while index < length:
-                if source[index] == "\\":
-                    index += 2
-                    continue
-                if source[index] == quote:
-                    index += 1
-                    break
-                index += 1
-            out.append(" ")
-            continue
-        if ch == "r" and nxt in {"#", '"'}:
-            if nxt == "#":
-                hash_count = 0
-                pos = index + 1
-                while pos < length and source[pos] == "#":
-                    hash_count += 1
-                    pos += 1
-                if pos < length and source[pos] == '"':
-                    end = f'"{"#" * hash_count}'
-                    index = pos + 1
-                    while index < length:
-                        if source.startswith(end, index):
-                            index += len(end)
-                            break
-                        index += 1
+            if nxt == '"':
+                new_index, consumed = _skip_prefixed_string(source, index)
+                if consumed:
                     out.append(" ")
+                    index = new_index
                     continue
-            quote = '"'
-            index += 2
-            while index < length:
-                if source[index] == "\\":
-                    index += 2
-                    continue
-                if source[index] == quote:
-                    index += 1
-                    break
-                index += 1
+            index = _skip_char_or_lifetime(source, index + 1)  # byte char b'x'
             out.append(" ")
             continue
+
+        if ch == "c" and nxt == '"':
+            new_index, consumed = _skip_prefixed_string(source, index)
+            if consumed:
+                out.append(" ")
+                index = new_index
+                continue
+
+        if ch in {"r", '"'} or (ch == "b" and nxt == "r"):
+            new_index, consumed = _skip_prefixed_string(source, index)
+            if consumed:
+                out.append(" ")
+                index = new_index
+                continue
+
+        if ch == "'":
+            index = _skip_char_or_lifetime(source, index)
+            out.append(" ")
+            continue
+
         out.append(ch)
         index += 1
+
     return "".join(out)
 
 
@@ -1020,7 +1102,9 @@ class DenialRunnerSelfTests(unittest.TestCase):
     def test_rust_test_name_parser_ignores_comments_and_strings(self) -> None:
         source = '''
 // async fn decoy_in_comment() {}
+/// Always fails for one specific job's outbox event with fn decoy_in_doc() {}
 const IGNORED = "fn fake_in_string() {}";
+/* block fn block_decoy() { 'published' } */
 #[tokio::test]
 async fn real_integration_test() {}
 fn helper_only() {}
@@ -1029,6 +1113,111 @@ fn helper_only() {}
         self.assertIn("real_integration_test", names)
         self.assertNotIn("decoy_in_comment", names)
         self.assertNotIn("fake_in_string", names)
+        self.assertNotIn("block_decoy", names)
+        self.assertNotIn("decoy_in_doc", names)
+
+    def test_rust_lexer_handles_literal_forms_before_target_fn(self) -> None:
+        snippets: list[tuple[str, str, list[str]]] = [
+            (
+                "normal_string",
+                '''
+const X = "VALUES ($1, 'job.enqueued', $2)";
+#[tokio::test]
+async fn target_normal_string() {}
+''',
+                ["target_normal_string"],
+            ),
+            (
+                "static_lifetime",
+                '''
+fn helper(ext: &'static str) {}
+#[tokio::test]
+async fn target_static_lifetime() {}
+''',
+                ["helper", "target_static_lifetime"],
+            ),
+            (
+                "byte_string",
+                '''
+put_bytes(b"TAMPERED MARKDOWN BYTES", "text/markdown; charset=utf-8");
+#[tokio::test]
+async fn target_byte_string() {}
+''',
+                ["target_byte_string"],
+            ),
+            (
+                "raw_string",
+                '''
+const SQL: &str = r#"SELECT 'published' FROM "t""#;
+#[tokio::test]
+async fn target_raw_string() {}
+''',
+                ["target_raw_string"],
+            ),
+            (
+                "raw_string_hashes",
+                '''
+const SQL: &str = r##"edge "quote" and 'published'"##;
+#[tokio::test]
+async fn target_raw_string_hashes() {}
+''',
+                ["target_raw_string_hashes"],
+            ),
+            (
+                "byte_raw_string",
+                '''
+const SQL: &str = br#"byte 'published' raw"#;
+#[tokio::test]
+async fn target_byte_raw_string() {}
+''',
+                ["target_byte_raw_string"],
+            ),
+            (
+                "char_literal",
+                r"""
+const C: char = '\'';
+#[tokio::test]
+async fn target_char_literal() {}
+""",
+                ["target_char_literal"],
+            ),
+            (
+                "nested_block_comment",
+                r"""
+/* outer /* inner */ trailing */
+#[tokio::test]
+async fn target_nested_block_comment() {}
+""",
+                ["target_nested_block_comment"],
+            ),
+        ]
+        for label, source, expected in snippets:
+            names = extract_rust_test_names(source)
+            for fn_name in expected:
+                self.assertIn(fn_name, names, f"{label}: missing {fn_name}")
+            self.assertNotIn("nested_decoy", names, label)
+
+    def test_repo_jobs_source_contains_org_isolation_test(self) -> None:
+        source = (REPO_ROOT / "crates/server/tests/jobs.rs").read_text(encoding="utf-8")
+        names = extract_rust_test_names(source)
+        self.assertIn("org_isolation_prevents_cross_org_claim_see_and_mutate", names)
+
+    def test_repo_citation_authz_matrix_source_contains_live_citation_test(self) -> None:
+        source = (REPO_ROOT / "crates/server/tests/citation_authz_matrix.rs").read_text(
+            encoding="utf-8"
+        )
+        names = extract_rust_test_names(source)
+        self.assertIn("live_citation_authz_expiry_replay_idor_and_immediate_deny", names)
+
+    def test_repo_manifest_executable_rows_resolve_without_cargo(self) -> None:
+        manifest = load_manifest(DEFAULT_MANIFEST)
+        errors = validate_manifest_schema(manifest)
+        errors.extend(
+            validate_executable_sources(manifest, tests_root=resolve_tests_root(REPO_ROOT))
+        )
+        self.assertEqual(errors, [], "\n".join(errors))
+        executable = sum(1 for row in manifest.rows if row.status == "executable")
+        self.assertEqual(executable, 74)
 
     def test_shared_display_names_are_not_static_leak_needles(self) -> None:
         fixture = load_fixture(self.fixture_path)
