@@ -2430,15 +2430,16 @@ async fn live_convert_worker_refund_failure_expires_via_quota_sweep_and_retries(
         vec!["refunded".to_string(), "expired".to_string()]
     );
 
-    make_job_available(&pool, &ctx, job.id).await;
-    let retry_worker = ConvertWorker::new(
-        pool.clone(),
-        storage.clone(),
+    let retry_outcome = run_convert_worker_until_completed(
+        &pool,
+        &storage,
+        &ctx,
+        job.id,
         stub_worker_config(ECHO_INPUT_SCRIPT, 50),
     )
-    .expect("retry worker");
+    .await;
     assert!(matches!(
-        retry_worker.run_once(&ctx).await.expect("retry"),
+        retry_outcome,
         ConvertWorkerRun::Completed { job_id, .. } if job_id == job.id
     ));
     assert_eq!(count_published_versions(&pool, &ctx, document_id).await, 1);
