@@ -205,32 +205,54 @@ async fn load_indexed_document(
         [org.collections["org"].collection_id],
     )
     .map_err(|err| err.to_string())?;
-    let (object_key, state): (String, String) = with_org_txn(pool, &ctx, {
-        let document_id = produced.document_id;
-        let org_id = ctx.org_id();
-        move |txn| {
-            Box::pin(async move {
-                let row = txn
-                    .query_one(
-                        "SELECT dv.original_object_key, d.state::text
+    let (object_key, version_object_key, state): (String, Option<String>, String) =
+        with_org_txn(pool, &ctx, {
+            let document_id = produced.document_id;
+            let version_id = produced.version_id;
+            let org_id = ctx.org_id();
+            move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_one(
+                            "SELECT da.object_key, dv.markdown_object_key, d.state::text
                          FROM documents d
                          JOIN document_versions dv
                            ON dv.org_id = d.org_id AND dv.id = d.current_version_id
-                         WHERE d.org_id = $1 AND d.id = $2",
-                        &[&org_id, &document_id],
-                    )
-                    .await?;
-                Ok((row.get::<_, String>(0), row.get::<_, String>(1)))
-            })
-        }
-    })
-    .await
-    .map_err(|err| format!("load indexed document identity: {err}"))?;
+                         JOIN derived_artifacts da
+                           ON da.org_id = dv.org_id
+                          AND da.version_id = dv.id
+                          AND da.artifact_kind = 'markdown'
+                         WHERE d.org_id = $1 AND d.id = $2 AND dv.id = $3",
+                            &[&org_id, &document_id, &version_id],
+                        )
+                        .await?;
+                    Ok((
+                        row.get::<_, String>(0),
+                        row.get::<_, Option<String>>(1),
+                        row.get::<_, String>(2),
+                    ))
+                })
+            }
+        })
+        .await
+        .map_err(|err| format!("load indexed document identity: {err}"))?;
     if state != DocumentState::Indexed.as_str() {
         return Err(format!(
             "org {} document {} expected indexed state after worker pipeline, got {state}",
             org.slug, produced.document_id
         ));
+    }
+    if !object_key.starts_with("trusted/") {
+        return Err(format!(
+            "worker-produced markdown object key must be trusted: {object_key}"
+        ));
+    }
+    if let Some(version_object_key) = version_object_key {
+        if version_object_key != object_key {
+            return Err(format!(
+                "worker-produced markdown identity mismatch: artifact={object_key}, version={version_object_key}"
+            ));
+        }
     }
     Ok(BootedIndexedDocument {
         document_id: produced.document_id,
@@ -241,48 +263,169 @@ async fn load_indexed_document(
     })
 }
 
+#[derive(Debug, Clone)]
+pub struct AskStreamPreRevokeEvidence {
+    pub session_id: Uuid,
+    pub token_sequences: Vec<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AskStreamTerminalEvidence {
+    pub status: String,
+    pub close_reason: Option<String>,
+    pub terminal_event_reasons: Vec<String>,
+}
+
 async fn poll_latest_ask_stream_session(
     pool: &Pool,
     org_id: Uuid,
     user_id: Uuid,
     cited_document_id: Uuid,
-) -> Result<Uuid, String> {
-    let ctx = OrgContext::try_new(org_id, user_id, ["qa.query"], [])
+) -> Result<AskStreamPreRevokeEvidence, String> {
+    let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
         .map_err(|error| error.to_string())?;
-    for attempt in 0..60 {
-        let row = with_org_txn(pool, &ctx, move |txn| {
-            Box::pin(async move {
-                txn.query_opt(
-                    "SELECT id FROM ask_stream_sessions
-                     WHERE org_id = $1 AND user_id = $2
-                       AND $3 = ANY(cited_document_ids)
-                     ORDER BY created_at DESC
-                     LIMIT 1",
-                    &[&org_id, &user_id, &cited_document_id],
-                )
-                .await
-                .map_err(Into::into)
+    tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        loop {
+            let row = with_org_txn(pool, &ctx, move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_opt(
+                            "SELECT s.id, s.status::text,
+                                    COALESCE(
+                                      array_agg(e.sequence_no ORDER BY e.sequence_no)
+                                        FILTER (WHERE e.event_type = 'ask.token'),
+                                      '{}'::bigint[]
+                                    ) AS token_sequences
+                             FROM ask_stream_sessions s
+                             LEFT JOIN ask_stream_events e
+                               ON e.org_id = s.org_id AND e.session_id = s.id
+                             WHERE s.org_id = $1 AND s.user_id = $2
+                               AND $3 = ANY(s.cited_document_ids)
+                             GROUP BY s.id, s.status, s.created_at
+                             ORDER BY s.created_at DESC
+                             LIMIT 1",
+                            &[&org_id, &user_id, &cited_document_id],
+                        )
+                        .await?;
+                    Ok(row)
+                })
             })
-        })
-        .await
-        .map_err(|error| error.to_string())?;
-        if let Some(row) = row {
-            return Ok(row.get(0));
+            .await
+            .map_err(|error| error.to_string())?;
+            if let Some(row) = row {
+                let session_id: Uuid = row.get(0);
+                let status: String = row.get(1);
+                let token_sequences: Vec<i64> = row.get(2);
+                if status != "open" {
+                    return Err(format!(
+                        "ask stream session {session_id} closed before revoke with {token_sequences:?}"
+                    ));
+                }
+                if !token_sequences.is_empty() {
+                    return Ok(AskStreamPreRevokeEvidence {
+                        session_id,
+                        token_sequences,
+                    });
+                }
+            }
+            tokio::task::yield_now().await;
         }
-        if attempt + 1 < 60 {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    }
-    Err("timed out waiting for ask_stream_sessions row".into())
+    })
+    .await
+    .map_err(|_| "timed out waiting for cited ask stream with durable ask.token".to_string())?
 }
 
-/// Poll durable session state instead of draining SSE before ACL revoke.
-pub async fn await_ask_stream_session(
+/// Poll durable session state until a terminal event and close reason are committed.
+pub async fn await_ask_stream_terminal(
+    pool: &Pool,
+    org_id: Uuid,
+    user_id: Uuid,
+    session_id: Uuid,
+) -> Result<AskStreamTerminalEvidence, String> {
+    let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
+        .map_err(|error| error.to_string())?;
+    tokio::time::timeout(std::time::Duration::from_secs(12), async {
+        loop {
+            let row = with_org_txn(pool, &ctx, move |txn| {
+                Box::pin(async move {
+                    let row = txn
+                        .query_opt(
+                            "SELECT s.status::text, s.close_reason,
+                                    COALESCE(
+                                      array_agg(e.data->>'reason' ORDER BY e.sequence_no)
+                                        FILTER (WHERE e.event_type = 'stream.closed'),
+                                      '{}'::text[]
+                                    ) AS terminal_reasons
+                             FROM ask_stream_sessions s
+                             LEFT JOIN ask_stream_events e
+                               ON e.org_id = s.org_id AND e.session_id = s.id
+                             WHERE s.org_id = $1 AND s.user_id = $2 AND s.id = $3
+                             GROUP BY s.id, s.status, s.close_reason",
+                            &[&org_id, &user_id, &session_id],
+                        )
+                        .await?;
+                    Ok(row)
+                })
+            })
+            .await
+            .map_err(|error| error.to_string())?;
+            if let Some(row) = row {
+                let status: String = row.get(0);
+                let close_reason: Option<String> = row.get(1);
+                let terminal_event_reasons: Vec<Option<String>> = row.get(2);
+                let terminal_event_reasons: Vec<String> =
+                    terminal_event_reasons.into_iter().flatten().collect();
+                if status != "open" && !terminal_event_reasons.is_empty() {
+                    return Ok(AskStreamTerminalEvidence {
+                        status,
+                        close_reason,
+                        terminal_event_reasons,
+                    });
+                }
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .map_err(|_| format!("timed out waiting for terminal ask stream session {session_id}"))?
+}
+
+/// Query durable token sequence numbers strictly after the revoke high-water mark.
+pub async fn ask_token_sequences_after(
+    pool: &Pool,
+    org_id: Uuid,
+    user_id: Uuid,
+    session_id: Uuid,
+    high_water: i64,
+) -> Result<Vec<i64>, String> {
+    let ctx = OrgContext::try_new(org_id, user_id, [] as [&str; 0], [])
+        .map_err(|error| error.to_string())?;
+    with_org_txn(pool, &ctx, move |txn| {
+        Box::pin(async move {
+            let rows = txn
+                .query(
+                    "SELECT sequence_no
+                     FROM ask_stream_events
+                     WHERE org_id = $1 AND user_id = $2 AND session_id = $3
+                       AND sequence_no > $4 AND event_type = 'ask.token'
+                     ORDER BY sequence_no",
+                    &[&org_id, &user_id, &session_id, &high_water],
+                )
+                .await?;
+            Ok(rows.into_iter().map(|row| row.get::<_, i64>(0)).collect())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())
+}
+
+/// Poll for a cited, open session with at least one durable content event.
+pub async fn await_ask_stream_pre_revoke_evidence(
     pool: &Pool,
     org_id: Uuid,
     user_id: Uuid,
     cited_document_id: Uuid,
-) -> Result<Uuid, String> {
+) -> Result<AskStreamPreRevokeEvidence, String> {
     poll_latest_ask_stream_session(pool, org_id, user_id, cited_document_id).await
 }
 

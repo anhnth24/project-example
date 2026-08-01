@@ -10,7 +10,10 @@ use axum::http::{Request, StatusCode};
 use common::multi_org_denial::{
     assert_denial_no_leak, DenialExpectation, DenialResponse, MultiOrgDenialWorld,
 };
-use common::multi_org_denial_world::{await_ask_stream_session, BootedOrg, IndexedDenialRuntime};
+use common::multi_org_denial_world::{
+    ask_token_sequences_after, await_ask_stream_pre_revoke_evidence, await_ask_stream_terminal,
+    BootedOrg, IndexedDenialRuntime,
+};
 use common::{
     admin_database_url, app_database_url, login_tokens, seed_user_with_permissions,
     test_minio_client, test_qdrant_url,
@@ -761,6 +764,28 @@ async fn org_switch_never_reuses_previous_org_cache_scope() {
     let (bridge_token, _) = seed_cross_org_bridge_user(&world).await;
     let app = world.app();
 
+    let (status, orgs_body, _) =
+        json_request(app, "GET", "/api/v1/orgs", Some(&bridge_token), None).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "bridge org inventory must be available: {}",
+        String::from_utf8_lossy(&orgs_body)
+    );
+    let orgs: serde_json::Value =
+        serde_json::from_slice(&orgs_body).expect("bridge org inventory JSON");
+    let org_ids: BTreeSet<String> = orgs["items"]
+        .as_array()
+        .expect("bridge org items")
+        .iter()
+        .map(|item| item["id"].as_str().expect("bridge org id").to_string())
+        .collect();
+    assert_eq!(
+        org_ids,
+        BTreeSet::from([alpha.org_id.to_string(), beta.org_id.to_string()]),
+        "bridge identity must expose exactly its two seeded org memberships: {orgs}"
+    );
+
     let (status, me_body, _) =
         json_request(app, "GET", "/api/v1/auth/me", Some(&bridge_token), None).await;
     assert_eq!(status, StatusCode::OK);
@@ -1106,6 +1131,16 @@ async fn preview_download_job_and_sse_hide_foreign_ids() {
         .await
         .unwrap();
     let job_status = job_events.status();
+    let job_headers: Vec<(String, String)> = job_events
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.to_string(),
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
+            )
+        })
+        .collect();
     let job_body = job_events
         .into_body()
         .collect()
@@ -1114,11 +1149,7 @@ async fn preview_download_job_and_sse_hide_foreign_ids() {
         .to_bytes()
         .to_vec();
     assert_denial_no_leak(
-        &DenialResponse {
-            status: job_status.as_u16(),
-            body: &job_body,
-            headers: vec![],
-        },
+        &denial_response(job_status, &job_body, &job_headers),
         &foreign,
         DenialExpectation::PathIdorNotFound,
     );
@@ -1229,10 +1260,19 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         .expect("stream start");
     assert_eq!(response.status(), StatusCode::OK);
 
-    let session_id =
-        await_ask_stream_session(world.pool(), alpha.org_id, owner_id, indexed_document_id)
-            .await
-            .expect("session row citing worker-indexed document");
+    let pre_revoke = await_ask_stream_pre_revoke_evidence(
+        world.pool(),
+        alpha.org_id,
+        owner_id,
+        indexed_document_id,
+    )
+    .await
+    .expect("open cited session with durable pre-revoke ask.token");
+    assert!(
+        !pre_revoke.token_sequences.is_empty(),
+        "in-flight proof requires durable content before revoke"
+    );
+    let session_id = pre_revoke.session_id;
 
     let org_id = alpha.org_id;
     let owner_ctx = OrgContext::try_new(
@@ -1266,9 +1306,28 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         })
     })
     .await
-    .expect("revoke collection acl through production path");
+    .expect("revoke qa.query role permission through production path");
+    assert!(
+        pre_revoke
+            .token_sequences
+            .iter()
+            .all(|sequence| *sequence <= last_event_id),
+        "pre-revoke tokens must be at or below committed HWM {last_event_id}: {:?}",
+        pre_revoke.token_sequences
+    );
 
-    let tail = app
+    let (original_buf, _, _) = read_sse_until(
+        response,
+        |buf, _, _| buf.contains("stream.closed"),
+        Duration::from_secs(12),
+    )
+    .await;
+    assert!(
+        original_buf.contains("stream.closed"),
+        "original live response must drain to terminal after revoke: {original_buf}"
+    );
+
+    let resumed = app
         .clone()
         .oneshot(
             Request::builder()
@@ -1285,10 +1344,10 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         )
         .await
         .unwrap();
-    let tail_status = tail.status();
-    let tail_buf = if tail_status == StatusCode::OK {
+    let resumed_status = resumed.status();
+    let resumed_buf = if resumed_status == StatusCode::OK {
         read_sse_until(
-            tail,
+            resumed,
             |buf, _, _| {
                 buf.contains("citation_revoked")
                     || buf.contains("principal_denied")
@@ -1300,12 +1359,12 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         .0
     } else {
         assert_eq!(
-            tail_status,
+            resumed_status,
             StatusCode::UNAUTHORIZED,
             "resumed stream must fail closed after ACL revoke"
         );
         String::from_utf8_lossy(
-            &tail
+            &resumed
                 .into_body()
                 .collect()
                 .await
@@ -1314,22 +1373,49 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         )
         .into_owned()
     };
-    assert!(
-        tail_buf.contains("citation_revoked") || tail_buf.contains("principal_denied"),
-        "in-flight ask must close after ACL revoke: {tail_buf}"
-    );
-    assert!(
-        !tail_buf.contains("ask.token"),
-        "ACL revoke must not emit new content sequences: {tail_buf}"
-    );
-    for needle in foreign.all_needles() {
-        assert!(
-            !tail_buf.to_lowercase().contains(&needle.to_lowercase()),
-            "in-flight ask leaked foreign marker {needle}: {tail_buf}"
-        );
-    }
 
-    let _ = response.into_body().collect().await;
+    let terminal = await_ask_stream_terminal(world.pool(), org_id, owner_id, session_id)
+        .await
+        .expect("durable terminal ask stream evidence");
+    assert!(
+        matches!(terminal.status.as_str(), "closed" | "error"),
+        "revoked ask stream must be durable-terminal: {terminal:?}"
+    );
+    assert!(
+        matches!(
+            terminal.close_reason.as_deref(),
+            Some("principal_denied" | "citation_revoked")
+        ),
+        "durable session reason must prove authorization revoke: {terminal:?}"
+    );
+    assert!(
+        terminal
+            .terminal_event_reasons
+            .iter()
+            .any(|reason| matches!(reason.as_str(), "principal_denied" | "citation_revoked")),
+        "durable terminal event must prove authorization revoke: {terminal:?}"
+    );
+
+    let post_revoke_tokens =
+        ask_token_sequences_after(world.pool(), org_id, owner_id, session_id, last_event_id)
+            .await
+            .expect("post-revoke durable token query");
+    assert!(
+        post_revoke_tokens.is_empty(),
+        "ACL revoke emitted durable ask.token sequences after HWM {last_event_id}: {post_revoke_tokens:?}"
+    );
+
+    for (label, body) in [
+        ("original live response", &original_buf),
+        ("same-session resume", &resumed_buf),
+    ] {
+        for needle in foreign.all_needles() {
+            assert!(
+                !body.to_lowercase().contains(&needle.to_lowercase()),
+                "{label} leaked foreign marker {needle}: {body}"
+            );
+        }
+    }
 
     runtime.teardown().await;
     world.cleanup().await.expect("cleanup");
