@@ -183,6 +183,16 @@ fn org_context(org: Uuid, user: Uuid) -> OrgContext {
     OrgContext::try_new(org, user, ["doc.upload"], []).expect("org context")
 }
 
+/// Globally unique org slug for worker integration seeds (one ephemeral DB may host many orgs).
+fn worker_seed_org_slug(org_id: Uuid) -> String {
+    format!("worker-org-{}", org_id.simple())
+}
+
+/// Globally unique user email for worker integration seeds.
+fn worker_seed_user_email(user_id: Uuid) -> String {
+    format!("worker-{}@example.test", user_id.simple())
+}
+
 async fn seed_org_collection_document_version(
     pool: &Pool,
     ctx: &OrgContext,
@@ -195,13 +205,16 @@ async fn seed_org_collection_document_version(
     let collection_id = Uuid::new_v4();
     let original_object_key = original_object_key.to_string();
     let sha256 = sha256.to_string();
+    let org_slug = worker_seed_org_slug(ctx.org_id());
+    let user_email = worker_seed_user_email(ctx.user_id());
     with_org_txn(pool, ctx, {
         let ctx = ctx.clone();
+        let org_slug = org_slug.clone();
+        let user_email = user_email.clone();
         move |txn| {
             Box::pin(async move {
-                orgs::ensure_exists(txn, &ctx, "worker-org", "Worker Org").await?;
-                orgs::ensure_user(txn, &ctx, ctx.user_id(), "worker@example.test", "Worker")
-                    .await?;
+                orgs::ensure_exists(txn, &ctx, &org_slug, "Worker Org").await?;
+                orgs::ensure_user(txn, &ctx, ctx.user_id(), &user_email, "Worker").await?;
                 orgs::ensure_membership(txn, &ctx).await?;
                 txn.execute(
                     "INSERT INTO org_quotas (
@@ -2906,6 +2919,21 @@ fn assert_process_exits(pid: u32, timeout: Duration) {
         std::thread::sleep(Duration::from_millis(25));
     }
     panic!("process {pid} survived sandbox kill");
+}
+
+#[test]
+fn worker_seed_identities_are_unique_per_org_and_user() {
+    let org_a = Uuid::new_v4();
+    let org_b = Uuid::new_v4();
+    let user_a = Uuid::new_v4();
+    let user_b = Uuid::new_v4();
+    assert_ne!(worker_seed_org_slug(org_a), worker_seed_org_slug(org_b));
+    assert_ne!(
+        worker_seed_user_email(user_a),
+        worker_seed_user_email(user_b)
+    );
+    assert!(worker_seed_org_slug(org_a).starts_with("worker-org-"));
+    assert!(worker_seed_user_email(user_a).starts_with("worker-"));
 }
 
 /// Pins worker integration tests to shared strict prerequisite getters.
