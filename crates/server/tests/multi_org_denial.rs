@@ -583,7 +583,7 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
         "/api/v1/ask",
         Some(token),
         Some(json!({
-            "question": format!("Where is {} recorded?", alpha.marker),
+            "question": alpha.marker.clone(),
             "mode": "current",
             "limit": 5
         })),
@@ -1220,7 +1220,7 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
-                            "question": format!("Summarize {}", stream_marker),
+                            "question": stream_marker,
                             "mode": "current",
                             "limit": 5,
                             "collectionIds": [stream_collection]
