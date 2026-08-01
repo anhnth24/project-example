@@ -501,9 +501,9 @@ mod tests {
                 "{table} must have a named BEFORE INSERT OR UPDATE visibility guard"
             );
             assert!(
-                source.contains(&format!(
+                source.contains(
                     "WHERE org_id = NEW.org_id AND id = NEW.collection_id\n    FOR NO KEY UPDATE"
-                )) || source.contains(
+                ) || source.contains(
                     "WHERE org_id = NEW.org_id AND id = NEW.collection_id FOR NO KEY UPDATE"
                 ),
                 "{table} grant trigger must lock parent by org_id + collection_id"
