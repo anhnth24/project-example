@@ -26,9 +26,12 @@ use uuid::Uuid;
 
 const PASSWORD: &str = "correct-password-1";
 /// Bounded wait for worker-indexed chunks to become retrieval-visible under
-/// parallel suite load (mirrors ASK_STREAM_EVIDENCE polling in the world).
+/// parallel suite load. Unlike the world's DB-level ASK_STREAM_EVIDENCE polls,
+/// these probes go through HTTP, so the backoff must stay well under the
+/// expensive-route rate limit (60/min by default) or the poll itself draws
+/// 429s (seen in CI run 30778007036).
 const SEARCH_VISIBILITY_POLL_TIMEOUT: Duration = Duration::from_secs(30);
-const SEARCH_VISIBILITY_POLL_BACKOFF: Duration = Duration::from_millis(20);
+const SEARCH_VISIBILITY_POLL_BACKOFF: Duration = Duration::from_secs(1);
 
 async fn boot_world_if_live() -> Option<MultiOrgDenialWorld> {
     admin_database_url()?;
@@ -632,7 +635,8 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
     // Retrieval visibility can trail the synchronously drained worker jobs
     // when the whole suite runs in parallel, so poll with a bounded backoff.
     // The denial property (no foreign marker) must hold on EVERY response;
-    // only own-marker visibility is allowed to arrive late.
+    // only own-marker visibility is allowed to arrive late. A 429 from the
+    // shared rate limiter carries no tenant data and is retried, not failed.
     let query = alpha.marker.clone();
     let deadline = tokio::time::Instant::now() + SEARCH_VISIBILITY_POLL_TIMEOUT;
     loop {
@@ -644,6 +648,15 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
             Some(json!({ "query": query, "mode": "current", "limit": 10 })),
         )
         .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "search visibility poll stayed rate-limited past {}s",
+                SEARCH_VISIBILITY_POLL_TIMEOUT.as_secs()
+            );
+            tokio::time::sleep(SEARCH_VISIBILITY_POLL_BACKOFF).await;
+            continue;
+        }
         assert_denial_no_leak(
             &denial_response(status, &body, &headers),
             &foreign,
@@ -682,23 +695,38 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
         tokio::time::sleep(SEARCH_VISIBILITY_POLL_BACKOFF).await;
     }
 
-    let (status, body, headers) = json_request(
-        app,
-        "POST",
-        "/api/v1/ask",
-        Some(token),
-        Some(json!({
-            "question": alpha.marker.clone(),
-            "mode": "current",
-            "limit": 5
-        })),
-    )
-    .await;
-    assert_denial_no_leak(
-        &denial_response(status, &body, &headers),
-        &foreign,
-        DenialExpectation::AllowSuccess,
-    );
+    // The ask probe shares rate-limit budget with the search polls above, so
+    // it retries 429s within the same bounded-backoff convention.
+    let ask_deadline = tokio::time::Instant::now() + SEARCH_VISIBILITY_POLL_TIMEOUT;
+    let body = loop {
+        let (status, body, headers) = json_request(
+            app,
+            "POST",
+            "/api/v1/ask",
+            Some(token),
+            Some(json!({
+                "question": alpha.marker.clone(),
+                "mode": "current",
+                "limit": 5
+            })),
+        )
+        .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            assert!(
+                tokio::time::Instant::now() < ask_deadline,
+                "ask probe stayed rate-limited past {}s",
+                SEARCH_VISIBILITY_POLL_TIMEOUT.as_secs()
+            );
+            tokio::time::sleep(SEARCH_VISIBILITY_POLL_BACKOFF).await;
+            continue;
+        }
+        assert_denial_no_leak(
+            &denial_response(status, &body, &headers),
+            &foreign,
+            DenialExpectation::AllowSuccess,
+        );
+        break body;
+    };
     let ask_text = String::from_utf8_lossy(&body);
     assert!(
         ask_text.contains(&alpha.marker),
