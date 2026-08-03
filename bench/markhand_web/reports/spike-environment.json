@@ -75,7 +75,7 @@
     "manifestSha256": "a338779f0c8d0579462ca0e890bd7cbc300967a63f443b627df70d60e7e60ff3"
   },
   "fixtureManifestPath": "tests/fixtures/manifest.json",
-  "implementationSha256": "a675a53776c3a9bf3534f2967e9d631e65c19f6ba3bdd9a9b17a3c9f1d2af47e",
+  "implementationSha256": "d36ae0ec2a322c739389c7e43c1d35e8fd4828e721b085f79bc6e51190d50358",
   "result": {
     "metric": "healthy_spike_services",
     "value": 5,

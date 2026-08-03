@@ -461,8 +461,12 @@ jobs:
           toolchain: 1.88.0
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Resolve 1C report dir
-        run: echo "MARKHAND_1C_OUTPUT_DIR=$RUNNER_TEMP/markhand-1c-integration" >> "$GITHUB_ENV"
+      - name: Resolve 1C report dir and manifest digest
+        run: |
+          set -euo pipefail
+          echo "MARKHAND_1C_OUTPUT_DIR=$RUNNER_TEMP/markhand-1c-integration" >> "$GITHUB_ENV"
+          manifest_sha=$(python3 -c "import hashlib; from pathlib import Path; print(hashlib.sha256(Path('crates/server/tests/fixtures/multi-org-denial.manifest.json').read_bytes()).hexdigest())")
+          echo "PHASE1C_MANIFEST_SHA256=$manifest_sha" >> "$GITHUB_ENV"
       - name: Boot POC Compose stack
         run: |
           cp deploy/.env.example deploy/.env
@@ -470,8 +474,8 @@ jobs:
           deploy/scripts/poc-health.sh
       - name: Run Phase 1C denial suite (deployed POC stack)
         id: phase1c_denial_suite
-        # Capture runner exit code without failing the step yet so render,
-        # upload, and teardown always() steps below still run on test failure.
+        # Capture runner exit code without failing the step yet so teardown,
+        # render, upload, and final enforcement can still run on failure.
         run: |
           set +e
           set -u
@@ -488,65 +492,91 @@ jobs:
           exit_code=$?
           echo "runner_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Render Phase 1C denial report
-        if: always()
-        run: |
-          set -euo pipefail
-          runner_exit="${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}"
-          if [ -z "${runner_exit:-}" ]; then
-            runner_exit=1
-          fi
-          if [ ! -f "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" ]; then
-            echo "manifest-run.json missing; writing stub failure report" >&2
-            printf '%s\n' \
-              '{"schemaVersion":1,"gitShaFull":"${{ github.sha }}","manifestSha256":"0","executableCount":0,"naCount":0,"deferredCount":0,"binariesRun":[],"failures":["manifest-run.json missing"],"leakageCount":0,"findings":[],"redactionScan":{"passed":true,"findings":[]}}' \
-              > "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"
-          fi
-          python3 scripts/render-phase1c-denial-report.py \
-            --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
-            --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
-            --gate 1C-12 \
-            --environment-id poc-compose \
-            --git-ref "${{ github.ref_name }}" \
-            --ci-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --runner-exit-code "$runner_exit" \
-            --gate-1c13-status not_run \
-            || true
-      - name: Enforce 1C-12 deployed gate
-        if: always()
-        run: |
-          set -euo pipefail
-          runner_exit="${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}"
-          if [ -z "${runner_exit:-}" ]; then
-            echo "runner exit code unavailable (boot or earlier step failed)" >&2
-            exit 1
-          fi
-          if [ "$runner_exit" -ne 0 ]; then
-            echo "Phase 1C denial runner exited $runner_exit" >&2
-            exit "$runner_exit"
-          fi
-          test -f "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"
-          python3 scripts/render-phase1c-denial-report.py \
-            --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
-            --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
-            --gate 1C-12 \
-            --environment-id poc-compose \
-            --git-ref "${{ github.ref_name }}" \
-            --ci-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            --runner-exit-code "$runner_exit" \
-            --gate-1c13-status not_run
       - name: Dump POC logs on failure
         if: failure()
         run: docker compose -f deploy/compose.poc.yml logs --tail=200 || true
       - name: Tear down POC stack
+        id: phase1c_teardown
         if: always()
-        run: docker compose -f deploy/compose.poc.yml down -v
+        run: |
+          set +e
+          docker compose -f deploy/compose.poc.yml down -v
+          exit_code=$?
+          echo "teardown_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Render Phase 1C denial report
+        id: phase1c_render
+        if: always()
+        run: |
+          set +e
+          set -u
+          runner_exit="${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}"
+          teardown_exit="${{ steps.phase1c_teardown.outputs.teardown_exit_code }}"
+          if [ -z "${runner_exit:-}" ]; then
+            runner_exit=1
+          fi
+          if [ -z "${teardown_exit:-}" ]; then
+            teardown_exit=1
+          fi
+          missing_reason="manifest-run.json missing"
+          if [ -z "${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}" ]; then
+            missing_reason="runner step did not complete; manifest-run.json unavailable"
+          fi
+          python3 scripts/render-phase1c-denial-report.py \
+            --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
+            --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
+            --expected-git-sha "${{ github.sha }}" \
+            --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
+            --ci-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --runner-exit-code "$runner_exit" \
+            --teardown-exit-code "$teardown_exit" \
+            --missing-input-reason "$missing_reason"
+          render_exit=$?
+          echo "render_exit_code=$render_exit" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: Upload 1C integration report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deployed-1c-integration-${{ github.sha }}
-          path: ${{ runner.temp }}/markhand-1c-integration/**
+          path: |
+            ${{ runner.temp }}/markhand-1c-integration/manifest-run.json
+            ${{ runner.temp }}/markhand-1c-integration/phase1c-denial-report.md
+          if-no-files-found: error
+      - name: Enforce 1C-12 deployed gate
+        if: always()
+        run: |
+          set -euo pipefail
+          fail=0
+          runner_exit="${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}"
+          teardown_exit="${{ steps.phase1c_teardown.outputs.teardown_exit_code }}"
+          render_exit="${{ steps.phase1c_render.outputs.render_exit_code }}"
+          if [ -z "${runner_exit:-}" ]; then
+            echo "runner exit code unavailable (boot or earlier step failed)" >&2
+            fail=1
+          elif [ "$runner_exit" -ne 0 ]; then
+            echo "Phase 1C denial runner exited $runner_exit" >&2
+            fail=1
+          fi
+          if [ -z "${teardown_exit:-}" ]; then
+            echo "teardown exit code unavailable" >&2
+            fail=1
+          elif [ "$teardown_exit" -ne 0 ]; then
+            echo "POC teardown exited $teardown_exit" >&2
+            fail=1
+          fi
+          if [ -z "${render_exit:-}" ]; then
+            echo "render exit code unavailable" >&2
+            fail=1
+          elif [ "$render_exit" -ne 0 ]; then
+            echo "Phase 1C denial report render exited $render_exit" >&2
+            fail=1
+          fi
+          test -f "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" || fail=1
+          test -f "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" || fail=1
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
 
   # OWASP baseline DAST gate (P2-15). Cloned from phase1b-o04-release-gate's
   # boot/teardown shape: same opt-in trigger, same POC stack via
