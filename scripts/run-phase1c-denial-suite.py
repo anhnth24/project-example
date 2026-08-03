@@ -59,6 +59,23 @@ DEFAULT_BINARY_TIMEOUT_SECS = int(
 
 BINARY_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 ALLOWED_STATUSES = frozenset({"executable", "na", "deferred"})
+MANIFEST_ROOT_KEYS = frozenset({"version", "rows"})
+MANIFEST_ROW_KEYS = frozenset(
+    {
+        "id",
+        "binary",
+        "testName",
+        "operationId",
+        "guardInventoryRef",
+        "layer",
+        "status",
+        "coverageState",
+        "evidenceRole",
+        "naCategory",
+        "coverageNote",
+        "deferredTask",
+    }
+)
 RUST_FN_DECL_RE = re.compile(
     r"(?:#\[[^\]]*\]\s*)*(?:pub\s+)?(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)"
 )
@@ -126,29 +143,33 @@ MARKHAND_ENV_ASSIGN_RE = re.compile(
 
 @dataclass(frozen=True)
 class ManifestRow:
-    id: str
-    status: str
-    guard_inventory_ref: str
-    layer: str
-    binary: str | None = None
-    test_name: str | None = None
-    operation_id: str | None = None
-    na_category: str | None = None
-    coverage_state: str | None = None
-    deferred_task: str | None = None
+    id: object
+    status: object
+    guard_inventory_ref: object
+    layer: object
+    binary: object | None = None
+    test_name: object | None = None
+    operation_id: object | None = None
+    na_category: object | None = None
+    coverage_state: object | None = None
+    evidence_role: object | None = None
+    coverage_note: object | None = None
+    deferred_task: object | None = None
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ManifestRow:
         return cls(
-            id=str(raw["id"]),
-            status=str(raw["status"]),
-            guard_inventory_ref=str(raw["guardInventoryRef"]),
-            layer=str(raw.get("layer", "")),
+            id=raw.get("id"),
+            status=raw.get("status"),
+            guard_inventory_ref=raw.get("guardInventoryRef"),
+            layer=raw.get("layer"),
             binary=raw.get("binary"),
             test_name=raw.get("testName"),
             operation_id=raw.get("operationId"),
             na_category=raw.get("naCategory"),
             coverage_state=raw.get("coverageState"),
+            evidence_role=raw.get("evidenceRole"),
+            coverage_note=raw.get("coverageNote"),
             deferred_task=raw.get("deferredTask"),
         )
 
@@ -160,7 +181,11 @@ class DenialManifest:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> DenialManifest:
-        return cls(version=int(raw["version"]), rows=tuple(ManifestRow.from_dict(row) for row in raw["rows"]))
+        manifest, errors = parse_manifest_document(raw)
+        if errors:
+            raise ValueError("; ".join(errors))
+        assert manifest is not None
+        return manifest
 
 
 @dataclass(frozen=True)
@@ -368,9 +393,62 @@ def resolve_tests_root(repo_root: Path) -> Path:
     return (repo_root / SERVER_TESTS_REL).resolve()
 
 
+def _is_strict_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def parse_manifest_document(raw: object) -> tuple[DenialManifest | None, list[str]]:
+    errors: list[str] = []
+    if not isinstance(raw, dict):
+        return None, ["manifest root must be an object"]
+
+    root_keys = set(raw.keys())
+    missing_root = MANIFEST_ROOT_KEYS - root_keys
+    if missing_root:
+        errors.append("manifest root missing keys: " + ", ".join(sorted(missing_root)))
+    unexpected_root = root_keys - MANIFEST_ROOT_KEYS
+    if unexpected_root:
+        errors.append("manifest root has unexpected keys: " + ", ".join(sorted(unexpected_root)))
+
+    version: int | None = None
+    if "version" in raw:
+        version_value = raw["version"]
+        if not _is_strict_int(version_value):
+            errors.append("manifest version must be an integer")
+        else:
+            version = version_value
+
+    parsed_rows: list[ManifestRow] = []
+    if "rows" in raw:
+        rows_raw = raw["rows"]
+        if not isinstance(rows_raw, list):
+            errors.append("manifest rows must be a list")
+        else:
+            for index, row_raw in enumerate(rows_raw):
+                row_label = f"rows[{index}]"
+                if not isinstance(row_raw, dict):
+                    errors.append(f"manifest {row_label} must be an object")
+                    continue
+                unexpected_row = set(row_raw.keys()) - MANIFEST_ROW_KEYS
+                if unexpected_row:
+                    errors.append(
+                        f"manifest {row_label} has unexpected keys: "
+                        + ", ".join(sorted(unexpected_row))
+                    )
+                parsed_rows.append(ManifestRow.from_dict(row_raw))
+
+    if errors or version is None:
+        return None, errors
+    return DenialManifest(version=version, rows=tuple(parsed_rows)), []
+
+
 def load_manifest(path: Path) -> DenialManifest:
     raw = json.loads(path.read_text(encoding="utf-8"))
-    return DenialManifest.from_dict(raw)
+    manifest, errors = parse_manifest_document(raw)
+    if errors:
+        raise ValueError("; ".join(errors))
+    assert manifest is not None
+    return manifest
 
 
 def load_fixture(path: Path) -> DenialFixture:
@@ -382,6 +460,38 @@ def fixture_path_for_manifest(manifest_path: Path) -> Path:
     return manifest_path.with_name("multi-org-denial.fixture.json")
 
 
+def _manifest_row_label(row: ManifestRow, index: int) -> str:
+    if isinstance(row.id, str) and row.id.strip():
+        return row.id
+    return f"rows[{index}]"
+
+
+def _validate_required_string_field(
+    value: object,
+    field_name: str,
+    row_label: str,
+) -> tuple[str | None, list[str]]:
+    if not isinstance(value, str):
+        return None, [f"manifest row {row_label} {field_name} must be a string"]
+    if not value.strip():
+        return None, [f"manifest row {row_label} missing {field_name}"]
+    return value, []
+
+
+def _validate_optional_string_field(
+    value: object,
+    field_name: str,
+    row_label: str,
+) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, str):
+        return [f"manifest row {row_label} {field_name} must be a string or omitted"]
+    if not value.strip():
+        return [f"manifest row {row_label} {field_name} must not be empty when present"]
+    return []
+
+
 def validate_manifest_schema(manifest: DenialManifest) -> list[str]:
     errors: list[str] = []
     if manifest.version < 1:
@@ -390,40 +500,81 @@ def validate_manifest_schema(manifest: DenialManifest) -> list[str]:
         errors.append("manifest rows must not be empty")
 
     seen_ids: set[str] = set()
-    for row in manifest.rows:
-        if row.status not in ALLOWED_STATUSES:
-            errors.append(f"manifest row {row.id} has unknown status {row.status!r}")
+    executable_rows = 0
+    for index, row in enumerate(manifest.rows):
+        row_label = _manifest_row_label(row, index)
+        row_errors: list[str] = []
+
+        id_value, id_errors = _validate_required_string_field(row.id, "id", row_label)
+        row_errors.extend(id_errors)
+        if id_value is not None:
+            row_label = id_value
+
+        status_value, status_errors = _validate_required_string_field(row.status, "status", row_label)
+        row_errors.extend(status_errors)
+
+        _, layer_errors = _validate_required_string_field(row.layer, "layer", row_label)
+        row_errors.extend(layer_errors)
+
+        _, guard_errors = _validate_required_string_field(
+            row.guard_inventory_ref,
+            "guardInventoryRef",
+            row_label,
+        )
+        row_errors.extend(guard_errors)
+
+        row_errors.extend(_validate_optional_string_field(row.binary, "binary", row_label))
+        row_errors.extend(_validate_optional_string_field(row.test_name, "testName", row_label))
+        row_errors.extend(_validate_optional_string_field(row.operation_id, "operationId", row_label))
+        row_errors.extend(_validate_optional_string_field(row.na_category, "naCategory", row_label))
+        row_errors.extend(_validate_optional_string_field(row.coverage_state, "coverageState", row_label))
+        row_errors.extend(_validate_optional_string_field(row.evidence_role, "evidenceRole", row_label))
+        row_errors.extend(_validate_optional_string_field(row.coverage_note, "coverageNote", row_label))
+        row_errors.extend(_validate_optional_string_field(row.deferred_task, "deferredTask", row_label))
+
+        if row_errors:
+            errors.extend(row_errors)
             continue
-        if row.status == "deferred":
-            errors.append(f"manifest row {row.id} has unresolved deferred status")
-        if row.id in seen_ids:
-            errors.append(f"duplicate manifest row id {row.id}")
-        seen_ids.add(row.id)
 
-        if not row.guard_inventory_ref.strip():
-            errors.append(f"manifest row {row.id} missing guardInventoryRef")
+        assert id_value is not None
+        assert status_value is not None
 
-        if row.status == "na":
-            if not row.na_category:
-                errors.append(f"manifest row {row.id} missing naCategory")
+        if status_value not in ALLOWED_STATUSES:
+            errors.append(f"manifest row {row_label} has unknown status {status_value!r}")
+            continue
+        if status_value == "deferred":
+            errors.append(f"manifest row {row_label} has unresolved deferred status")
+        if id_value in seen_ids:
+            errors.append(f"duplicate manifest row id {id_value}")
+        seen_ids.add(id_value)
+
+        if status_value == "na":
+            if not isinstance(row.na_category, str) or not row.na_category.strip():
+                errors.append(f"manifest row {row_label} missing naCategory")
             if row.coverage_state == "deferred":
                 errors.append(
-                    f"manifest row {row.id} cannot combine status=na with coverageState=deferred"
+                    f"manifest row {row_label} cannot combine status=na with coverageState=deferred"
                 )
-        elif row.status == "executable":
+        elif status_value == "executable":
+            executable_rows += 1
             if row.coverage_state == "deferred":
                 errors.append(
-                    f"executable manifest row {row.id} cannot declare coverageState=deferred"
+                    f"executable manifest row {row_label} cannot declare coverageState=deferred"
                 )
+            if not isinstance(row.operation_id, str) or not row.operation_id.strip():
+                errors.append(f"executable manifest row {row_label} missing operationId")
             if not isinstance(row.binary, str) or not row.binary.strip():
-                errors.append(f"executable manifest row {row.id} missing binary")
+                errors.append(f"executable manifest row {row_label} missing binary")
             elif not is_safe_binary_identifier(row.binary):
                 errors.append(
-                    f"executable manifest row {row.id} binary {row.binary!r} is not a safe "
+                    f"executable manifest row {row_label} binary {row.binary!r} is not a safe "
                     "Rust integration target identifier"
                 )
             if not isinstance(row.test_name, str) or not row.test_name.strip():
-                errors.append(f"executable manifest row {row.id} missing testName")
+                errors.append(f"executable manifest row {row_label} missing testName")
+
+    if manifest.rows and executable_rows == 0:
+        errors.append("manifest must declare at least one executable row for denial gate coverage")
     return errors
 
 
@@ -640,9 +791,13 @@ def validate_executable_sources(
 
 
 def count_rows_by_status(manifest: DenialManifest) -> tuple[int, int, int]:
-    executable = sum(1 for row in manifest.rows if row.status == "executable")
-    na = sum(1 for row in manifest.rows if row.status == "na")
-    deferred = sum(1 for row in manifest.rows if row.status == "deferred")
+    executable = sum(
+        1 for row in manifest.rows if isinstance(row.status, str) and row.status == "executable"
+    )
+    na = sum(1 for row in manifest.rows if isinstance(row.status, str) and row.status == "na")
+    deferred = sum(
+        1 for row in manifest.rows if isinstance(row.status, str) and row.status == "deferred"
+    )
     return executable, na, deferred
 
 
@@ -1124,10 +1279,16 @@ def run_suite(
         return finalize(2)
 
     try:
-        manifest = load_manifest(manifest_path)
-    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        raw_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
         report.failures.append(f"manifest load failed: {type(exc).__name__}")
         return finalize(2)
+
+    manifest, parse_errors = parse_manifest_document(raw_manifest)
+    if parse_errors:
+        report.failures.extend(sorted(parse_errors))
+        return finalize(2)
+    assert manifest is not None
 
     report.executable_count, report.na_count, report.deferred_count = count_rows_by_status(manifest)
 
@@ -1452,27 +1613,15 @@ ignored_live_case: ignored
         )
         self.assertEqual(errors, [], "\n".join(errors))
 
-    def test_malformed_executable_non_string_binary_fails_closed_without_cargo(self) -> None:
+    def _assert_schema_failure_without_cargo(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        expected_substring: str,
+        git_sha: str,
+    ) -> None:
         manifest_path = self.root / "manifest.json"
-        manifest_path.write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "rows": [
-                        {
-                            "id": "denial-non-string-binary",
-                            "binary": 123,
-                            "testName": "some_test",
-                            "operationId": "ask",
-                            "guardInventoryRef": "ask",
-                            "layer": "http",
-                            "status": "executable",
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
+        manifest_path.write_text(json.dumps({"version": 1, "rows": rows}), encoding="utf-8")
         executor = FakeExecutor()
         exit_code, report = run_suite(
             manifest_path=manifest_path,
@@ -1481,38 +1630,26 @@ ignored_live_case: ignored
             tests_root=self.tests_root,
             executor=executor,
             env=self.required_env,
-            git_sha_resolver=lambda _root: "k" * 40,
+            git_sha_resolver=lambda _root: git_sha,
         )
         self.assertEqual(exit_code, 2)
         assert report is not None
         self.assertTrue(
-            any("denial-non-string-binary" in failure and "missing binary" in failure for failure in report.failures),
+            any(expected_substring in failure for failure in report.failures),
             report.failures,
         )
         self.assertEqual(executor.calls, [])
         self.assertTrue((self.root / "report.json").is_file())
 
-    def test_malformed_executable_non_string_test_name_fails_closed_without_cargo(self) -> None:
+    def _assert_manifest_document_failure_without_cargo(
+        self,
+        document: dict[str, Any],
+        *,
+        expected_substring: str,
+        git_sha: str,
+    ) -> None:
         manifest_path = self.root / "manifest.json"
-        manifest_path.write_text(
-            json.dumps(
-                {
-                    "version": 1,
-                    "rows": [
-                        {
-                            "id": "denial-non-string-test-name",
-                            "binary": "api_http_contracts",
-                            "testName": ["not", "a", "string"],
-                            "operationId": "ask",
-                            "guardInventoryRef": "ask",
-                            "layer": "http",
-                            "status": "executable",
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
+        manifest_path.write_text(json.dumps(document), encoding="utf-8")
         executor = FakeExecutor()
         exit_code, report = run_suite(
             manifest_path=manifest_path,
@@ -1521,18 +1658,189 @@ ignored_live_case: ignored
             tests_root=self.tests_root,
             executor=executor,
             env=self.required_env,
-            git_sha_resolver=lambda _root: "l" * 40,
+            git_sha_resolver=lambda _root: git_sha,
         )
         self.assertEqual(exit_code, 2)
         assert report is not None
         self.assertTrue(
-            any(
-                "denial-non-string-test-name" in failure and "missing testName" in failure
-                for failure in report.failures
-            ),
+            any(expected_substring in failure for failure in report.failures),
             report.failures,
         )
         self.assertEqual(executor.calls, [])
+        self.assertTrue((self.root / "report.json").is_file())
+
+    def _executable_manifest_row(self, **overrides: object) -> dict[str, object]:
+        row: dict[str, object] = {
+            "id": "denial-sample",
+            "binary": "api_http_contracts",
+            "testName": "live_http_retrieval_refuses_foreign_collection_scope",
+            "operationId": "ask",
+            "guardInventoryRef": "ask",
+            "layer": "http",
+            "status": "executable",
+        }
+        row.update(overrides)
+        return row
+
+    def _na_manifest_row(self, **overrides: object) -> dict[str, object]:
+        row: dict[str, object] = {
+            "id": "na-sample",
+            "guardInventoryRef": "export_route_absent",
+            "layer": "http",
+            "status": "na",
+            "naCategory": "export_route_absent",
+        }
+        row.update(overrides)
+        return row
+
+    def test_malformed_non_string_id_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(id=123)],
+            expected_substring="id must be a string",
+            git_sha="m1" + "0" * 38,
+        )
+
+    def test_malformed_non_string_status_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(status=["executable"])],
+            expected_substring="status must be a string",
+            git_sha="m2" + "0" * 38,
+        )
+
+    def test_malformed_non_string_guard_inventory_ref_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(guardInventoryRef={"bad": True})],
+            expected_substring="guardInventoryRef must be a string",
+            git_sha="m3" + "0" * 38,
+        )
+
+    def test_malformed_non_string_layer_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(layer=404)],
+            expected_substring="layer must be a string",
+            git_sha="m4" + "0" * 38,
+        )
+
+    def test_malformed_non_string_na_category_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._na_manifest_row(naCategory=["export_route_absent"])],
+            expected_substring="naCategory must be a string or omitted",
+            git_sha="m5" + "0" * 38,
+        )
+
+    def test_malformed_non_string_operation_id_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(operationId=999)],
+            expected_substring="operationId must be a string or omitted",
+            git_sha="m6" + "0" * 38,
+        )
+
+    def test_malformed_non_string_coverage_state_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(coverageState={"state": "complete"})],
+            expected_substring="coverageState must be a string or omitted",
+            git_sha="m7" + "0" * 38,
+        )
+
+    def test_all_na_manifest_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [
+                self._na_manifest_row(id="na-export-route-absent"),
+                self._na_manifest_row(
+                    id="na-autocomplete-route-absent",
+                    guardInventoryRef="autocomplete_route_absent",
+                    naCategory="autocomplete_route_absent",
+                ),
+            ],
+            expected_substring="at least one executable row",
+            git_sha="m8" + "0" * 38,
+        )
+
+    def test_string_manifest_version_fails_closed_without_cargo(self) -> None:
+        self._assert_manifest_document_failure_without_cargo(
+            {"version": "1", "rows": [self._executable_manifest_row()]},
+            expected_substring="manifest version must be an integer",
+            git_sha="n1" + "0" * 38,
+        )
+
+    def test_bool_manifest_version_fails_closed_without_cargo(self) -> None:
+        self._assert_manifest_document_failure_without_cargo(
+            {"version": True, "rows": [self._executable_manifest_row()]},
+            expected_substring="manifest version must be an integer",
+            git_sha="n2" + "0" * 38,
+        )
+
+    def test_non_list_manifest_rows_fails_closed_without_cargo(self) -> None:
+        self._assert_manifest_document_failure_without_cargo(
+            {"version": 1, "rows": {"bad": True}},
+            expected_substring="manifest rows must be a list",
+            git_sha="n3" + "0" * 38,
+        )
+
+    def test_non_object_manifest_row_fails_closed_without_cargo(self) -> None:
+        self._assert_manifest_document_failure_without_cargo(
+            {"version": 1, "rows": ["not-an-object"]},
+            expected_substring="manifest rows[0] must be an object",
+            git_sha="n4" + "0" * 38,
+        )
+
+    def test_unexpected_manifest_root_key_fails_closed_without_cargo(self) -> None:
+        self._assert_manifest_document_failure_without_cargo(
+            {"version": 1, "rows": [self._executable_manifest_row()], "attack": True},
+            expected_substring="manifest root has unexpected keys: attack",
+            git_sha="n5" + "0" * 38,
+        )
+
+    def test_unexpected_manifest_row_key_fails_closed_without_cargo(self) -> None:
+        self._assert_manifest_document_failure_without_cargo(
+            {
+                "version": 1,
+                "rows": [self._executable_manifest_row(attackerMetadata="drop-me")],
+            },
+            expected_substring="manifest rows[0] has unexpected keys: attackerMetadata",
+            git_sha="n6" + "0" * 38,
+        )
+
+    def test_malformed_non_string_evidence_role_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(evidenceRole=["primary"])],
+            expected_substring="evidenceRole must be a string or omitted",
+            git_sha="n7" + "0" * 38,
+        )
+
+    def test_malformed_non_string_coverage_note_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(coverageNote={"note": True})],
+            expected_substring="coverageNote must be a string or omitted",
+            git_sha="n8" + "0" * 38,
+        )
+
+    def test_canonical_manifest_document_parses_and_validates(self) -> None:
+        raw = json.loads(DEFAULT_MANIFEST.read_text(encoding="utf-8"))
+        manifest, parse_errors = parse_manifest_document(raw)
+        self.assertEqual(parse_errors, [], "\n".join(parse_errors))
+        assert manifest is not None
+        errors = validate_manifest_schema(manifest)
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_malformed_executable_non_string_binary_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [self._executable_manifest_row(id="denial-non-string-binary", binary=123)],
+            expected_substring="binary must be a string or omitted",
+            git_sha="k" * 40,
+        )
+
+    def test_malformed_executable_non_string_test_name_fails_closed_without_cargo(self) -> None:
+        self._assert_schema_failure_without_cargo(
+            [
+                self._executable_manifest_row(
+                    id="denial-non-string-test-name",
+                    testName=["not", "a", "string"],
+                )
+            ],
+            expected_substring="testName must be a string or omitted",
+            git_sha="l" * 40,
+        )
 
     def test_redact_report_dict_structured_access_token_has_no_json_residual(self) -> None:
         secret = "supersecret123456789"

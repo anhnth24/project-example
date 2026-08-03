@@ -39,8 +39,14 @@ MINIO_NARROW_CREDENTIAL_ENV_KEYS = frozenset(
     {"MARKHAND_MINIO_ACCESS_KEY", "MARKHAND_MINIO_SECRET_KEY"}
 )
 
-EXPLICIT_RUNTIME_SERVICE_PREFIXES = ("api", "worker-")
+RESTORE_GREEN_MINIO_ROOT_USER = "${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}"
+RESTORE_GREEN_MINIO_ROOT_PASSWORD = "${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}"
+
+EXTENSION_BLOCK_RE = re.compile(r"^(x-[a-z0-9_-]+):\s*(?:&([a-z0-9_-]+))?\s*$", re.IGNORECASE)
+ANCHOR_DEF_RE = re.compile(r"(?<![A-Za-z0-9_-])&([a-z0-9_-]+)(?![A-Za-z0-9_-])")
+ANCHOR_ALIAS_RE = re.compile(r"(?<![A-Za-z0-9_-])\*([a-z0-9_-]+)(?![A-Za-z0-9_-])")
 EXPLICIT_RUNTIME_SERVICE_NAMES = frozenset({"migrate", "api"})
+EXPLICIT_RUNTIME_SERVICE_PREFIXES = ("api", "worker-")
 
 CANONICAL_POLICY_VERSION = "2012-10-17"
 POLICY_TOP_LEVEL_KEYS = frozenset({"Version", "Statement"})
@@ -352,8 +358,204 @@ def compose_minio_contract_errors(
     example: dict[str, str],
 ) -> list[str]:
     errors = compose_services_contract_errors(compose_text)
+    errors.extend(compose_extension_and_anchor_minio_errors(compose_text))
+    errors.extend(minio_restore_green_invariant_errors(compose_text))
     errors.extend(poc_runtime_minio_credential_errors(compose_text, example))
     return errors
+
+
+def _compose_prefix_before_services(compose_text: str) -> str:
+    match = re.search(r"^services:\n", compose_text, flags=re.MULTILINE)
+    if match is None:
+        return compose_text
+    return compose_text[: match.start()]
+
+
+def _compose_extension_blocks(prefix: str) -> list[tuple[str, str]]:
+    blocks: list[tuple[str, str]] = []
+    current_name: str | None = None
+    current_lines: list[str] = []
+    for line in prefix.splitlines():
+        extension_match = EXTENSION_BLOCK_RE.match(line)
+        if extension_match:
+            if current_name is not None:
+                blocks.append((current_name, "\n".join(current_lines)))
+            current_name = extension_match.group(1)
+            current_lines = [line]
+            continue
+        if current_name is not None:
+            if not line.strip():
+                current_lines.append(line)
+                continue
+            if line.startswith(" "):
+                current_lines.append(line)
+                continue
+            blocks.append((current_name, "\n".join(current_lines)))
+            current_name = None
+            current_lines = []
+    if current_name is not None:
+        blocks.append((current_name, "\n".join(current_lines)))
+    return blocks
+
+
+def _yaml_anchor_definition_blocks(text: str) -> dict[str, str]:
+    blocks: dict[str, str] = {}
+    lines = text.splitlines()
+    index = 0
+    while index < len(lines):
+        anchor_match = ANCHOR_DEF_RE.search(lines[index])
+        if anchor_match is None:
+            index += 1
+            continue
+        name = anchor_match.group(1)
+        base_indent = len(lines[index]) - len(lines[index].lstrip())
+        body = [lines[index]]
+        index += 1
+        while index < len(lines):
+            if not lines[index].strip():
+                body.append(lines[index])
+                index += 1
+                continue
+            indent = len(lines[index]) - len(lines[index].lstrip())
+            if indent <= base_indent:
+                break
+            body.append(lines[index])
+            index += 1
+        blocks[name] = "\n".join(body)
+    return blocks
+
+
+def compose_extension_and_anchor_minio_errors(compose_text: str) -> list[str]:
+    errors: list[str] = []
+    prefix = _compose_prefix_before_services(compose_text)
+
+    for extension_name, block in _compose_extension_blocks(prefix):
+        if service_has_minio_credential_references(block):
+            errors.append(
+                "deploy/compose.poc.yml extension "
+                f"{extension_name!r} must not define MinIO credential references"
+            )
+
+    forbidden_anchors: set[str] = set()
+    for anchor_name, block in _yaml_anchor_definition_blocks(compose_text).items():
+        if service_has_minio_credential_references(block):
+            forbidden_anchors.add(anchor_name)
+            errors.append(
+                "deploy/compose.poc.yml YAML anchor "
+                f"&{anchor_name} must not define MinIO credential references"
+            )
+
+    for match in ANCHOR_ALIAS_RE.finditer(compose_text):
+        anchor_name = match.group(1)
+        if anchor_name in forbidden_anchors:
+            errors.append(
+                "deploy/compose.poc.yml must not alias MinIO credential anchor "
+                f"*{anchor_name}"
+            )
+    return errors
+
+
+def minio_restore_green_invariant_errors(compose_text: str) -> list[str]:
+    errors: list[str] = []
+    blocks = parse_compose_service_blocks(compose_text)
+    block = blocks.get("minio-restore-green")
+    if block is None:
+        return ["deploy/compose.poc.yml missing minio-restore-green service"]
+    env = parse_service_environment(block)
+    root_user = env.get("MINIO_ROOT_USER")
+    root_password = env.get("MINIO_ROOT_PASSWORD")
+    if root_user != RESTORE_GREEN_MINIO_ROOT_USER:
+        errors.append(
+            "minio-restore-green MINIO_ROOT_USER must map narrow app identity "
+            f"({RESTORE_GREEN_MINIO_ROOT_USER!r}, got {root_user!r})"
+        )
+    if root_password != RESTORE_GREEN_MINIO_ROOT_PASSWORD:
+        errors.append(
+            "minio-restore-green MINIO_ROOT_PASSWORD must map narrow app secret "
+            f"({RESTORE_GREEN_MINIO_ROOT_PASSWORD!r}, got {root_password!r})"
+        )
+    if service_block_references_minio_credential_key(block, "MARKHAND_MINIO_ROOT_USER"):
+        errors.append("minio-restore-green must not use MARKHAND_MINIO_ROOT_USER")
+    if service_block_references_minio_credential_key(block, "MARKHAND_MINIO_ROOT_PASSWORD"):
+        errors.append("minio-restore-green must not use MARKHAND_MINIO_ROOT_PASSWORD")
+    return errors
+
+
+def insert_compose_extension_root_credential_anchor(compose_text: str) -> str:
+    extension = (
+        "x-archive-root-env: &archive-root-env\n"
+        "  MARKHAND_MINIO_ROOT_USER: ${MARKHAND_MINIO_ROOT_USER:-markhand_root}\n"
+        "  MARKHAND_MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_ROOT_PASSWORD:-markhand_root_poc_change_me}\n"
+        "\n"
+    )
+    match = re.search(r"^services:\n", compose_text, flags=re.MULTILINE)
+    if match is None:
+        return compose_text
+    return compose_text[: match.start()] + extension + compose_text[match.start() :]
+
+
+def insert_service_with_environment_anchor(
+    compose_text: str,
+    *,
+    service: str = "archive-replay",
+    anchor: str = "archive-root-env",
+) -> str:
+    insertion = [
+        f"  {service}:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        f"    environment: *{anchor}",
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
+
+
+def insert_service_scoped_root_credential_anchor(compose_text: str) -> str:
+    insertion = [
+        "  credential-donor:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment: &service-root-env",
+        "      MARKHAND_MINIO_ROOT_USER: ${MARKHAND_MINIO_ROOT_USER:-markhand_root}",
+        "      MARKHAND_MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_ROOT_PASSWORD:-markhand_root_poc_change_me}",
+        "  credential-consumer:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment: *service-root-env",
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
+
+
+def insert_service_scoped_root_credential_anchor_with_inline_comment(
+    compose_text: str,
+) -> str:
+    insertion = [
+        "  credential-donor:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment: &service-root-env # inline anchor hides root credential block",
+        "      MARKHAND_MINIO_ROOT_USER: ${MARKHAND_MINIO_ROOT_USER:-markhand_root}",
+        "      MARKHAND_MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_ROOT_PASSWORD:-markhand_root_poc_change_me}",
+        "  credential-consumer:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment: *service-root-env",
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
+
+
+def mutate_minio_restore_green_root_user(compose_text: str, *, replacement: str) -> str:
+    blocks = parse_compose_service_blocks(compose_text)
+    block = blocks.get("minio-restore-green")
+    if block is None:
+        return compose_text
+    env = parse_service_environment(block)
+    old = env.get("MINIO_ROOT_USER")
+    if old is None:
+        return compose_text
+    return replace_in_service_block(compose_text, "minio-restore-green", old, replacement)
 
 
 def service_block_line_span(lines: list[str], service: str) -> tuple[int, int] | None:
@@ -1211,11 +1413,91 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             errors,
         )
 
+    def test_compose_extension_blocks_must_not_carry_minio_credentials(self) -> None:
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        errors = compose_extension_and_anchor_minio_errors(compose_text)
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_adversarial_root_credential_anchor_and_environment_alias_fails_contract(
+        self,
+    ) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_compose_extension_root_credential_anchor(compose_text)
+        mutated = insert_service_with_environment_anchor(mutated)
+        errors = compose_minio_contract_errors(mutated, example)
+        self.assertTrue(
+            any("extension 'x-archive-root-env' must not define MinIO credential references" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("YAML anchor &archive-root-env must not define MinIO credential references" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("must not alias MinIO credential anchor *archive-root-env" in error for error in errors),
+            errors,
+        )
+
+    def test_service_scoped_root_credential_anchor_and_alias_fails_contract(self) -> None:
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_service_scoped_root_credential_anchor(compose_text)
+        errors = compose_extension_and_anchor_minio_errors(mutated)
+        self.assertTrue(
+            any("YAML anchor &service-root-env must not define MinIO credential references" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("must not alias MinIO credential anchor *service-root-env" in error for error in errors),
+            errors,
+        )
+
+    def test_service_scoped_inline_comment_anchor_and_alias_fails_contract(self) -> None:
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_service_scoped_root_credential_anchor_with_inline_comment(compose_text)
+        errors = compose_extension_and_anchor_minio_errors(mutated)
+        self.assertTrue(
+            any("YAML anchor &service-root-env must not define MinIO credential references" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("must not alias MinIO credential anchor *service-root-env" in error for error in errors),
+            errors,
+        )
+
+    def test_minio_restore_green_requires_narrow_app_root_mapping(self) -> None:
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        errors = minio_restore_green_invariant_errors(compose_text)
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_minio_restore_green_primary_root_user_mutation_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = mutate_minio_restore_green_root_user(
+            compose_text,
+            replacement="${MARKHAND_MINIO_ROOT_USER:-markhand_root}",
+        )
+        errors = minio_restore_green_invariant_errors(mutated)
+        self.assertTrue(
+            any("minio-restore-green MINIO_ROOT_USER must map narrow app identity" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("minio-restore-green must not use MARKHAND_MINIO_ROOT_USER" in error for error in errors),
+            errors,
+        )
+        boundary_errors = compose_minio_contract_errors(mutated, example)
+        self.assertTrue(
+            any("minio-restore-green MINIO_ROOT_USER must map narrow app identity" in error for error in boundary_errors),
+            boundary_errors,
+        )
+
     def test_bootstrap_minio_services_remain_outside_runtime_contract(self) -> None:
         compose_text = COMPOSE_POC.read_text(encoding="utf-8")
         runtime = poc_runtime_minio_credential_services(compose_text)
         self.assertNotIn("minio", runtime)
         self.assertNotIn("minio-init", runtime)
+        self.assertNotIn("minio-restore-green", runtime)
 
     def test_all_runtime_services_use_narrow_minio_defaults(self) -> None:
         example = parse_env_example(ENV_EXAMPLE)
