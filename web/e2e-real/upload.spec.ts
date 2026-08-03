@@ -68,12 +68,10 @@ test('uploading a file against the real backend reaches indexed, and its preview
   //    purpose) — the state badge below is the stable signal instead.
   await expect(row).toBeVisible({ timeout: 15_000 });
 
-  // 2. No intermediate-state assertion on purpose: the real worker converts
-  //    this tiny .txt in well under the list's 5s poll tick, so the
-  //    transient "Đang chuyển đổi" badge is never reliably rendered — the
-  //    first CI run against the real stack confirmed exactly the loosening
-  //    this comment's earlier version predicted (run 30806030510). The state
-  //    machine's intermediate steps stay covered by the mock suite
+  // 2. No intermediate-state assertion on purpose: with workers running, this
+  //    tiny .txt often converts in well under the list's 5s poll tick, so the
+  //    transient "Đang chuyển đổi" badge is not reliably observable. The
+  //    state machine's intermediate steps stay covered by the mock suite
   //    (`e2e/document-status-polling.spec.ts`), which can freeze each stage;
   //    the real-deployment signal here is the terminal state below.
 
