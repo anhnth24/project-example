@@ -485,7 +485,7 @@
         "operator": ">=",
         "value": 1.0
       },
-      "command": "python3 scripts/run-phase1c-denial-suite.py --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json",
+      "command": "cargo test -p fileconv-server --test '*' -- --ignored",
       "environmentId": "poc-compose",
       "owner": "security-owner",
       "approver": "security-owner",
@@ -495,7 +495,7 @@
       "blocksIssues": [
         "1C-13"
       ],
-      "notes": "Security/revoke/load gate: token/revoke/cache/Qdrant-partial/reconcile/quota/noisy-neighbor/supply-chain suite, threat review, external pentest, and load SLO validation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-13; depends on 1C-10/11/12). [Unverified] whether a dedicated noisy-neighbor/pentest harness exists beyond prose today. Shares deployed-1c-integration boot/teardown with 1C-12 but remains explicitly not_run in the Markdown artifact until a dedicated suite lands; command/threshold are placeholders. Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment."
+      "notes": "Security/revoke/load gate: token/revoke/cache/Qdrant-partial/reconcile/quota/noisy-neighbor/supply-chain suite, threat review, external pentest, and load SLO validation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-13; depends on 1C-10/11/12). [Unverified] whether a dedicated noisy-neighbor/pentest harness exists beyond prose today. Shares deployed-1c-integration boot/teardown with 1C-12 but remains explicitly not_run in the Markdown artifact until a dedicated suite lands; command and threshold are placeholders — this registry command is not executed by deployed-1c-integration today. Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment."
     }
   ]
 }
