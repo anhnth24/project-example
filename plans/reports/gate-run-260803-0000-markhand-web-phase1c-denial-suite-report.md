@@ -10,8 +10,8 @@
 
 Date: `[YYYY-MM-DD]`
 Commit under test: `[full 40-char git sha]`
-Branch: `[branch name]`
-CI run: `[https://github.com/<org>/<repo>/actions/runs/<id>]` (job:
+Branch/ref: `[branch or tag name — must match trusted --expected-git-ref]`
+CI run: `[https://github.com/anhnth24/project-example/actions/runs/<id>]` (job:
 `deployed-1c-integration`)
 Compose project: `[docker compose project name printed by deploy/scripts/poc-up.sh]`
 Host: `[runner label, e.g. ubuntu-22.04 GitHub-hosted runner, or local host spec]`
@@ -28,25 +28,34 @@ Host: `[runner label, e.g. ubuntu-22.04 GitHub-hosted runner, or local host spec
 
 ## Test summary
 
-| Gate | Status | Executable | N/A | Deferred | Leakage | Redaction |
-|---|---|---:|---:|---:|---:|---|
-| 1C-12 (multi-org denial suite) | `[pass/fail/not_run]` | `[n]` | `[n]` | `[n]` | `[n]` | `[pass/fail]` |
-| 1C-13 (security/revoke/load gate) | `not_run` | — | — | — | — | — |
+| Gate | Status | Executable | N/A | Deferred | Leakage | Redaction | Runner | Teardown |
+|---|---|---:|---:|---:|---:|---|---:|---:|
+| 1C-12 (multi-org denial suite) | `[pass/fail/not_run]` | `[n]` | `[n]` | `[n]` | `[n]` | `[pass/fail]` | `[exit]` | `[exit]` |
+| 1C-13 (security/revoke/load gate) | `not_run` | — | — | — | — | — | — | — |
 
 Command executed (deployed environment, `deployed-1c-integration` job):
 
 ```bash
-MARKHAND_TEST_REQUIRED=1 python3 scripts/run-phase1c-denial-suite.py \
+export MARKHAND_TEST_REQUIRED=1
+export MARKHAND_1C_OUTPUT_DIR="${RUNNER_TEMP:-/tmp}/markhand-1c-integration"
+mkdir -p "$MARKHAND_1C_OUTPUT_DIR"
+PHASE1C_MANIFEST_SHA256="$(python3 -c "import hashlib; from pathlib import Path; print(hashlib.sha256(Path('crates/server/tests/fixtures/multi-org-denial.manifest.json').read_bytes()).hexdigest())")"
+cargo build -p fileconv-cli --no-default-features
+python3 scripts/run-phase1c-denial-suite.py \
   --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json \
   --output "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"
+RUNNER_EXIT=$?
+docker compose -f deploy/compose.poc.yml down -v
+TEARDOWN_EXIT=$?
 python3 scripts/render-phase1c-denial-report.py \
   --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
   --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
-  --gate 1C-12 --environment-id poc-compose \
-  --git-ref "$GITHUB_REF_NAME" \
-  --ci-run-url "$CI_RUN_URL" \
+  --expected-git-sha "$(git rev-parse HEAD)" \
+  --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
+  --expected-git-ref "$(git branch --show-current)" \
+  --ci-run-url "https://github.com/anhnth24/project-example/actions/runs/[id]" \
   --runner-exit-code "$RUNNER_EXIT" \
-  --gate-1c13-status not_run
+  --teardown-exit-code "$TEARDOWN_EXIT"
 ```
 
 CI half (same manifest runner, `rust-integration` job against
@@ -94,6 +103,8 @@ cp deploy/.env.example deploy/.env
 deploy/scripts/poc-up.sh
 deploy/scripts/poc-health.sh
 export MARKHAND_TEST_REQUIRED=1
+export MARKHAND_1C_OUTPUT_DIR="${RUNNER_TEMP:-/tmp}/markhand-1c-integration"
+mkdir -p "$MARKHAND_1C_OUTPUT_DIR"
 export MARKHAND_TEST_DATABASE_URL=postgresql://markhand:markhand_poc_change_me@127.0.0.1:54330/markhand
 export MARKHAND_TEST_APP_DATABASE_URL=postgresql://markhand_app:markhand_app_poc_change_me@127.0.0.1:54330/markhand
 export MARKHAND_TEST_MINIO_ENDPOINT=http://127.0.0.1:9010
@@ -102,16 +113,28 @@ export MARKHAND_TEST_MINIO_SECRET_KEY=markhand_app_poc_change_me
 export MARKHAND_TEST_MINIO_REGION=us-east-1
 export MARKHAND_TEST_QDRANT_URL=http://127.0.0.1:6343
 export MARKHAND_TEST_QDRANT_ADMIN_API_KEY=test-operator-admin-key
+PHASE1C_MANIFEST_SHA256="$(python3 -c "import hashlib; from pathlib import Path; print(hashlib.sha256(Path('crates/server/tests/fixtures/multi-org-denial.manifest.json').read_bytes()).hexdigest())")"
 cargo build -p fileconv-cli --no-default-features
 python3 scripts/run-phase1c-denial-suite.py \
   --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json \
-  --output /tmp/manifest-run.json
+  --output "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"
+RUNNER_EXIT=$?
 docker compose -f deploy/compose.poc.yml down -v
+TEARDOWN_EXIT=$?
+python3 scripts/render-phase1c-denial-report.py \
+  --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
+  --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
+  --expected-git-sha "$(git rev-parse HEAD)" \
+  --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
+  --expected-git-ref "$(git branch --show-current)" \
+  --ci-run-url "https://github.com/anhnth24/project-example/actions/runs/local-repro" \
+  --runner-exit-code "$RUNNER_EXIT" \
+  --teardown-exit-code "$TEARDOWN_EXIT"
 ```
 
 ## Artifact
 
 CI artifact name: `deployed-1c-integration-<sha>` (contains sanitized
-`manifest-run.json` + `phase1c-denial-report.md`, per the
+`manifest-run.json` + `phase1c-denial-report.md` only, per the
 `deployed-1c-integration` job in `.github/workflows/ci.yml`). Raw cargo output is
 not uploaded.

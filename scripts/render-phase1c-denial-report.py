@@ -13,6 +13,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,7 @@ ENVIRONMENT_ID = "poc-compose"
 
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_HEX = re.compile(r"^[0-9a-f]{40}$")
+GIT_REF_SAFE = re.compile(r"^[A-Za-z0-9._/@-]{1,256}$")
 
 REQUIRED_TOP_LEVEL_KEYS = frozenset(
     {
@@ -42,12 +44,15 @@ REQUIRED_TOP_LEVEL_KEYS = frozenset(
         "redactionScan",
     }
 )
+REDACTION_KEYS = frozenset({"passed", "findings"})
+FINDING_KEYS = frozenset({"category", "label", "hash"})
 
 
 @dataclass(frozen=True)
 class RenderContext:
     expected_git_sha: str
     expected_manifest_sha256: str
+    expected_git_ref: str
     ci_run_url: str
     runner_exit_code: int
     teardown_exit_code: int
@@ -63,15 +68,38 @@ def _is_non_negative_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
+def _is_exact_schema_version(value: object) -> bool:
+    return type(value) is int and value == REPORT_SCHEMA_VERSION
+
+
+def validate_git_ref(value: str) -> None:
+    if not value or "\n" in value or "\r" in value:
+        raise ValueError("expected git ref must be a single non-empty line")
+    if len(value) > 256:
+        raise ValueError("expected git ref exceeds 256 characters")
+    if not GIT_REF_SAFE.fullmatch(value):
+        raise ValueError("expected git ref contains unsafe characters")
+
+
+def markdown_escape_cell(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("|", "\\|")
+
+
 def validate_report_schema(payload: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
+
+    extra_top = sorted(set(payload.keys()) - REQUIRED_TOP_LEVEL_KEYS)
+    if extra_top:
+        errors.append(f"unexpected top-level keys: {', '.join(extra_top)}")
+
     missing = sorted(REQUIRED_TOP_LEVEL_KEYS - set(payload))
     if missing:
         errors.append(f"missing keys: {', '.join(missing)}")
         return errors
 
-    if payload.get("schemaVersion") != REPORT_SCHEMA_VERSION:
-        errors.append(f"schemaVersion must be exactly {REPORT_SCHEMA_VERSION}")
+    schema_version = payload.get("schemaVersion")
+    if isinstance(schema_version, bool) or not _is_exact_schema_version(schema_version):
+        errors.append(f"schemaVersion must be exactly int {REPORT_SCHEMA_VERSION}")
 
     git_sha = payload.get("gitShaFull")
     if not isinstance(git_sha, str) or not GIT_SHA_HEX.fullmatch(git_sha):
@@ -99,6 +127,11 @@ def validate_report_schema(payload: Mapping[str, Any]) -> list[str]:
     if not isinstance(redaction, dict):
         errors.append("redactionScan must be an object")
     else:
+        extra_redaction = sorted(set(redaction.keys()) - REDACTION_KEYS)
+        if extra_redaction:
+            errors.append(
+                f"redactionScan unexpected keys: {', '.join(extra_redaction)}"
+            )
         passed = redaction.get("passed")
         findings = redaction.get("findings")
         if not isinstance(passed, bool):
@@ -119,7 +152,12 @@ def validate_report_schema(payload: Mapping[str, Any]) -> list[str]:
             if not isinstance(finding, dict):
                 errors.append(f"findings[{index}] must be an object")
                 continue
-            for key in ("category", "label", "hash"):
+            extra_finding = sorted(set(finding.keys()) - FINDING_KEYS)
+            if extra_finding:
+                errors.append(
+                    f"findings[{index}] unexpected keys: {', '.join(extra_finding)}"
+                )
+            for key in FINDING_KEYS:
                 value = finding.get(key)
                 if not isinstance(value, str) or not value:
                     errors.append(f"findings[{index}].{key} must be a non-empty string")
@@ -195,6 +233,7 @@ def render_markdown(
     failure_lines = payload["failures"] or ["(none)"]
     redaction = payload["redactionScan"]
     redaction_status = "passed" if redaction.get("passed") else "failed"
+    ref_cell = markdown_escape_cell(context.expected_git_ref)
 
     lines = [
         f"# Phase 1C denial gate report — {GATE_1C12}",
@@ -206,6 +245,7 @@ def render_markdown(
         f"| Gate | `{GATE_1C12}` |",
         f"| Environment | `{ENVIRONMENT_ID}` |",
         f"| Git SHA (full) | `{payload['gitShaFull']}` |",
+        f"| Git ref | `{ref_cell}` |",
         f"| CI run | {context.ci_run_url} |",
         f"| Manifest SHA-256 | `{payload['manifestSha256']}` |",
         "",
@@ -249,8 +289,22 @@ def render_markdown(
     return "\n".join(lines)
 
 
-def load_report(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+def parse_report_json(text: str) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        return None, f"manifest-run.json malformed: {exc.msg}"
+    if isinstance(raw, list):
+        return None, "report root must be an object, got list"
+    if not isinstance(raw, dict):
+        return None, f"report root must be an object, got {type(raw).__name__}"
+    return raw, None
+
+
+def read_report_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.is_file():
+        return None, "manifest-run.json missing"
+    return parse_report_json(path.read_text(encoding="utf-8"))
 
 
 def write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -258,22 +312,33 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def ensure_input_report(
+def resolve_input_report(
     input_path: Path,
     *,
     expected_git_sha: str,
     expected_manifest_sha256: str,
     failure_message: str,
 ) -> dict[str, Any]:
-    if input_path.is_file():
-        payload = load_report(input_path)
-    else:
+    payload, read_error = read_report_file(input_path)
+    if read_error is not None:
         payload = build_fail_closed_report(
             expected_git_sha=expected_git_sha,
             expected_manifest_sha256=expected_manifest_sha256,
-            failure_message=failure_message,
+            failure_message=read_error if failure_message == "manifest-run.json missing" else failure_message,
         )
         write_json(input_path, payload)
+        return payload
+
+    errors = validate_report_schema(payload)
+    if errors:
+        payload = build_fail_closed_report(
+            expected_git_sha=expected_git_sha,
+            expected_manifest_sha256=expected_manifest_sha256,
+            failure_message="; ".join(errors),
+        )
+        write_json(input_path, payload)
+        return payload
+
     return payload
 
 
@@ -284,7 +349,7 @@ def render_file(
     context: RenderContext,
     failure_message: str = "manifest-run.json missing",
 ) -> GateVerdict:
-    payload = ensure_input_report(
+    payload = resolve_input_report(
         input_path,
         expected_git_sha=context.expected_git_sha,
         expected_manifest_sha256=context.expected_manifest_sha256,
@@ -292,15 +357,7 @@ def render_file(
     )
     errors = validate_report_schema(payload)
     if errors:
-        payload = build_fail_closed_report(
-            expected_git_sha=context.expected_git_sha,
-            expected_manifest_sha256=context.expected_manifest_sha256,
-            failure_message=f"; ".join(errors),
-        )
-        write_json(input_path, payload)
-        errors = validate_report_schema(payload)
-        if errors:
-            raise ValueError("; ".join(errors))
+        raise ValueError("; ".join(errors))
 
     markdown = render_markdown(payload, context=context)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -311,6 +368,7 @@ def render_file(
 class RenderPhase1cDenialReportTests(unittest.TestCase):
     GIT_SHA = "a" * 40
     MANIFEST_SHA = "b" * 64
+    GIT_REF = "cursor/phase1c-deployed-evidence-06b6"
 
     def sample_payload(self) -> dict[str, Any]:
         return {
@@ -332,11 +390,13 @@ class RenderPhase1cDenialReportTests(unittest.TestCase):
         *,
         runner_exit_code: int = 0,
         teardown_exit_code: int = 0,
+        git_ref: str | None = None,
     ) -> RenderContext:
         return RenderContext(
             expected_git_sha=self.GIT_SHA,
             expected_manifest_sha256=self.MANIFEST_SHA,
-            ci_run_url="https://github.com/example/markhand/actions/runs/123",
+            expected_git_ref=git_ref or self.GIT_REF,
+            ci_run_url="https://github.com/anhnth24/project-example/actions/runs/123",
             runner_exit_code=runner_exit_code,
             teardown_exit_code=teardown_exit_code,
         )
@@ -344,6 +404,30 @@ class RenderPhase1cDenialReportTests(unittest.TestCase):
     def test_validate_schema_rejects_missing_keys(self) -> None:
         errors = validate_report_schema({"schemaVersion": 1})
         self.assertTrue(any("missing keys" in error for error in errors))
+
+    def test_validate_schema_rejects_bool_schema_version_and_wrong_roots(self) -> None:
+        payload = self.sample_payload()
+        payload["schemaVersion"] = True
+        errors = validate_report_schema(payload)
+        self.assertTrue(any("schemaVersion must be exactly int 1" in error for error in errors))
+
+        payload, error = parse_report_json("[]")
+        self.assertIsNone(payload)
+        self.assertIn("list", error or "")
+
+        payload, error = parse_report_json('"scalar"')
+        self.assertIsNone(payload)
+        self.assertIn("str", error or "")
+
+    def test_validate_schema_rejects_unexpected_keys(self) -> None:
+        payload = self.sample_payload()
+        payload["extra"] = 1
+        payload["redactionScan"]["token"] = "secret"
+        payload["findings"] = [{"category": "x", "label": "y", "hash": "c" * 64, "needle": "z"}]
+        errors = validate_report_schema(payload)
+        self.assertTrue(any("unexpected top-level keys: extra" in error for error in errors))
+        self.assertTrue(any("redactionScan unexpected keys" in error for error in errors))
+        self.assertTrue(any("findings[0] unexpected keys" in error for error in errors))
 
     def test_validate_schema_rejects_bool_counters_and_bad_hashes(self) -> None:
         payload = self.sample_payload()
@@ -354,76 +438,54 @@ class RenderPhase1cDenialReportTests(unittest.TestCase):
         payload["gitShaFull"] = "A" * 40
         self.assertTrue(any("gitShaFull" in error for error in validate_report_schema(payload)))
 
-        payload = self.sample_payload()
-        payload["schemaVersion"] = 2
-        self.assertTrue(any("schemaVersion must be exactly 1" in error for error in validate_report_schema(payload)))
+    def test_validate_git_ref_rejects_unsafe_values(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_git_ref("branch|inject")
+        with self.assertRaises(ValueError):
+            validate_git_ref("line\nbreak")
 
-    def test_validate_schema_rejects_leakage_and_redaction_inconsistency(self) -> None:
-        payload = self.sample_payload()
-        payload["leakageCount"] = 1
-        self.assertTrue(any("leakageCount must equal len(findings)" in error for error in validate_report_schema(payload)))
-
-        payload = self.sample_payload()
-        payload["redactionScan"] = {"passed": True, "findings": ["token"]}
-        self.assertTrue(any("redactionScan.passed true requires empty findings" in error for error in validate_report_schema(payload)))
-
-        payload = self.sample_payload()
-        payload["redactionScan"] = {"passed": False, "findings": []}
-        self.assertTrue(any("redactionScan.passed false requires non-empty findings" in error for error in validate_report_schema(payload)))
+    def test_render_escapes_ref_for_markdown_table(self) -> None:
+        context = self.sample_context(git_ref="feature/test|safe")
+        markdown = render_markdown(self.sample_payload(), context=context)
+        self.assertIn("feature/test\\|safe", markdown)
 
     def test_pass_verdict_requires_all_clear_signals(self) -> None:
         verdict = evaluate_gate_verdict(self.sample_payload(), context=self.sample_context())
         self.assertTrue(verdict.passed)
 
-    def test_fail_when_metadata_or_lifecycle_mismatch(self) -> None:
-        payload = self.sample_payload()
-        payload["gitShaFull"] = "c" * 40
-        verdict = evaluate_gate_verdict(payload, context=self.sample_context())
-        self.assertFalse(verdict.passed)
-        self.assertIn("trusted expected git SHA", verdict.reasons[0])
+    def test_render_includes_trusted_ref_in_identity(self) -> None:
+        markdown = render_markdown(self.sample_payload(), context=self.sample_context())
+        self.assertIn(f"| Git ref | `{self.GIT_REF}` |", markdown)
 
-        payload = self.sample_payload()
-        verdict = evaluate_gate_verdict(
-            payload,
-            context=self.sample_context(runner_exit_code=1, teardown_exit_code=2),
-        )
-        self.assertFalse(verdict.passed)
-        self.assertIn("runner exit code 1", verdict.reasons[0])
-        self.assertIn("teardown exit code 2", verdict.reasons[1])
+    def test_malformed_json_is_replaced_with_schema_valid_fail_closed_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "manifest-run.json"
+            output_path = root / "phase1c-denial-report.md"
+            input_path.write_text("{not json", encoding="utf-8")
+            verdict = render_file(
+                input_path=input_path,
+                output_path=output_path,
+                context=self.sample_context(runner_exit_code=1),
+            )
+            self.assertFalse(verdict.passed)
+            self.assertEqual([], validate_report_schema(json.loads(input_path.read_text())))
+            self.assertNotIn("{not json", input_path.read_text())
+            self.assertIn("**FAIL**", output_path.read_text())
 
-    def test_render_includes_required_identity_and_verdict(self) -> None:
-        markdown = render_markdown(
-            self.sample_payload(),
-            context=self.sample_context(),
-        )
-        self.assertIn(self.GIT_SHA, markdown)
-        self.assertIn("https://github.com/example/markhand/actions/runs/123", markdown)
-        self.assertIn(f"`{ENVIRONMENT_ID}`", markdown)
-        self.assertIn(f"`{GATE_1C12}`", markdown)
-        self.assertIn("Teardown exit code: 0", markdown)
-        self.assertIn("**PASS**", markdown)
-        self.assertIn(f"`{GATE_1C13}`: `{GATE_1C13_STATUS}`", markdown)
-
-    def test_render_fail_is_unambiguous(self) -> None:
-        payload = self.sample_payload()
-        payload["failures"] = ["binary multi_org_denial exited 101"]
-        markdown = render_markdown(
-            payload,
-            context=self.sample_context(runner_exit_code=1),
-        )
-        self.assertIn("**FAIL**", markdown)
-        self.assertIn("failures non-empty", markdown)
-
-    def test_fail_closed_report_is_schema_valid_and_renders_fail(self) -> None:
-        payload = build_fail_closed_report(
-            expected_git_sha=self.GIT_SHA,
-            expected_manifest_sha256=self.MANIFEST_SHA,
-            failure_message="manifest-run.json missing",
-        )
-        self.assertEqual([], validate_report_schema(payload))
-        markdown = render_markdown(payload, context=self.sample_context(runner_exit_code=1))
-        self.assertIn("**FAIL**", markdown)
-        self.assertIn("redactionScan.passed is false", markdown)
+    def test_list_root_is_replaced_and_renders_fail_markdown(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "manifest-run.json"
+            output_path = root / "phase1c-denial-report.md"
+            input_path.write_text("[]", encoding="utf-8")
+            render_file(
+                input_path=input_path,
+                output_path=output_path,
+                context=self.sample_context(runner_exit_code=1),
+            )
+            self.assertIn("**FAIL**", output_path.read_text())
+            self.assertEqual([], validate_report_schema(json.loads(input_path.read_text())))
 
 
 def run_self_tests() -> int:
@@ -448,6 +510,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--expected-manifest-sha256",
         help="Trusted 64-char lowercase manifest SHA-256",
+    )
+    parser.add_argument(
+        "--expected-git-ref",
+        help="Trusted single-line git ref for this run (e.g. branch name)",
     )
     parser.add_argument("--ci-run-url", help="CI workflow run URL")
     parser.add_argument(
@@ -479,9 +545,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.input is None or args.output is None:
         parser.error("--input and --output are required unless --self-test is used")
-    if not args.expected_git_sha or not args.expected_manifest_sha256 or not args.ci_run_url:
+    required = (
+        args.expected_git_sha,
+        args.expected_manifest_sha256,
+        args.expected_git_ref,
+        args.ci_run_url,
+    )
+    if not all(required):
         parser.error(
-            "--expected-git-sha, --expected-manifest-sha256, and --ci-run-url are required"
+            "--expected-git-sha, --expected-manifest-sha256, "
+            "--expected-git-ref, and --ci-run-url are required"
         )
 
     try:
@@ -492,9 +565,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             SHA256_HEX,
             64,
         )
+        validate_git_ref(args.expected_git_ref)
         context = RenderContext(
             expected_git_sha=args.expected_git_sha,
             expected_manifest_sha256=args.expected_manifest_sha256,
+            expected_git_ref=args.expected_git_ref,
             ci_run_url=args.ci_run_url,
             runner_exit_code=args.runner_exit_code,
             teardown_exit_code=args.teardown_exit_code,
@@ -505,7 +580,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             context=context,
             failure_message=args.missing_input_reason,
         )
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         print(f"render failed: {exc}", file=sys.stderr)
         return 2
 

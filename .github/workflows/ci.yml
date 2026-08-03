@@ -527,6 +527,7 @@ jobs:
             --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
             --expected-git-sha "${{ github.sha }}" \
             --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
+            --expected-git-ref "${{ github.ref_name }}" \
             --ci-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --runner-exit-code "$runner_exit" \
             --teardown-exit-code "$teardown_exit" \

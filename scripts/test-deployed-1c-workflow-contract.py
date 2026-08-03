@@ -24,8 +24,18 @@ REQUIRED_STEP_ORDER = (
     "Enforce 1C-12 deployed gate",
 )
 
-RENDER_COMMAND_PREFIX = "python3 scripts/render-phase1c-denial-report.py"
-TEARDOWN_COMMAND = "docker compose -f deploy/compose.poc.yml down -v"
+RENDER_ARG_ORDER = (
+    "--input",
+    "--output",
+    "--expected-git-sha",
+    "--expected-manifest-sha256",
+    "--expected-git-ref",
+    "--ci-run-url",
+    "--runner-exit-code",
+    "--teardown-exit-code",
+    "--missing-input-reason",
+)
+
 ARTIFACT_PATHS = (
     "${{ runner.temp }}/markhand-1c-integration/manifest-run.json",
     "${{ runner.temp }}/markhand-1c-integration/phase1c-denial-report.md",
@@ -39,6 +49,7 @@ class WorkflowStep:
     if_condition: str | None
     step_id: str | None
     uses: str | None
+    with_block: str | None = None
 
 
 def extract_job_block(workflow_text: str, job_name: str) -> str:
@@ -51,6 +62,39 @@ def extract_job_block(workflow_text: str, job_name: str) -> str:
     next_job = re.search(r"^  [A-Za-z0-9_-]+:\n", tail, flags=re.MULTILINE)
     end = start + 1 + (next_job.start() if next_job else len(tail))
     return workflow_text[start:end]
+
+
+def strip_shell_comments(script: str) -> str:
+    cleaned: list[str] = []
+    for line in script.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        without_trailing = re.sub(r"(?<!\\)#.*$", "", line).rstrip()
+        if without_trailing:
+            cleaned.append(without_trailing)
+    return "\n".join(cleaned)
+
+
+def parse_job_env(job_block: str) -> dict[str, str]:
+    match = re.search(r"^    env:\n((?:      .+\n)*)", job_block, flags=re.MULTILINE)
+    if match is None:
+        return {}
+    env: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        entry = re.sub(r"\s+#.*$", "", stripped)
+        if not entry or entry.startswith("#"):
+            continue
+        key_match = re.match(r"^([A-Z0-9_]+):\s*(.+)$", entry)
+        if key_match is None:
+            continue
+        key = key_match.group(1)
+        value = key_match.group(2).strip().strip('"').strip("'")
+        env[key] = value
+    return env
 
 
 def parse_job_steps(job_block: str) -> list[WorkflowStep]:
@@ -77,6 +121,10 @@ def parse_job_steps(job_block: str) -> list[WorkflowStep]:
         run_match = re.search(r"^        run: \|\n((?:          .*\n?)*)", chunk, flags=re.MULTILINE)
         if run_match:
             run = "\n".join(line[10:] for line in run_match.group(1).splitlines())
+        with_block = None
+        with_match = re.search(r"^        with:\n((?:          .*\n?)*)", chunk, flags=re.MULTILINE)
+        if with_match:
+            with_block = with_match.group(1)
         steps.append(
             WorkflowStep(
                 name=name,
@@ -84,6 +132,7 @@ def parse_job_steps(job_block: str) -> list[WorkflowStep]:
                 if_condition=if_condition,
                 step_id=step_id,
                 uses=uses,
+                with_block=with_block,
             )
         )
     return steps
@@ -96,12 +145,37 @@ def step_index(steps: Sequence[WorkflowStep], name: str) -> int:
     raise ValueError(f"step {name!r} not found")
 
 
+def args_in_order(text: str, args: Sequence[str]) -> bool:
+    position = 0
+    for arg in args:
+        index = text.find(arg, position)
+        if index < 0:
+            return False
+        position = index + len(arg)
+    return True
+
+
+def parse_upload_paths(with_block: str | None) -> list[str]:
+    if with_block is None:
+        return []
+    path_match = re.search(r"^          path: \|\n((?:            .+\n)*)", with_block, flags=re.MULTILINE)
+    if path_match is None:
+        single = re.search(r"^          path: (.+)\n", with_block, flags=re.MULTILINE)
+        return [single.group(1).strip()] if single else []
+    return [
+        line.strip()
+        for line in path_match.group(1).splitlines()
+        if line.strip()
+    ]
+
+
 def deployed_job_contract_errors(job_block: str) -> list[str]:
     errors: list[str] = []
     steps = parse_job_steps(job_block)
     names = [step.name for step in steps]
+    env = parse_job_env(job_block)
 
-    if 'MARKHAND_TEST_REQUIRED: "1"' not in job_block:
+    if env.get("MARKHAND_TEST_REQUIRED") != "1":
         errors.append('job env must set MARKHAND_TEST_REQUIRED: "1"')
 
     if re.search(r"cargo test -p fileconv-server --test '\*'", job_block):
@@ -129,51 +203,57 @@ def deployed_job_contract_errors(job_block: str) -> list[str]:
         errors.append("Enforce 1C-12 deployed gate must be the final step")
 
     runner = steps[step_index(steps, "Run Phase 1C denial suite (deployed POC stack)")]
+    runner_script = strip_shell_comments(runner.run or "")
     if runner.step_id != "phase1c_denial_suite":
         errors.append("runner step must have id phase1c_denial_suite")
-    if runner.run is None:
+    if not runner_script:
         errors.append("runner step must have a run block")
     else:
         if not re.search(
             r"(?m)^[ \t]*python3 scripts/run-phase1c-denial-suite\.py \\",
-            runner.run,
+            runner_script,
         ):
             errors.append("runner step must invoke canonical denial suite command")
         for token in (
             "--manifest crates/server/tests/fixtures/multi-org-denial.manifest.json",
             '--output "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"',
         ):
-            if token not in runner.run:
+            if token not in runner_script:
                 errors.append(f"runner step must include {token!r}")
-    if "runner_exit_code=" not in (runner.run or ""):
-        errors.append("runner step must capture runner_exit_code output")
+        if "runner_exit_code=" not in runner_script:
+            errors.append("runner step must capture runner_exit_code output")
 
     teardown = steps[step_index(steps, "Tear down POC stack")]
+    teardown_script = strip_shell_comments(teardown.run or "")
     if teardown.if_condition != "always()":
         errors.append("teardown step must use if: always()")
     if teardown.step_id != "phase1c_teardown":
         errors.append("teardown step must have id phase1c_teardown")
-    if teardown.run is None or TEARDOWN_COMMAND not in teardown.run:
+    if "docker compose -f deploy/compose.poc.yml down -v" not in teardown_script:
         errors.append("teardown step must run docker compose down -v")
-    if "teardown_exit_code=" not in (teardown.run or ""):
+    if "teardown_exit_code=" not in teardown_script:
         errors.append("teardown step must capture teardown_exit_code output")
 
     render = steps[step_index(steps, "Render Phase 1C denial report")]
+    render_script = strip_shell_comments(render.run or "")
     if render.if_condition != "always()":
         errors.append("render step must use if: always()")
     if render.step_id != "phase1c_render":
         errors.append("render step must have id phase1c_render")
-    if render.run is None or RENDER_COMMAND_PREFIX not in render.run:
+    if "python3 scripts/render-phase1c-denial-report.py" not in render_script:
         errors.append("render step must invoke render-phase1c-denial-report.py")
-    if "--expected-git-sha" not in (render.run or ""):
-        errors.append("render step must pass trusted expected git sha")
-    if "--expected-manifest-sha256" not in (render.run or ""):
-        errors.append("render step must pass trusted expected manifest digest")
-    if "--teardown-exit-code" not in (render.run or ""):
-        errors.append("render step must pass teardown exit code")
-    if "|| true" in (render.run or ""):
+    if not args_in_order(render_script, RENDER_ARG_ORDER):
+        errors.append(
+            "render step must pass renderer args in order: "
+            + ", ".join(RENDER_ARG_ORDER)
+        )
+    if "--expected-git-ref" not in render_script:
+        errors.append("render step must pass trusted expected git ref")
+    if "${{ github.ref_name }}" not in render_script:
+        errors.append("render step must pass github.ref_name as expected git ref")
+    if "|| true" in render_script:
         errors.append("render step must not hide failures with || true")
-    if "render_exit_code=" not in (render.run or ""):
+    if "render_exit_code=" not in render_script:
         errors.append("render step must capture render_exit_code output")
 
     upload = steps[step_index(steps, "Upload 1C integration report")]
@@ -181,19 +261,20 @@ def deployed_job_contract_errors(job_block: str) -> list[str]:
         errors.append("upload step must use if: always()")
     if upload.uses is None or "actions/upload-artifact" not in upload.uses:
         errors.append("upload step must use actions/upload-artifact")
-    upload_chunk = job_block.split("- name: Upload 1C integration report", 1)[-1]
-    if "if-no-files-found: error" not in upload_chunk:
+    upload_with = upload.with_block or ""
+    if "if-no-files-found: error" not in upload_with:
         errors.append("upload step must set if-no-files-found: error")
-    for artifact_path in ARTIFACT_PATHS:
-        if artifact_path not in upload_chunk:
-            errors.append(f"upload step must include exact artifact path {artifact_path}")
-    if "markhand-1c-integration/**" in upload_chunk:
-        errors.append("upload step must not use wildcard artifact glob")
+    upload_paths = parse_upload_paths(upload_with)
+    if upload_paths != list(ARTIFACT_PATHS):
+        errors.append(
+            "upload step must upload exactly the two canonical artifact paths"
+        )
 
     enforce = steps[step_index(steps, "Enforce 1C-12 deployed gate")]
+    enforce_script = strip_shell_comments(enforce.run or "")
     if enforce.if_condition != "always()":
         errors.append("enforce step must use if: always()")
-    if enforce.run is None:
+    if not enforce_script:
         errors.append("enforce step must have a run block")
     else:
         for token in (
@@ -203,7 +284,7 @@ def deployed_job_contract_errors(job_block: str) -> list[str]:
             "manifest-run.json",
             "phase1c-denial-report.md",
         ):
-            if token not in enforce.run:
+            if token not in enforce_script:
                 errors.append(f"enforce step must check {token}")
 
     render_index = step_index(steps, "Render Phase 1C denial report")
@@ -224,6 +305,43 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
         errors = deployed_job_contract_errors(self.job_block)
         self.assertEqual(errors, [], "\n".join(errors))
 
+    def test_commenting_required_env_fails_contract(self) -> None:
+        mutated = self.job_block.replace(
+            'MARKHAND_TEST_REQUIRED: "1"',
+            '# MARKHAND_TEST_REQUIRED: "1"',
+            1,
+        )
+        errors = deployed_job_contract_errors(mutated)
+        self.assertTrue(
+            any('job env must set MARKHAND_TEST_REQUIRED: "1"' in error for error in errors),
+            errors,
+        )
+
+    def test_removing_runner_exit_code_arg_fails_contract(self) -> None:
+        mutated = self.job_block.replace(
+            '            --runner-exit-code "$runner_exit" \\\n',
+            "",
+            1,
+        )
+        errors = deployed_job_contract_errors(mutated)
+        self.assertTrue(
+            any("render step must pass renderer args in order" in error for error in errors),
+            errors,
+        )
+
+    def test_third_artifact_path_fails_contract(self) -> None:
+        mutated = self.job_block.replace(
+            "            ${{ runner.temp }}/markhand-1c-integration/phase1c-denial-report.md",
+            "            ${{ runner.temp }}/markhand-1c-integration/phase1c-denial-report.md\n"
+            "            ${{ runner.temp }}/markhand-1c-integration/extra.log",
+            1,
+        )
+        errors = deployed_job_contract_errors(mutated)
+        self.assertTrue(
+            any("exactly the two canonical artifact paths" in error for error in errors),
+            errors,
+        )
+
     def test_comment_mention_cannot_satisfy_runner_contract(self) -> None:
         mutated = self.job_block.replace(
             "python3 scripts/run-phase1c-denial-suite.py",
@@ -235,16 +353,6 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             any("canonical denial suite command" in error for error in errors),
             errors,
         )
-
-    def test_unrelated_upload_glob_fails_contract(self) -> None:
-        mutated = self.job_block.replace(
-            "path: |\n            ${{ runner.temp }}/markhand-1c-integration/manifest-run.json\n"
-            "            ${{ runner.temp }}/markhand-1c-integration/phase1c-denial-report.md",
-            "path: ${{ runner.temp }}/markhand-1c-integration/**",
-            1,
-        )
-        errors = deployed_job_contract_errors(mutated)
-        self.assertTrue(any("wildcard artifact glob" in error for error in errors))
 
 
 def run_self_tests() -> int:
