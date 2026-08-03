@@ -1,19 +1,21 @@
 # Phase 1C denial-suite gate run — TEMPLATE
 
-> **This file is a skeleton, not a real run.** No `deployed-1c-integration` job
-> has produced a report yet as of 2026-08-03 (see
-> `plans/markhand-web/backlog/phase-1c/issues/README.md`, issues 1C-12/1C-13:
-> "gate có tên KHÔNG tồn tại" before this infrastructure landed). Every bracketed
-> field below is a placeholder — do not fill in numbers from memory or
-> inference; copy this file to a new `gate-run-<YYMMDD-HHMM>-markhand-web-
-> phase1c-denial-suite-report.md` and fill it in only from an actual CI run or
-> local reproduction of the commands below. If a field cannot be verified from
-> a real run, leave it as `[unverified]` rather than guessing.
+> **Reusable skeleton for future runs.** The first live deployed run is recorded at
+> [`gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.md`](gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.md)
+> (JSON:
+> [`gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.json`](gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.json))
+> from CI run
+> [30849375921](https://github.com/anhnth24/project-example/actions/runs/30849375921)
+> / job
+> [91805590040](https://github.com/anhnth24/project-example/actions/runs/30849375921/job/91805590040)
+> — deployed half **PASS**, CI half still tracked separately. Copy this file to a new
+> `gate-run-<YYMMDD-HHMM>-markhand-web-phase1c-denial-suite-report.md` and fill bracketed
+> fields only from an actual CI run or local reproduction. Do not fabricate counts.
 
 Date: `[YYYY-MM-DD]`
 Commit under test: `[full 40-char git sha]`
-Branch: `[branch name]`
-CI run: `[https://github.com/<org>/<repo>/actions/runs/<id>]` (job:
+Branch/ref: `[branch or tag name — must match trusted --expected-git-ref]`
+CI run: `[https://github.com/anhnth24/project-example/actions/runs/<id>]` (job:
 `deployed-1c-integration`)
 Compose project: `[docker compose project name printed by deploy/scripts/poc-up.sh]`
 Host: `[runner label, e.g. ubuntu-22.04 GitHub-hosted runner, or local host spec]`
@@ -22,7 +24,7 @@ Host: `[runner label, e.g. ubuntu-22.04 GitHub-hosted runner, or local host spec
 
 | Field | Value |
 |---|---|
-| Gate id(s) | `1C-12`, `1C-13` (`bench/markhand_web/gates.yaml`) |
+| Gate id(s) | `1C-12` (`bench/markhand_web/gates.yaml`); `1C-13` explicitly `not_run` in artifact |
 | externalGate | `G0-SEC` |
 | failureDisposition | `block-phase-1c` |
 | environmentId | `poc-compose` |
@@ -30,39 +32,66 @@ Host: `[runner label, e.g. ubuntu-22.04 GitHub-hosted runner, or local host spec
 
 ## Test summary
 
-| Gate | Status | Tests run | Passed | Failed | Ignored/skipped |
-|---|---|---:|---:|---:|---:|
-| 1C-12 (multi-org denial suite) | `[pass/fail/not_run]` | `[n]` | `[n]` | `[n]` | `[n]` |
-| 1C-13 (security/revoke/load gate) | `[pass/fail/not_run]` | `[n]` | `[n]` | `[n]` | `[n]` |
+| Gate | Status | Executable | N/A | Deferred | Leakage | Redaction | Runner | Teardown |
+|---|---|---:|---:|---:|---:|---|---:|---:|
+| 1C-12 (multi-org denial suite) | `[pass/fail/not_run]` | `[n]` | `[n]` | `[n]` | `[n]` | `[pass/fail]` | `[exit]` | `[exit]` |
+| 1C-13 (security/revoke/load gate) | `not_run` | — | — | — | — | — | — | — |
 
 Command executed (deployed environment, `deployed-1c-integration` job):
 
 ```bash
-cargo test -p fileconv-server --test '*' --no-fail-fast -- --ignored
+export MARKHAND_TEST_REQUIRED=1
+export MARKHAND_1C_OUTPUT_DIR="${RUNNER_TEMP:-/tmp}/markhand-1c-integration"
+mkdir -p "$MARKHAND_1C_OUTPUT_DIR"
+PHASE1C_MANIFEST_SHA256="$(python3 -c "import hashlib; from pathlib import Path; print(hashlib.sha256(Path('crates/server/tests/fixtures/multi-org-denial.manifest.json').read_bytes()).hexdigest())")"
+cargo build -p fileconv-cli --no-default-features
+python3 scripts/run-phase1c-denial-suite.py \
+  --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json \
+  --output "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"
+RUNNER_EXIT=$?
+docker compose -f deploy/compose.poc.yml down -v
+TEARDOWN_EXIT=$?
+python3 scripts/render-phase1c-denial-report.py \
+  --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
+  --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
+  --expected-git-sha "$(git rev-parse HEAD)" \
+  --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
+  --expected-git-ref "$(git branch --show-current)" \
+  --ci-run-url "https://github.com/anhnth24/project-example/actions/runs/[id]" \
+  --runner-exit-code "$RUNNER_EXIT" \
+  --teardown-exit-code "$TEARDOWN_EXIT"
 ```
 
-CI half (same tests, `rust-integration` job against `deploy/dev/compose.yml`)
-ran at commit `[sha]`, run `[url]` — record separately if it diverges from the
-deployed-environment result above; the 1C-12/1C-13 acceptance criteria require
-**both** CI and deployed to be green, not either alone.
+CI half (same manifest runner, `rust-integration` job against
+`deploy/dev/compose.yml`) ran at commit `[sha]`, run `[url]` — record separately
+if it diverges from the deployed-environment result above; the 1C-12/1C-13
+acceptance criteria require **both** CI and deployed to be green, not either
+alone.
+
+## Export surface (1C-12 acceptance item)
+
+| Item | Status | Evidence |
+|---|---|---|
+| `export.run` / export HTTP operation | N/A-until-surface-exists | `na-export-route-absent` in `multi-org-denial.manifest.json`; `multi-org-denial.na-evidence.json` documents OpenAPI/guard-inventory absence |
+
+Any future export operation must enter guard inventory and the denial manifest
+before release.
 
 ## Per-test results
 
-> Link each row to the actual test file/function once the connected suite
-> (plan A1-A2 / B1-B7 in the phase-1c backlog) lands. Until then this table is
-> empty by design — do not list the ~10 scattered `#[ignore]` cross-org checks
-> here as if they were the "suite gắn kết" the 1C-12 issue calls for; that
-> conflation was the exact gap the assessment flagged.
+> Copy executable rows from `manifest-run.json` (`binariesRun`, `failures`) and
+> the connected suite tests under `crates/server/tests/multi_org_denial.rs` once
+> a live run succeeds. Do not fabricate counts.
 
-| Test | File | Result | Notes |
-|---|---|---|---|
-| `[test_name]` | `crates/server/tests/[file].rs` | `[pass/fail]` | `[note]` |
+| Test / binary | Result | Notes |
+|---|---|---|
+| `[binary or test]` | `[pass/fail]` | `[note]` |
 
 ## Performance / load metrics (1C-13 only)
 
 | Metric | Measured | Threshold | Source |
 |---|---:|---:|---|
-| `[metric name]` | `[value]` | `[operator] [value]` | `[script/report path]` |
+| — | — | — | Gate `1C-13` remains `not_run` in this job |
 
 ## Known issues / exceptions
 
@@ -77,12 +106,51 @@ deployed-environment result above; the 1C-12/1C-13 acceptance criteria require
 cp deploy/.env.example deploy/.env
 deploy/scripts/poc-up.sh
 deploy/scripts/poc-health.sh
-cargo test -p fileconv-server --test '*' --no-fail-fast -- --ignored
+export MARKHAND_TEST_REQUIRED=1
+export MARKHAND_1C_OUTPUT_DIR="${RUNNER_TEMP:-/tmp}/markhand-1c-integration"
+mkdir -p "$MARKHAND_1C_OUTPUT_DIR"
+export MARKHAND_TEST_DATABASE_URL=postgresql://markhand:markhand_poc_change_me@127.0.0.1:54330/markhand
+export MARKHAND_TEST_APP_DATABASE_URL=postgresql://markhand_app:markhand_app_poc_change_me@127.0.0.1:54330/markhand
+export MARKHAND_TEST_MINIO_ENDPOINT=http://127.0.0.1:9010
+export MARKHAND_TEST_MINIO_ACCESS_KEY=markhand_root
+export MARKHAND_TEST_MINIO_SECRET_KEY=markhand_root_poc_change_me
+export MARKHAND_TEST_MINIO_REGION=us-east-1
+export MARKHAND_TEST_QDRANT_URL=http://127.0.0.1:6343
+export MARKHAND_TEST_QDRANT_ADMIN_API_KEY=test-operator-admin-key
+PHASE1C_MANIFEST_SHA256="$(python3 -c "import hashlib; from pathlib import Path; print(hashlib.sha256(Path('crates/server/tests/fixtures/multi-org-denial.manifest.json').read_bytes()).hexdigest())")"
+cargo build -p fileconv-cli --no-default-features
+python3 scripts/run-phase1c-denial-suite.py \
+  --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json \
+  --output "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"
+RUNNER_EXIT=$?
 docker compose -f deploy/compose.poc.yml down -v
+TEARDOWN_EXIT=$?
+python3 scripts/render-phase1c-denial-report.py \
+  --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
+  --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
+  --expected-git-sha "$(git rev-parse HEAD)" \
+  --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
+  --expected-git-ref "$(git branch --show-current)" \
+  --ci-run-url "https://github.com/anhnth24/project-example/actions/runs/local-repro" \
+  --runner-exit-code "$RUNNER_EXIT" \
+  --teardown-exit-code "$TEARDOWN_EXIT"
 ```
+
+## MinIO test fixture boundary (not IAM least-privilege evidence)
+
+Integration tests create/delete ephemeral `markhand-it-*` buckets via
+`test_minio_client()`. The deployed job therefore sets
+`MARKHAND_TEST_MINIO_ACCESS_KEY` / `MARKHAND_TEST_MINIO_SECRET_KEY` to the POC
+**root fixture** credentials from `deploy/.env.example`
+(`MARKHAND_MINIO_ROOT_USER` / `MARKHAND_MINIO_ROOT_PASSWORD`). Application and
+worker containers in `deploy/compose.poc.yml` continue to use the narrow
+`markhand_app` key scoped to `MARKHAND_MINIO_BUCKET` only. Root in the test
+harness is **bootstrap/ephemeral-bucket lifecycle only** — it does not prove
+MinIO IAM least-privilege enforcement for runtime services.
 
 ## Artifact
 
-CI artifact name: `deployed-1c-integration-<sha>` (contains
-`1c-integration-report.md` + raw `test-output.log`, per the
-`deployed-1c-integration` job in `.github/workflows/ci.yml`).
+CI artifact name: `deployed-1c-integration-<sha>` (contains sanitized
+`manifest-run.json` + `phase1c-denial-report.md` only, per the
+`deployed-1c-integration` job in `.github/workflows/ci.yml`). Raw cargo output is
+not uploaded.

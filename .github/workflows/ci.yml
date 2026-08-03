@@ -414,17 +414,14 @@ jobs:
   # gate; bench/markhand_web/gates.yaml, failureDisposition block-phase-1c).
   # Cloned from phase1b-o04-release-gate's boot/teardown shape: same opt-in
   # trigger, same POC stack via deploy/scripts/poc-up.sh + poc-health.sh. Runs
-  # the fileconv-server DB-gated #[ignore] tests against the deployed POC
-  # stack (deploy/compose.poc.yml ports/credentials, not deploy/dev/compose.yml's
-  # used by rust-integration), so a pass here is evidence for the "deployed
-  # environment" half of 1C-12/1C-13's "CI AND deployed green" acceptance
-  # criteria — rust-integration already covers the CI half. No branch
-  # protection required check yet — informational until the connected
-  # multi-org suite (phase-1c backlog plan A1-A2/B1-B7) lands.
-  # `--test '*' -- --ignored` matches every test binary under
-  # crates/server/tests/*.rs (verified: cargo 1.88.0 resolves the glob against
-  # all integration-test targets), so it automatically picks up new test
-  # files as they're added with no workflow change required.
+  # the canonical manifest runner (scripts/run-phase1c-denial-suite.py) against
+  # the deployed POC stack (deploy/compose.poc.yml ports/credentials, not
+  # deploy/dev/compose.yml's used by rust-integration), so a pass here is
+  # evidence for the "deployed environment" half of 1C-12's "CI AND deployed
+  # green" acceptance criteria — rust-integration already covers the CI half.
+  # 1C-13 remains explicitly not_run in the Markdown artifact; this job does
+  # not measure load/revoke/fairness thresholds. No branch protection required
+  # check yet — informational until branch protection adopts this gate.
   deployed-1c-integration:
     needs: changes-and-static
     if: >-
@@ -439,13 +436,19 @@ jobs:
       MARKHAND_TEST_DATABASE_URL: postgresql://markhand:markhand_poc_change_me@127.0.0.1:54330/markhand
       MARKHAND_TEST_APP_DATABASE_URL: postgresql://markhand_app:markhand_app_poc_change_me@127.0.0.1:54330/markhand
       MARKHAND_TEST_MINIO_ENDPOINT: http://127.0.0.1:9010
-      MARKHAND_TEST_MINIO_ACCESS_KEY: markhand_app
-      MARKHAND_TEST_MINIO_SECRET_KEY: markhand_app_poc_change_me
+      # Ephemeral integration buckets (markhand-it-*) need MinIO admin; narrow
+      # markhand_app policy is scoped to MARKHAND_MINIO_BUCKET only (see
+      # deploy/poc/minio-init.sh). Root fixture creds are bootstrap-only in
+      # deploy/.env.example — not application/worker container identity.
+      MARKHAND_TEST_MINIO_ACCESS_KEY: markhand_root
+      MARKHAND_TEST_MINIO_SECRET_KEY: markhand_root_poc_change_me
       MARKHAND_TEST_MINIO_REGION: us-east-1
       MARKHAND_TEST_QDRANT_URL: http://127.0.0.1:6343
       # POC Qdrant has auth disabled like dev's; value only satisfies admin
       # client construction (see tests/common/worker_pipeline.rs).
       MARKHAND_TEST_QDRANT_ADMIN_API_KEY: test-operator-admin-key
+      # Forbid prerequisite soft-skips — missing DB/app/MinIO must fail closed.
+      MARKHAND_TEST_REQUIRED: "1"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Install native dependencies
@@ -462,54 +465,125 @@ jobs:
           toolchain: 1.88.0
       - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - name: Resolve 1C report dir
-        run: echo "MARKHAND_1C_OUTPUT_DIR=$RUNNER_TEMP/markhand-1c-integration" >> "$GITHUB_ENV"
+      - name: Resolve 1C report dir and manifest digest
+        run: |
+          set -euo pipefail
+          echo "MARKHAND_1C_OUTPUT_DIR=$RUNNER_TEMP/markhand-1c-integration" >> "$GITHUB_ENV"
+          manifest_sha=$(python3 -c "import hashlib; from pathlib import Path; print(hashlib.sha256(Path('crates/server/tests/fixtures/multi-org-denial.manifest.json').read_bytes()).hexdigest())")
+          echo "PHASE1C_MANIFEST_SHA256=$manifest_sha" >> "$GITHUB_ENV"
       - name: Boot POC Compose stack
         run: |
           cp deploy/.env.example deploy/.env
           deploy/scripts/poc-up.sh
           deploy/scripts/poc-health.sh
-      - name: Run Phase 1C denial-suite tests (fileconv-server, deployed POC stack)
-        id: integration_tests
-        # Conservative filter (no dedicated multi-org test binary/name exists
-        # yet — see gates.yaml 1C-12 notes): every ignored test in every
-        # fileconv-server test binary. Capture exit code instead of
-        # propagating it immediately so the report/upload/teardown steps
-        # below always run even on failure.
+      - name: Run Phase 1C denial suite (deployed POC stack)
+        id: phase1c_denial_suite
+        # Capture runner exit code without failing the step yet so teardown,
+        # render, upload, and final enforcement can still run on failure.
         run: |
           set +e
+          set -u
           mkdir -p "$MARKHAND_1C_OUTPUT_DIR"
-          cargo test -p fileconv-server --test '*' --no-fail-fast -- --ignored \
-            2>&1 | tee "$MARKHAND_1C_OUTPUT_DIR/test-output.log"
+          cargo build -p fileconv-cli --no-default-features
+          build_code=$?
+          if [ "$build_code" -ne 0 ]; then
+            echo "runner_exit_code=$build_code" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 scripts/run-phase1c-denial-suite.py \
+            --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json \
+            --output "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json"
           exit_code=$?
-          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
-          exit "$exit_code"
-      - name: Write 1C integration report
-        if: always()
-        run: |
-          {
-            echo "# Deployed 1C integration run — ${{ github.sha }}"
-            echo
-            echo "Job: deployed-1c-integration | Gates: 1C-12, 1C-13 (bench/markhand_web/gates.yaml)"
-            echo "Exit code: ${{ steps.integration_tests.outputs.exit_code }}"
-            echo
-            echo "## Test summary"
-            echo
-            grep -E "^test result:|^running [0-9]+ tests?" "$MARKHAND_1C_OUTPUT_DIR/test-output.log" \
-              || echo "(no test result lines captured)"
-          } > "$MARKHAND_1C_OUTPUT_DIR/1c-integration-report.md"
+          echo "runner_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: Dump POC logs on failure
         if: failure()
         run: docker compose -f deploy/compose.poc.yml logs --tail=200 || true
       - name: Tear down POC stack
+        id: phase1c_teardown
         if: always()
-        run: docker compose -f deploy/compose.poc.yml down -v
+        run: |
+          set +e
+          docker compose -f deploy/compose.poc.yml down -v
+          exit_code=$?
+          echo "teardown_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Render Phase 1C denial report
+        id: phase1c_render
+        if: always()
+        env:
+          PHASE1C_SOURCE_REF: ${{ github.head_ref || github.ref_name }}
+        run: |
+          set +e
+          set -u
+          runner_exit="${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}"
+          teardown_exit="${{ steps.phase1c_teardown.outputs.teardown_exit_code }}"
+          if [ -z "${runner_exit:-}" ]; then
+            runner_exit=1
+          fi
+          if [ -z "${teardown_exit:-}" ]; then
+            teardown_exit=1
+          fi
+          input_failure_category="runner output missing"
+          if [ -z "${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}" ]; then
+            input_failure_category="runner step incomplete"
+          fi
+          python3 scripts/render-phase1c-denial-report.py \
+            --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
+            --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
+            --expected-git-sha "${{ github.sha }}" \
+            --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
+            --expected-git-ref "$PHASE1C_SOURCE_REF" \
+            --ci-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --runner-exit-code "$runner_exit" \
+            --teardown-exit-code "$teardown_exit" \
+            --input-failure-category "$input_failure_category"
+          render_exit=$?
+          echo "render_exit_code=$render_exit" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: Upload 1C integration report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deployed-1c-integration-${{ github.sha }}
-          path: ${{ runner.temp }}/markhand-1c-integration/**
+          path: |
+            ${{ runner.temp }}/markhand-1c-integration/manifest-run.json
+            ${{ runner.temp }}/markhand-1c-integration/phase1c-denial-report.md
+          if-no-files-found: error
+      - name: Enforce 1C-12 deployed gate
+        if: always()
+        run: |
+          set -euo pipefail
+          fail=0
+          runner_exit="${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}"
+          teardown_exit="${{ steps.phase1c_teardown.outputs.teardown_exit_code }}"
+          render_exit="${{ steps.phase1c_render.outputs.render_exit_code }}"
+          if [ -z "${runner_exit:-}" ]; then
+            echo "runner exit code unavailable (boot or earlier step failed)" >&2
+            fail=1
+          elif [ "$runner_exit" -ne 0 ]; then
+            echo "Phase 1C denial runner exited $runner_exit" >&2
+            fail=1
+          fi
+          if [ -z "${teardown_exit:-}" ]; then
+            echo "teardown exit code unavailable" >&2
+            fail=1
+          elif [ "$teardown_exit" -ne 0 ]; then
+            echo "POC teardown exited $teardown_exit" >&2
+            fail=1
+          fi
+          if [ -z "${render_exit:-}" ]; then
+            echo "render exit code unavailable" >&2
+            fail=1
+          elif [ "$render_exit" -ne 0 ]; then
+            echo "Phase 1C denial report render exited $render_exit" >&2
+            fail=1
+          fi
+          test -f "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" || fail=1
+          test -f "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" || fail=1
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
 
   # OWASP baseline DAST gate (P2-15). Cloned from phase1b-o04-release-gate's
   # boot/teardown shape: same opt-in trigger, same POC stack via

@@ -7,6 +7,7 @@
 
 pub mod acl_fixture;
 pub mod fixtures;
+pub mod fts_visibility_diagnostic;
 pub mod multi_org_denial;
 pub mod multi_org_denial_world;
 pub mod multi_org_fixture;

@@ -32,6 +32,10 @@ check-toolchain:
 
 check-ci:
 	python3 scripts/classify-ci-changes.py --self-test
+	python3 scripts/run-phase1c-denial-suite.py --self-test
+	python3 scripts/render-phase1c-denial-report.py --self-test
+	python3 scripts/test-deployed-1c-workflow-contract.py --self-test
+	python3 scripts/test-phase1c-template-contract.py --self-test
 
 check-boundaries:
 	python3 scripts/check-architecture-boundaries.py
