@@ -25,6 +25,10 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 const PASSWORD: &str = "correct-password-1";
+/// Bounded wait for worker-indexed chunks to become retrieval-visible under
+/// parallel suite load (mirrors ASK_STREAM_EVIDENCE polling in the world).
+const SEARCH_VISIBILITY_POLL_TIMEOUT: Duration = Duration::from_secs(30);
+const SEARCH_VISIBILITY_POLL_BACKOFF: Duration = Duration::from_millis(20);
 
 async fn boot_world_if_live() -> Option<MultiOrgDenialWorld> {
     admin_database_url()?;
@@ -202,6 +206,86 @@ async fn document_index_state(
     })
     .await
     .map_err(|err| format!("load document index state: {err}"))
+}
+
+/// Per-chunk snapshot of every predicate the FTS candidate query requires
+/// (`db::search::fts_search`), so a timed-out search probe reports which
+/// visibility condition was still unmet instead of failing blind.
+async fn search_visibility_snapshot(
+    pool: &deadpool_postgres::Pool,
+    org: &BootedOrg,
+    marker: &str,
+) -> Result<String, String> {
+    use fileconv_server::auth::context::OrgContext;
+    use fileconv_server::db::pool::with_org_txn;
+
+    let owner = org.users.get("owner").ok_or("missing owner user")?;
+    let collection_id = org.collections["org"].collection_id;
+    let ctx = OrgContext::try_new(
+        org.org_id,
+        owner.user_id,
+        ["qa.query", "doc.upload"],
+        [collection_id],
+    )
+    .map_err(|err| err.to_string())?;
+    let indexed = org
+        .indexed_document
+        .as_ref()
+        .ok_or_else(|| format!("org {} has no worker-produced indexed document", org.slug))?;
+    let rows = with_org_txn(pool, &ctx, {
+        let document_id = indexed.document_id;
+        let org_id = ctx.org_id();
+        let marker = marker.to_string();
+        move |txn| {
+            Box::pin(async move {
+                let rows = txn
+                    .query(
+                        "SELECT c.id::text,
+                                d.state::text AS doc_state,
+                                dv.publication_state::text,
+                                dv.is_current,
+                                im.is_active,
+                                im.state::text AS generation_state,
+                                c.tsv @@ plainto_tsquery('simple', $3) AS tsv_match
+                         FROM chunks c
+                         JOIN documents d
+                           ON d.org_id = c.org_id AND d.id = c.document_id
+                         JOIN document_versions dv
+                           ON dv.org_id = c.org_id
+                          AND dv.document_id = c.document_id
+                          AND dv.id = c.version_id
+                         JOIN index_metadata im
+                           ON im.org_id = c.org_id AND im.id = c.index_metadata_id
+                         WHERE c.org_id = $1 AND c.document_id = $2
+                         ORDER BY c.id",
+                        &[&org_id, &document_id, &marker],
+                    )
+                    .await?;
+                Ok(rows
+                    .iter()
+                    .map(|row| {
+                        format!(
+                            "chunk {} doc_state={} publication_state={} is_current={} \
+                             generation_active={} generation_state={} tsv_match={}",
+                            row.get::<_, String>(0),
+                            row.get::<_, String>(1),
+                            row.get::<_, String>(2),
+                            row.get::<_, bool>(3),
+                            row.get::<_, bool>(4),
+                            row.get::<_, String>(5),
+                            row.get::<_, bool>(6),
+                        )
+                    })
+                    .collect::<Vec<_>>())
+            })
+        }
+    })
+    .await
+    .map_err(|err| format!("load search visibility snapshot: {err}"))?;
+    if rows.is_empty() {
+        return Ok("no chunks joined the FTS visibility predicates".to_string());
+    }
+    Ok(rows.join("; "))
 }
 
 async fn read_sse_until(
@@ -545,40 +629,58 @@ async fn indexed_fts_and_ask_never_return_foreign_marker() {
         .expect("beta indexed document");
     let app = world.app();
 
+    // Retrieval visibility can trail the synchronously drained worker jobs
+    // when the whole suite runs in parallel, so poll with a bounded backoff.
+    // The denial property (no foreign marker) must hold on EVERY response;
+    // only own-marker visibility is allowed to arrive late.
     let query = alpha.marker.clone();
-    let (status, body, headers) = json_request(
-        app,
-        "POST",
-        "/api/v1/search",
-        Some(token),
-        Some(json!({ "query": query, "mode": "current", "limit": 10 })),
-    )
-    .await;
-    assert_denial_no_leak(
-        &denial_response(status, &body, &headers),
-        &foreign,
-        DenialExpectation::AllowSuccess,
-    );
-    let search: serde_json::Value = serde_json::from_slice(&body).expect("search json");
-    let hits = search["hits"].as_array().expect("hits array");
-    assert!(
-        hits.iter().any(|hit| {
+    let deadline = tokio::time::Instant::now() + SEARCH_VISIBILITY_POLL_TIMEOUT;
+    loop {
+        let (status, body, headers) = json_request(
+            app,
+            "POST",
+            "/api/v1/search",
+            Some(token),
+            Some(json!({ "query": query, "mode": "current", "limit": 10 })),
+        )
+        .await;
+        assert_denial_no_leak(
+            &denial_response(status, &body, &headers),
+            &foreign,
+            DenialExpectation::AllowSuccess,
+        );
+        let search: serde_json::Value = serde_json::from_slice(&body).expect("search json");
+        let hits = search["hits"].as_array().expect("hits array");
+        assert!(
+            !hits.iter().any(|hit| {
+                hit["documentId"].as_str() == Some(beta_indexed.document_id.to_string().as_str())
+                    || hit["quote"]
+                        .as_str()
+                        .is_some_and(|quote| quote.contains(&beta.marker))
+            }),
+            "search must not return foreign indexed marker: {search}"
+        );
+        let own_marker_visible = hits.iter().any(|hit| {
             hit["documentId"].as_str() == Some(alpha_indexed.document_id.to_string().as_str())
                 || hit["quote"]
                     .as_str()
                     .is_some_and(|quote| quote.contains(&alpha.marker))
-        }),
-        "actor search must surface own indexed marker: {search}"
-    );
-    assert!(
-        !hits.iter().any(|hit| {
-            hit["documentId"].as_str() == Some(beta_indexed.document_id.to_string().as_str())
-                || hit["quote"]
-                    .as_str()
-                    .is_some_and(|quote| quote.contains(&beta.marker))
-        }),
-        "search must not return foreign indexed marker: {search}"
-    );
+        });
+        if own_marker_visible {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let visibility = search_visibility_snapshot(world.pool(), alpha, &alpha.marker)
+                .await
+                .unwrap_or_else(|error| format!("snapshot unavailable: {error}"));
+            panic!(
+                "actor search must surface own indexed marker within {}s; \
+                 last response: {search}; visibility: {visibility}",
+                SEARCH_VISIBILITY_POLL_TIMEOUT.as_secs()
+            );
+        }
+        tokio::time::sleep(SEARCH_VISIBILITY_POLL_BACKOFF).await;
+    }
 
     let (status, body, headers) = json_request(
         app,
