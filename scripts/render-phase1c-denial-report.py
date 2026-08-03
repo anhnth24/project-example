@@ -442,7 +442,11 @@ def resolve_input_report(
     validate_failure_message(input_failure_category)
     payload, read_error = read_report_file(input_path)
     if read_error is not None:
-        category = read_error
+        category = (
+            input_failure_category
+            if read_error == FAILURE_RUNNER_OUTPUT_MISSING
+            else read_error
+        )
         payload = build_fail_closed_report(
             expected_git_sha=expected_git_sha,
             expected_manifest_sha256=expected_manifest_sha256,
@@ -587,6 +591,21 @@ class RenderPhase1cDenialReportTests(unittest.TestCase):
     def test_render_includes_trusted_ref_in_identity(self) -> None:
         markdown = render_markdown(self.sample_payload(), context=self.sample_context())
         self.assertIn(f"| Git ref | `{self.GIT_REF}` |", markdown)
+
+    def test_missing_input_honors_trusted_failure_category_transport(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "manifest-run.json"
+            output_path = root / "phase1c-denial-report.md"
+            verdict = render_file(
+                input_path=input_path,
+                output_path=output_path,
+                context=self.sample_context(runner_exit_code=1),
+                input_failure_category=FAILURE_RUNNER_STEP_INCOMPLETE,
+            )
+            self.assertFalse(verdict.passed)
+            payload = json.loads(input_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["failures"], [FAILURE_RUNNER_STEP_INCOMPLETE])
 
     def test_malformed_json_is_replaced_with_schema_valid_fail_closed_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

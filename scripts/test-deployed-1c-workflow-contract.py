@@ -24,6 +24,13 @@ NARROW_MINIO_SECRET_DEFAULT = "${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_cha
 
 BOOTSTRAP_MINIO_SERVICES = frozenset({"minio-init"})
 
+MINIO_CREDENTIAL_ENV_KEYS = frozenset(
+    {"MARKHAND_MINIO_ACCESS_KEY", "MARKHAND_MINIO_SECRET_KEY"}
+)
+
+EXPLICIT_RUNTIME_SERVICE_PREFIXES = ("api", "worker-")
+EXPLICIT_RUNTIME_SERVICE_NAMES = frozenset({"migrate", "api"})
+
 CANONICAL_POLICY_VERSION = "2012-10-17"
 POLICY_TOP_LEVEL_KEYS = frozenset({"Version", "Statement"})
 STATEMENT_KEYS = frozenset({"Sid", "Effect", "Action", "Resource"})
@@ -370,7 +377,7 @@ def mutate_service_block_lines(
 def parse_service_environment(service_block: str) -> dict[str, str]:
     env: dict[str, str] = {}
     env_match = re.search(
-        r"(?m)^    environment:\n((?:      .+\n)*)",
+        r"(?m)^    environment:\n((?:      .+(?:\n|$))+)",
         service_block,
     )
     if env_match is None:
@@ -387,20 +394,59 @@ def parse_service_environment(service_block: str) -> dict[str, str]:
     return env
 
 
-def poc_required_runtime_service_names(compose_text: str) -> frozenset[str]:
+def service_has_markhand_minio_credentials(service_block: str) -> bool:
+    env = parse_service_environment(service_block)
+    return any(key in env for key in MINIO_CREDENTIAL_ENV_KEYS)
+
+
+def poc_runtime_minio_credential_services(compose_text: str) -> frozenset[str]:
+    services: set[str] = set()
+    for name, block in parse_compose_service_blocks(compose_text).items():
+        if name in BOOTSTRAP_MINIO_SERVICES:
+            continue
+        if service_has_markhand_minio_credentials(block):
+            services.add(name)
+    return frozenset(services)
+
+
+def poc_explicit_required_runtime_service_names(compose_text: str) -> frozenset[str]:
     required: set[str] = set()
     for name in parse_compose_service_blocks(compose_text):
-        if name == "api" or name.startswith("api-") or name.startswith("worker-"):
+        if name in EXPLICIT_RUNTIME_SERVICE_NAMES or any(
+            name.startswith(prefix) for prefix in EXPLICIT_RUNTIME_SERVICE_PREFIXES
+        ):
             required.add(name)
     return frozenset(required)
 
 
+def poc_required_runtime_service_names(compose_text: str) -> frozenset[str]:
+    return poc_explicit_required_runtime_service_names(compose_text)
+
+
 def poc_runtime_minio_service_envs(compose_text: str) -> dict[str, dict[str, str]]:
     services: dict[str, dict[str, str]] = {}
-    for name in poc_required_runtime_service_names(compose_text):
+    for name in poc_runtime_minio_credential_services(compose_text):
         block = parse_compose_service_blocks(compose_text)[name]
         services[name] = parse_service_environment(block)
     return services
+
+
+def insert_nonstandard_runtime_minio_service(
+    compose_text: str,
+    *,
+    access_default: str,
+    secret_default: str,
+) -> str:
+    insertion = [
+        "  archive-replay:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment:",
+        f"      MARKHAND_MINIO_ACCESS_KEY: ${{MARKHAND_MINIO_ACCESS_KEY:-{access_default}}}",
+        f"      MARKHAND_MINIO_SECRET_KEY: ${{MARKHAND_MINIO_SECRET_KEY:-{secret_default}}}",
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
 
 
 def poc_runtime_minio_credential_errors(
@@ -421,9 +467,19 @@ def poc_runtime_minio_credential_errors(
     parsed = parse_compose_services(compose_text)
     errors.extend(parsed.errors)
     blocks = parsed.blocks
-    for service in sorted(poc_required_runtime_service_names(compose_text)):
+    runtime_services = poc_runtime_minio_credential_services(compose_text)
+    explicit_required = poc_explicit_required_runtime_service_names(compose_text)
+
+    missing_required = sorted(explicit_required - runtime_services)
+    if missing_required:
+        errors.append(
+            "deploy/compose.poc.yml runtime services missing MinIO credential env: "
+            + ", ".join(missing_required)
+        )
+
+    for service in sorted(runtime_services):
         if service not in blocks:
-            errors.append(f"deploy/compose.poc.yml missing required runtime service {service!r}")
+            errors.append(f"deploy/compose.poc.yml missing runtime service {service!r}")
             continue
         env = parse_service_environment(blocks[service])
         if "MARKHAND_MINIO_ACCESS_KEY" not in env:
@@ -648,7 +704,7 @@ def swap_runtime_minio_defaults_in_compose(
     only_service: str | None = None,
 ) -> str:
     result = compose_text
-    for service in sorted(poc_required_runtime_service_names(compose_text)):
+    for service in sorted(poc_runtime_minio_credential_services(compose_text)):
         if only_service is not None and service != only_service:
             continue
         block = parse_compose_service_blocks(compose_text)[service]
@@ -954,10 +1010,49 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
         errors = minio_fixture_boundary_errors(self.job_block)
         self.assertEqual(errors, [], "\n".join(errors))
 
+    def test_migrate_service_must_use_narrow_minio_defaults(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        self.assertIn("migrate", poc_runtime_minio_credential_services(compose_text))
+        errors = poc_runtime_minio_credential_errors(compose_text, example)
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_swap_migrate_minio_defaults_to_root_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = swap_runtime_minio_defaults_in_compose(
+            compose_text,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+            only_service="migrate",
+        )
+        errors = poc_runtime_minio_credential_errors(mutated, example)
+        self.assertTrue(
+            any("migrate MARKHAND_MINIO_ACCESS_KEY" in error for error in errors),
+            errors,
+        )
+
+    def test_nonstandard_runtime_service_with_root_minio_credentials_fails_contract(
+        self,
+    ) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_nonstandard_runtime_minio_service(
+            compose_text,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+        )
+        errors = poc_runtime_minio_credential_errors(mutated, example)
+        self.assertTrue(
+            any("archive-replay MARKHAND_MINIO_ACCESS_KEY" in error for error in errors),
+            errors,
+        )
+
     def test_all_runtime_services_use_narrow_minio_defaults(self) -> None:
         example = parse_env_example(ENV_EXAMPLE)
         compose_text = COMPOSE_POC.read_text(encoding="utf-8")
-        required = poc_required_runtime_service_names(compose_text)
+        required = poc_runtime_minio_credential_services(compose_text)
+        self.assertIn("migrate", required)
         self.assertIn("api", required)
         self.assertIn("api-restore-green", required)
         self.assertIn("worker-convert", required)
@@ -972,7 +1067,7 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
     def test_swap_all_runtime_minio_defaults_to_root_fails_contract(self) -> None:
         example = parse_env_example(ENV_EXAMPLE)
         compose_text = COMPOSE_POC.read_text(encoding="utf-8")
-        required_count = len(poc_required_runtime_service_names(compose_text))
+        required_count = len(poc_runtime_minio_credential_services(compose_text))
         mutated = swap_runtime_minio_defaults_in_compose(
             compose_text,
             access_default=example["MARKHAND_MINIO_ROOT_USER"],

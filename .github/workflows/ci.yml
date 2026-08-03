@@ -421,7 +421,7 @@ jobs:
   # green" acceptance criteria — rust-integration already covers the CI half.
   # 1C-13 remains explicitly not_run in the Markdown artifact; this job does
   # not measure load/revoke/fairness thresholds. No branch protection required
-  # check yet — informational until a live deployed run succeeds.
+  # check yet — informational until branch protection adopts this gate.
   deployed-1c-integration:
     needs: changes-and-static
     if: >-
