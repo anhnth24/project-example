@@ -40,6 +40,9 @@ created_env=false
 
 cleanup() {
   local worker_pid
+  if [[ -n "${WEB_E2E_REAL_CLEANUP_DELAY_SECS:-}" ]]; then
+    sleep "$WEB_E2E_REAL_CLEANUP_DELAY_SECS"
+  fi
   if [[ -n "$server_pid" ]]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
@@ -88,8 +91,12 @@ dump_redacted_logs() {
   done
 }
 
-workers_alive() {
+required_processes_alive() {
   local context="${1:-before Playwright}"
+  if [[ -z "$server_pid" ]] || ! kill -0 "$server_pid" 2>/dev/null; then
+    dump_redacted_logs "fileconv-server exited ${context}"
+    return 1
+  fi
   local worker_pid
   for worker_pid in "${worker_pids[@]}"; do
     if ! kill -0 "$worker_pid" 2>/dev/null; then
@@ -130,7 +137,7 @@ start_worker() {
 }
 
 run_playwright_supervised() {
-  local playwright_pid
+  local playwright_pid playwright_status=0
   set +e
   if [[ -n "${WEB_E2E_REAL_PLAYWRIGHT_CMD:-}" ]]; then
     bash -c "$WEB_E2E_REAL_PLAYWRIGHT_CMD" &
@@ -141,16 +148,9 @@ run_playwright_supervised() {
       pnpm --dir "$WEB_DIR" exec playwright test --project=real &
     playwright_pid=$!
   fi
-  set -e
 
   while kill -0 "$playwright_pid" 2>/dev/null; do
-    if [[ -n "$server_pid" ]] && ! kill -0 "$server_pid" 2>/dev/null; then
-      kill "$playwright_pid" 2>/dev/null || true
-      wait "$playwright_pid" 2>/dev/null || true
-      dump_redacted_logs "fileconv-server exited during Playwright"
-      return 1
-    fi
-    if ! workers_alive "during Playwright"; then
+    if ! required_processes_alive "during Playwright"; then
       kill -TERM "$playwright_pid" 2>/dev/null || true
       local _w
       for _w in $(seq 1 20); do
@@ -164,7 +164,6 @@ run_playwright_supervised() {
     sleep 0.1
   done
 
-  local playwright_status=0
   wait "$playwright_pid" 2>/dev/null || playwright_status=$?
   return "$playwright_status"
 }
@@ -237,7 +236,7 @@ for _ in $(seq 1 "$readiness_attempts"); do
     dump_redacted_logs "fileconv-server exited during readiness"
     exit 1
   fi
-  if ! workers_alive "during readiness"; then
+  if ! required_processes_alive "during readiness"; then
     exit 1
   fi
   sleep 1
@@ -249,22 +248,19 @@ if [[ "$healthy" != true ]]; then
   exit 1
 fi
 
-if ! workers_alive "after readiness, before seed"; then
+if ! required_processes_alive "after readiness, before seed"; then
   exit 1
 fi
 
 "$ROOT/deploy/scripts/seed-dev-all.sh" --skip-init
 echo "healthy: fileconv-server + convert/index/embedding workers (web/dist from $MARKHAND_WEB_DIST_DIR)"
 
-if ! workers_alive "after seed, before Playwright"; then
+if ! required_processes_alive "after seed, before Playwright"; then
   exit 1
 fi
 
-set +e
-run_playwright_supervised
-playwright_status=$?
-set -e
-
+playwright_status=0
+run_playwright_supervised || playwright_status=$?
 if [[ "$playwright_status" -ne 0 ]]; then
   dump_redacted_logs "Playwright real project failed (exit ${playwright_status})"
   exit "$playwright_status"

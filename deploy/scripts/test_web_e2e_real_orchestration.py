@@ -78,13 +78,14 @@ class OrchestrationHarness:
             f"""\
             #!/usr/bin/env bash
             set -euo pipefail
+            echo "server:$$" >> "{state}/child.pids"
             echo "MARKHAND_AUTH_SIGNING_KEY=super-secret-key-at-least-32-bytes"
             echo "server-start pid=$$" >> "{state}/server.events"
             if [[ "${{WEB_E2E_REAL_SERVER_EXIT_EARLY:-}}" == "1" ]]; then
               echo "server-exit-early" >> "{state}/server.events"
               exit 1
             fi
-            trap 'echo server-term >> "{state}/server.events"; exit 0' TERM INT
+            trap 'echo server-reaped:$$ >> "{state}/cleanup.reaped"; echo server-term >> "{state}/server.events"; exit 0' TERM INT
             while true; do sleep 0.05; done
             """,
         )
@@ -94,6 +95,7 @@ class OrchestrationHarness:
             f"""\
             #!/usr/bin/env bash
             set -euo pipefail
+            echo "worker-${{MARKHAND_WORKER_KIND}}:$$" >> "{state}/child.pids"
             echo "kind=${{MARKHAND_WORKER_KIND:-unset}}" >> "{state}/workers.started"
             echo "db=${{MARKHAND_WORKER_DATABASE_URL:-}}" >> "{state}/workers.env"
             if [[ -n "${{MARKHAND_CONVERTER_ARGV_JSON:-}}" ]]; then
@@ -109,7 +111,7 @@ class OrchestrationHarness:
                 kill -TERM "$$" 2>/dev/null || exit 1
               ) &
             fi
-            trap 'echo worker-term-${{MARKHAND_WORKER_KIND}} >> "{state}/cleanup.signals"; exit 0' TERM INT
+            trap 'echo worker-reaped-${{MARKHAND_WORKER_KIND}}:$$ >> "{state}/cleanup.reaped"; echo worker-term-${{MARKHAND_WORKER_KIND}} >> "{state}/cleanup.signals"; exit 0' TERM INT
             while true; do sleep 0.05; done
             """,
         )
@@ -242,6 +244,39 @@ class OrchestrationHarness:
             check=False,
         )
 
+    def install_failing_redactor(self) -> None:
+        redact = self.root / "deploy" / "scripts" / "redact_secrets.py"
+        _write_executable(
+            redact,
+            """\
+            #!/usr/bin/env python3
+            import sys
+            from pathlib import Path
+            raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+            if "super-secret-key-at-least-32-bytes" in raw:
+                sys.stderr.write("INJECTED_REDACT_FAIL\\n")
+            sys.exit(1)
+            """,
+        )
+
+    def child_pids(self) -> list[int]:
+        pids_file = self.state / "child.pids"
+        if not pids_file.exists():
+            return []
+        pids: list[int] = []
+        for line in pids_file.read_text(encoding="utf-8").splitlines():
+            _, pid_text = line.split(":", 1)
+            pids.append(int(pid_text))
+        return pids
+
+    def assert_no_live_child_pids(self) -> None:
+        for pid in self.child_pids():
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            self.fail(f"pid {pid} still alive")
+
     def cleanup(self) -> None:
         shutil.rmtree(self.tempdir, ignore_errors=True)
 
@@ -314,6 +349,49 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
         finally:
             harness.cleanup()
 
+    def test_failing_redactor_emits_only_safe_withholding_text(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            harness.install_failing_redactor()
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_PLAYWRIGHT_FAIL": "1"},
+                timeout=15.0,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            combined = result.stdout + result.stderr
+            self.assertNotIn("super-secret-key-at-least-32-bytes", combined)
+            self.assertIn("raw log withheld", combined.lower())
+            self.assertNotRegex(combined, r"MARKHAND_AUTH_SIGNING_KEY=super-secret")
+        finally:
+            harness.cleanup()
+
+    def test_cleanup_terminates_and_waits_all_children_after_failure(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_PLAYWRIGHT_FAIL": "1"},
+                timeout=15.0,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertGreaterEqual(len(harness.child_pids()), 4)
+            reaped = (harness.state / "cleanup.reaped").read_text(encoding="utf-8")
+            self.assertIn("server-reaped:", reaped)
+            for kind in ("convert", "index", "embedding"):
+                self.assertIn(f"worker-reaped-{kind}:", reaped)
+            harness.assert_no_live_child_pids()
+        finally:
+            harness.cleanup()
+
+    def test_unified_liveness_check_after_seed(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertRegex(
+            text,
+            r'required_processes_alive[^\n]*after seed, before Playwright',
+            msg="must use unified server+worker liveness after seed",
+        )
+        seed_to_playwright = text.split('seed-dev-all.sh" --skip-init', 1)[1]
+        self.assertNotIn("workers_alive", seed_to_playwright.split("run_playwright_supervised", 1)[0])
+
     def test_forbids_fail_open_redaction_flags(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
         self.assertNotIn("--allow-residual", text)
@@ -322,6 +400,12 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
             r'redact_secrets\.py[^\n]*\|\|\s*cat',
             msg="must not fall back to raw cat after redaction failure",
         )
+        self.assertNotRegex(
+            text,
+            r"set -e\s*\n\s*run_playwright_supervised\s*\n\s*playwright_status=\$\?",
+            msg="must not re-enable errexit before capturing Playwright status",
+        )
+        self.assertIn("run_playwright_supervised || playwright_status=", text)
 
 
 def main() -> int:
