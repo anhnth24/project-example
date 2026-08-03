@@ -103,6 +103,16 @@ struct TargetDocumentChunkAggregate {
     all_structural_predicates_pass: bool,
 }
 
+/// Mirrors production `fts_search` structural filters for `VersionVisibility::Current`.
+fn target_chunk_structural_predicates_expr() -> &'static str {
+    "d.deleted_at IS NULL
+     AND d.state = 'indexed'
+     AND dv.publication_state = 'published'
+     AND dv.is_current
+     AND im.is_active
+     AND im.state = 'active'"
+}
+
 async fn load_target_document_chunk_aggregate(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -113,6 +123,7 @@ async fn load_target_document_chunk_aggregate(
     let permission = "qa.query";
     let access = AccessLevel::Read.as_str();
     let acl = acl_predicate_sql("d.org_id", "d.collection_id", "$4", "$5", "$6");
+    let structural = target_chunk_structural_predicates_expr();
     let sql = format!(
         "SELECT COUNT(*)::bigint AS chunk_count,
                 COALESCE(BOOL_OR(c.tsv @@ plainto_tsquery('simple', $3)), false)
@@ -121,11 +132,7 @@ async fn load_target_document_chunk_aggregate(
                     AS any_tsv_match_normalized,
                 COALESCE(BOOL_AND({acl}), false) AS all_acl_predicate_pass,
                 COALESCE(BOOL_AND(
-                    d.state = 'indexed'
-                    AND dv.publication_state = 'published'
-                    AND dv.is_current
-                    AND im.is_active
-                    AND im.state = 'active'
+                    {structural}
                 ), false) AS all_structural_predicates_pass
          FROM chunks c
          JOIN documents d
@@ -136,7 +143,8 @@ async fn load_target_document_chunk_aggregate(
           AND dv.id = c.version_id
          JOIN index_metadata im
            ON im.org_id = c.org_id AND im.id = c.index_metadata_id
-         WHERE c.org_id = $1 AND c.document_id = $2"
+         WHERE c.org_id = $1 AND c.document_id = $2",
+        structural = structural,
     );
     let row = txn
         .query_one(
@@ -355,5 +363,23 @@ mod tests {
             RETRIEVAL_LEG_CANDIDATE_LIMIT
         );
         assert_eq!(leg_candidate_limit_for_request(300), 300);
+    }
+
+    #[test]
+    fn target_structural_predicates_match_production_fts_search_current() {
+        let expr = target_chunk_structural_predicates_expr();
+        for needle in [
+            "d.deleted_at IS NULL",
+            "d.state = 'indexed'",
+            "dv.publication_state = 'published'",
+            "dv.is_current",
+            "im.is_active",
+            "im.state = 'active'",
+        ] {
+            assert!(
+                expr.contains(needle),
+                "structural predicate missing {needle:?}: {expr}"
+            );
+        }
     }
 }
