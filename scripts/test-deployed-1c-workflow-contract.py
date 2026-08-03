@@ -24,34 +24,27 @@ NARROW_MINIO_SECRET_DEFAULT = "${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_cha
 
 BOOTSTRAP_MINIO_SERVICES = frozenset({"minio-init"})
 
-EXPECTED_POC_RUNTIME_MINIO_SERVICES = frozenset(
-    {
-        "migrate",
-        "api",
-        "worker-convert",
-        "worker-index",
-        "worker-embedding",
-        "worker-delete",
-        "worker-reconcile",
-        "worker-reconcile-oneshot",
-    }
-)
+CANONICAL_POLICY_VERSION = "2012-10-17"
+POLICY_TOP_LEVEL_KEYS = frozenset({"Version", "Statement"})
+STATEMENT_KEYS = frozenset({"Sid", "Effect", "Action", "Resource"})
 
-BUCKET_MANAGEMENT_ACTIONS = frozenset(
-    {
-        "s3:*",
-        "s3:CreateBucket",
-        "s3:DeleteBucket",
-        "s3:ListAllMyBuckets",
-        "s3:PutBucketPolicy",
-        "s3:DeleteBucketPolicy",
-        "s3:GetBucketPolicy",
-        "s3:PutBucketAcl",
-        "s3:GetBucketAcl",
-        "s3:PutBucketVersioning",
-        "s3:PutLifecycleConfiguration",
-    }
-)
+CANONICAL_STATEMENTS_BY_SID: dict[str, dict[str, object]] = {
+    "MarkhandDocumentsBucket": {
+        "Sid": "MarkhandDocumentsBucket",
+        "Effect": "Allow",
+        "Action": ["s3:GetBucketLocation", "s3:ListBucket"],
+        "Resource": ["arn:aws:s3:::__BUCKET__"],
+    },
+    "MarkhandDocumentsObjects": {
+        "Sid": "MarkhandDocumentsObjects",
+        "Effect": "Allow",
+        "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+        "Resource": [
+            "arn:aws:s3:::__BUCKET__/quarantine/*",
+            "arn:aws:s3:::__BUCKET__/trusted/*",
+        ],
+    },
+}
 
 REQUIRED_STEP_ORDER = (
     "Boot POC Compose stack",
@@ -280,14 +273,19 @@ def parse_service_environment(service_block: str) -> dict[str, str]:
     return env
 
 
+def poc_required_runtime_service_names(compose_text: str) -> frozenset[str]:
+    required: set[str] = set()
+    for name in parse_compose_service_blocks(compose_text):
+        if name == "api" or name.startswith("api-") or name.startswith("worker-"):
+            required.add(name)
+    return frozenset(required)
+
+
 def poc_runtime_minio_service_envs(compose_text: str) -> dict[str, dict[str, str]]:
     services: dict[str, dict[str, str]] = {}
-    for name, block in parse_compose_service_blocks(compose_text).items():
-        if name in BOOTSTRAP_MINIO_SERVICES:
-            continue
-        env = parse_service_environment(block)
-        if "MARKHAND_MINIO_ACCESS_KEY" in env and "MARKHAND_MINIO_SECRET_KEY" in env:
-            services[name] = env
+    for name in poc_required_runtime_service_names(compose_text):
+        block = parse_compose_service_blocks(compose_text)[name]
+        services[name] = parse_service_environment(block)
     return services
 
 
@@ -306,15 +304,19 @@ def poc_runtime_minio_credential_errors(
         )
         return errors
 
-    runtime_services = poc_runtime_minio_service_envs(compose_text)
-    if not EXPECTED_POC_RUNTIME_MINIO_SERVICES.issubset(runtime_services):
-        missing = sorted(EXPECTED_POC_RUNTIME_MINIO_SERVICES - set(runtime_services))
-        errors.append(
-            "deploy/compose.poc.yml missing MinIO runtime services: "
-            + ", ".join(missing)
-        )
+    blocks = parse_compose_service_blocks(compose_text)
+    for service in sorted(poc_required_runtime_service_names(compose_text)):
+        if service not in blocks:
+            errors.append(f"deploy/compose.poc.yml missing required runtime service {service!r}")
+            continue
+        env = parse_service_environment(blocks[service])
+        if "MARKHAND_MINIO_ACCESS_KEY" not in env:
+            errors.append(f"{service} must define MARKHAND_MINIO_ACCESS_KEY")
+        if "MARKHAND_MINIO_SECRET_KEY" not in env:
+            errors.append(f"{service} must define MARKHAND_MINIO_SECRET_KEY")
+        if "MARKHAND_MINIO_ACCESS_KEY" not in env or "MARKHAND_MINIO_SECRET_KEY" not in env:
+            continue
 
-    for service, env in sorted(runtime_services.items()):
         access = env["MARKHAND_MINIO_ACCESS_KEY"]
         secret = env["MARKHAND_MINIO_SECRET_KEY"]
         if access != NARROW_MINIO_ACCESS_DEFAULT:
@@ -340,62 +342,145 @@ def poc_runtime_minio_credential_errors(
     return errors
 
 
+def _normalize_string_list(
+    value: object,
+    field_name: str,
+    errors: list[str],
+    *,
+    statement_index: int,
+) -> list[str] | None:
+    prefix = f"minio app policy Statement[{statement_index}] "
+    if isinstance(value, str):
+        errors.append(f"{prefix}{field_name} must be a list, not a string")
+        return None
+    if not isinstance(value, list):
+        errors.append(f"{prefix}{field_name} must be a list")
+        return None
+    return [str(entry) for entry in value]
+
+
 def minio_app_policy_errors(policy_text: str) -> list[str]:
     errors: list[str] = []
     if "__BUCKET__" not in policy_text:
         errors.append("minio app policy template must parameterize fixed bucket via __BUCKET__")
     try:
-        rendered = policy_text.replace("__BUCKET__", "markhand-documents")
-        policy = json.loads(rendered)
+        policy = json.loads(policy_text)
     except json.JSONDecodeError as exc:
         return errors + [f"minio app policy template must be valid JSON: {exc}"]
 
-    statements = policy.get("Statement")
-    if not isinstance(statements, list) or not statements:
-        return errors + ["minio app policy must contain non-empty Statement list"]
+    if not isinstance(policy, dict):
+        return errors + ["minio app policy root must be a JSON object"]
 
-    all_resources: list[str] = []
-    all_actions: list[str] = []
+    top_level_keys = set(policy.keys())
+    if top_level_keys != POLICY_TOP_LEVEL_KEYS:
+        extra = sorted(top_level_keys - POLICY_TOP_LEVEL_KEYS)
+        missing = sorted(POLICY_TOP_LEVEL_KEYS - top_level_keys)
+        if extra:
+            errors.append(f"minio app policy has unknown top-level keys: {extra}")
+        if missing:
+            errors.append(f"minio app policy missing top-level keys: {missing}")
+
+    if policy.get("Version") != CANONICAL_POLICY_VERSION:
+        errors.append(
+            f"minio app policy Version must be exactly {CANONICAL_POLICY_VERSION!r}"
+        )
+
+    statements = policy.get("Statement")
+    if not isinstance(statements, list):
+        return errors + ["minio app policy Statement must be a list"]
+    if len(statements) != 2:
+        errors.append("minio app policy must contain exactly two Statement entries")
+
+    seen_sids: set[str] = set()
     for index, statement in enumerate(statements):
         if not isinstance(statement, dict):
             errors.append(f"minio app policy Statement[{index}] must be an object")
             continue
-        resources = statement.get("Resource", [])
-        if isinstance(resources, str):
-            resources = [resources]
-        actions = statement.get("Action", [])
-        if isinstance(actions, str):
-            actions = [actions]
-        all_resources.extend(str(resource) for resource in resources)
-        all_actions.extend(str(action) for action in actions)
-        for resource in resources:
-            resource_text = str(resource)
-            if resource_text in {"*", "arn:aws:s3:::*"}:
-                errors.append("minio app policy must not use wildcard Resource *")
-            if resource_text.endswith("/*") and (
-                "/quarantine/" not in resource_text and "/trusted/" not in resource_text
-            ):
+
+        statement_keys = set(statement.keys())
+        if statement_keys != STATEMENT_KEYS:
+            forbidden = sorted(statement_keys - STATEMENT_KEYS)
+            missing = sorted(STATEMENT_KEYS - statement_keys)
+            if forbidden:
                 errors.append(
-                    "minio app policy object resources must stay under quarantine/* or trusted/*"
+                    f"minio app policy Statement[{index}] has forbidden keys: {forbidden}"
                 )
-        for action in actions:
-            if action in BUCKET_MANAGEMENT_ACTIONS:
+            if missing:
                 errors.append(
-                    f"minio app policy must not include bucket-management action {action!r}"
+                    f"minio app policy Statement[{index}] missing keys: {missing}"
                 )
 
-    resource_blob = " ".join(all_resources)
-    if "quarantine" not in resource_blob or "trusted" not in resource_blob:
-        errors.append(
-            "minio app policy must scope objects to quarantine/* and trusted/* prefixes"
+        sid = statement.get("Sid")
+        if not isinstance(sid, str):
+            errors.append(f"minio app policy Statement[{index}] Sid must be a string")
+            continue
+        if sid in seen_sids:
+            errors.append(f"minio app policy duplicate Sid {sid!r}")
+        seen_sids.add(sid)
+
+        canonical = CANONICAL_STATEMENTS_BY_SID.get(sid)
+        if canonical is None:
+            errors.append(f"minio app policy Statement[{index}] has unknown Sid {sid!r}")
+            continue
+        if statement.get("Effect") != canonical["Effect"]:
+            errors.append(f"minio app policy Statement[{index}] Effect must be Allow")
+
+        actions = _normalize_string_list(
+            statement.get("Action"),
+            "Action",
+            errors,
+            statement_index=index,
         )
-    if "arn:aws:s3:::markhand-documents" not in resource_blob:
-        errors.append("minio app policy must include fixed-bucket ARN boundary")
-    if "arn:aws:s3:::markhand-documents/quarantine/*" not in resource_blob:
-        errors.append("minio app policy must include quarantine object prefix")
-    if "arn:aws:s3:::markhand-documents/trusted/*" not in resource_blob:
-        errors.append("minio app policy must include trusted object prefix")
+        resources = _normalize_string_list(
+            statement.get("Resource"),
+            "Resource",
+            errors,
+            statement_index=index,
+        )
+        if actions is not None:
+            if actions != canonical["Action"]:
+                errors.append(
+                    f"minio app policy Statement[{index}] Action must be exactly "
+                    f"{canonical['Action']!r}"
+                )
+            for action in actions:
+                if "*" in action:
+                    errors.append(
+                        f"minio app policy Statement[{index}] Action must not contain wildcards"
+                    )
+        if resources is not None:
+            if resources != canonical["Resource"]:
+                errors.append(
+                    f"minio app policy Statement[{index}] Resource must be exactly "
+                    f"{canonical['Resource']!r}"
+                )
+            for resource in resources:
+                if resource in {"*", "arn:aws:s3:::*"}:
+                    errors.append("minio app policy must not use wildcard Resource *")
+
+    missing_sids = set(CANONICAL_STATEMENTS_BY_SID) - seen_sids
+    if missing_sids:
+        errors.append(
+            "minio app policy missing required Sid entries: "
+            + ", ".join(sorted(missing_sids))
+        )
     return errors
+
+
+def remove_service_env_line(compose_text: str, service: str, env_key: str) -> str:
+    pattern = rf"(?ms)(^  {re.escape(service)}:\n)(.*?)(?=^  [a-z0-9_-]+:\s*$|^networks:|^volumes:|\Z)"
+    match = re.search(pattern, compose_text)
+    if match is None:
+        return compose_text
+    header = match.group(1)
+    body = re.sub(
+        rf"^      {re.escape(env_key)}: .+\n",
+        "",
+        match.group(2),
+        count=1,
+        flags=re.MULTILINE,
+    )
+    return compose_text[: match.start()] + header + body + compose_text[match.end() :]
 
 
 def replace_in_service_block(
@@ -421,13 +506,12 @@ def swap_runtime_minio_defaults_in_compose(
     only_service: str | None = None,
 ) -> str:
     result = compose_text
-    for service, block in parse_compose_service_blocks(compose_text).items():
-        if service in BOOTSTRAP_MINIO_SERVICES:
-            continue
-        env = parse_service_environment(block)
-        if "MARKHAND_MINIO_ACCESS_KEY" not in env:
-            continue
+    for service in sorted(poc_required_runtime_service_names(compose_text)):
         if only_service is not None and service != only_service:
+            continue
+        block = parse_compose_service_blocks(compose_text)[service]
+        env = parse_service_environment(block)
+        if "MARKHAND_MINIO_ACCESS_KEY" not in env or "MARKHAND_MINIO_SECRET_KEY" not in env:
             continue
         old_access = env["MARKHAND_MINIO_ACCESS_KEY"]
         old_secret = env["MARKHAND_MINIO_SECRET_KEY"]
@@ -731,12 +815,14 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
     def test_all_runtime_services_use_narrow_minio_defaults(self) -> None:
         example = parse_env_example(ENV_EXAMPLE)
         compose_text = COMPOSE_POC.read_text(encoding="utf-8")
-        runtime = poc_runtime_minio_service_envs(compose_text)
-        self.assertTrue(EXPECTED_POC_RUNTIME_MINIO_SERVICES.issubset(runtime))
+        required = poc_required_runtime_service_names(compose_text)
+        self.assertIn("api", required)
+        self.assertIn("api-restore-green", required)
+        self.assertIn("worker-convert", required)
         errors = poc_runtime_minio_credential_errors(compose_text, example)
         self.assertEqual(errors, [], "\n".join(errors))
 
-    def test_minio_app_policy_stays_bucket_object_scoped(self) -> None:
+    def test_minio_app_policy_matches_exact_canonical_allowlist(self) -> None:
         policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
         errors = minio_app_policy_errors(policy_text)
         self.assertEqual(errors, [], "\n".join(errors))
@@ -744,6 +830,7 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
     def test_swap_all_runtime_minio_defaults_to_root_fails_contract(self) -> None:
         example = parse_env_example(ENV_EXAMPLE)
         compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        required_count = len(poc_required_runtime_service_names(compose_text))
         mutated = swap_runtime_minio_defaults_in_compose(
             compose_text,
             access_default=example["MARKHAND_MINIO_ROOT_USER"],
@@ -754,7 +841,7 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             any("must narrow-default to markhand_app" in error for error in errors),
             errors,
         )
-        self.assertGreaterEqual(len(errors), len(EXPECTED_POC_RUNTIME_MINIO_SERVICES))
+        self.assertGreaterEqual(len(errors), required_count)
 
     def test_swap_one_worker_minio_defaults_to_root_fails_contract(self) -> None:
         example = parse_env_example(ENV_EXAMPLE)
@@ -771,20 +858,48 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             errors,
         )
 
-    def test_widened_minio_policy_wildcard_fails_contract(self) -> None:
+    def test_remove_api_restore_green_access_credential_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = remove_service_env_line(
+            compose_text,
+            "api-restore-green",
+            "MARKHAND_MINIO_ACCESS_KEY",
+        )
+        errors = poc_runtime_minio_credential_errors(mutated, example)
+        self.assertTrue(
+            any("api-restore-green must define MARKHAND_MINIO_ACCESS_KEY" in error for error in errors),
+            errors,
+        )
+
+    def test_remove_worker_secret_credential_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = remove_service_env_line(
+            compose_text,
+            "worker-index",
+            "MARKHAND_MINIO_SECRET_KEY",
+        )
+        errors = poc_runtime_minio_credential_errors(mutated, example)
+        self.assertTrue(
+            any("worker-index must define MARKHAND_MINIO_SECRET_KEY" in error for error in errors),
+            errors,
+        )
+
+    def test_widened_minio_policy_extra_bucket_resource_fails_contract(self) -> None:
         policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
         mutated = policy_text.replace(
-            '"arn:aws:s3:::__BUCKET__/trusted/*"',
-            '"arn:aws:s3:::__BUCKET__/trusted/*",\n        "*"',
+            '"arn:aws:s3:::__BUCKET__"',
+            '"arn:aws:s3:::__BUCKET__",\n        "arn:aws:s3:::other-bucket"',
             1,
         )
         errors = minio_app_policy_errors(mutated)
         self.assertTrue(
-            any("wildcard Resource *" in error for error in errors),
+            any("Resource must be exactly" in error for error in errors),
             errors,
         )
 
-    def test_widened_minio_policy_bucket_management_fails_contract(self) -> None:
+    def test_widened_minio_policy_create_action_fails_contract(self) -> None:
         policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
         mutated = policy_text.replace(
             '"s3:ListBucket"',
@@ -793,7 +908,92 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
         )
         errors = minio_app_policy_errors(mutated)
         self.assertTrue(
-            any("bucket-management action 's3:CreateBucket'" in error for error in errors),
+            any("Action must be exactly" in error for error in errors),
+            errors,
+        )
+
+    def test_widened_minio_policy_put_bucket_cors_fails_contract(self) -> None:
+        policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
+        mutated = policy_text.replace(
+            '"s3:DeleteObject"',
+            '"s3:DeleteObject",\n        "s3:PutBucketCors"',
+            1,
+        )
+        errors = minio_app_policy_errors(mutated)
+        self.assertTrue(
+            any("Action must be exactly" in error for error in errors),
+            errors,
+        )
+
+    def test_widened_minio_policy_extra_statement_fails_contract(self) -> None:
+        policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
+        policy = json.loads(policy_text)
+        policy["Statement"].append(
+            {
+                "Sid": "ExtraStatement",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject"],
+                "Resource": ["arn:aws:s3:::__BUCKET__/trusted/*"],
+            }
+        )
+        mutated = json.dumps(policy, indent=2) + "\n"
+        errors = minio_app_policy_errors(mutated)
+        self.assertTrue(
+            any("exactly two Statement entries" in error for error in errors),
+            errors,
+        )
+
+    def test_widened_minio_policy_not_action_fails_contract(self) -> None:
+        policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
+        mutated = policy_text.replace(
+            '"Action": [',
+            '"NotAction": [',
+            1,
+        )
+        errors = minio_app_policy_errors(mutated)
+        self.assertTrue(
+            any("forbidden keys" in error and "NotAction" in error for error in errors),
+            errors,
+        )
+
+    def test_widened_minio_policy_not_resource_fails_contract(self) -> None:
+        policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
+        mutated = policy_text.replace(
+            '"Resource": [',
+            '"NotResource": [',
+            1,
+        )
+        errors = minio_app_policy_errors(mutated)
+        self.assertTrue(
+            any("forbidden keys" in error and "NotResource" in error for error in errors),
+            errors,
+        )
+
+    def test_widened_minio_policy_wildcard_action_fails_contract(self) -> None:
+        policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
+        mutated = policy_text.replace(
+            '"s3:GetObject"',
+            '"s3:*"',
+            1,
+        )
+        errors = minio_app_policy_errors(mutated)
+        self.assertTrue(
+            any("Action must not contain wildcards" in error for error in errors)
+            or any("Action must be exactly" in error for error in errors),
+            errors,
+        )
+
+    def test_widened_minio_policy_wildcard_resource_fails_contract(self) -> None:
+        policy_text = MINIO_POLICY_TEMPLATE.read_text(encoding="utf-8")
+        mutated = policy_text.replace(
+            '"arn:aws:s3:::__BUCKET__/trusted/*"',
+            '"*"',
+            1,
+        )
+        errors = minio_app_policy_errors(mutated)
+        self.assertTrue(
+            any("wildcard Resource *" in error for error in errors)
+            or any("Resource must be exactly" in error for error in errors),
             errors,
         )
 
