@@ -49,12 +49,17 @@ pub const PERMISSION_QA_QUERY: &str = "qa.query";
 /// Additional permission required whenever retrieval can expose a superseded version.
 pub const PERMISSION_QA_HISTORY: &str = "qa.history";
 
-/// Candidate pull depth per leg before merge (desktop uses 250/500).
-const LEG_CANDIDATE_LIMIT: usize = 250;
+/// Maximum candidates pulled per retrieval leg before merge/rerank (desktop uses 250/500).
+pub const RETRIEVAL_LEG_CANDIDATE_LIMIT: usize = 250;
 /// Bound embedding so a hung provider cannot stall retrieval forever.
 pub const EMBED_TIMEOUT: Duration = Duration::from_secs(5);
 /// Bound each retrieval leg (FTS / Qdrant) independently.
 pub const LEG_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Candidate depth for one retrieval leg, mirroring [`hybrid_search`].
+pub fn leg_candidate_limit_for_request(request_limit: usize) -> usize {
+    RETRIEVAL_LEG_CANDIDATE_LIMIT.max(request_limit)
+}
 
 /// Version-aware retrieval mode (ADR 0002).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,7 +326,7 @@ pub async fn hybrid_search(
         .map(|runtime| runtime.plan().runtime_path().to_string())
         .unwrap_or_else(|| "fts_only".into());
 
-    let leg_limit = LEG_CANDIDATE_LIMIT.max(request.limit);
+    let leg_limit = leg_candidate_limit_for_request(request.limit);
 
     let lexical_future = async {
         let started = std::time::Instant::now();
@@ -881,6 +886,19 @@ mod tests {
             collections,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn leg_candidate_limit_for_request_matches_hybrid_search_depth() {
+        assert_eq!(
+            leg_candidate_limit_for_request(10),
+            RETRIEVAL_LEG_CANDIDATE_LIMIT
+        );
+        assert_eq!(
+            leg_candidate_limit_for_request(1),
+            RETRIEVAL_LEG_CANDIDATE_LIMIT
+        );
+        assert_eq!(leg_candidate_limit_for_request(300), 300);
     }
 
     fn authorized(

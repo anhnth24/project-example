@@ -215,84 +215,27 @@ async fn document_index_state(
     .map_err(|err| format!("load document index state: {err}"))
 }
 
-/// Per-chunk snapshot of every predicate the FTS candidate query requires
-/// (`db::search::fts_search`), so a timed-out search probe reports which
-/// visibility condition was still unmet instead of failing blind.
+/// Production-path FTS visibility diagnostic for timed-out search probes.
 async fn search_visibility_snapshot(
     pool: &deadpool_postgres::Pool,
     org: &BootedOrg,
     marker: &str,
 ) -> Result<String, String> {
-    use fileconv_server::auth::context::OrgContext;
-    use fileconv_server::db::pool::with_org_txn;
-
     let owner = org.users.get("owner").ok_or("missing owner user")?;
-    let collection_id = org.collections["org"].collection_id;
-    let ctx = OrgContext::try_new(
-        org.org_id,
-        owner.user_id,
-        ["qa.query", "doc.upload"],
-        [collection_id],
-    )
-    .map_err(|err| err.to_string())?;
     let indexed = org
         .indexed_document
         .as_ref()
         .ok_or_else(|| format!("org {} has no worker-produced indexed document", org.slug))?;
-    let rows = with_org_txn(pool, &ctx, {
-        let document_id = indexed.document_id;
-        let org_id = ctx.org_id();
-        let marker = marker.to_string();
-        move |txn| {
-            Box::pin(async move {
-                let rows = txn
-                    .query(
-                        "SELECT c.id::text,
-                                d.state::text AS doc_state,
-                                dv.publication_state::text,
-                                dv.is_current,
-                                im.is_active,
-                                im.state::text AS generation_state,
-                                c.tsv @@ plainto_tsquery('simple', $3) AS tsv_match
-                         FROM chunks c
-                         JOIN documents d
-                           ON d.org_id = c.org_id AND d.id = c.document_id
-                         JOIN document_versions dv
-                           ON dv.org_id = c.org_id
-                          AND dv.document_id = c.document_id
-                          AND dv.id = c.version_id
-                         JOIN index_metadata im
-                           ON im.org_id = c.org_id AND im.id = c.index_metadata_id
-                         WHERE c.org_id = $1 AND c.document_id = $2
-                         ORDER BY c.id",
-                        &[&org_id, &document_id, &marker],
-                    )
-                    .await?;
-                Ok(rows
-                    .iter()
-                    .map(|row| {
-                        format!(
-                            "chunk {} doc_state={} publication_state={} is_current={} \
-                             generation_active={} generation_state={} tsv_match={}",
-                            row.get::<_, String>(0),
-                            row.get::<_, String>(1),
-                            row.get::<_, String>(2),
-                            row.get::<_, bool>(3),
-                            row.get::<_, bool>(4),
-                            row.get::<_, String>(5),
-                            row.get::<_, bool>(6),
-                        )
-                    })
-                    .collect::<Vec<_>>())
-            })
-        }
-    })
+    crate::common::fts_visibility_diagnostic::search_visibility_snapshot_for_document(
+        pool,
+        org.org_id,
+        owner.user_id,
+        indexed.document_id,
+        org.collections["org"].collection_id,
+        marker,
+        10,
+    )
     .await
-    .map_err(|err| format!("load search visibility snapshot: {err}"))?;
-    if rows.is_empty() {
-        return Ok("no chunks joined the FTS visibility predicates".to_string());
-    }
-    Ok(rows.join("; "))
 }
 
 async fn read_sse_until(
