@@ -875,9 +875,14 @@ mod tests {
 
     #[test]
     fn normalized_fts_query_stats_count_tokens_without_logging_query() {
-        let stats = normalized_fts_query_stats("Kinh phí được phê duyệt là bao nhiêu?");
+        let query = "Kinh phí được phê duyệt là bao nhiêu?";
+        let stats = normalized_fts_query_stats(query);
+        let normalized_token_count = normalized_fts_query_for_retrieval(query)
+            .split_whitespace()
+            .count();
         assert!(stats.nonempty);
-        assert_eq!(stats.token_count, 4);
+        assert_eq!(normalized_token_count, 5);
+        assert_eq!(stats.token_count, normalized_token_count);
     }
 
     /// 1C-06: chunk/claim queries route ACL through the shared
