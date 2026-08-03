@@ -185,6 +185,99 @@ describe('reduceAskStreamMessage', () => {
     const after = reduceAskStreamMessage(before, { kind: 'heartbeat' });
     expect(after).toEqual(before);
   });
+
+  // P2-10 conflict-warning demo (as-of/compare/history) — `mocks/handlers/qa.ts`'s
+  // `nonCurrentConflictWarning`/history-summary warning are just extra
+  // `ask.warning` frames ahead of `ask.version_context`, same wire shape
+  // `current` mode's own warning already uses (see the "fallback-extractive"
+  // test above); these three cases check the reducer surfaces each mode's
+  // warning(s) intact, in order, alongside the right `versionContext.mode` —
+  // not the mock's own string-building, which is exercised via the mock/E2E
+  // layer instead.
+  describe('P2-10 conflict-warning demo (as-of/compare/history)', () => {
+    it('as-of mode: one warning that the resolved version is older than current', () => {
+      const final = fold([
+        event(1, 'ask.started', { streamSessionId: 's', mode: 'offline_extractive' }),
+        event(2, 'ask.token', { text: 'Ngân sách vận hành được BA duyệt là 10 triệu đồng mỗi quý.' }),
+        event(3, 'ask.warning', {
+          message:
+            'Phiên bản 1 của "Chính sách ngân sách vận hành.pdf" không phải phiên bản hiện hành — nội dung: "Ngân sách vận hành được BA duyệt là 10 triệu đồng mỗi quý.". Xung đột đã được giải quyết ở phiên bản 2.',
+        }),
+        event(4, 'ask.citations', { citations: [] }),
+        event(5, 'ask.version_context', {
+          mode: 'as_of',
+          currentVersionIds: ['v2'],
+          citedVersionIds: ['v1'],
+          changeNote: 'Truy vấn as-of tại 2026-01-01T00:00:00.000Z.',
+        }),
+        event(6, 'ask.completed', { mode: 'offline_extractive', streamSessionId: 's' }),
+        event(7, 'stream.closed', { reason: 'completed' }),
+      ]);
+
+      expect(final.warnings).toHaveLength(1);
+      expect(final.warnings[0]).toContain('không phải phiên bản hiện hành');
+      expect(final.warnings[0]).toContain('giải quyết ở phiên bản 2');
+      expect(final.versionContext?.mode).toBe('as_of');
+      expect(final.versionContext?.citedVersionIds).toEqual(['v1']);
+    });
+
+    it('compare mode: BOTH v1 and v2 get their own warning when both differ from current', () => {
+      // The seeded fixture only has v1 differ from current (v2 IS current),
+      // so this exercises the general "both sides can warn independently"
+      // shape the mock's per-passage loop produces, rather than assuming
+      // exactly one warning is all `compare` mode can ever emit.
+      const final = fold([
+        event(1, 'ask.started', { streamSessionId: 's', mode: 'offline_extractive' }),
+        event(2, 'ask.token', { text: 'So sánh hai phiên bản.' }),
+        event(3, 'ask.warning', {
+          message: 'Phiên bản 1 của "Doc.pdf" không phải phiên bản hiện hành — nội dung: "10 triệu". Xung đột đã được giải quyết ở phiên bản 3.',
+        }),
+        event(4, 'ask.warning', {
+          message: 'Phiên bản 2 của "Doc.pdf" không phải phiên bản hiện hành — nội dung: "15 triệu". Xung đột đã được giải quyết ở phiên bản 3.',
+        }),
+        event(5, 'ask.citations', { citations: [] }),
+        event(6, 'ask.version_context', {
+          mode: 'compare',
+          currentVersionIds: ['v3'],
+          citedVersionIds: ['v1', 'v2'],
+          changeNote: 'So sánh phiên bản 1 (v1) với phiên bản 2 (v2).',
+        }),
+        event(7, 'ask.completed', { mode: 'offline_extractive', streamSessionId: 's' }),
+        event(8, 'stream.closed', { reason: 'completed' }),
+      ]);
+
+      expect(final.warnings).toHaveLength(2);
+      expect(final.warnings[0]).toContain('Phiên bản 1');
+      expect(final.warnings[1]).toContain('Phiên bản 2');
+      expect(final.versionContext?.mode).toBe('compare');
+      expect(final.versionContext?.changeNote).toContain('So sánh phiên bản 1');
+    });
+
+    it('history mode: a single summary warning naming the version the conflict was resolved in', () => {
+      const final = fold([
+        event(1, 'ask.started', { streamSessionId: 's', mode: 'offline_extractive' }),
+        event(2, 'ask.token', { text: 'Lịch sử ngân sách vận hành.' }),
+        event(3, 'ask.warning', {
+          message:
+            'Lịch sử phiên bản của "Chính sách ngân sách vận hành.pdf" có xung đột dữ liệu giữa các phiên bản (vd. đề xuất BA vs. thiết kế mới) — đã được giải quyết ở phiên bản 2.',
+        }),
+        event(4, 'ask.citations', { citations: [] }),
+        event(5, 'ask.version_context', {
+          mode: 'history',
+          currentVersionIds: ['v2'],
+          citedVersionIds: ['v1', 'v2'],
+          changeNote: 'Lịch sử phiên bản cho tài liệu doc-1.',
+        }),
+        event(6, 'ask.completed', { mode: 'offline_extractive', streamSessionId: 's' }),
+        event(7, 'stream.closed', { reason: 'completed' }),
+      ]);
+
+      expect(final.warnings).toHaveLength(1);
+      expect(final.warnings[0]).toContain('xung đột dữ liệu giữa các phiên bản');
+      expect(final.warnings[0]).toContain('giải quyết ở phiên bản 2');
+      expect(final.versionContext?.mode).toBe('history');
+    });
+  });
 });
 
 describe('describeAskStreamError', () => {
