@@ -45,3 +45,20 @@ export async function login(page: Page): Promise<void> {
   await expect(page.getByRole('link', { name: 'Thư viện' })).toBeVisible();
   await expect(page).not.toHaveURL(/\/login/);
 }
+
+/**
+ * Opens the seeded "POC Library" collection from the library's collection
+ * nav (mirrors `e2e/support.ts`'s `openEmployeeHandbook`, against the real
+ * seeded collection instead of the mock fixture one — see this file's own
+ * module doc for where `SEEDED_COLLECTION_NAME` comes from).
+ */
+export async function openPocLibrary(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'Thư viện' }).click();
+  await page
+    .getByRole('navigation', { name: 'Điều hướng bộ sưu tập' })
+    .getByRole('link', { name: SEEDED_COLLECTION_NAME })
+    .click();
+  // The upload panel only renders once a collection is open — a reliable
+  // "collection is loaded" signal (same rationale as `openEmployeeHandbook`).
+  await expect(page.getByLabel('Chọn tệp để tải lên')).toBeVisible();
+}
