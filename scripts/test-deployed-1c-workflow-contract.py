@@ -242,57 +242,21 @@ class ComposeServicesParse:
     errors: list[str]
 
 
-UNQUOTED_SERVICE_KEY = re.compile(r"^  ([a-z0-9_-]+):\s*$")
-QUOTED_SERVICE_KEY = re.compile(r"""^  (?P<quote>['"])(?P<body>(?:\\.|[^'"])+)(?P=quote):\s*$""")
+CANONICAL_DIRECT_SERVICE_KEY = re.compile(r"^  ([a-z0-9_-]+):\s*$")
+CANONICAL_SERVICE_KEY_ERROR = "canonical unquoted service key grammar"
 
 
-def is_top_level_service_key_line(line: str) -> bool:
-    if not line.startswith("  ") or line.startswith("    "):
-        return False
+def is_direct_child_services_line(line: str) -> bool:
+    return line.startswith("  ") and not line.startswith("    ")
+
+
+def is_skipped_direct_child_line(line: str) -> bool:
     stripped = line.strip()
-    if not stripped or stripped.startswith("#"):
-        return False
-    return stripped.endswith(":")
+    return not stripped or stripped.startswith("#")
 
 
-def parse_service_key_line(line: str) -> tuple[str | None, list[str]]:
-    errors: list[str] = []
-    if not is_top_level_service_key_line(line):
-        return None, errors
-    unquoted = UNQUOTED_SERVICE_KEY.match(line)
-    if unquoted:
-        return unquoted.group(1), errors
-    quoted = QUOTED_SERVICE_KEY.match(line)
-    if quoted:
-        body = quoted.group("body")
-        errors.append(
-            "deploy/compose.poc.yml services section must not use quoted service keys: "
-            + f"{line.strip()!r}"
-        )
-        if re.fullmatch(r"[a-z0-9_-]+", body):
-            return body, errors
-        errors.append(
-            "deploy/compose.poc.yml quoted service key must be a simple "
-            f"[a-z0-9_-]+ identifier, got {body!r}"
-        )
-        return None, errors
-    errors.append(
-        "deploy/compose.poc.yml services section has unsupported service key syntax: "
-        + f"{line.strip()!r}"
-    )
-    return None, errors
-
-
-def _services_section_lines(compose_text: str) -> tuple[list[str], list[str]]:
-    match = re.search(r"^services:\n", compose_text, flags=re.MULTILINE)
-    if match is None:
-        return [], ["deploy/compose.poc.yml missing services: mapping"]
-    lines: list[str] = []
-    for line in compose_text[match.end() :].splitlines():
-        if re.match(r"^(?:networks|volumes|secrets|configs):", line):
-            break
-        lines.append(line)
-    return lines, []
+def is_canonical_direct_service_key_line(line: str) -> bool:
+    return CANONICAL_DIRECT_SERVICE_KEY.match(line) is not None
 
 
 def parse_compose_services(compose_text: str) -> ComposeServicesParse:
@@ -302,12 +266,18 @@ def parse_compose_services(compose_text: str) -> ComposeServicesParse:
 
     key_records: list[tuple[int, str]] = []
     for index, line in enumerate(lines):
-        if not is_top_level_service_key_line(line):
+        if not is_direct_child_services_line(line):
             continue
-        name, line_errors = parse_service_key_line(line)
-        errors.extend(line_errors)
-        if name is not None:
-            key_records.append((index, name))
+        if is_skipped_direct_child_line(line):
+            continue
+        match = CANONICAL_DIRECT_SERVICE_KEY.match(line)
+        if match:
+            key_records.append((index, match.group(1)))
+            continue
+        errors.append(
+            "deploy/compose.poc.yml services direct-child line must use "
+            f"{CANONICAL_SERVICE_KEY_ERROR} (`  [a-z0-9_-]+:`): {line.strip()!r}"
+        )
 
     blocks: dict[str, str] = {}
     for record_index, (line_index, name) in enumerate(key_records):
@@ -347,17 +317,36 @@ def reassemble_services_section(compose_text: str, new_service_lines: list[str])
     return before + body + after
 
 
+def _services_section_lines(compose_text: str) -> tuple[list[str], list[str]]:
+    match = re.search(r"^services:\n", compose_text, flags=re.MULTILINE)
+    if match is None:
+        return [], ["deploy/compose.poc.yml missing services: mapping"]
+    lines: list[str] = []
+    for line in compose_text[match.end() :].splitlines():
+        if re.match(r"^(?:networks|volumes|secrets|configs):", line):
+            break
+        lines.append(line)
+    return lines, []
+
+
+def compose_minio_contract_errors(
+    compose_text: str,
+    example: dict[str, str],
+) -> list[str]:
+    errors = compose_services_contract_errors(compose_text)
+    errors.extend(poc_runtime_minio_credential_errors(compose_text, example))
+    return errors
+
+
 def service_block_line_span(lines: list[str], service: str) -> tuple[int, int] | None:
     for index, line in enumerate(lines):
-        if not is_top_level_service_key_line(line):
-            continue
-        name, _ = parse_service_key_line(line)
-        if name != service:
+        match = CANONICAL_DIRECT_SERVICE_KEY.match(line)
+        if match is None or match.group(1) != service:
             continue
         start = index + 1
         end = len(lines)
         for next_index in range(index + 1, len(lines)):
-            if is_top_level_service_key_line(lines[next_index]):
+            if is_canonical_direct_service_key_line(lines[next_index]):
                 end = next_index
                 break
         return start, end
@@ -603,22 +592,27 @@ def remove_service_env_line(compose_text: str, service: str, env_key: str) -> st
     return mutate_service_block_lines(compose_text, service, mutator)
 
 
-def quote_service_key_line(compose_text: str, service: str) -> str:
+def mutate_canonical_service_key_line(
+    compose_text: str,
+    service: str,
+    new_line: str,
+) -> str:
     lines, _ = _services_section_lines(compose_text)
     for index, line in enumerate(lines):
-        if not is_top_level_service_key_line(line):
-            continue
-        name, _ = parse_service_key_line(line)
-        if name != service:
-            continue
-        lines[index] = f"  '{service}':"
-        return reassemble_services_section(compose_text, lines)
+        match = CANONICAL_DIRECT_SERVICE_KEY.match(line)
+        if match and match.group(1) == service:
+            lines[index] = new_line
+            return reassemble_services_section(compose_text, lines)
     return compose_text
+
+
+def quote_service_key_line(compose_text: str, service: str) -> str:
+    return mutate_canonical_service_key_line(compose_text, service, f"  '{service}':")
 
 
 def insert_unrelated_quoted_service(compose_text: str) -> str:
     insertion = [
-        "  'telemetry-sidecar':",
+        "  'telemetry-sidecar': # sidecar",
         "    image: alpine:latest",
         "    networks: [private]",
     ]
@@ -1155,10 +1149,9 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
             only_service="worker-delete",
         )
-        errors = compose_services_contract_errors(mutated)
-        errors.extend(poc_runtime_minio_credential_errors(mutated, example))
+        errors = compose_minio_contract_errors(mutated, example)
         self.assertTrue(
-            any("must not use quoted service keys" in error for error in errors),
+            any(CANONICAL_SERVICE_KEY_ERROR in error for error in errors),
             errors,
         )
 
@@ -1172,10 +1165,9 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
             only_service="api-restore-green",
         )
-        errors = compose_services_contract_errors(mutated)
-        errors.extend(poc_runtime_minio_credential_errors(mutated, example))
+        errors = compose_minio_contract_errors(mutated, example)
         self.assertTrue(
-            any("must not use quoted service keys" in error for error in errors),
+            any(CANONICAL_SERVICE_KEY_ERROR in error for error in errors),
             errors,
         )
 
@@ -1184,10 +1176,68 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
         mutated = insert_unrelated_quoted_service(compose_text)
         errors = compose_services_contract_errors(mutated)
         self.assertTrue(
-            any("must not use quoted service keys" in error for error in errors),
+            any(CANONICAL_SERVICE_KEY_ERROR in error for error in errors),
             errors,
         )
         self.assertIn("telemetry-sidecar", mutated)
+
+    def test_worker_embedding_inline_comment_with_root_credentials_fails_contract(
+        self,
+    ) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = mutate_canonical_service_key_line(
+            compose_text,
+            "worker-embedding",
+            "  worker-embedding: # comment",
+        )
+        mutated = swap_runtime_minio_defaults_in_compose(
+            mutated,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+            only_service="worker-embedding",
+        )
+        errors = compose_minio_contract_errors(mutated, example)
+        self.assertTrue(
+            any(CANONICAL_SERVICE_KEY_ERROR in error for error in errors),
+            errors,
+        )
+
+    def test_api_restore_green_anchor_with_root_credentials_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = mutate_canonical_service_key_line(
+            compose_text,
+            "api-restore-green",
+            "  api-restore-green: &restore_api",
+        )
+        mutated = swap_runtime_minio_defaults_in_compose(
+            mutated,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+            only_service="api-restore-green",
+        )
+        errors = compose_minio_contract_errors(mutated, example)
+        self.assertTrue(
+            any(CANONICAL_SERVICE_KEY_ERROR in error for error in errors),
+            errors,
+        )
+
+    def test_quoted_sidecar_with_comment_and_root_credentials_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_unrelated_quoted_service(compose_text)
+        mutated = swap_runtime_minio_defaults_in_compose(
+            mutated,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+            only_service="worker-convert",
+        )
+        errors = compose_minio_contract_errors(mutated, example)
+        self.assertTrue(
+            any(CANONICAL_SERVICE_KEY_ERROR in error for error in errors),
+            errors,
+        )
 
 
 def run_self_tests() -> int:
