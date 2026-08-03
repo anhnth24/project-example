@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import tempfile
@@ -378,6 +379,36 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    try:
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+    finally:
+        if temporary.is_file():
+            temporary.unlink(missing_ok=True)
+
+
+def purge_allowlisted_artifacts(input_path: Path, output_path: Path) -> None:
+    for path in (input_path, output_path):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def commit_synthesized_input(
+    input_path: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    errors = validate_report_schema(payload)
+    if errors:
+        raise ValueError("synthesized fallback report failed schema validation")
+    write_json_atomic(input_path, payload)
+
+
 def resolve_input_report(
     input_path: Path,
     *,
@@ -420,16 +451,25 @@ def render_file(
         expected_manifest_sha256=context.expected_manifest_sha256,
         input_failure_category=input_failure_category,
     )
-    errors = validate_report_schema(payload)
-    if errors:
-        raise ValueError("synthesized fallback report failed schema validation")
 
-    markdown = render_markdown(payload, context=context)
     if synthesized:
-        assert_artifacts_safe(payload, markdown)
-        write_json(input_path, payload)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(markdown, encoding="utf-8")
+        commit_synthesized_input(input_path, payload)
+
+    try:
+        errors = validate_report_schema(payload)
+        if errors:
+            raise ValueError("synthesized fallback report failed schema validation")
+
+        markdown = render_markdown(payload, context=context)
+        if synthesized:
+            assert_artifacts_safe(payload, markdown)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(markdown, encoding="utf-8")
+    except (OSError, ValueError):
+        if synthesized:
+            purge_allowlisted_artifacts(input_path, output_path)
+        raise
+
     return evaluate_gate_verdict(payload, context=context)
 
 
@@ -575,6 +615,53 @@ class RenderPhase1cDenialReportTests(unittest.TestCase):
             self.assertNotIn("Bearer SUPERSECRET123", markdown)
             self.assertNotIn("SUPERSECRET123", markdown)
             self.assertIn(FAILURE_RUNNER_OUTPUT_SCHEMA_INVALID, json_text)
+
+    JWT_SHAPED_REF = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+        "dozjgNryP4J3jVmNHl0w5N_XgL0YX3gc8"
+    )
+
+    def _assert_no_untrusted_secret_at_allowlisted_paths(
+        self,
+        input_path: Path,
+        output_path: Path,
+    ) -> None:
+        for path in (input_path, output_path):
+            if not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("SUPERSECRET123", text)
+            self.assertNotIn("Bearer SUPERSECRET123", text)
+
+    def test_jwt_trusted_ref_scan_failure_purges_untrusted_input(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "manifest-run.json"
+            output_path = root / "phase1c-denial-report.md"
+            payload = self.sample_payload()
+            payload["Bearer SUPERSECRET123"] = "ignored-value"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                render_file(
+                    input_path=input_path,
+                    output_path=output_path,
+                    context=self.sample_context(
+                        runner_exit_code=1,
+                        git_ref=self.JWT_SHAPED_REF,
+                    ),
+                )
+            self._assert_no_untrusted_secret_at_allowlisted_paths(input_path, output_path)
+            if input_path.is_file():
+                self.assertEqual(
+                    [],
+                    validate_report_schema(json.loads(input_path.read_text())),
+                )
+            if input_path.is_file() and output_path.is_file():
+                json_text = input_path.read_text(encoding="utf-8")
+                markdown = output_path.read_text(encoding="utf-8")
+                self.assertEqual([], scan_for_secret_shapes(json_text))
+                self.assertEqual([], scan_for_secret_shapes(markdown))
 
 
 def run_self_tests() -> int:
