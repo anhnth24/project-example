@@ -13,6 +13,8 @@ from typing import Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+ENV_EXAMPLE = REPO_ROOT / "deploy/.env.example"
+COMPOSE_POC = REPO_ROOT / "deploy/compose.poc.yml"
 JOB_NAME = "deployed-1c-integration"
 
 REQUIRED_STEP_ORDER = (
@@ -194,6 +196,58 @@ def parse_upload_paths(with_block: str | None) -> list[str]:
     ]
 
 
+def parse_env_example(path: Path) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        env[key.strip()] = value.strip()
+    return env
+
+
+def minio_fixture_boundary_errors(job_block: str) -> list[str]:
+    """Deployed test harness uses root for ephemeral buckets; app stack stays narrow."""
+    errors: list[str] = []
+    job_env = parse_job_env(job_block)
+    example = parse_env_example(ENV_EXAMPLE)
+    root_user = example.get("MARKHAND_MINIO_ROOT_USER")
+    root_pass = example.get("MARKHAND_MINIO_ROOT_PASSWORD")
+    app_key = example.get("MARKHAND_MINIO_ACCESS_KEY")
+    if not root_user or not root_pass or not app_key:
+        errors.append(
+            "deploy/.env.example must define MARKHAND_MINIO_ROOT_* and MARKHAND_MINIO_ACCESS_KEY"
+        )
+        return errors
+
+    test_key = job_env.get("MARKHAND_TEST_MINIO_ACCESS_KEY")
+    test_secret = job_env.get("MARKHAND_TEST_MINIO_SECRET_KEY")
+    if test_key != root_user:
+        errors.append(
+            "MARKHAND_TEST_MINIO_ACCESS_KEY must use POC root fixture identity "
+            f"({root_user!r}) for ephemeral markhand-it-* bucket lifecycle"
+        )
+    if test_secret != root_pass:
+        errors.append(
+            "MARKHAND_TEST_MINIO_SECRET_KEY must use POC root fixture password "
+            "for ephemeral markhand-it-* bucket lifecycle"
+        )
+    if test_key == app_key:
+        errors.append(
+            "MARKHAND_TEST_MINIO_ACCESS_KEY must differ from narrow application "
+            f"identity ({app_key!r})"
+        )
+
+    compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+    if "MARKHAND_MINIO_ACCESS_KEY:-markhand_app" not in compose_text:
+        errors.append(
+            "deploy/compose.poc.yml must keep narrow markhand_app MinIO defaults "
+            "for application/worker services"
+        )
+    return errors
+
+
 def deployed_job_contract_errors(job_block: str) -> list[str]:
     errors: list[str] = []
     steps = parse_job_steps(job_block)
@@ -336,6 +390,8 @@ def deployed_job_contract_errors(job_block: str) -> list[str]:
     if render_index <= teardown_index:
         errors.append("render must occur after teardown")
 
+    errors.extend(minio_fixture_boundary_errors(job_block))
+
     return errors
 
 
@@ -413,6 +469,29 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             any('quoted env transport' in error for error in errors),
             errors,
         )
+
+    def test_narrow_app_minio_for_test_harness_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        root_user = example["MARKHAND_MINIO_ROOT_USER"]
+        app_key = example["MARKHAND_MINIO_ACCESS_KEY"]
+        mutated = self.job_block.replace(
+            f"MARKHAND_TEST_MINIO_ACCESS_KEY: {root_user}",
+            f"MARKHAND_TEST_MINIO_ACCESS_KEY: {app_key}",
+            1,
+        )
+        errors = minio_fixture_boundary_errors(mutated)
+        self.assertTrue(
+            any("must use POC root fixture identity" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("must differ from narrow application" in error for error in errors),
+            errors,
+        )
+
+    def test_deployed_test_minio_uses_root_fixture_while_compose_app_stays_narrow(self) -> None:
+        errors = minio_fixture_boundary_errors(self.job_block)
+        self.assertEqual(errors, [], "\n".join(errors))
 
 
 def run_self_tests() -> int:

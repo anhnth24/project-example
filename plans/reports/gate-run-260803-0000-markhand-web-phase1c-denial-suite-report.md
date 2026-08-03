@@ -108,8 +108,8 @@ mkdir -p "$MARKHAND_1C_OUTPUT_DIR"
 export MARKHAND_TEST_DATABASE_URL=postgresql://markhand:markhand_poc_change_me@127.0.0.1:54330/markhand
 export MARKHAND_TEST_APP_DATABASE_URL=postgresql://markhand_app:markhand_app_poc_change_me@127.0.0.1:54330/markhand
 export MARKHAND_TEST_MINIO_ENDPOINT=http://127.0.0.1:9010
-export MARKHAND_TEST_MINIO_ACCESS_KEY=markhand_app
-export MARKHAND_TEST_MINIO_SECRET_KEY=markhand_app_poc_change_me
+export MARKHAND_TEST_MINIO_ACCESS_KEY=markhand_root
+export MARKHAND_TEST_MINIO_SECRET_KEY=markhand_root_poc_change_me
 export MARKHAND_TEST_MINIO_REGION=us-east-1
 export MARKHAND_TEST_QDRANT_URL=http://127.0.0.1:6343
 export MARKHAND_TEST_QDRANT_ADMIN_API_KEY=test-operator-admin-key
@@ -131,6 +131,18 @@ python3 scripts/render-phase1c-denial-report.py \
   --runner-exit-code "$RUNNER_EXIT" \
   --teardown-exit-code "$TEARDOWN_EXIT"
 ```
+
+## MinIO test fixture boundary (not IAM least-privilege evidence)
+
+Integration tests create/delete ephemeral `markhand-it-*` buckets via
+`test_minio_client()`. The deployed job therefore sets
+`MARKHAND_TEST_MINIO_ACCESS_KEY` / `MARKHAND_TEST_MINIO_SECRET_KEY` to the POC
+**root fixture** credentials from `deploy/.env.example`
+(`MARKHAND_MINIO_ROOT_USER` / `MARKHAND_MINIO_ROOT_PASSWORD`). Application and
+worker containers in `deploy/compose.poc.yml` continue to use the narrow
+`markhand_app` key scoped to `MARKHAND_MINIO_BUCKET` only. Root in the test
+harness is **bootstrap/ephemeral-bucket lifecycle only** — it does not prove
+MinIO IAM least-privilege enforcement for runtime services.
 
 ## Artifact
 

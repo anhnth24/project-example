@@ -436,8 +436,12 @@ jobs:
       MARKHAND_TEST_DATABASE_URL: postgresql://markhand:markhand_poc_change_me@127.0.0.1:54330/markhand
       MARKHAND_TEST_APP_DATABASE_URL: postgresql://markhand_app:markhand_app_poc_change_me@127.0.0.1:54330/markhand
       MARKHAND_TEST_MINIO_ENDPOINT: http://127.0.0.1:9010
-      MARKHAND_TEST_MINIO_ACCESS_KEY: markhand_app
-      MARKHAND_TEST_MINIO_SECRET_KEY: markhand_app_poc_change_me
+      # Ephemeral integration buckets (markhand-it-*) need MinIO admin; narrow
+      # markhand_app policy is scoped to MARKHAND_MINIO_BUCKET only (see
+      # deploy/poc/minio-init.sh). Root fixture creds are bootstrap-only in
+      # deploy/.env.example — not application/worker container identity.
+      MARKHAND_TEST_MINIO_ACCESS_KEY: markhand_root
+      MARKHAND_TEST_MINIO_SECRET_KEY: markhand_root_poc_change_me
       MARKHAND_TEST_MINIO_REGION: us-east-1
       MARKHAND_TEST_QDRANT_URL: http://127.0.0.1:6343
       # POC Qdrant has auth disabled like dev's; value only satisfies admin
