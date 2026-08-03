@@ -158,6 +158,11 @@ fn historical_retrieval_acl_predicate(
     )
 }
 
+/// Query text after accent-fold + stop-word filtering for production FTS.
+pub fn normalized_fts_query_for_retrieval(query: &str) -> String {
+    normalize_fts_query(query)
+}
+
 fn normalize_fts_query(query: &str) -> String {
     const QUESTION_STOP_WORDS: &[&str] = &["bao", "nhieu", "la", "gi", "nao"];
     let normalized = fileconv_core::intelligence::normalize_search_text(query);
@@ -394,6 +399,142 @@ pub async fn fts_search(
         }
     };
     rows.iter().map(map_fts_candidate).collect()
+}
+
+/// Fail-closed diagnostic parts for integration tests when HTTP search returns
+/// no hits despite indexed chunks. Never includes chunk body text or secrets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FtsVisibilitySnapshotParts {
+    pub normalized_query: String,
+    pub allowed_collection_count: usize,
+    pub document_collection_in_allowed: bool,
+    pub resolve_scope_collection_count: usize,
+    pub document_collection_in_scope: bool,
+    pub lexical_candidate_count: usize,
+    pub hydration_row_count: usize,
+    pub chunk_rows: Vec<String>,
+}
+
+pub fn format_fts_visibility_snapshot(parts: &FtsVisibilitySnapshotParts) -> String {
+    let mut lines = vec![
+        format!("normalized_query={}", parts.normalized_query),
+        format!(
+            "allowed_collection_count={}",
+            parts.allowed_collection_count
+        ),
+        format!(
+            "document_collection_in_allowed={}",
+            parts.document_collection_in_allowed
+        ),
+        format!(
+            "resolve_scope_collection_count={}",
+            parts.resolve_scope_collection_count
+        ),
+        format!(
+            "document_collection_in_scope={}",
+            parts.document_collection_in_scope
+        ),
+        format!("lexical_candidate_count={}", parts.lexical_candidate_count),
+        format!("hydration_row_count={}", parts.hydration_row_count),
+    ];
+    if parts.chunk_rows.is_empty() {
+        lines.push("chunk_rows=none".into());
+    } else {
+        lines.extend(parts.chunk_rows.iter().cloned());
+    }
+    lines.join("; ")
+}
+
+/// Collects production-path FTS visibility diagnostics for one indexed document.
+pub async fn collect_fts_visibility_snapshot_parts(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_ids: &[Uuid],
+    document_id: Uuid,
+    document_collection_id: Uuid,
+    query: &str,
+    limit: usize,
+) -> Result<FtsVisibilitySnapshotParts, DbError> {
+    let normalized = normalized_fts_query_for_retrieval(query);
+    let visibility = VersionVisibility::Current;
+    let lexical = fts_search(txn, ctx, collection_ids, query, &visibility, limit).await?;
+    let identities: Vec<String> = lexical
+        .iter()
+        .map(|candidate| candidate.chunk_identity_sha256.clone())
+        .collect();
+    let hydration = if identities.is_empty() {
+        Vec::new()
+    } else {
+        hydrate_chunks_by_identity(txn, ctx, collection_ids, &identities, &visibility).await?
+    };
+
+    let acl = current_retrieval_acl_predicate("d.org_id", "d.collection_id", "$4", "$5", "$6");
+    let chunk_sql = format!(
+        "SELECT c.id::text,
+                d.state::text AS doc_state,
+                dv.publication_state::text,
+                dv.is_current,
+                im.is_active,
+                im.state::text AS generation_state,
+                c.tsv @@ plainto_tsquery('simple', $3) AS tsv_match_raw,
+                c.tsv @@ plainto_tsquery('simple', $7) AS tsv_match_normalized,
+                ({acl}) AS acl_predicate_pass
+         FROM chunks c
+         JOIN documents d
+           ON d.org_id = c.org_id AND d.id = c.document_id
+         JOIN document_versions dv
+           ON dv.org_id = c.org_id
+          AND dv.document_id = c.document_id
+          AND dv.id = c.version_id
+         JOIN index_metadata im
+           ON im.org_id = c.org_id AND im.id = c.index_metadata_id
+         WHERE c.org_id = $1 AND c.document_id = $2
+         ORDER BY c.id"
+    );
+    let chunk_rows = txn
+        .query(
+            &chunk_sql,
+            &[
+                &ctx.org_id(),
+                &document_id,
+                &query,
+                &ctx.user_id(),
+                &visibility.required_permission(),
+                &acl_read_access_param(),
+                &normalized,
+            ],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            format!(
+                "chunk {} doc_state={} publication_state={} is_current={} \
+                 generation_active={} generation_state={} tsv_match_raw={} \
+                 tsv_match_normalized={} acl_predicate_pass={}",
+                row.get::<_, String>(0),
+                row.get::<_, String>(1),
+                row.get::<_, String>(2),
+                row.get::<_, bool>(3),
+                row.get::<_, bool>(4),
+                row.get::<_, String>(5),
+                row.get::<_, bool>(6),
+                row.get::<_, bool>(7),
+                row.get::<_, bool>(8),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let allowed = ctx.allowed_collection_ids();
+    Ok(FtsVisibilitySnapshotParts {
+        normalized_query: normalized,
+        allowed_collection_count: allowed.len(),
+        document_collection_in_allowed: allowed.contains(&document_collection_id),
+        resolve_scope_collection_count: collection_ids.len(),
+        document_collection_in_scope: collection_ids.contains(&document_collection_id),
+        lexical_candidate_count: lexical.len(),
+        hydration_row_count: hydration.len(),
+        chunk_rows,
+    })
 }
 
 /// Hydrates candidate chunk identities from the active index generation only.
@@ -836,6 +977,50 @@ mod tests {
             "bao nhieu",
             "all-stop-word questions must retain a non-empty fallback"
         );
+    }
+
+    #[test]
+    fn marker_shaped_denial_query_normalizes_to_non_empty_tokens() {
+        let marker = format!("phase1c-marker-alpha-{}", "a".repeat(32));
+        let normalized = normalized_fts_query_for_retrieval(&marker);
+        assert!(!normalized.is_empty());
+        assert!(normalized.contains("phase1c"));
+        assert!(normalized.contains("marker"));
+    }
+
+    #[test]
+    fn fts_visibility_snapshot_format_includes_production_predicate_fields() {
+        let rendered = format_fts_visibility_snapshot(&FtsVisibilitySnapshotParts {
+            normalized_query: "phase1c marker alpha".into(),
+            allowed_collection_count: 3,
+            document_collection_in_allowed: true,
+            resolve_scope_collection_count: 3,
+            document_collection_in_scope: true,
+            lexical_candidate_count: 0,
+            hydration_row_count: 0,
+            chunk_rows: vec![
+                "chunk abc doc_state=indexed publication_state=published is_current=true \
+                 generation_active=true generation_state=active tsv_match_raw=true \
+                 tsv_match_normalized=false acl_predicate_pass=false"
+                    .into(),
+            ],
+        });
+        for needle in [
+            "normalized_query=",
+            "allowed_collection_count=",
+            "document_collection_in_allowed=",
+            "resolve_scope_collection_count=",
+            "document_collection_in_scope=",
+            "lexical_candidate_count=",
+            "hydration_row_count=",
+            "tsv_match_normalized=",
+            "acl_predicate_pass=",
+        ] {
+            assert!(
+                rendered.contains(needle),
+                "snapshot missing {needle:?}: {rendered}"
+            );
+        }
     }
 
     /// 1C-06: chunk/claim queries route ACL through the shared
