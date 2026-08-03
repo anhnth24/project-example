@@ -22,9 +22,20 @@ JOB_NAME = "deployed-1c-integration"
 NARROW_MINIO_ACCESS_DEFAULT = "${MARKHAND_MINIO_ACCESS_KEY:-markhand_app}"
 NARROW_MINIO_SECRET_DEFAULT = "${MARKHAND_MINIO_SECRET_KEY:-markhand_app_poc_change_me}"
 
-BOOTSTRAP_MINIO_SERVICES = frozenset({"minio-init"})
+BOOTSTRAP_MINIO_SERVICES = frozenset({"minio-init", "minio", "minio-restore-green"})
 
-MINIO_CREDENTIAL_ENV_KEYS = frozenset(
+MINIO_CREDENTIAL_REFERENCE_KEYS = frozenset(
+    {
+        "MARKHAND_MINIO_ACCESS_KEY",
+        "MARKHAND_MINIO_SECRET_KEY",
+        "MARKHAND_MINIO_ROOT_USER",
+        "MARKHAND_MINIO_ROOT_PASSWORD",
+        "MINIO_ROOT_USER",
+        "MINIO_ROOT_PASSWORD",
+    }
+)
+
+MINIO_NARROW_CREDENTIAL_ENV_KEYS = frozenset(
     {"MARKHAND_MINIO_ACCESS_KEY", "MARKHAND_MINIO_SECRET_KEY"}
 )
 
@@ -387,6 +398,19 @@ def parse_service_environment(service_block: str) -> dict[str, str]:
         if not stripped or stripped.startswith("#"):
             continue
         entry = re.sub(r"\s+#.*$", "", stripped)
+
+        list_match = re.match(r"^-\s*(.+)$", entry)
+        if list_match:
+            item = list_match.group(1).strip().strip('"').strip("'")
+            if "=" in item:
+                key, _, value = item.partition("=")
+                env[key.strip()] = value.strip()
+                continue
+            key_match = re.match(r"^([A-Z0-9_]+):\s*(.+)$", item)
+            if key_match:
+                env[key_match.group(1)] = key_match.group(2).strip()
+            continue
+
         key_match = re.match(r"^([A-Z0-9_]+):\s*(.+)$", entry)
         if key_match is None:
             continue
@@ -394,9 +418,33 @@ def parse_service_environment(service_block: str) -> dict[str, str]:
     return env
 
 
-def service_has_markhand_minio_credentials(service_block: str) -> bool:
-    env = parse_service_environment(service_block)
-    return any(key in env for key in MINIO_CREDENTIAL_ENV_KEYS)
+def _minio_credential_key_token_pattern(key: str) -> re.Pattern[str]:
+    return re.compile(rf"(?<![A-Z0-9_]){re.escape(key)}(?![A-Z0-9_])")
+
+
+def service_block_references_minio_credential_key(service_block: str, key: str) -> bool:
+    return _minio_credential_key_token_pattern(key).search(service_block) is not None
+
+
+def service_has_minio_credential_references(service_block: str) -> bool:
+    return any(
+        service_block_references_minio_credential_key(service_block, key)
+        for key in MINIO_CREDENTIAL_REFERENCE_KEYS
+    )
+
+
+def service_block_references_minio_root_credentials(
+    service_block: str,
+    *,
+    root_user: str,
+    root_pass: str,
+) -> bool:
+    lowered = service_block.lower()
+    if root_user.lower() in lowered or root_pass.lower() in lowered:
+        return True
+    if "minio_root" in lowered or "markhand_root" in lowered:
+        return True
+    return False
 
 
 def poc_runtime_minio_credential_services(compose_text: str) -> frozenset[str]:
@@ -404,7 +452,7 @@ def poc_runtime_minio_credential_services(compose_text: str) -> frozenset[str]:
     for name, block in parse_compose_service_blocks(compose_text).items():
         if name in BOOTSTRAP_MINIO_SERVICES:
             continue
-        if service_has_markhand_minio_credentials(block):
+        if service_has_minio_credential_references(block):
             services.add(name)
     return frozenset(services)
 
@@ -449,6 +497,59 @@ def insert_nonstandard_runtime_minio_service(
     return reassemble_services_section(compose_text, lines + insertion)
 
 
+def insert_list_form_runtime_minio_service(
+    compose_text: str,
+    *,
+    access_default: str,
+    secret_default: str,
+    service: str = "archive-replay",
+) -> str:
+    insertion = [
+        f"  {service}:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment:",
+        f"      - MARKHAND_MINIO_ACCESS_KEY=${{MARKHAND_MINIO_ACCESS_KEY:-{access_default}}}",
+        f"      - MARKHAND_MINIO_SECRET_KEY=${{MARKHAND_MINIO_SECRET_KEY:-{secret_default}}}",
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
+
+
+def insert_root_variable_only_runtime_minio_service(
+    compose_text: str,
+    *,
+    service: str = "archive-replay",
+) -> str:
+    insertion = [
+        f"  {service}:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment:",
+        "      MARKHAND_MINIO_ROOT_USER: ${MARKHAND_MINIO_ROOT_USER:-markhand_root}",
+        "      MARKHAND_MINIO_ROOT_PASSWORD: ${MARKHAND_MINIO_ROOT_PASSWORD:-markhand_root_poc_change_me}",
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
+
+
+def insert_quoted_root_variable_runtime_minio_service(
+    compose_text: str,
+    *,
+    service: str = "archive-replay",
+) -> str:
+    insertion = [
+        f"  {service}:",
+        "    image: alpine:latest",
+        "    networks: [private]",
+        "    environment:",
+        '      "MARKHAND_MINIO_ROOT_USER": ${MARKHAND_MINIO_ROOT_USER:-markhand_root}',
+        '      "MARKHAND_MINIO_ROOT_PASSWORD": ${MARKHAND_MINIO_ROOT_PASSWORD:-markhand_root_poc_change_me}',
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
+
+
 def poc_runtime_minio_credential_errors(
     compose_text: str,
     example: dict[str, str],
@@ -481,11 +582,31 @@ def poc_runtime_minio_credential_errors(
         if service not in blocks:
             errors.append(f"deploy/compose.poc.yml missing runtime service {service!r}")
             continue
-        env = parse_service_environment(blocks[service])
+        block = blocks[service]
+        env = parse_service_environment(block)
+        if (
+            service_block_references_minio_credential_key(block, "MARKHAND_MINIO_ROOT_USER")
+            or service_block_references_minio_credential_key(block, "MARKHAND_MINIO_ROOT_PASSWORD")
+        ):
+            errors.append(f"{service} must not define MARKHAND_MINIO_ROOT_* outside bootstrap services")
+        if service_block_references_minio_root_credentials(
+            block,
+            root_user=root_user,
+            root_pass=root_pass,
+        ):
+            errors.append(f"{service} must not reference MinIO root credentials")
         if "MARKHAND_MINIO_ACCESS_KEY" not in env:
             errors.append(f"{service} must define MARKHAND_MINIO_ACCESS_KEY")
+            if service_block_references_minio_credential_key(block, "MARKHAND_MINIO_ACCESS_KEY"):
+                errors.append(
+                    f"{service} MARKHAND_MINIO_ACCESS_KEY must use canonical mapping syntax"
+                )
         if "MARKHAND_MINIO_SECRET_KEY" not in env:
             errors.append(f"{service} must define MARKHAND_MINIO_SECRET_KEY")
+            if service_block_references_minio_credential_key(block, "MARKHAND_MINIO_SECRET_KEY"):
+                errors.append(
+                    f"{service} MARKHAND_MINIO_SECRET_KEY must use canonical mapping syntax"
+                )
         if "MARKHAND_MINIO_ACCESS_KEY" not in env or "MARKHAND_MINIO_SECRET_KEY" not in env:
             continue
 
@@ -501,16 +622,6 @@ def poc_runtime_minio_credential_errors(
                 f"{service} MARKHAND_MINIO_SECRET_KEY must narrow-default to markhand_app secret "
                 f"({NARROW_MINIO_SECRET_DEFAULT!r}, got {secret!r})"
             )
-        for label, value in (("access", access), ("secret", secret)):
-            lowered = value.lower()
-            if root_user.lower() in lowered or "minio_root" in lowered:
-                errors.append(
-                    f"{service} must not reference MinIO root credentials in {label} env"
-                )
-            if "markhand_root" in lowered:
-                errors.append(
-                    f"{service} must not reference markhand_root in {label} env"
-                )
     return errors
 
 
@@ -1047,6 +1158,64 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             any("archive-replay MARKHAND_MINIO_ACCESS_KEY" in error for error in errors),
             errors,
         )
+
+    def test_list_form_runtime_minio_service_with_root_credentials_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_list_form_runtime_minio_service(
+            compose_text,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+        )
+        errors = poc_runtime_minio_credential_errors(mutated, example)
+        self.assertTrue(
+            any("archive-replay MARKHAND_MINIO_ACCESS_KEY" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("archive-replay must not reference MinIO root credentials" in error for error in errors),
+            errors,
+        )
+
+    def test_root_variable_only_runtime_minio_service_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_root_variable_only_runtime_minio_service(compose_text)
+        errors = poc_runtime_minio_credential_errors(mutated, example)
+        self.assertTrue(
+            any("archive-replay must define MARKHAND_MINIO_ACCESS_KEY" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("archive-replay must not define MARKHAND_MINIO_ROOT_*" in error for error in errors),
+            errors,
+        )
+
+    def test_quoted_root_environment_key_on_nonstandard_service_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_quoted_root_variable_runtime_minio_service(compose_text)
+        runtime = poc_runtime_minio_credential_services(mutated)
+        self.assertIn("archive-replay", runtime)
+        errors = poc_runtime_minio_credential_errors(mutated, example)
+        self.assertTrue(
+            any("archive-replay must not define MARKHAND_MINIO_ROOT_*" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("archive-replay must define MARKHAND_MINIO_ACCESS_KEY" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("archive-replay must define MARKHAND_MINIO_SECRET_KEY" in error for error in errors),
+            errors,
+        )
+
+    def test_bootstrap_minio_services_remain_outside_runtime_contract(self) -> None:
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        runtime = poc_runtime_minio_credential_services(compose_text)
+        self.assertNotIn("minio", runtime)
+        self.assertNotIn("minio-init", runtime)
 
     def test_all_runtime_services_use_narrow_minio_defaults(self) -> None:
         example = parse_env_example(ENV_EXAMPLE)

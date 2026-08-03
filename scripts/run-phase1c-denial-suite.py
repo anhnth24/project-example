@@ -65,10 +65,13 @@ RUST_FN_DECL_RE = re.compile(
 
 SENSITIVE_JSON_KEY_RE = re.compile(
     r"(?i)^(?:password|passwd|secret|token|authorization|api[_-]?key|access[_-]?key|"
+    r"access[_-]?token|accesstoken|"
     r"private[_-]?key|signing[_-]?key|client[_-]?secret|refresh[_-]?token|"
     r"database_url|jwt_secret|env|environment|"
     r"markhand_[a-z0-9_]*(?:secret|password|token|api_key|access_key|private_key|signing_key))$"
 )
+
+STRUCTURED_REDACTED = "__REDACTED__"
 
 SENSITIVE_JSON_KV_REDACT_RE = re.compile(
     r'(?i)"('
@@ -83,7 +86,7 @@ SENSITIVE_JSON_KV_RE = re.compile(
     r"access[_-]?token|refresh[_-]?token|"
     r"password|passwd|secret|token|api[_-]?key|"
     r"access[_-]?key|private[_-]?key|client[_-]?secret"
-    r')"\s*:\s*"(?!\[REDACTED\])[^"]*"'
+    r')"\s*:\s*"(?!\[REDACTED\]|__REDACTED__|<REDACTED>)[^"]*"'
 )
 
 COOKIE_HEADER_REDACT_RE = re.compile(r"(?i)(?:Set-)?Cookie:\s*[^\n\r]+")
@@ -412,14 +415,14 @@ def validate_manifest_schema(manifest: DenialManifest) -> list[str]:
                 errors.append(
                     f"executable manifest row {row.id} cannot declare coverageState=deferred"
                 )
-            if not row.binary or not row.binary.strip():
+            if not isinstance(row.binary, str) or not row.binary.strip():
                 errors.append(f"executable manifest row {row.id} missing binary")
             elif not is_safe_binary_identifier(row.binary):
                 errors.append(
                     f"executable manifest row {row.id} binary {row.binary!r} is not a safe "
                     "Rust integration target identifier"
                 )
-            if not row.test_name or not row.test_name.strip():
+            if not isinstance(row.test_name, str) or not row.test_name.strip():
                 errors.append(f"executable manifest row {row.id} missing testName")
     return errors
 
@@ -670,7 +673,7 @@ def build_cargo_list_command(binary: str) -> list[str]:
 
 
 def parse_cargo_test_list_output(text: str) -> set[str]:
-    """Return short test names registered in the Cargo test harness."""
+    """Return full libtest harness names registered in the Cargo test harness."""
     registered: set[str] = set()
     for line in text.splitlines():
         stripped = line.strip()
@@ -679,8 +682,7 @@ def parse_cargo_test_list_output(text: str) -> set[str]:
         match = re.match(r"^(.+): (?:test|ignored)$", stripped)
         if match is None:
             continue
-        full_name = match.group(1)
-        registered.add(full_name.rsplit("::", 1)[-1])
+        registered.add(match.group(1))
     return registered
 
 
@@ -848,7 +850,7 @@ def _redact_json_value(value: Any, *, fixture: DenialFixture | None) -> Any:
         out: dict[str, Any] = {}
         for key, item in value.items():
             if isinstance(key, str) and SENSITIVE_JSON_KEY_RE.match(key):
-                out[key] = "<REDACTED>"
+                out[key] = STRUCTURED_REDACTED
             else:
                 out[key] = _redact_json_value(item, fixture=fixture)
         return out
@@ -1363,7 +1365,7 @@ class DenialRunnerSelfTests(unittest.TestCase):
         self.assertIn("--list", executor.calls[0])
         self.assertNotIn("--nocapture", executor.calls[0])
 
-    def test_parse_cargo_test_list_output_extracts_short_names_from_libtest_lines(self) -> None:
+    def test_parse_cargo_test_list_output_keeps_full_libtest_harness_names(self) -> None:
         # Representative `cargo test --test api_http_contracts -- --list --include-ignored`
         # output (captured manually; self-tests must stay hermetic — no subprocess).
         sample = """
@@ -1378,12 +1380,179 @@ ignored_live_case: ignored
         self.assertEqual(
             registered,
             {
-                "formatted_snapshot_includes_required_field_names",
-                "allow_success_rejects_401_but_accepts_2xx",
+                "common::fts_visibility_diagnostic::tests::formatted_snapshot_includes_required_field_names",
+                "common::multi_org_denial::unit_tests::allow_success_rejects_401_but_accepts_2xx",
                 "live_http_retrieval_refuses_foreign_collection_scope",
                 "ignored_live_case",
             },
         )
+
+    def test_nested_harness_name_does_not_certify_top_level_manifest_name(self) -> None:
+        self.write_source("api_http_contracts", ["orphan_test"])
+        manifest_path = self.write_manifest(
+            [
+                {
+                    "id": "denial-collision",
+                    "binary": "api_http_contracts",
+                    "testName": "orphan_test",
+                    "operationId": "ask",
+                    "guardInventoryRef": "ask",
+                    "layer": "http",
+                    "status": "executable",
+                }
+            ]
+        )
+        manifest = load_manifest(manifest_path)
+        executor = FakeExecutor(
+            list_outcomes={
+                "api_http_contracts": FakeExecutorOutcome(
+                    stdout="nested::orphan_test: test\n",
+                )
+            }
+        )
+        errors = validate_executable_harness_registration(
+            manifest,
+            executor=executor,
+            repo_root=self.root,
+            env=self.required_env,
+        )
+        self.assertTrue(
+            any("denial-collision" in error and "not registered in cargo harness" in error for error in errors),
+            errors,
+        )
+
+    def test_exact_top_level_harness_name_certifies_manifest_row(self) -> None:
+        self.write_source("api_http_contracts", ["orphan_test"])
+        manifest_path = self.write_manifest(
+            [
+                {
+                    "id": "denial-exact",
+                    "binary": "api_http_contracts",
+                    "testName": "orphan_test",
+                    "operationId": "ask",
+                    "guardInventoryRef": "ask",
+                    "layer": "http",
+                    "status": "executable",
+                }
+            ]
+        )
+        manifest = load_manifest(manifest_path)
+        executor = FakeExecutor(
+            list_outcomes={
+                "api_http_contracts": FakeExecutorOutcome(
+                    stdout="orphan_test: test\nnested::orphan_test: test\n",
+                )
+            }
+        )
+        errors = validate_executable_harness_registration(
+            manifest,
+            executor=executor,
+            repo_root=self.root,
+            env=self.required_env,
+        )
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_malformed_executable_non_string_binary_fails_closed_without_cargo(self) -> None:
+        manifest_path = self.root / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "rows": [
+                        {
+                            "id": "denial-non-string-binary",
+                            "binary": 123,
+                            "testName": "some_test",
+                            "operationId": "ask",
+                            "guardInventoryRef": "ask",
+                            "layer": "http",
+                            "status": "executable",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        executor = FakeExecutor()
+        exit_code, report = run_suite(
+            manifest_path=manifest_path,
+            output_path=self.root / "report.json",
+            repo_root=self.root,
+            tests_root=self.tests_root,
+            executor=executor,
+            env=self.required_env,
+            git_sha_resolver=lambda _root: "k" * 40,
+        )
+        self.assertEqual(exit_code, 2)
+        assert report is not None
+        self.assertTrue(
+            any("denial-non-string-binary" in failure and "missing binary" in failure for failure in report.failures),
+            report.failures,
+        )
+        self.assertEqual(executor.calls, [])
+        self.assertTrue((self.root / "report.json").is_file())
+
+    def test_malformed_executable_non_string_test_name_fails_closed_without_cargo(self) -> None:
+        manifest_path = self.root / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "rows": [
+                        {
+                            "id": "denial-non-string-test-name",
+                            "binary": "api_http_contracts",
+                            "testName": ["not", "a", "string"],
+                            "operationId": "ask",
+                            "guardInventoryRef": "ask",
+                            "layer": "http",
+                            "status": "executable",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        executor = FakeExecutor()
+        exit_code, report = run_suite(
+            manifest_path=manifest_path,
+            output_path=self.root / "report.json",
+            repo_root=self.root,
+            tests_root=self.tests_root,
+            executor=executor,
+            env=self.required_env,
+            git_sha_resolver=lambda _root: "l" * 40,
+        )
+        self.assertEqual(exit_code, 2)
+        assert report is not None
+        self.assertTrue(
+            any(
+                "denial-non-string-test-name" in failure and "missing testName" in failure
+                for failure in report.failures
+            ),
+            report.failures,
+        )
+        self.assertEqual(executor.calls, [])
+
+    def test_redact_report_dict_structured_access_token_has_no_json_residual(self) -> None:
+        secret = "supersecret123456789"
+        raw_report = {
+            "gitShaFull": "m" * 40,
+            "manifestSha256": "n" * 64,
+            "failures": [],
+            "findings": [],
+            "leakageCount": 0,
+            "redactionScan": {"passed": True, "findings": []},
+            "tokenPayload": {"access_token": secret, "accessToken": secret},
+        }
+        redacted = redact_report_dict(raw_report)
+        serialized = json.dumps(redacted, sort_keys=True)
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn("supersecret", serialized.lower())
+        self.assertEqual(redacted["tokenPayload"]["access_token"], STRUCTURED_REDACTED)
+        self.assertEqual(redacted["tokenPayload"]["accessToken"], STRUCTURED_REDACTED)
+        self.assertEqual(scan_for_secret_shapes(serialized), [])
+        self.assertTrue(redacted.get("redactionScan", {}).get("passed", True))
 
     def test_malformed_executable_missing_binary_fails_closed_without_cargo(self) -> None:
         manifest_path = self.write_manifest(
