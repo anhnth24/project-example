@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import io
 import json
 import os
 import re
@@ -73,7 +74,7 @@ JWT_RE = re.compile(
     r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"
 )
 ASSIGN_SECRET_RE = re.compile(
-    r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[=:]\s*"
+    r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?(?:key|token)|private[_-]?key)\s*[=:]\s*"
     r"([^\s'\"\\]+|'[^']*'|\"[^\"]*\")"
 )
 DB_URL_RE = re.compile(r"(?i)\b(postgres(?:ql)?|mysql|mongodb|redis)://[^\s'\"]+")
@@ -697,18 +698,18 @@ def scan_for_secret_shapes(text: str) -> list[str]:
 
 
 def redact_text(text: str, *, fixture: DenialFixture | None = None) -> str:
-    out = PEM_RE.sub("<REDACTED_PEM>", text)
-    out = BEARER_RE.sub("Bearer <REDACTED_BEARER>", out)
-    out = JWT_RE.sub("<REDACTED_JWT>", out)
-    out = ASSIGN_SECRET_RE.sub(r"\1=<REDACTED_SECRET>", out)
-    out = MARKHAND_ENV_ASSIGN_RE.sub(r"\1=<REDACTED_ENV>", out)
-    out = DB_URL_RE.sub("<REDACTED_DATABASE_URL>", out)
-    out = CI_SECRET_RE.sub(r"\1=<REDACTED_CI_SECRET>", out)
+    out = PEM_RE.sub("<redacted pem block>", text)
+    out = BEARER_RE.sub("Bearer (redacted)", out)
+    out = JWT_RE.sub("(jwt redacted)", out)
+    out = ASSIGN_SECRET_RE.sub(r"\1 (redacted)", out)
+    out = MARKHAND_ENV_ASSIGN_RE.sub(r"\1 (redacted)", out)
+    out = DB_URL_RE.sub("(database url redacted)", out)
+    out = CI_SECRET_RE.sub(r"\1 (redacted)", out)
     if fixture is not None:
         for needle in static_foreign_needles(fixture):
             if needle.value:
                 pattern = re.compile(re.escape(needle.value), re.IGNORECASE)
-                out = pattern.sub(f"<REDACTED_{needle.category.upper()}>", out)
+                out = pattern.sub(f"({needle.category} redacted)", out)
     return out
 
 
@@ -1504,6 +1505,75 @@ async fn target_nested_block_comment() {}
         serialized = json.dumps(redacted, sort_keys=True)
         self.assertNotIn(canary, serialized)
         self.assertNotIn("phase1c-selftest-canary-token-value", serialized)
+
+    def test_redacted_outputs_have_no_residual_secret_shape_labels(self) -> None:
+        samples = {
+            "assignment_access_token": "access_token=supersecret123456789",
+            "assignment_secret": "secret=supersecret123456789",
+            "assignment_api_key": "api_key=supersecret123456789",
+            "markhand_env": "MARKHAND_TEST_MINIO_SECRET_KEY=markhand_app_poc_change_me",
+            "ci_secret": "GITHUB_TOKEN=ghp_supersecret1234567890",
+            "bearer": "Authorization: Bearer supersecret123456789",
+            "jwt": (
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+                "eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+                "abcdefghijklmnopqrstuvwxyz1234567890"
+            ),
+            "database_url": "postgresql://markhand:markhand_poc_change_me@127.0.0.1:54330/markhand",
+            "pem": (
+                "-----BEGIN RSA PRIVATE KEY-----\n"
+                "MIIEpAIBAAKCAQEAabc123\n"
+                "-----END RSA PRIVATE KEY-----"
+            ),
+        }
+        for label, raw in samples.items():
+            with self.subTest(label=label):
+                redacted = redact_text(raw)
+                self.assertNotIn("supersecret", redacted.lower())
+                self.assertNotIn("ghp_", redacted)
+                self.assertNotIn("markhand_poc_change_me", redacted)
+                self.assertNotIn("BEGIN RSA PRIVATE KEY", redacted)
+                self.assertNotIn("eyJhbGci", redacted)
+                residuals = scan_for_secret_shapes(redacted)
+                self.assertEqual(
+                    residuals,
+                    [],
+                    f"redacted output still matched secret shapes: {redacted!r}",
+                )
+
+    def test_unredacted_secret_still_triggers_residual_scan_and_tail_suppression(self) -> None:
+        leaked = "api_key=still_leaked_secret_value_123456789"
+        self.assertIn("assignment_secret", scan_for_secret_shapes(leaked))
+
+        redacted = redact_text(leaked)
+        self.assertNotIn("still_leaked_secret_value", redacted)
+        self.assertEqual(scan_for_secret_shapes(redacted), [])
+
+        child = ChildResult(
+            binary="multi_org_denial",
+            exit_code=101,
+            stdout="",
+            stderr=f"thread panicked\n{leaked}\n",
+        )
+        tail = bound_capture(child.stdout + child.stderr)
+        if scan_for_secret_shapes(tail):
+            tail = "<suppressed: residual secret shapes survived redaction>"
+        self.assertEqual(tail, "<suppressed: residual secret shapes survived redaction>")
+        self.assertNotIn("still_leaked_secret_value", tail)
+
+    def test_redacted_failure_tail_echoes_diagnostic_output_when_clean(self) -> None:
+        child = ChildResult(
+            binary="multi_org_denial",
+            exit_code=101,
+            stdout="",
+            stderr="thread 'test' panicked at crates/server/tests/multi_org_denial.rs:42:5\n",
+        )
+        buffer = io.StringIO()
+        emit_redacted_failure_output([child], fixture=None, stream=buffer)
+        rendered = buffer.getvalue()
+        self.assertIn("redacted output tail: binary multi_org_denial", rendered)
+        self.assertIn("panicked at crates/server/tests/multi_org_denial.rs", rendered)
+        self.assertNotIn("<suppressed: residual secret shapes survived redaction>", rendered)
 
     def test_deterministic_json_for_identical_inputs(self) -> None:
         report = RunReport(
