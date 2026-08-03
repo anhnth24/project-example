@@ -378,7 +378,26 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-12 — Multi-org denial suite
 
-- **Status:** In progress — có ~10 cross-org check **rải rác** (list/count, vector, jobs, SSE, worker, RLS/pool-leak, in-flight ACL revoke) đều `#[ignore]` DB-gated. **Deliverable "suite gắn kết" CHƯA có**: không có fixture 2-org/≥3-user/duplicate-name/groups/stale-token; các mặt **FTS, Q&A, preview/download, export, cache** CHƯA có test cross-org; chưa chạy trên deployed environment (acceptance đòi CI **và** deployed).
+- **Status:** In progress — **suite gắn kết đã landed (#353)**: `tests/multi_org_denial.rs`
+  (7 test connected trên shared world 2-org: HTTP surfaces theo org scope, FTS + ask
+  không trả marker org khác, duplicate-name không thành oracle, org-switch không tái
+  dùng cache scope cũ, pre-revoke token fail sau downgrade/suspend/remove,
+  preview/download/job/SSE giấu foreign id, in-flight ask ngừng phát content sau ACL
+  revoke) + `tests/multi_org_denial_manifest.rs` (join guard-inventory ↔ route ↔ test
+  source, đếm đủ inventory) + fixture world `tests/common/multi_org_denial{,_world}.rs`.
+  **#374** bổ sung lớp service-level: `tests/common/multi_org_fixture.rs`
+  (`TwoOrgFixture` — 2 org × 4 user owner/admin/member[editor]/viewer, 3 collection
+  trùng tên private/org/groups, helper stale-token + capability), test FTS service-layer
+  (`retrieval.rs`: org A truyền cả collection id của org B vào `fts_search` vẫn chỉ ra
+  doc org A) và reconcile cross-org (`deletion_reconcile.rs`: reconcile org A không đụng
+  org B) — cả hai pass trên PG/MinIO thật; kèm **hạ tầng gate**: entry `1C-12`/`1C-13`
+  trong `bench/markhand_web/gates.yaml` (disposition `block-phase-1c` mới trong
+  validator) + CI job `deployed-1c-integration` (opt-in `workflow_dispatch`/label
+  `run-live-gates`, boot POC compose, chạy suite `--ignored`, upload report artifact) +
+  template report `plans/reports/gate-run-260803-0000-...-phase1c-denial-suite-report.md`.
+  **Còn lại để đóng**: chạy `deployed-1c-integration` lần đầu trên POC stack (job đã có,
+  chưa kích hoạt), điền report thật; surface "export" trong acceptance chưa map được
+  endpoint nào tồn tại — cần owner xác nhận scope hoặc trim.
 
 - **Plan/files:** Fixture 2 org, ≥3 users, duplicate names, private/org/groups, stale
   token; phủ list/count/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/
@@ -390,7 +409,17 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 ## 1C-13 — Security/revoke/load gate
 
-- **Status:** Backlog — gate có tên **KHÔNG tồn tại**: không có 1C gate trong `bench/markhand_web/gates.yaml` (toàn `G0-*`, disposition `block-phase-1b`), không có 1C gate report trong `plans/reports/` (chỉ có report 1B), không có 1C CI job (chỉ `phase1b-o04-release-gate`). **Noisy-neighbor** và **supply-chain/container scan** chưa có gì (chỉ prose + 1 rủi ro mở `R-P0-10-SCALE-01` chưa đo).
+- **Status:** Backlog — **hạ tầng gate đã có tên (#374)**: entry `1C-13` trong
+  `bench/markhand_web/gates.yaml` (`block-phase-1c`, workload `loads.peak`,
+  `evidence: null` — định nghĩa được duyệt, chưa có số đo), template report trong
+  `plans/reports/`, CI job `deployed-1c-integration` dùng chung với 1C-12.
+  **Supply-chain/container scan đã landed (#374, thuộc P2-15)**: `security-deps`
+  (cargo-audit + pnpm audit, chạy live lần đầu, exception có hồ sơ trong
+  `.cargo/audit.toml`/`pnpm.auditConfig`) + `security-image` (Trivy 2 Dockerfile,
+  `ignore-unfixed`) + `owasp-baseline` (ZAP, opt-in, warning-only, chưa chạy live).
+  **Còn nguyên**: đo thật — token/revoke bound, quota recovery, **noisy-neighbor**
+  (`R-P0-10-SCALE-01` vẫn mở, chưa đo), load/fairness SLO trên deployed target, và
+  điền evidence vào gate entry.
 
 - **Plan/files:** Token/revoke/cache/Qdrant partial/reconcile/quota/noisy-neighbor/
   supply-chain suite + gate report.

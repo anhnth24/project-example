@@ -4,14 +4,18 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-07-29).** MVP xây trên mock server đã merge vào
+**Trạng thái tổng quan (cập nhật 2026-08-03).** MVP xây trên mock server đã merge vào
 `master`: **13/19 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
-+ serve). **4 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có,
-xem chi tiết bên dưới), P2-15 (E2E — nửa mock-based xong, nay có thêm flow ask→citation
-của P2-10; nửa real-deployment hoãn), **P2-17** (Document graph — owner request mới
-2026-07-29, MVP server+web+mock xong, `similarity` đã landed 2026-07-29 (recommend-by-id, org-filter bắt buộc, threshold 0.5 const, cap 500 cạnh/200 node — test tích hợp `graph_similarity_edges_from_qdrant_recommend` gated `MARKHAND_TEST_QDRANT_URL`, evidence đầu tiên trên CI `rust-integration`; follow-up: batch recommend + tune threshold trên corpus thật) — xem chi tiết
-bên dưới), **P2-18** (Project grouping — owner request mới 2026-07-29, org → project →
-collection → document, MVP server+web+mock xong — xem chi tiết bên dưới). P2-11/P2-12
++ serve). **4 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có;
+**#374** đóng nốt gap conflict-warning demo cho as-of/compare/history — xem chi tiết bên
+dưới), P2-15 (E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed
+và lần chạy live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa
+chạy live), **P2-17** (Document graph — owner request mới
+2026-07-29, MVP server+web+mock xong, `similarity` đã landed 2026-07-29 (recommend-by-id, org-filter bắt buộc, threshold 0.5 const, cap 500 cạnh/200 node — test tích hợp `graph_similarity_edges_from_qdrant_recommend` gated `MARKHAND_TEST_QDRANT_URL`, evidence đầu tiên trên CI `rust-integration`; follow-up: batch recommend + tune threshold trên corpus thật); **#374** đóng deep-link "click node → mở đúng tài liệu"
+(`?doc=`) — xem chi tiết bên dưới), **P2-18** (Project grouping — owner request mới
+2026-07-29, org → project → collection → document, MVP server+web+mock xong; **#374**
+bổ sung 409 `name_taken` cho `PATCH /projects/{projectId}` vào spec + regenerate
+contract — xem chi tiết bên dưới). P2-11/P2-12
 rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice) landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
@@ -23,7 +27,11 @@ rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice) landed ở #3
 Truy vết merge: **#311** (P2-01…06 — foundations, client, SSE, mock, login, org switch),
 **#312** (P2-07…09 — library, upload, actions), **#313** (P2-14, P2-16 — a11y, serve SPA),
 **#317** (P2-11, P2-12 — member/usage admin, trên lát membership API),
-**#318** (P2-15 nửa mock-based — Playwright E2E + job `web-e2e`).
+**#318** (P2-15 nửa mock-based — Playwright E2E + job `web-e2e`),
+**#374** (P2-10 conflict-warning demo đa chế độ; P2-15 real-mode upload E2E + 3 job
+security scan; P2-17 graph→document deep-link; P2-18 spec 409 PATCH; 1C-12 fixture/test
++ hạ tầng gate 1C — kèm loạt fix CI: repin canonical gates SHA, cargo/pnpm audit
+exception có hồ sơ, Trivy `ignore-unfixed`, 2 flaky test integration, contract drift).
 P2-13 đi cùng wave 0 (#311); phần CSP/header của nó thực tế landed ở P2-16 (#313).
 
 ## Dependency
@@ -199,11 +207,16 @@ P2-15 + Phase 1C gate → P2-16
   chết) thay vì bịa một id. Deep-link + version badge **có** hoạt động đầy đủ cho kết quả
   `search` (hits mang `documentId`/`versionId` — quy ước riêng của mock vì
   `SearchResponse.hits` là `additionalProperties: true` trong spec, không phải trường bắt
-  buộc theo hợp đồng). Conflict warning demo: chỉ mô phỏng đúng một luật thật của server
-  (`services/qa/grounding.rs`: chế độ `current` trích một phiên bản không phải hiện hành
-  → warning) — kịch bản "BA 10 triệu vs thiết kế 15 triệu, cảnh báo rồi v2 resolved" đầy
-  đủ cần dữ liệu conflict-claim liên kết version mà thời lượng việc này không cho phép
-  dựng cho đúng cả 3 chế độ; ghi nhận là gap còn lại, không phải đã làm.
+  buộc theo hợp đồng). Conflict warning demo: **gap đã đóng (#374)** — trước đó chỉ mô
+  phỏng luật `current` của `services/qa/grounding.rs`; nay fixture
+  `QA_COMPARE_DOCUMENT_ID` mang đúng kịch bản "BA đề xuất 10 triệu/quý (v1) vs thiết kế
+  15 triệu/quý (v2, hiện hành, resolved)" và `mocks/handlers/qa.ts` phát warning theo
+  từng chế độ: `as_of` (phiên bản resolve ra không phải hiện hành), `compare` (warning
+  độc lập cho từng phía không-hiện-hành — v2 là current nên chỉ v1 có warning),
+  `history` (một warning tổng kết "resolved ở phiên bản 2"). Reducer test cho cả 3 chế
+  độ (`askStream.test.ts`) + E2E compare/history (`qa.spec.ts`); riêng `as_of` chỉ cover
+  mức reducer/mock vì `ChatPanel` chưa có document picker cho chế độ đó (gap UI có sẵn,
+  ngoài scope #374).
   "Trạng thái reconnect" chỉ hiển thị chung là "đang stream" — transport P2-04
   (`api/sse.ts`) không phát một `SseMessage` kind riêng cho "đang thử kết nối lại" (chỉ
   âm thầm retry/backoff nội bộ), nên UI không bịa tín hiệu không có thật; chỉ có trạng
@@ -281,7 +294,7 @@ P2-15 + Phase 1C gate → P2-16
     nhiều lượt mới, tổng suite E2E mock 25).
 - **Depends:** P2-04…07 + backend ACL. **Acceptance/tests:** `aria-live`; current source
   citation; multi-document citations; old/new amount example labels v1/v2 and delta;
-  BA 10m vs design 15m warning then v2 resolved (**chưa làm** — xem gap ở trên);
+  BA 10m vs design 15m warning then v2 resolved (**đã làm — #374**, xem cập nhật ở trên);
   as-of/history/deep-link (**search only**, xem gap ở trên)/sequence/fallback/no-answer/
   revoke tests đã có (`askStream.test.ts` + `QaPage.test.tsx` + `qa.spec.ts`).
   switch-mid-answer: **đã đóng** — `QaPage.test.tsx` nay có một kịch bản org-switch cụ thể
@@ -371,16 +384,21 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-15 — Contract/integration/E2E suite
 
-- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **ask→citation đã hết hoãn** (P2-10): `web/e2e/qa.spec.ts` — search→preview, ask→stream→citations, kịch bản `citation_revoked` giữa chừng, kịch bản fallback extractive (mock 24 spec, xem chi tiết ở mục P2-10). **OWASP baseline đã wire** (chưa chạy live lần nào): CI có 3 job mới —
+- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **ask→citation đã hết hoãn** (P2-10): `web/e2e/qa.spec.ts` — search→preview, ask→stream→citations, kịch bản `citation_revoked` giữa chừng, kịch bản fallback extractive, conflict-warning đa chế độ (#374). **Upload→indexed real-mode đã hết hoãn (#374)**: `web/e2e-real/upload.spec.ts` — upload thật qua `POST /uploads`, chờ terminal state `indexed` do worker thật convert/index (không nudge, không interception), preview render đúng nội dung đã convert; không assert badge trung gian "Đang chuyển đổi" vì file .txt nhỏ convert nhanh hơn tick poll 5s (lần chạy live đầu xác nhận đúng dự báo trong spec), state machine trung gian vẫn do mock suite cover. **OWASP baseline đã wire, SCA/image scan đã chạy live lần đầu (#374)**: CI có 3 job mới —
 `security-deps` (cargo-audit qua `rustsec/audit-check` + `pnpm audit --audit-level
-high`, unconditional, fail High/Critical), `security-image` (Trivy scan
+high`, unconditional, fail High/Critical — lần chạy đầu lộ nợ có sẵn, xử lý bằng
+`cargo update crossbeam-epoch` + ignore-list có hồ sơ: `.cargo/audit.toml` 5 advisory
+không có đường fix qua parent pin, `pnpm.auditConfig.ignoreGhsas` cho js-yaml bị
+redocly pin cứng =4.2.0), `security-image` (Trivy scan
 `deploy/Dockerfile.server`/`Dockerfile.worker`, gate theo `deploy_images` classifier
-output hoặc master push, fail High/Critical, exception qua `.trivyignore`),
+output hoặc master push, fail High/Critical **có fix** — `ignore-unfixed: true` vì lần
+chạy đầu fail toàn CVE base-image Debian `will_not_fix`/`fix_deferred`; exception qua
+`.trivyignore`),
 `owasp-baseline` (ZAP baseline scan qua `zaproxy/action-baseline`, opt-in
 `workflow_dispatch`/label `run-live-gates` giống `phase1b-o04-release-gate`,
 **warning-only** — `fail_action: false` + `continue-on-error: true`, chưa vào
 branch-protection required checks vì alert-filter rules chưa tune trên corpus thật).
-Xem `docs/conventions/ci.md`. **Còn hoãn**: upload→indexed real-mode, chạy live
+Xem `docs/conventions/ci.md`. **Còn hoãn**: chạy live
 `owasp-baseline` lần đầu + tune alert-filter + quyết định promote sang blocking gate.
 Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-switch.spec.ts` chứng minh "no stale org-A render" (mock 24 spec). Unit/component đã có (462 test, tăng từ P2-10's reducer/QaPage suite).
 
@@ -426,11 +444,12 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   (thuật toán thuần); OpenAPI path/schemas (`GraphNode`/`GraphEdge`/`GraphCommunity`/
   `GraphResponse`) + `ROUTE_INVENTORY`; `web/src/pages/GraphPage.tsx`,
   `components/graph/**`, `lib/forceLayout.ts`, `mocks/handlers/graph.ts`.
-- **Depends:** P2-07 (điều hướng vào `/library/:collectionId` khi click node — vẫn chưa
-  sâu tới preview một tài liệu cụ thể *từ đồ thị*: `GraphPage` truyền `collectionId`,
-  không truyền `documentId`, dù `LibraryPage` giờ đã đọc tài liệu đang mở từ URL param
-  `?doc=` — xem P2-07 — nên việc "click node → mở đúng tài liệu đó" chỉ cần
-  `GraphPage` build `?doc=` vào cùng link, chưa làm ở đây) + backend 1B
+- **Depends:** P2-07 (điều hướng khi click node — **deep-link đã đóng, #374**:
+  `GraphPage.handleActivateNode` giờ build `buildLibraryDocPath(collectionId, nodeId)`
+  → `/library/:collectionId?doc=:documentId`, mở thẳng preview tài liệu đó qua đúng
+  route param P2-07/P2-10 đang dùng; mock fixture tái dùng document id thật
+  "Onboarding Guide.pdf" cho một node để deep-link test được end-to-end, unit + E2E
+  cập nhật theo) + backend 1B
   claims/conflicts + P1B-R05 ask-stream.
 - **Acceptance/tests:** `services::graph` unit test (components/pruning, xác định);
   `tests/graph.rs` DB-gated (permission, conflict edge, co_citation edge, org isolation,
@@ -438,8 +457,8 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   (`forceLayout.test.ts`, `GraphPage.test.tsx` 7 kịch bản) + `e2e/graph.spec.ts` (3 kịch
   bản: cụm + sidebar, tắt cụm ẩn node, click node → preview thật qua library).
 - **Security:** Cùng ACL/permission với `/conflicts`; không thêm quyền mới chưa seed
-  role. **Out:** `similarity` edge thật (chờ Qdrant thật), deep-link preview một tài
-  liệu cụ thể từ đồ thị.
+  role. **Out:** batch recommend + tune threshold `similarity` trên corpus thật
+  (deep-link preview từ đồ thị đã đóng ở #374 — xem Depends).
 
 ## P2-18 — Project grouping (org → project → collection → document)
 
@@ -511,7 +530,9 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
 - **Acceptance/tests:** `tests/projects.rs` DB-gated (CRUD happy/validate/403/404, org
   isolation, assign/unassign, search filter theo project trả đúng tập tài liệu, 404
   projectId lạ, **409 trùng tên cho cả `POST /projects` và `POST /collections`** —
-  chạy trên PG local); `db::models`/`schema_migrations.rs` drift guard
+  chạy trên PG local; #374 bổ sung response 409 `name_taken` còn thiếu cho
+  `PATCH /projects/{projectId}` vào `openapi.yaml` + regenerate `contract.ts` — handler
+  đã enforce sẵn qua `uq_projects__org_name`, spec chỉ chưa khai); `db::models`/`schema_migrations.rs` drift guard
   cập nhật cho bảng `projects` + cột `collections.project_id`; web unit
   (`QaPage.test.tsx` phạm vi dropdown + reset khi đổi org, `LibraryPage.test.tsx` nhóm
   nav theo dự án + xác nhận ProjectsPanel không còn, `AdminProjectsPage.test.tsx`
