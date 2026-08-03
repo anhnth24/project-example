@@ -49,6 +49,7 @@ REQUIRED_ENV_VAR = "MARKHAND_TEST_REQUIRED"
 REQUIRED_ENV_VALUE = "1"
 MAX_CAPTURE_BYTES = 256 * 1024
 SNIPPET_HASH_BYTES = 4096
+FAILURE_ECHO_TAIL_CHARS = 20_000
 REPORT_SCHEMA_VERSION = 1
 DEFAULT_BINARY_TIMEOUT_SECS = int(
     os.environ.get("PHASE1C_DENIAL_BINARY_TIMEOUT_SECS", "1800")
@@ -834,6 +835,41 @@ def execute_grouped_binaries(
     return results
 
 
+def emit_redacted_failure_output(
+    child_results: Sequence[ChildResult],
+    *,
+    fixture: DenialFixture | None,
+    stream: Any = None,
+    tail_chars: int = FAILURE_ECHO_TAIL_CHARS,
+) -> None:
+    """Echo a redacted, bounded output tail for each failed child to stderr.
+
+    The sanitized artifact intentionally keeps hashes only, which made CI
+    failures undiagnosable from the workflow log (run 30778769464: `binary
+    multi_org_denial exited 101` with no way to see which test panicked).
+    This echo goes through the same redaction pipeline as the artifact, is
+    suppressed entirely if residual secret shapes survive redaction, and
+    never touches the report schema.
+    """
+    if stream is None:
+        stream = sys.stderr
+    for result in child_results:
+        if not result.timed_out and result.exit_code == 0:
+            continue
+        combined = result.stdout + result.stderr
+        redacted = redact_text(bound_capture(combined), fixture=fixture)
+        tail = redacted[-tail_chars:]
+        if scan_for_secret_shapes(tail):
+            tail = "<suppressed: residual secret shapes survived redaction>"
+        suffix = " (timed out)" if result.timed_out else ""
+        stream.write(
+            f"--- redacted output tail: binary {result.binary} "
+            f"exited {result.exit_code}{suffix} ---\n"
+            f"{tail}\n"
+            f"--- end redacted output tail: {result.binary} ---\n"
+        )
+
+
 def assemble_report(
     *,
     manifest: DenialManifest,
@@ -982,6 +1018,7 @@ def run_suite(
         cwd=repo_root,
         env=runtime_env,
     )
+    emit_redacted_failure_output(child_results, fixture=fixture)
     report = assemble_report(
         manifest=manifest,
         fixture=fixture,
@@ -1334,6 +1371,49 @@ async fn target_nested_block_comment() {}
         self.assertTrue(report.findings)
         serialized = (self.root / "report.json").read_text(encoding="utf-8")
         self.assertNotIn("phase1c-marker-beta", serialized)
+
+    def test_failure_echo_is_redacted_bounded_and_skips_passing_children(self) -> None:
+        import io
+
+        fixture = DenialFixture(
+            version=1,
+            indexed_markers={"orgAlpha": "phase1c-marker-alpha"},
+            duplicate_names={},
+            object_key_template="denial/{orgKey}/{marker}.txt",
+        )
+        results = [
+            ChildResult(binary="quiet_pass", exit_code=0, stdout="ok\n", stderr=""),
+            ChildResult(
+                binary="loud_fail",
+                exit_code=101,
+                stdout=(
+                    "test fts_probe ... FAILED\n"
+                    "panicked: marker phase1c-marker-alpha-abc123 missing\n"
+                    "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.signature\n"
+                ),
+                stderr="",
+            ),
+        ]
+        stream = io.StringIO()
+        emit_redacted_failure_output(results, fixture=fixture, stream=stream)
+        echoed = stream.getvalue()
+        self.assertIn("loud_fail", echoed)
+        self.assertIn("FAILED", echoed)
+        self.assertNotIn("quiet_pass", echoed)
+        self.assertNotIn("phase1c-marker-alpha", echoed)
+        self.assertNotIn("eyJhbGciOiJIUzI1NiJ9", echoed)
+
+        oversized = ChildResult(
+            binary="huge_fail",
+            exit_code=101,
+            stdout="x" * (FAILURE_ECHO_TAIL_CHARS * 3) + "\ntail marker line\n",
+            stderr="",
+        )
+        stream = io.StringIO()
+        emit_redacted_failure_output([oversized], fixture=fixture, stream=stream)
+        echoed = stream.getvalue()
+        self.assertIn("tail marker line", echoed)
+        self.assertLess(len(echoed), FAILURE_ECHO_TAIL_CHARS + 500)
 
     def test_command_grouping_runs_each_binary_once_in_sorted_order(self) -> None:
         self.write_source("alpha_binary", ["alpha_test"])
