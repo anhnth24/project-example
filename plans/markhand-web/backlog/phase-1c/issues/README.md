@@ -402,3 +402,21 @@ ADR RLS ───────→ 1C-08 ─────────────�
 
 Chỉ đóng Phase 1C khi 1C-12 và 1C-13 xanh cả CI lẫn deployed environment. Đây là
 gate trước khi cho nhiều org khác trust boundary và trước khi Phase 2 hoàn tất.
+
+**Gate plumbing (infra-only, chưa phải test implementation):** `bench/markhand_web/gates.yaml`
+có hai entry `1C-12` và `1C-13` (`externalGate: G0-SEC`, `environmentId: poc-compose`,
+`failureDisposition: block-phase-1c`) — trước đây file này KHÔNG có entry Phase 1C nào
+(chỉ toàn `G0-*` với disposition `block-phase-1b`), đúng như 1C-13's status note đã ghi.
+CI half tiếp tục chạy trong `rust-integration` (DB-gated `#[ignore]` tests, xem hai ranh
+giới ở đầu file này); deployed half chạy trong job mới `deployed-1c-integration`
+(`.github/workflows/ci.yml`), clone từ `phase1b-o04-release-gate`/`owasp-baseline`'s
+boot/teardown shape — cùng opt-in trigger (`workflow_dispatch` hoặc PR label
+`run-live-gates`), boot `deploy/compose.poc.yml` qua `deploy/scripts/poc-up.sh` +
+`poc-health.sh`, chạy `cargo test -p fileconv-server --test '*' -- --ignored` (conservative
+filter — chưa có tên test/binary multi-org riêng), rồi upload report
+`1c-integration-report.md` làm artifact. Job này độc lập với việc test suite đã có hay
+chưa: hôm nay nó chỉ chạy lại ~10 cross-org check rải rác hiện có; khi suite gắn kết
+(plan A1-A2/B1-B7) landed, job tự động phủ luôn mà không cần sửa workflow. Chưa gắn
+branch-protection required check — informational cho tới khi suite thật tồn tại. Report
+template: `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`.
+Xem thêm `docs/conventions/ci.md` phần "CI behavior" (`deployed-1c-integration`).

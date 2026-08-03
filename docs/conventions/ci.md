@@ -60,6 +60,29 @@ validation uses `make bundle-linux`.
   act before a phase closes; per-push CI stays static + unit + service-container
   integration. The O05 soak is not a CI job at all: it needs a full 1800-second run on
   a host that can meet the throughput gate.
+- `deployed-1c-integration` inherits the same opt-in, expensive-live-gate pattern as
+  `phase1b-o04-release-gate`/`owasp-baseline`: same trigger (manual `workflow_dispatch`
+  or the `run-live-gates` PR label), same `deploy/scripts/poc-up.sh` +
+  `poc-health.sh` boot/teardown shape. It runs the `fileconv-server` DB-gated
+  `#[ignore]` tests (`cargo test -p fileconv-server --test '*' -- --ignored`) against
+  the deployed POC stack (`deploy/compose.poc.yml` ports/credentials, not
+  `deploy/dev/compose.yml`'s), so a pass is evidence for the "deployed environment"
+  half of the Phase 1C exit gate — the `rust-integration` job already covers the CI
+  half against the ephemeral dev services. It reports to two named gates in
+  `bench/markhand_web/gates.yaml`:
+  - **`1C-12`** — multi-org denial suite (cross-org ACL/FTS/vector/Q&A/cache/
+    reconcile/token/org-switch isolation).
+  - **`1C-13`** — security/revoke/load gate (threat review, external pentest, load
+    SLO validation).
+
+  Both carry `failureDisposition: block-phase-1c` and `environmentId: poc-compose`.
+  The job is intentionally independent of whether the connected multi-org test suite
+  (phase-1c backlog plan A1-A2/B1-B7) exists yet: `--test '*' -- --ignored` picks up
+  new test binaries automatically, so today it just runs the existing scattered
+  `#[ignore]` cross-org checks and reports 0/whatever count exists. No branch
+  protection required check is attached yet — informational only until the suite
+  lands. See `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`
+  for the evidence template these runs fill in.
 - `dev-stack` uses tiered profiles via `deploy/scripts/dev-stack-ci.sh`:
   - **lite** (`deploy/scripts/**`): compose config + `dev-up`/`dev-health` only.
   - **full** (`deploy/dev/**`, spike compose): adds spike lifecycle and `check-spike`,
