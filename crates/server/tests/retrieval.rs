@@ -16,6 +16,7 @@ use chrono::{TimeZone, Utc};
 use fileconv_knowledge::rank::VECTOR_WEIGHT;
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::database::apply_migrations;
+use fileconv_server::db::error::DbError;
 use fileconv_server::db::pool::{create_pool, with_org_txn};
 use fileconv_server::db::search::{self, VersionVisibility};
 use fileconv_server::services::retrieval::{
@@ -875,6 +876,208 @@ async fn fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership() {
     })
     .await
     .expect("acl predicate fixture");
+
+    ephemeral.drop().await;
+}
+
+/// Seeds one indexed, published, chunked, currently-active document in
+/// `collection_id` under `ctx`'s org. `distinguishing_char` feeds the
+/// content/identity/index-signature hashes so two docs seeded across two
+/// different orgs (as in the 1C-12 cross-org test below) never collide on
+/// `chunk_identity_sha256`.
+async fn seed_indexed_chunk_doc(
+    txn: &tokio_postgres::Transaction<'_>,
+    ctx: &OrgContext,
+    collection_id: Uuid,
+    title: &str,
+    body: &str,
+    distinguishing_char: char,
+) -> Result<(Uuid, Uuid), DbError> {
+    let document_id = Uuid::new_v4();
+    let version_id = Uuid::new_v4();
+    let meta_id = Uuid::new_v4();
+    let chunk_id = Uuid::new_v4();
+    let sig = sha64(distinguishing_char);
+    let identity = sha64(distinguishing_char);
+    let content_sha = sha64(distinguishing_char);
+    txn.execute(
+        "INSERT INTO documents (
+            id, org_id, collection_id, title, state, created_by_user_id
+         ) VALUES ($1, $2, $3, $4, 'indexed', $5)",
+        &[
+            &document_id,
+            &ctx.org_id(),
+            &collection_id,
+            &title,
+            &ctx.user_id(),
+        ],
+    )
+    .await?;
+    txn.execute(
+        "INSERT INTO document_versions (
+            id, org_id, document_id, version_number, publication_state,
+            is_current, content_sha256, original_object_key, effective_from,
+            created_by_user_id
+         ) VALUES ($1,$2,$3,1,'published',true,$4,$5, now(), $6)",
+        &[
+            &version_id,
+            &ctx.org_id(),
+            &document_id,
+            &content_sha,
+            &format!("k-{document_id}"),
+            &ctx.user_id(),
+        ],
+    )
+    .await?;
+    txn.execute(
+        "UPDATE documents SET current_version_id = $1 WHERE id = $2",
+        &[&version_id, &document_id],
+    )
+    .await?;
+    txn.execute(
+        "INSERT INTO index_metadata (
+            id, org_id, collection_id, index_signature_sha256, embedding_family,
+            embedding_revision, dimensions, runtime_path, generation, is_active, state
+         ) VALUES ($1,$2,$3,$4,'f','r',8,'local-hash',1,true,'active')",
+        &[&meta_id, &ctx.org_id(), &collection_id, &sig],
+    )
+    .await?;
+    txn.execute(
+        "INSERT INTO chunks (
+            id, org_id, document_id, version_id, ordinal, heading_path, body,
+            chunk_identity_sha256, index_metadata_id, index_signature
+         ) VALUES ($1,$2,$3,$4,0,$5,$6,$7,$8,$9)",
+        &[
+            &chunk_id,
+            &ctx.org_id(),
+            &document_id,
+            &version_id,
+            &vec![title.to_string()],
+            &body,
+            &identity,
+            &meta_id,
+            &sig,
+        ],
+    )
+    .await?;
+    Ok((document_id, chunk_id))
+}
+
+/// 1C-12 (B1): org A's FTS candidate + hydration legs must never surface
+/// org B's chunks/documents — even when org B's own collection id is
+/// explicitly included in the request's `collection_ids`, as an attacker
+/// guessing/passing it would do. Both orgs' collections share the identical
+/// name "Shared Docs" (see `TwoOrgFixture`), so this also proves the ACL
+/// predicate scopes by `org_id` + collection UUID, never by name/slug.
+///
+/// This exercises the same low-level legs as
+/// `fts_candidate_leg_and_hydration_deny_acl_and_suspended_membership`
+/// above (which is single-org); the invariant proven here is different:
+/// `c.org_id = $1` in both `fts_search` and `hydrate_chunks_by_identity`'s
+/// SQL structurally cannot match a different org's collection row, no
+/// matter what grants exist, because collection ids are looked up jointly
+/// with `org_id` — there is no grant shape that could make this leak.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn cross_org_fts_search_never_returns_other_org_documents() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let ephemeral = EphemeralDb::create(&base_url).await;
+    apply_migrations(&ephemeral.url)
+        .await
+        .expect("migrate ephemeral db");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+
+    let fixture = common::multi_org_fixture::TwoOrgFixture::seed(&pool).await;
+
+    let ctx_a = OrgContext::try_new(
+        fixture.org_a,
+        fixture.org_a_users.owner,
+        [PERMISSION_QA_QUERY, PERMISSION_QA_HISTORY],
+        [fixture.org_a_collections.shared_docs],
+    )
+    .unwrap();
+    let ctx_b = OrgContext::try_new(
+        fixture.org_b,
+        fixture.org_b_users.owner,
+        [PERMISSION_QA_QUERY, PERMISSION_QA_HISTORY],
+        [fixture.org_b_collections.shared_docs],
+    )
+    .unwrap();
+
+    let needle = "Đối soát giao dịch liên chi nhánh";
+    let collection_a = fixture.org_a_collections.shared_docs;
+    let collection_b = fixture.org_b_collections.shared_docs;
+
+    let (doc_a, chunk_a) = with_org_txn(&pool, &ctx_a, {
+        let ctx_a = ctx_a.clone();
+        move |txn| {
+            Box::pin(async move {
+                seed_indexed_chunk_doc(txn, &ctx_a, collection_a, "Doc A", needle, 'a').await
+            })
+        }
+    })
+    .await
+    .expect("seed org a doc");
+
+    let (doc_b, chunk_b) = with_org_txn(&pool, &ctx_b, {
+        let ctx_b = ctx_b.clone();
+        move |txn| {
+            Box::pin(async move {
+                seed_indexed_chunk_doc(txn, &ctx_b, collection_b, "Doc B", needle, 'b').await
+            })
+        }
+    })
+    .await
+    .expect("seed org b doc");
+
+    with_org_txn(&pool, &ctx_a, {
+        let ctx_a = ctx_a.clone();
+        move |txn| {
+            Box::pin(async move {
+                // Org B's collection id is explicitly requested alongside
+                // org A's own — must never widen org A's results.
+                let hits = search::fts_search(
+                    txn,
+                    &ctx_a,
+                    &[collection_a, collection_b],
+                    needle,
+                    &VersionVisibility::Current,
+                    10,
+                )
+                .await?;
+                assert_eq!(
+                    hits.len(),
+                    1,
+                    "org A's FTS leg must never surface org B's chunk, even when \
+                     org B's collection id is explicitly passed in the request"
+                );
+                assert_eq!(hits[0].chunk_id, chunk_a);
+                assert_ne!(hits[0].chunk_id, chunk_b);
+                assert_ne!(hits[0].document_id, doc_b);
+
+                let hydrated = search::hydrate_chunks_by_identity(
+                    txn,
+                    &ctx_a,
+                    &[collection_a, collection_b],
+                    std::slice::from_ref(&hits[0].chunk_identity_sha256),
+                    &VersionVisibility::Current,
+                )
+                .await?;
+                assert_eq!(
+                    hydrated.len(),
+                    1,
+                    "hydration must never surface org B's chunk either"
+                );
+                assert_eq!(hydrated[0].chunk_id, chunk_a);
+                assert_eq!(hydrated[0].document_id, doc_a);
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("cross-org fts/hydration assertions");
 
     ephemeral.drop().await;
 }
