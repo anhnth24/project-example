@@ -459,7 +459,7 @@
         "operator": ">=",
         "value": 1.0
       },
-      "command": "cargo test -p fileconv-server --test '*' -- --ignored",
+      "command": "python3 scripts/run-phase1c-denial-suite.py --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json",
       "environmentId": "poc-compose",
       "owner": "security-owner",
       "approver": "security-owner",
@@ -469,7 +469,7 @@
       "blocksIssues": [
         "1C-12"
       ],
-      "notes": "Multi-org denial suite: cross-org ACL/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/cache/audit/worker/reconcile, in-flight ACL revoke, and token/org-switch isolation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-12). CI half runs the existing DB-gated #[ignore] cross-org checks inside rust-integration; the deployed half runs in the deployed-1c-integration job (.github/workflows/ci.yml) against deploy/compose.poc.yml. Command runs the whole fileconv-server ignored-test set (conservative filter; no dedicated multi-org binary/test name exists yet) and will pick up the fixture/B1-B7 tests as they land, with no job change required. Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment; no evidence exists yet because this entry only establishes the named gate ahead of the connected-suite work."
+      "notes": "Multi-org denial suite: cross-org ACL/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/cache/audit/worker/reconcile, in-flight ACL revoke, and token/org-switch isolation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-12). CI half runs the canonical manifest runner inside rust-integration; the deployed half runs the same runner in deployed-1c-integration (.github/workflows/ci.yml) against deploy/compose.poc.yml with MARKHAND_TEST_REQUIRED=1. Export is N/A-until-surface-exists (na-export-route-absent in multi-org-denial.manifest.json; OpenAPI/guard inventory contain no export operation — any future export operation must enter guard inventory + denial manifest before release). Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment; deployed evidence pending first live run."
     },
     {
       "id": "1C-13",
@@ -485,7 +485,7 @@
         "operator": ">=",
         "value": 1.0
       },
-      "command": "cargo test -p fileconv-server --test '*' -- --ignored",
+      "command": "python3 scripts/run-phase1c-denial-suite.py --manifest crates/server/tests/fixtures/multi-org-denial.manifest.json",
       "environmentId": "poc-compose",
       "owner": "security-owner",
       "approver": "security-owner",
@@ -495,7 +495,7 @@
       "blocksIssues": [
         "1C-13"
       ],
-      "notes": "Security/revoke/load gate: token/revoke/cache/Qdrant-partial/reconcile/quota/noisy-neighbor/supply-chain suite, threat review, external pentest, and load SLO validation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-13; depends on 1C-10/11/12). [Unverified] whether a dedicated noisy-neighbor/pentest harness exists beyond prose today — the README's own 1C-13 status note says the gate name itself did not exist before this entry and only records prose plus one open risk (R-P0-10-SCALE-01). Reuses the same deployed-1c-integration job as 1C-12 pending a dedicated script; command/threshold are placeholders to be replaced once that suite lands. Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment."
+      "notes": "Security/revoke/load gate: token/revoke/cache/Qdrant-partial/reconcile/quota/noisy-neighbor/supply-chain suite, threat review, external pentest, and load SLO validation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-13; depends on 1C-10/11/12). [Unverified] whether a dedicated noisy-neighbor/pentest harness exists beyond prose today. Shares deployed-1c-integration boot/teardown with 1C-12 but remains explicitly not_run in the Markdown artifact until a dedicated suite lands; command/threshold are placeholders. Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment."
     }
   ]
 }

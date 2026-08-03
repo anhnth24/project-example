@@ -393,11 +393,14 @@ ADR RLS ───────→ 1C-08 ─────────────�
   org B) — cả hai pass trên PG/MinIO thật; kèm **hạ tầng gate**: entry `1C-12`/`1C-13`
   trong `bench/markhand_web/gates.yaml` (disposition `block-phase-1c` mới trong
   validator) + CI job `deployed-1c-integration` (opt-in `workflow_dispatch`/label
-  `run-live-gates`, boot POC compose, chạy suite `--ignored`, upload report artifact) +
+  `run-live-gates`, boot POC compose, chạy canonical denial runner +
+  Markdown renderer, upload sanitized artifact) +
   template report `plans/reports/gate-run-260803-0000-...-phase1c-denial-suite-report.md`.
-  **Còn lại để đóng**: chạy `deployed-1c-integration` lần đầu trên POC stack (job đã có,
-  chưa kích hoạt), điền report thật; surface "export" trong acceptance chưa map được
-  endpoint nào tồn tại — cần owner xác nhận scope hoặc trim.
+  **Còn lại để đóng**: chạy `deployed-1c-integration` lần đầu trên POC stack (job đã
+  wired tới canonical runner + Markdown renderer, chưa kích hoạt live), điền report
+  thật; **export** đã map N/A-until-surface-exists (`na-export-route-absent` —
+  OpenAPI/guard inventory không có export operation; mọi export tương lai phải vào
+  guard inventory + denial manifest trước release).
 
 - **Plan/files:** Fixture 2 org, ≥3 users, duplicate names, private/org/groups, stale
   token; phủ list/count/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/
@@ -441,11 +444,9 @@ giới ở đầu file này); deployed half chạy trong job mới `deployed-1c-
 (`.github/workflows/ci.yml`), clone từ `phase1b-o04-release-gate`/`owasp-baseline`'s
 boot/teardown shape — cùng opt-in trigger (`workflow_dispatch` hoặc PR label
 `run-live-gates`), boot `deploy/compose.poc.yml` qua `deploy/scripts/poc-up.sh` +
-`poc-health.sh`, chạy `cargo test -p fileconv-server --test '*' -- --ignored` (conservative
-filter — chưa có tên test/binary multi-org riêng), rồi upload report
-`1c-integration-report.md` làm artifact. Job này độc lập với việc test suite đã có hay
-chưa: hôm nay nó chỉ chạy lại ~10 cross-org check rải rác hiện có; khi suite gắn kết
-(plan A1-A2/B1-B7) landed, job tự động phủ luôn mà không cần sửa workflow. Chưa gắn
-branch-protection required check — informational cho tới khi suite thật tồn tại. Report
-template: `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`.
+`poc-health.sh`, chạy canonical runner `scripts/run-phase1c-denial-suite.py` với
+`MARKHAND_TEST_REQUIRED=1`, render `phase1c-denial-report.md` từ sanitized JSON,
+rồi upload artifact (không raw cargo output). Job này chứng minh deployed half của
+1C-12; 1C-13 vẫn `not_run` trong artifact. Chưa gắn branch-protection required
+check — informational cho tới khi live run thành công. Report template: `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`.
 Xem thêm `docs/conventions/ci.md` phần "CI behavior" (`deployed-1c-integration`).
