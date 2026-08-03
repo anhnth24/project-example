@@ -60,6 +60,29 @@ validation uses `make bundle-linux`.
   act before a phase closes; per-push CI stays static + unit + service-container
   integration. The O05 soak is not a CI job at all: it needs a full 1800-second run on
   a host that can meet the throughput gate.
+- `deployed-1c-integration` inherits the same opt-in, expensive-live-gate pattern as
+  `phase1b-o04-release-gate`/`owasp-baseline`: same trigger (manual `workflow_dispatch`
+  or the `run-live-gates` PR label), same `deploy/scripts/poc-up.sh` +
+  `poc-health.sh` boot/teardown shape. It runs the `fileconv-server` DB-gated
+  `#[ignore]` tests (`cargo test -p fileconv-server --test '*' -- --ignored`) against
+  the deployed POC stack (`deploy/compose.poc.yml` ports/credentials, not
+  `deploy/dev/compose.yml`'s), so a pass is evidence for the "deployed environment"
+  half of the Phase 1C exit gate — the `rust-integration` job already covers the CI
+  half against the ephemeral dev services. It reports to two named gates in
+  `bench/markhand_web/gates.yaml`:
+  - **`1C-12`** — multi-org denial suite (cross-org ACL/FTS/vector/Q&A/cache/
+    reconcile/token/org-switch isolation).
+  - **`1C-13`** — security/revoke/load gate (threat review, external pentest, load
+    SLO validation).
+
+  Both carry `failureDisposition: block-phase-1c` and `environmentId: poc-compose`.
+  The job is intentionally independent of whether the connected multi-org test suite
+  (phase-1c backlog plan A1-A2/B1-B7) exists yet: `--test '*' -- --ignored` picks up
+  new test binaries automatically, so today it just runs the existing scattered
+  `#[ignore]` cross-org checks and reports 0/whatever count exists. No branch
+  protection required check is attached yet — informational only until the suite
+  lands. See `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`
+  for the evidence template these runs fill in.
 - `dev-stack` uses tiered profiles via `deploy/scripts/dev-stack-ci.sh`:
   - **lite** (`deploy/scripts/**`): compose config + `dev-up`/`dev-health` only.
   - **full** (`deploy/dev/**`, spike compose): adds spike lifecycle and `check-spike`,
@@ -93,6 +116,40 @@ validation uses `make bundle-linux`.
 - CI permissions remain read-only except dedicated issue-sync/release workflows.
 - Artifacts follow [`testing-fixtures.md`](testing-fixtures.md): no secret/PII/content
   leakage, explicit retention and checksums.
+
+## Security scanning (P2-15 OWASP baseline)
+
+Three gates, split by the same two-speed philosophy as the rest of this file: fast
+static scans block every relevant push; the live DAST gate stays opt-in like
+`phase1b-o04-release-gate` until its findings have been triaged.
+
+- `security-deps` — **unconditional**, runs on every PR and `master` push (seconds,
+  no infra). `rustsec/audit-check` runs `cargo audit` against `Cargo.lock`/the RustSec
+  advisory DB; `pnpm audit --audit-level high` runs against the root `pnpm-lock.yaml`
+  (covers both `web/` and `app/`). Fails on High/Critical; informational RustSec
+  advisories and pnpm findings below `high` are reported but non-blocking.
+- `security-image` — gated like `linux-bundle`: only when `deploy/**` changed (new
+  `deploy_images` classifier output), or unconditionally on a `master` push. Builds
+  `deploy/Dockerfile.server` and `deploy/Dockerfile.worker`, scans both with
+  `aquasecurity/trivy-action` (`scan-type: image`), fails on High/Critical. Accepted
+  risk goes in `.trivyignore` with the same owner/scope/expiry discipline as any other
+  documented exception (see `docs/adr/TEMPLATE.md`'s "Exception lifecycle").
+- `owasp-baseline` — **opt-in, never per-push**, same trigger as
+  `phase1b-o04-release-gate` (`workflow_dispatch` or a `run-live-gates` PR label):
+  boots the POC stack via `deploy/scripts/poc-up.sh` + `poc-health.sh`, then runs
+  `zaproxy/action-baseline` against the API's base URL. This is the literal "OWASP
+  baseline scan" P2-15 asks for — passive HTTP checks only (missing security headers,
+  cookie flags, information disclosure); it does not authenticate or exercise business
+  logic, so it is **not** a substitute for Phase 1C's denial/authorization suite.
+  **Warning-only**: `fail_action: false` on the action plus job-level
+  `continue-on-error: true` so it can never fail the workflow yet, and it is
+  deliberately **not** added to branch-protection required checks. ZAP baseline's
+  alert set needs one or two real runs against this app's actual POC stack before an
+  alert-filter rules file can be trusted enough to promote this to a blocking gate —
+  that promotion is a deliberate follow-up, not something to guess at during initial
+  wiring.
+- All three new Actions are pinned to a full commit SHA with a version comment, same
+  as every other workflow step; `scripts/check-dependency-policy.py` enforces this.
 
 ## Failure handling
 

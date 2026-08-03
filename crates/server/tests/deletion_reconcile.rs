@@ -2144,3 +2144,165 @@ async fn live_reconcile_dead_letter_staging_gc() {
         .expect("dead letter repeat");
     env.drop().await;
 }
+
+/// Counts non-deleted documents for `org` (org-scoped by `ctx`).
+async fn document_count(pool: &Pool, ctx: &OrgContext, org: Uuid) -> i64 {
+    with_org_txn(pool, ctx, move |txn| {
+        Box::pin(async move {
+            let row = txn
+                .query_one(
+                    "SELECT count(*)::bigint FROM documents
+                     WHERE org_id = $1 AND deleted_at IS NULL",
+                    &[&org],
+                )
+                .await?;
+            Ok(row.get::<_, i64>(0))
+        })
+    })
+    .await
+    .expect("document count")
+}
+
+/// 1C-12 (B5): org A's delete + reconcile job must never touch org B's
+/// document state or counters.
+///
+/// Both orgs' documents are seeded bare (no `document_versions`/`chunks`/
+/// `index_metadata` rows) on purpose: `reconcile_document`'s Qdrant scroll
+/// loop only runs `for digest in signatures` (see
+/// `reconciliation.rs::scroll_document_points`), and with no `index_metadata`
+/// row for either org's collection, `signatures` is empty — so the `qdrant`
+/// client below is constructed but never dialed over the network, same
+/// no-network-call pattern `ask_grounding_matrix.rs` relies on when no
+/// embedder is configured. This keeps the test's only *real* live
+/// dependencies to Postgres + MinIO (bucket existence only — no objects are
+/// ever written, so nothing is asserted about the reconcile report's
+/// missing/orphan-object counts, only about org A/org B isolation).
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL and MARKHAND_TEST_MINIO_*"]
+async fn cross_org_deletion_reconcile_leaves_org_b_untouched() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let Some(storage) = test_minio_client() else {
+        return;
+    };
+    storage.ensure_bucket().await.expect("ensure bucket");
+    // Never dialed: no index_metadata signatures are seeded for either org's
+    // document, so `scroll_document_points` never issues a Qdrant call.
+    let qdrant = QdrantClient::new("http://127.0.0.1:6333").expect("qdrant client");
+
+    let db = EphemeralDb::create(&base_url).await;
+    apply_migrations(&db.url).await.expect("apply migrations");
+    let pool = create_pool(&db.url).expect("pool");
+
+    let fixture = common::multi_org_fixture::TwoOrgFixture::seed(&pool).await;
+
+    let ctx_a = OrgContext::try_new(
+        fixture.org_a,
+        fixture.org_a_users.owner,
+        ["doc.upload", "doc.delete"],
+        [fixture.org_a_collections.shared_docs],
+    )
+    .expect("org a context");
+    let ctx_b = OrgContext::try_new(
+        fixture.org_b,
+        fixture.org_b_users.owner,
+        ["doc.upload", "doc.delete"],
+        [fixture.org_b_collections.shared_docs],
+    )
+    .expect("org b context");
+
+    let doc_a = Uuid::new_v4();
+    let doc_b = Uuid::new_v4();
+    with_org_txn(&pool, &ctx_a, {
+        let ctx_a = ctx_a.clone();
+        let collection = fixture.org_a_collections.shared_docs;
+        move |txn| {
+            Box::pin(async move {
+                documents::insert(
+                    txn,
+                    &ctx_a,
+                    NewDocument {
+                        id: doc_a,
+                        collection_id: collection,
+                        title: "Doc A",
+                    },
+                )
+                .await
+            })
+        }
+    })
+    .await
+    .expect("seed org a document");
+    with_org_txn(&pool, &ctx_b, {
+        let ctx_b = ctx_b.clone();
+        let collection = fixture.org_b_collections.shared_docs;
+        move |txn| {
+            Box::pin(async move {
+                documents::insert(
+                    txn,
+                    &ctx_b,
+                    NewDocument {
+                        id: doc_b,
+                        collection_id: collection,
+                        title: "Doc B",
+                    },
+                )
+                .await
+            })
+        }
+    })
+    .await
+    .expect("seed org b document");
+
+    let org_b_count_before = document_count(&pool, &ctx_b, fixture.org_b).await;
+
+    let outcome = request_delete(&pool, &ctx_a, doc_a)
+        .await
+        .expect("request delete for org a document");
+    assert!(matches!(outcome, DeleteRequestOutcome::Requested(_)));
+
+    let _report = reconcile_document(
+        &pool,
+        &storage,
+        &qdrant,
+        &ctx_a,
+        doc_a,
+        ReconcileMode::DryRun,
+    )
+    .await
+    .expect("reconcile org a document");
+
+    let doc_a_after = with_org_txn(&pool, &ctx_a, {
+        let ctx_a = ctx_a.clone();
+        move |txn| Box::pin(async move { documents::get_by_id(txn, &ctx_a, doc_a).await })
+    })
+    .await
+    .expect("load org a document after reconcile");
+    assert_eq!(doc_a_after.state, DocumentState::Tombstoned);
+    assert!(doc_a_after.deleted_at.is_some());
+
+    let doc_b_after = with_org_txn(&pool, &ctx_b, {
+        let ctx_b = ctx_b.clone();
+        move |txn| Box::pin(async move { documents::get_by_id(txn, &ctx_b, doc_b).await })
+    })
+    .await
+    .expect("load org b document after org a's delete+reconcile");
+    assert_eq!(
+        doc_b_after.state,
+        DocumentState::Uploaded,
+        "org B's document state must be untouched by org A's delete+reconcile job"
+    );
+    assert!(
+        doc_b_after.deleted_at.is_none(),
+        "org B's document must not be tombstoned by org A's job"
+    );
+
+    let org_b_count_after = document_count(&pool, &ctx_b, fixture.org_b).await;
+    assert_eq!(
+        org_b_count_before, org_b_count_after,
+        "org B's document count must be unaffected by org A's delete+reconcile job"
+    );
+
+    db.drop().await;
+}

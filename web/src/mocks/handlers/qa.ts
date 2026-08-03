@@ -165,8 +165,8 @@ function passageCatalog(): Passage[] {
     .find((d) => d.id === QA_COMPARE_DOCUMENT_ID);
   const compareCollectionId = compareDoc?.collectionId ?? '';
   const compareQuotes: Record<number, string> = {
-    1: 'Ngân sách vận hành được duyệt là 10 triệu đồng mỗi quý.',
-    2: 'Ngân sách vận hành được điều chỉnh thành 15 triệu đồng mỗi quý theo thiết kế mới.',
+    1: 'Ngân sách vận hành được BA duyệt là 10 triệu đồng mỗi quý.',
+    2: 'Ngân sách vận hành được thiết kế điều chỉnh thành 15 triệu đồng mỗi quý, giải quyết xung đột với đề xuất ban đầu của BA.',
   };
   for (const version of compareVersions) {
     const quote = compareQuotes[version.versionNumber];
@@ -252,6 +252,33 @@ function passageToCitation(passage: Passage, citeId: string): CitationPin {
   };
 }
 
+/**
+ * P2-10 conflict-warning demo (as-of/compare/history) — the one seeded
+ * multi-version document (`QA_COMPARE_DOCUMENT_ID`) doubles as a live
+ * "BA's claim (v1, 10 triệu/quý) vs. thiết kế mới (v2, 15 triệu/quý)"
+ * conflict: v1's figure was superseded by v2's. `current` mode's own
+ * `currentModeWarnings` (above) already warns when a *current*-mode answer
+ * cites a non-current version; these three helpers give the other three
+ * modes the equivalent, mode-appropriate warning instead of silently citing
+ * stale data with no signal.
+ */
+function currentVersionNumberFor(documentId: string): number | undefined {
+  return getStore()
+    .versions.get(documentId)
+    ?.find((v) => v.isCurrent)?.versionNumber;
+}
+
+/** One non-current passage's own conflict warning — names its version, quotes its (superseded) claim, and points at the version it was resolved in. */
+function nonCurrentConflictWarning(passage: Passage): string {
+  const currentNumber = currentVersionNumberFor(passage.documentId);
+  const resolvedSuffix =
+    currentNumber !== undefined ? ` Xung đột đã được giải quyết ở phiên bản ${currentNumber}.` : '';
+  return (
+    `Phiên bản ${passage.versionNumber} của "${passage.title}" không phải phiên bản hiện hành ` +
+    `— nội dung: "${passage.quote}".${resolvedSuffix}`
+  );
+}
+
 /** `mode: 'compare'`/`'history'` resolve against the one seeded multi-version document, by explicit `versionA`/`versionB`/`documentId` — never inferred, matching the real server's "the caller names the exact versions" contract for these modes. */
 function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
   passages: Passage[];
@@ -271,6 +298,13 @@ function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
     if (!a || !b) {
       return { passages: [], warnings: ['Không tìm thấy một trong hai phiên bản để so sánh.'] };
     }
+    // Both v1 and v2 get their own warning when either differs from the
+    // current version — a comparison of two already-current versions (no
+    // fixture today has more than one current version, but nothing here
+    // assumes otherwise) stays warning-free.
+    for (const p of [a, b]) {
+      if (!p.isCurrent) warnings.push(nonCurrentConflictWarning(p));
+    }
     return { passages: [a, b], warnings };
   }
   if (body.mode === 'history') {
@@ -283,6 +317,16 @@ function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
         passages: [],
         warnings: [`Không có phiên bản nào cho tài liệu ${body.documentId}.`],
       };
+    }
+    // History mode already returns every version, so one summary warning
+    // (rather than one per superseded version) is enough to flag "this
+    // document's history contains a resolved conflict" and say where.
+    const currentNumber = currentVersionNumberFor(body.documentId);
+    if (versions.some((p) => !p.isCurrent) && currentNumber !== undefined) {
+      warnings.push(
+        `Lịch sử phiên bản của "${versions[0].title}" có xung đột dữ liệu giữa các phiên bản ` +
+          `(vd. đề xuất BA vs. thiết kế mới) — đã được giải quyết ở phiên bản ${currentNumber}.`,
+      );
     }
     return { passages: versions, warnings };
   }
@@ -300,6 +344,11 @@ function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
     if (!passage) {
       return { passages: [], warnings: [`Không có phiên bản nào hiệu lực tại ${body.asOf}.`] };
     }
+    // The as-of'd version may be older than what's current *today* — flag it
+    // the same way `current` mode flags citing a non-current version, since
+    // an as-of caller reading this without the warning could easily mistake
+    // "the version effective back then" for "the version effective now".
+    if (!passage.isCurrent) warnings.push(nonCurrentConflictWarning(passage));
     return { passages: [passage], warnings };
   }
   return { passages: [], warnings: [] };

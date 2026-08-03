@@ -371,7 +371,18 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-15 — Contract/integration/E2E suite
 
-- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **ask→citation đã hết hoãn** (P2-10): `web/e2e/qa.spec.ts` — search→preview, ask→stream→citations, kịch bản `citation_revoked` giữa chừng, kịch bản fallback extractive (mock 24 spec, xem chi tiết ở mục P2-10). **Còn hoãn**: upload→indexed real-mode, OWASP baseline. Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-switch.spec.ts` chứng minh "no stale org-A render" (mock 24 spec). Unit/component đã có (462 test, tăng từ P2-10's reducer/QaPage suite).
+- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **ask→citation đã hết hoãn** (P2-10): `web/e2e/qa.spec.ts` — search→preview, ask→stream→citations, kịch bản `citation_revoked` giữa chừng, kịch bản fallback extractive (mock 24 spec, xem chi tiết ở mục P2-10). **OWASP baseline đã wire** (chưa chạy live lần nào): CI có 3 job mới —
+`security-deps` (cargo-audit qua `rustsec/audit-check` + `pnpm audit --audit-level
+high`, unconditional, fail High/Critical), `security-image` (Trivy scan
+`deploy/Dockerfile.server`/`Dockerfile.worker`, gate theo `deploy_images` classifier
+output hoặc master push, fail High/Critical, exception qua `.trivyignore`),
+`owasp-baseline` (ZAP baseline scan qua `zaproxy/action-baseline`, opt-in
+`workflow_dispatch`/label `run-live-gates` giống `phase1b-o04-release-gate`,
+**warning-only** — `fail_action: false` + `continue-on-error: true`, chưa vào
+branch-protection required checks vì alert-filter rules chưa tune trên corpus thật).
+Xem `docs/conventions/ci.md`. **Còn hoãn**: upload→indexed real-mode, chạy live
+`owasp-baseline` lần đầu + tune alert-filter + quyết định promote sang blocking gate.
+Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-switch.spec.ts` chứng minh "no stale org-A render" (mock 24 spec). Unit/component đã có (462 test, tăng từ P2-10's reducer/QaPage suite).
 
 - **Plan/files:** Unit API/SSE/cache; component auth/library/Q&A/admin; Playwright full
   flows, org switch, deny/quota; CI artifacts redacted.

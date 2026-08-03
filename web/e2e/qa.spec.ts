@@ -134,6 +134,77 @@ test('chat keeps multi-turn history: a second question is answered without distu
   );
 });
 
+test('multi-mode conflict warnings display correctly (compare/history)', async ({ page }) => {
+  // P2-10 conflict-warning demo, extended past `current` mode to as-of/
+  // compare/history: the one seeded multi-version document
+  // (`QA_COMPARE_DOCUMENT_ID`, "Chính sách ngân sách vận hành.pdf" — see
+  // `mocks/fixtures.ts`) doubles as a live "BA's claim (v1, 10 triệu/quý) vs.
+  // thiết kế mới (v2, 15 triệu/quý, current)" conflict. `as-of` mode itself
+  // has no document picker in `ChatPanel` yet (`needsDocument` only covers
+  // `compare`/`history` — a pre-existing UI gap this task's brief says not to
+  // touch), so that mode's warning is covered at the reducer/mock level only
+  // (`state/askStream.test.ts`'s "as-of mode" case) — this spec drives the
+  // two modes the composer actually supports end-to-end.
+  await login(page);
+  await page.getByRole('link', { name: 'Hỏi đáp' }).click();
+
+  // The compare/history document picker only offers documents a search
+  // already turned up (`ChatPanel.tsx`'s module doc) — surface the compare
+  // document as a hit first, same prerequisite the "multi-project picker"
+  // scenario below already relies on for its own search step.
+  await page.getByRole('tab', { name: 'Tìm kiếm', exact: true }).click();
+  await page.getByLabel('Từ khóa').fill('ngân sách');
+  await page.getByRole('button', { name: 'Tìm kiếm', exact: true }).click();
+  await expect(page.getByText('Chính sách ngân sách vận hành.pdf')).toBeVisible();
+
+  await page.getByRole('tab', { name: 'Hỏi đáp', exact: true }).click();
+  const chatLog = page.getByRole('log', { name: 'Lịch sử hỏi đáp' });
+
+  // --- compare mode: v1 (BA, 10 triệu) vs. v2 (thiết kế mới, current) ------
+  await page.getByRole('combobox', { name: 'Chế độ truy vấn' }).click();
+  await page.getByRole('option', { name: 'So sánh 2 phiên bản' }).click();
+  await page.getByRole('combobox', { name: 'Tài liệu để so sánh hoặc xem lịch sử' }).click();
+  await page.getByRole('option', { name: 'Chính sách ngân sách vận hành.pdf' }).click();
+  await page.getByRole('combobox', { name: 'Phiên bản A' }).click();
+  await page.getByRole('option', { name: 'Phiên bản 1' }).click();
+  await page.getByRole('combobox', { name: 'Phiên bản B' }).click();
+  await page.getByRole('option', { name: 'Phiên bản 2 (hiện hành)' }).click();
+
+  await page.getByRole('textbox', { name: 'Câu hỏi' }).fill('Ngân sách vận hành thay đổi thế nào?');
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
+
+  const compareTurn = chatLog.locator('.chat-turn').nth(0);
+  await expect(
+    compareTurn.getByText(
+      /Phiên bản 1 của "Chính sách ngân sách vận hành\.pdf" không phải phiên bản hiện hành/,
+    ),
+  ).toBeVisible();
+  await expect(compareTurn.getByText(/đã được giải quyết ở phiên bản 2/)).toBeVisible();
+  // v2 IS the current version — only v1's side of the comparison gets its
+  // own warning here, proving the mock warns per-version rather than always
+  // emitting a fixed pair.
+  await expect(
+    compareTurn.getByText(
+      /Phiên bản 2 của "Chính sách ngân sách vận hành\.pdf" không phải phiên bản hiện hành/,
+    ),
+  ).not.toBeVisible();
+
+  // The composer re-enables once the compare turn settles, same as every
+  // other multi-turn scenario in this file.
+  await expect(page.getByRole('textbox', { name: 'Câu hỏi' })).toBeEnabled();
+
+  // --- history mode: same document, one "resolved in v2" summary warning --
+  await page.getByRole('combobox', { name: 'Chế độ truy vấn' }).click();
+  await page.getByRole('option', { name: 'Lịch sử phiên bản' }).click();
+
+  await page.getByRole('textbox', { name: 'Câu hỏi' }).fill('Lịch sử ngân sách vận hành thế nào?');
+  await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
+
+  const historyTurn = chatLog.locator('.chat-turn').nth(1);
+  await expect(historyTurn.getByText(/có xung đột dữ liệu giữa các phiên bản/)).toBeVisible();
+  await expect(historyTurn.getByText(/đã được giải quyết ở phiên bản 2/)).toBeVisible();
+});
+
 test('multi-project picker narrows both search and ask to the selected project', async ({
   page,
 }) => {

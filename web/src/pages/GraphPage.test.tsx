@@ -10,6 +10,11 @@ import { GraphPage } from './GraphPage';
 const DEMO_EMAIL = 'demo@markhand.test';
 const DEMO_PASSWORD = 'demo-password';
 const SPECS_COLLECTION_ID = mockUuid(11);
+// "Đặc tả sản phẩm v1" graph node id (mocks/handlers/graph.ts) — a node-only
+// id, not a real fixtures.ts document (only "Sổ tay nhân viên 2024" reuses
+// one, mockUuid(100)); fine here since this only asserts URL-building, not
+// that a preview resolves.
+const PRODUCT_SPECS_V1_NODE_ID = mockUuid(205);
 
 async function loggedInClient(): Promise<ApiClient> {
   const client = createApiClient({ baseUrl: '' });
@@ -73,13 +78,14 @@ describe('GraphPage', () => {
     await waitFor(() => expect(screen.getByText('Sổ tay nhân viên 2024')).toBeVisible());
   });
 
-  it('clicking a node navigates to its own collection in the library (P2-07 route)', async () => {
+  it('clicking a node deep-links to its own document preview via ?doc= (P2-17 gap close)', async () => {
     const client = await loggedInClient();
     renderGraph(client);
     await screen.findByText('Đặc tả sản phẩm v1');
 
     fireEvent.click(screen.getByRole('button', { name: /Đặc tả sản phẩm v1/ }));
     await waitFor(() => expect(window.location.pathname).toBe(`/library/${SPECS_COLLECTION_ID}`));
+    expect(window.location.search).toBe(`?doc=${PRODUCT_SPECS_V1_NODE_ID}`);
   });
 
   it('filtering by collection narrows the graph to that collection only', async () => {

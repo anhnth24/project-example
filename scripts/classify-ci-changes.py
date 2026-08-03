@@ -126,6 +126,13 @@ GROUPS = {
         "scripts/prepare-desktop-runtime.py",
         "scripts/validate-desktop-bundle.sh",
     ),
+    # Container image scan (security-image job, P2-15 OWASP baseline): any
+    # deploy/** touch, not only the two Dockerfiles — compose/runtime config
+    # changes can affect what ends up in the built images too.
+    "deploy_images": CI_INFRA
+    + (
+        "deploy/**",
+    ),
     "toolchain": CI_INFRA
     + RUST_INFRA
     + (
@@ -252,6 +259,12 @@ class ClassifierTests(unittest.TestCase):
         self.assertFalse(result["rust"])
         self.assertFalse(result["frontend"])
 
+    def test_deploy_change_activates_deploy_images(self) -> None:
+        self.assertTrue(classify(["deploy/dev/compose.yml"])["deploy_images"])
+        self.assertTrue(classify(["deploy/Dockerfile.server"])["deploy_images"])
+        self.assertTrue(classify(["deploy/Dockerfile.worker"])["deploy_images"])
+        self.assertFalse(classify(["docs/notes.md"])["deploy_images"])
+
     def test_spike_report_only_uses_static_gate(self) -> None:
         self.assertFalse(
             classify(["bench/markhand_web/reports/spike-environment.json"])["dev_stack"]
@@ -270,6 +283,7 @@ class ClassifierTests(unittest.TestCase):
         self.assertTrue(result["bundle"])
         self.assertTrue(result["toolchain"])
         self.assertTrue(result["corpus"])
+        self.assertTrue(result["deploy_images"])
         self.assertFalse(result["knowledge"])
 
     def test_makefile_change_activates_rust_and_toolchain_only(self) -> None:

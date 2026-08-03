@@ -30,7 +30,11 @@ const PASSWORD: &str = "correct-password-1";
 /// these probes go through HTTP, so the backoff must stay well under the
 /// expensive-route rate limit (60/min by default) or the poll itself draws
 /// 429s (seen in CI run 30778007036).
-const SEARCH_VISIBILITY_POLL_TIMEOUT: Duration = Duration::from_secs(30);
+// 90s, not 30s: conversion + FTS indexing runs on the real worker pipeline,
+// and on a loaded CI runner (this binary shares the runner with every other
+// integration binary) the 30s budget was observed expiring right as indexing
+// completed — the failure snapshot showed tsv_match=true at panic time.
+const SEARCH_VISIBILITY_POLL_TIMEOUT: Duration = Duration::from_secs(90);
 const SEARCH_VISIBILITY_POLL_BACKOFF: Duration = Duration::from_secs(1);
 
 async fn boot_world_if_live() -> Option<MultiOrgDenialWorld> {
