@@ -10,7 +10,7 @@ import sys
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
@@ -236,21 +236,146 @@ def parse_env_example(path: Path) -> dict[str, str]:
     return env
 
 
-def parse_compose_service_blocks(compose_text: str) -> dict[str, str]:
+@dataclass(frozen=True)
+class ComposeServicesParse:
+    blocks: dict[str, str]
+    errors: list[str]
+
+
+UNQUOTED_SERVICE_KEY = re.compile(r"^  ([a-z0-9_-]+):\s*$")
+QUOTED_SERVICE_KEY = re.compile(r"""^  (?P<quote>['"])(?P<body>(?:\\.|[^'"])+)(?P=quote):\s*$""")
+
+
+def is_top_level_service_key_line(line: str) -> bool:
+    if not line.startswith("  ") or line.startswith("    "):
+        return False
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    return stripped.endswith(":")
+
+
+def parse_service_key_line(line: str) -> tuple[str | None, list[str]]:
+    errors: list[str] = []
+    if not is_top_level_service_key_line(line):
+        return None, errors
+    unquoted = UNQUOTED_SERVICE_KEY.match(line)
+    if unquoted:
+        return unquoted.group(1), errors
+    quoted = QUOTED_SERVICE_KEY.match(line)
+    if quoted:
+        body = quoted.group("body")
+        errors.append(
+            "deploy/compose.poc.yml services section must not use quoted service keys: "
+            + f"{line.strip()!r}"
+        )
+        if re.fullmatch(r"[a-z0-9_-]+", body):
+            return body, errors
+        errors.append(
+            "deploy/compose.poc.yml quoted service key must be a simple "
+            f"[a-z0-9_-]+ identifier, got {body!r}"
+        )
+        return None, errors
+    errors.append(
+        "deploy/compose.poc.yml services section has unsupported service key syntax: "
+        + f"{line.strip()!r}"
+    )
+    return None, errors
+
+
+def _services_section_lines(compose_text: str) -> tuple[list[str], list[str]]:
     match = re.search(r"^services:\n", compose_text, flags=re.MULTILINE)
     if match is None:
-        return {}
-    rest = compose_text[match.end() :]
-    stop = re.search(r"^(?:networks|volumes|secrets|configs):", rest, flags=re.MULTILINE)
-    if stop:
-        rest = rest[: stop.start()]
+        return [], ["deploy/compose.poc.yml missing services: mapping"]
+    lines: list[str] = []
+    for line in compose_text[match.end() :].splitlines():
+        if re.match(r"^(?:networks|volumes|secrets|configs):", line):
+            break
+        lines.append(line)
+    return lines, []
+
+
+def parse_compose_services(compose_text: str) -> ComposeServicesParse:
+    lines, errors = _services_section_lines(compose_text)
+    if not lines and errors:
+        return ComposeServicesParse({}, errors)
+
+    key_records: list[tuple[int, str]] = []
+    for index, line in enumerate(lines):
+        if not is_top_level_service_key_line(line):
+            continue
+        name, line_errors = parse_service_key_line(line)
+        errors.extend(line_errors)
+        if name is not None:
+            key_records.append((index, name))
+
     blocks: dict[str, str] = {}
-    parts = re.split(r"(?m)^  ([a-z0-9_-]+):\s*$", rest)
-    iterator = iter(parts[1:])
-    for name in iterator:
-        body = next(iterator, "")
+    for record_index, (line_index, name) in enumerate(key_records):
+        start = line_index + 1
+        end = (
+            key_records[record_index + 1][0]
+            if record_index + 1 < len(key_records)
+            else len(lines)
+        )
+        body = "\n".join(lines[start:end])
+        if name in blocks:
+            errors.append(f"deploy/compose.poc.yml duplicate service key {name!r}")
         blocks[name] = body
-    return blocks
+
+    return ComposeServicesParse(blocks, errors)
+
+
+def compose_services_contract_errors(compose_text: str) -> list[str]:
+    return parse_compose_services(compose_text).errors
+
+
+def parse_compose_service_blocks(compose_text: str) -> dict[str, str]:
+    return parse_compose_services(compose_text).blocks
+
+
+def reassemble_services_section(compose_text: str, new_service_lines: list[str]) -> str:
+    match = re.search(r"^services:\n", compose_text, flags=re.MULTILINE)
+    if match is None:
+        return compose_text
+    before = compose_text[: match.end()]
+    after_rest = compose_text[match.end() :]
+    stop = re.search(r"^(?:networks|volumes|secrets|configs):", after_rest, flags=re.MULTILINE)
+    after = after_rest[stop.start() :] if stop else ""
+    body = "\n".join(new_service_lines)
+    if body:
+        body += "\n"
+    return before + body + after
+
+
+def service_block_line_span(lines: list[str], service: str) -> tuple[int, int] | None:
+    for index, line in enumerate(lines):
+        if not is_top_level_service_key_line(line):
+            continue
+        name, _ = parse_service_key_line(line)
+        if name != service:
+            continue
+        start = index + 1
+        end = len(lines)
+        for next_index in range(index + 1, len(lines)):
+            if is_top_level_service_key_line(lines[next_index]):
+                end = next_index
+                break
+        return start, end
+    return None
+
+
+def mutate_service_block_lines(
+    compose_text: str,
+    service: str,
+    mutator: Callable[[list[str]], list[str]],
+) -> str:
+    lines, _ = _services_section_lines(compose_text)
+    span = service_block_line_span(lines, service)
+    if span is None:
+        return compose_text
+    start, end = span
+    new_lines = lines[:start] + mutator(lines[start:end]) + lines[end:]
+    return reassemble_services_section(compose_text, new_lines)
 
 
 def parse_service_environment(service_block: str) -> dict[str, str]:
@@ -304,7 +429,9 @@ def poc_runtime_minio_credential_errors(
         )
         return errors
 
-    blocks = parse_compose_service_blocks(compose_text)
+    parsed = parse_compose_services(compose_text)
+    errors.extend(parsed.errors)
+    blocks = parsed.blocks
     for service in sorted(poc_required_runtime_service_names(compose_text)):
         if service not in blocks:
             errors.append(f"deploy/compose.poc.yml missing required runtime service {service!r}")
@@ -468,19 +595,35 @@ def minio_app_policy_errors(policy_text: str) -> list[str]:
 
 
 def remove_service_env_line(compose_text: str, service: str, env_key: str) -> str:
-    pattern = rf"(?ms)(^  {re.escape(service)}:\n)(.*?)(?=^  [a-z0-9_-]+:\s*$|^networks:|^volumes:|\Z)"
-    match = re.search(pattern, compose_text)
-    if match is None:
-        return compose_text
-    header = match.group(1)
-    body = re.sub(
-        rf"^      {re.escape(env_key)}: .+\n",
-        "",
-        match.group(2),
-        count=1,
-        flags=re.MULTILINE,
-    )
-    return compose_text[: match.start()] + header + body + compose_text[match.end() :]
+    prefix = f"      {env_key}: "
+
+    def mutator(body_lines: list[str]) -> list[str]:
+        return [line for line in body_lines if not line.startswith(prefix)]
+
+    return mutate_service_block_lines(compose_text, service, mutator)
+
+
+def quote_service_key_line(compose_text: str, service: str) -> str:
+    lines, _ = _services_section_lines(compose_text)
+    for index, line in enumerate(lines):
+        if not is_top_level_service_key_line(line):
+            continue
+        name, _ = parse_service_key_line(line)
+        if name != service:
+            continue
+        lines[index] = f"  '{service}':"
+        return reassemble_services_section(compose_text, lines)
+    return compose_text
+
+
+def insert_unrelated_quoted_service(compose_text: str) -> str:
+    insertion = [
+        "  'telemetry-sidecar':",
+        "    image: alpine:latest",
+        "    networks: [private]",
+    ]
+    lines, _ = _services_section_lines(compose_text)
+    return reassemble_services_section(compose_text, lines + insertion)
 
 
 def replace_in_service_block(
@@ -489,13 +632,18 @@ def replace_in_service_block(
     old: str,
     new: str,
 ) -> str:
-    pattern = rf"(?ms)(^  {re.escape(service)}:\n)(.*?)(?=^  [a-z0-9_-]+:\s*$|^networks:|^volumes:|\Z)"
-    match = re.search(pattern, compose_text)
-    if match is None or old not in match.group(2):
-        return compose_text
-    header = match.group(1)
-    body = match.group(2).replace(old, new, 1)
-    return compose_text[: match.start()] + header + body + compose_text[match.end() :]
+    def mutator(body_lines: list[str]) -> list[str]:
+        updated: list[str] = []
+        replaced = False
+        for line in body_lines:
+            if not replaced and old in line:
+                updated.append(line.replace(old, new, 1))
+                replaced = True
+            else:
+                updated.append(line)
+        return updated
+
+    return mutate_service_block_lines(compose_text, service, mutator)
 
 
 def swap_runtime_minio_defaults_in_compose(
@@ -996,6 +1144,50 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
             or any("Resource must be exactly" in error for error in errors),
             errors,
         )
+
+    def test_quoted_worker_delete_with_root_credentials_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = quote_service_key_line(compose_text, "worker-delete")
+        mutated = swap_runtime_minio_defaults_in_compose(
+            mutated,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+            only_service="worker-delete",
+        )
+        errors = compose_services_contract_errors(mutated)
+        errors.extend(poc_runtime_minio_credential_errors(mutated, example))
+        self.assertTrue(
+            any("must not use quoted service keys" in error for error in errors),
+            errors,
+        )
+
+    def test_quoted_api_restore_green_with_root_credentials_fails_contract(self) -> None:
+        example = parse_env_example(ENV_EXAMPLE)
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = quote_service_key_line(compose_text, "api-restore-green")
+        mutated = swap_runtime_minio_defaults_in_compose(
+            mutated,
+            access_default=example["MARKHAND_MINIO_ROOT_USER"],
+            secret_default=example["MARKHAND_MINIO_ROOT_PASSWORD"],
+            only_service="api-restore-green",
+        )
+        errors = compose_services_contract_errors(mutated)
+        errors.extend(poc_runtime_minio_credential_errors(mutated, example))
+        self.assertTrue(
+            any("must not use quoted service keys" in error for error in errors),
+            errors,
+        )
+
+    def test_unrelated_quoted_service_key_fails_parser_contract(self) -> None:
+        compose_text = COMPOSE_POC.read_text(encoding="utf-8")
+        mutated = insert_unrelated_quoted_service(compose_text)
+        errors = compose_services_contract_errors(mutated)
+        self.assertTrue(
+            any("must not use quoted service keys" in error for error in errors),
+            errors,
+        )
+        self.assertIn("telemetry-sidecar", mutated)
 
 
 def run_self_tests() -> int:
