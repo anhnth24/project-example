@@ -507,6 +507,8 @@ jobs:
       - name: Render Phase 1C denial report
         id: phase1c_render
         if: always()
+        env:
+          PHASE1C_SOURCE_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           set +e
           set -u
@@ -518,20 +520,20 @@ jobs:
           if [ -z "${teardown_exit:-}" ]; then
             teardown_exit=1
           fi
-          missing_reason="manifest-run.json missing"
+          input_failure_category="runner output missing"
           if [ -z "${{ steps.phase1c_denial_suite.outputs.runner_exit_code }}" ]; then
-            missing_reason="runner step did not complete; manifest-run.json unavailable"
+            input_failure_category="runner step incomplete"
           fi
           python3 scripts/render-phase1c-denial-report.py \
             --input "$MARKHAND_1C_OUTPUT_DIR/manifest-run.json" \
             --output "$MARKHAND_1C_OUTPUT_DIR/phase1c-denial-report.md" \
             --expected-git-sha "${{ github.sha }}" \
             --expected-manifest-sha256 "$PHASE1C_MANIFEST_SHA256" \
-            --expected-git-ref "${{ github.ref_name }}" \
+            --expected-git-ref "$PHASE1C_SOURCE_REF" \
             --ci-run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --runner-exit-code "$runner_exit" \
             --teardown-exit-code "$teardown_exit" \
-            --missing-input-reason "$missing_reason"
+            --input-failure-category "$input_failure_category"
           render_exit=$?
           echo "render_exit_code=$render_exit" >> "$GITHUB_OUTPUT"
           exit 0

@@ -29,6 +29,39 @@ SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_HEX = re.compile(r"^[0-9a-f]{40}$")
 GIT_REF_SAFE = re.compile(r"^[A-Za-z0-9._/@-]{1,256}$")
 
+FAILURE_RUNNER_OUTPUT_MISSING = "runner output missing"
+FAILURE_RUNNER_OUTPUT_MALFORMED = "runner output malformed"
+FAILURE_RUNNER_OUTPUT_INVALID_ROOT = "runner output invalid root"
+FAILURE_RUNNER_OUTPUT_SCHEMA_INVALID = "runner output schema invalid"
+FAILURE_RUNNER_STEP_INCOMPLETE = "runner step incomplete"
+
+ALLOWED_FAILURE_MESSAGES = frozenset(
+    {
+        FAILURE_RUNNER_OUTPUT_MISSING,
+        FAILURE_RUNNER_OUTPUT_MALFORMED,
+        FAILURE_RUNNER_OUTPUT_INVALID_ROOT,
+        FAILURE_RUNNER_OUTPUT_SCHEMA_INVALID,
+        FAILURE_RUNNER_STEP_INCOMPLETE,
+    }
+)
+
+BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-+=/]{8,}")
+JWT_RE = re.compile(
+    r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"
+)
+ASSIGN_SECRET_RE = re.compile(
+    r"(?i)\b(password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\s*[=:]\s*"
+    r"([^\s'\"\\]+|'[^']*'|\"[^\"]*\")"
+)
+DB_URL_RE = re.compile(r"(?i)\b(postgres(?:ql)?|mysql|mongodb|redis)://[^\s'\"]+")
+CI_SECRET_RE = re.compile(
+    r"(?i)\b(GITHUB_TOKEN|AWS_SECRET_ACCESS_KEY|NPM_TOKEN|PYPI_API_TOKEN)\s*[=:]\s*\S+"
+)
+PEM_RE = re.compile(
+    r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----",
+    re.DOTALL,
+)
+
 REQUIRED_TOP_LEVEL_KEYS = frozenset(
     {
         "schemaVersion",
@@ -62,6 +95,38 @@ class RenderContext:
 class GateVerdict:
     passed: bool
     reasons: tuple[str, ...]
+
+
+def scan_for_secret_shapes(text: str) -> list[str]:
+    labels: list[str] = []
+    if BEARER_RE.search(text):
+        labels.append("bearer_token")
+    if JWT_RE.search(text):
+        labels.append("jwt")
+    if ASSIGN_SECRET_RE.search(text):
+        labels.append("assignment_secret")
+    if DB_URL_RE.search(text):
+        labels.append("database_url")
+    if CI_SECRET_RE.search(text):
+        labels.append("ci_secret_assignment")
+    if PEM_RE.search(text):
+        labels.append("pem_private_key")
+    return labels
+
+
+def validate_failure_message(message: str) -> None:
+    if message not in ALLOWED_FAILURE_MESSAGES:
+        raise ValueError("failure message must be a fixed categorical label")
+
+
+def assert_artifacts_safe(payload: Mapping[str, Any], markdown: str) -> None:
+    serialized = json.dumps(payload, sort_keys=True)
+    residuals = scan_for_secret_shapes(serialized) + scan_for_secret_shapes(markdown)
+    if residuals:
+        raise ValueError(
+            "fallback artifact failed secret residual scan: "
+            + ", ".join(sorted(set(residuals)))
+        )
 
 
 def _is_non_negative_int(value: object) -> bool:
@@ -178,6 +243,7 @@ def build_fail_closed_report(
     expected_manifest_sha256: str,
     failure_message: str,
 ) -> dict[str, Any]:
+    validate_failure_message(failure_message)
     return {
         "schemaVersion": REPORT_SCHEMA_VERSION,
         "gitShaFull": expected_git_sha,
@@ -292,18 +358,18 @@ def render_markdown(
 def parse_report_json(text: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         raw = json.loads(text)
-    except json.JSONDecodeError as exc:
-        return None, f"manifest-run.json malformed: {exc.msg}"
+    except json.JSONDecodeError:
+        return None, FAILURE_RUNNER_OUTPUT_MALFORMED
     if isinstance(raw, list):
-        return None, "report root must be an object, got list"
+        return None, FAILURE_RUNNER_OUTPUT_INVALID_ROOT
     if not isinstance(raw, dict):
-        return None, f"report root must be an object, got {type(raw).__name__}"
+        return None, FAILURE_RUNNER_OUTPUT_INVALID_ROOT
     return raw, None
 
 
 def read_report_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     if not path.is_file():
-        return None, "manifest-run.json missing"
+        return None, FAILURE_RUNNER_OUTPUT_MISSING
     return parse_report_json(path.read_text(encoding="utf-8"))
 
 
@@ -317,29 +383,28 @@ def resolve_input_report(
     *,
     expected_git_sha: str,
     expected_manifest_sha256: str,
-    failure_message: str,
-) -> dict[str, Any]:
+    input_failure_category: str,
+) -> tuple[dict[str, Any], bool]:
+    validate_failure_message(input_failure_category)
     payload, read_error = read_report_file(input_path)
     if read_error is not None:
+        category = read_error
         payload = build_fail_closed_report(
             expected_git_sha=expected_git_sha,
             expected_manifest_sha256=expected_manifest_sha256,
-            failure_message=read_error if failure_message == "manifest-run.json missing" else failure_message,
+            failure_message=category,
         )
-        write_json(input_path, payload)
-        return payload
+        return payload, True
 
-    errors = validate_report_schema(payload)
-    if errors:
+    if validate_report_schema(payload):
         payload = build_fail_closed_report(
             expected_git_sha=expected_git_sha,
             expected_manifest_sha256=expected_manifest_sha256,
-            failure_message="; ".join(errors),
+            failure_message=FAILURE_RUNNER_OUTPUT_SCHEMA_INVALID,
         )
-        write_json(input_path, payload)
-        return payload
+        return payload, True
 
-    return payload
+    return payload, False
 
 
 def render_file(
@@ -347,19 +412,22 @@ def render_file(
     input_path: Path,
     output_path: Path,
     context: RenderContext,
-    failure_message: str = "manifest-run.json missing",
+    input_failure_category: str = FAILURE_RUNNER_OUTPUT_MISSING,
 ) -> GateVerdict:
-    payload = resolve_input_report(
+    payload, synthesized = resolve_input_report(
         input_path,
         expected_git_sha=context.expected_git_sha,
         expected_manifest_sha256=context.expected_manifest_sha256,
-        failure_message=failure_message,
+        input_failure_category=input_failure_category,
     )
     errors = validate_report_schema(payload)
     if errors:
-        raise ValueError("; ".join(errors))
+        raise ValueError("synthesized fallback report failed schema validation")
 
     markdown = render_markdown(payload, context=context)
+    if synthesized:
+        assert_artifacts_safe(payload, markdown)
+        write_json(input_path, payload)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(markdown, encoding="utf-8")
     return evaluate_gate_verdict(payload, context=context)
@@ -413,11 +481,11 @@ class RenderPhase1cDenialReportTests(unittest.TestCase):
 
         payload, error = parse_report_json("[]")
         self.assertIsNone(payload)
-        self.assertIn("list", error or "")
+        self.assertEqual(FAILURE_RUNNER_OUTPUT_INVALID_ROOT, error)
 
         payload, error = parse_report_json('"scalar"')
         self.assertIsNone(payload)
-        self.assertIn("str", error or "")
+        self.assertEqual(FAILURE_RUNNER_OUTPUT_INVALID_ROOT, error)
 
     def test_validate_schema_rejects_unexpected_keys(self) -> None:
         payload = self.sample_payload()
@@ -487,6 +555,27 @@ class RenderPhase1cDenialReportTests(unittest.TestCase):
             self.assertIn("**FAIL**", output_path.read_text())
             self.assertEqual([], validate_report_schema(json.loads(input_path.read_text())))
 
+    def test_malicious_unexpected_key_does_not_leak_into_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            input_path = root / "manifest-run.json"
+            output_path = root / "phase1c-denial-report.md"
+            payload = self.sample_payload()
+            payload["Bearer SUPERSECRET123"] = "ignored-value"
+            input_path.write_text(json.dumps(payload), encoding="utf-8")
+            render_file(
+                input_path=input_path,
+                output_path=output_path,
+                context=self.sample_context(runner_exit_code=1),
+            )
+            json_text = input_path.read_text(encoding="utf-8")
+            markdown = output_path.read_text(encoding="utf-8")
+            self.assertNotIn("Bearer SUPERSECRET123", json_text)
+            self.assertNotIn("SUPERSECRET123", json_text)
+            self.assertNotIn("Bearer SUPERSECRET123", markdown)
+            self.assertNotIn("SUPERSECRET123", markdown)
+            self.assertIn(FAILURE_RUNNER_OUTPUT_SCHEMA_INVALID, json_text)
+
 
 def run_self_tests() -> int:
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(RenderPhase1cDenialReportTests)
@@ -529,9 +618,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Exit code from POC stack teardown",
     )
     parser.add_argument(
-        "--missing-input-reason",
-        default="manifest-run.json missing",
-        help="Failure reason written when --input does not exist",
+        "--input-failure-category",
+        default=FAILURE_RUNNER_OUTPUT_MISSING,
+        help="Fixed categorical label when --input is missing or unusable",
     )
     parser.add_argument(
         "--self-test",
@@ -566,6 +655,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             64,
         )
         validate_git_ref(args.expected_git_ref)
+        validate_failure_message(args.input_failure_category)
         context = RenderContext(
             expected_git_sha=args.expected_git_sha,
             expected_manifest_sha256=args.expected_manifest_sha256,
@@ -578,7 +668,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             input_path=args.input.resolve(),
             output_path=args.output.resolve(),
             context=context,
-            failure_message=args.missing_input_reason,
+            input_failure_category=args.input_failure_category,
         )
     except (OSError, ValueError) as exc:
         print(f"render failed: {exc}", file=sys.stderr)

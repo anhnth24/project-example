@@ -33,8 +33,10 @@ RENDER_ARG_ORDER = (
     "--ci-run-url",
     "--runner-exit-code",
     "--teardown-exit-code",
-    "--missing-input-reason",
+    "--input-failure-category",
 )
+
+PHASE1C_SOURCE_REF_ENV = "${{ github.head_ref || github.ref_name }}"
 
 ARTIFACT_PATHS = (
     "${{ runner.temp }}/markhand-1c-integration/manifest-run.json",
@@ -50,6 +52,7 @@ class WorkflowStep:
     step_id: str | None
     uses: str | None
     with_block: str | None = None
+    env: dict[str, str] | None = None
 
 
 def extract_job_block(workflow_text: str, job_name: str) -> str:
@@ -74,6 +77,27 @@ def strip_shell_comments(script: str) -> str:
         if without_trailing:
             cleaned.append(without_trailing)
     return "\n".join(cleaned)
+
+
+def parse_step_env(chunk: str) -> dict[str, str]:
+    match = re.search(r"^        env:\n((?:          .+\n)*)", chunk, flags=re.MULTILINE)
+    if match is None:
+        return {}
+    env: dict[str, str] = {}
+    for line in match.group(1).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        entry = re.sub(r"\s+#.*$", "", stripped)
+        if not entry or entry.startswith("#"):
+            continue
+        key_match = re.match(r"^([A-Z0-9_]+):\s*(.+)$", entry)
+        if key_match is None:
+            continue
+        key = key_match.group(1)
+        value = key_match.group(2).strip().strip('"').strip("'")
+        env[key] = value
+    return env
 
 
 def parse_job_env(job_block: str) -> dict[str, str]:
@@ -133,6 +157,7 @@ def parse_job_steps(job_block: str) -> list[WorkflowStep]:
                 step_id=step_id,
                 uses=uses,
                 with_block=with_block,
+                env=parse_step_env(chunk),
             )
         )
     return steps
@@ -247,10 +272,29 @@ def deployed_job_contract_errors(job_block: str) -> list[str]:
             "render step must pass renderer args in order: "
             + ", ".join(RENDER_ARG_ORDER)
         )
+    render_env = render.env or {}
+    if render_env.get("PHASE1C_SOURCE_REF") != PHASE1C_SOURCE_REF_ENV:
+        errors.append(
+            "render step env must set PHASE1C_SOURCE_REF from github.head_ref || github.ref_name"
+        )
     if "--expected-git-ref" not in render_script:
         errors.append("render step must pass trusted expected git ref")
-    if "${{ github.ref_name }}" not in render_script:
-        errors.append("render step must pass github.ref_name as expected git ref")
+    if '--expected-git-ref "$PHASE1C_SOURCE_REF"' not in render_script:
+        errors.append(
+            'render step must pass --expected-git-ref "$PHASE1C_SOURCE_REF" (quoted env transport)'
+        )
+    for forbidden in (
+        "${{ github.ref_name }}",
+        "${{ github.head_ref",
+        "github.ref_name",
+        "github.head_ref",
+    ):
+        if forbidden in render_script:
+            errors.append(
+                f"render step run block must not interpolate {forbidden!r} directly in shell"
+            )
+    if "--input-failure-category" not in render_script:
+        errors.append("render step must pass --input-failure-category")
     if "|| true" in render_script:
         errors.append("render step must not hide failures with || true")
     if "render_exit_code=" not in render_script:
@@ -351,6 +395,22 @@ class Deployed1cWorkflowContractTests(unittest.TestCase):
         errors = deployed_job_contract_errors(mutated)
         self.assertTrue(
             any("canonical denial suite command" in error for error in errors),
+            errors,
+        )
+
+    def test_direct_github_ref_interpolation_fails_contract(self) -> None:
+        mutated = self.job_block.replace(
+            '--expected-git-ref "$PHASE1C_SOURCE_REF" \\\n',
+            '--expected-git-ref "${{ github.ref_name }}" \\\n',
+            1,
+        )
+        errors = deployed_job_contract_errors(mutated)
+        self.assertTrue(
+            any("must not interpolate" in error for error in errors),
+            errors,
+        )
+        self.assertTrue(
+            any('quoted env transport' in error for error in errors),
             errors,
         )
 
