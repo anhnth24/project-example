@@ -41,6 +41,7 @@ import unittest
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Protocol, Sequence
+from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO_ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json"
@@ -1541,25 +1542,46 @@ async fn target_nested_block_comment() {}
                     f"redacted output still matched secret shapes: {redacted!r}",
                 )
 
-    def test_unredacted_secret_still_triggers_residual_scan_and_tail_suppression(self) -> None:
+    def test_emit_redacted_failure_output_redacts_secrets_without_suppression(self) -> None:
+        secret = "supersecret123456789"
+        child = ChildResult(
+            binary="multi_org_denial",
+            exit_code=101,
+            stdout="",
+            stderr=(
+                "thread panicked\n"
+                f"access_token={secret}\n"
+                "MARKHAND_TEST_MINIO_SECRET_KEY=markhand_app_poc_change_me\n"
+                f"GITHUB_TOKEN=ghp_{secret}\n"
+            ),
+        )
+        buffer = io.StringIO()
+        emit_redacted_failure_output([child], fixture=None, stream=buffer)
+        rendered = buffer.getvalue()
+        self.assertIn("redacted output tail: binary multi_org_denial", rendered)
+        self.assertIn("(redacted)", rendered)
+        self.assertNotIn(secret, rendered)
+        self.assertNotIn("markhand_app_poc_change_me", rendered)
+        self.assertNotIn("ghp_", rendered)
+        self.assertNotIn("<suppressed: residual secret shapes survived redaction>", rendered)
+
+    def test_emit_redacted_failure_output_suppresses_when_redaction_leaves_residual(
+        self,
+    ) -> None:
         leaked = "api_key=still_leaked_secret_value_123456789"
-        self.assertIn("assignment_secret", scan_for_secret_shapes(leaked))
-
-        redacted = redact_text(leaked)
-        self.assertNotIn("still_leaked_secret_value", redacted)
-        self.assertEqual(scan_for_secret_shapes(redacted), [])
-
         child = ChildResult(
             binary="multi_org_denial",
             exit_code=101,
             stdout="",
             stderr=f"thread panicked\n{leaked}\n",
         )
-        tail = bound_capture(child.stdout + child.stderr)
-        if scan_for_secret_shapes(tail):
-            tail = "<suppressed: residual secret shapes survived redaction>"
-        self.assertEqual(tail, "<suppressed: residual secret shapes survived redaction>")
-        self.assertNotIn("still_leaked_secret_value", tail)
+        buffer = io.StringIO()
+        with patch(f"{__name__}.redact_text", side_effect=lambda text, fixture=None: text):
+            emit_redacted_failure_output([child], fixture=None, stream=buffer)
+        rendered = buffer.getvalue()
+        self.assertIn("<suppressed: residual secret shapes survived redaction>", rendered)
+        self.assertNotIn("still_leaked_secret_value", rendered)
+        self.assertNotIn(leaked, rendered)
 
     def test_redacted_failure_tail_echoes_diagnostic_output_when_clean(self) -> None:
         child = ChildResult(
