@@ -16,7 +16,7 @@ use common::worker_pipeline::{
 };
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_access_token, seed_user_with_permissions, take_live, test_minio_client, tiny_docx_bytes,
+    login_access_token, seed_user_with_permissions, test_minio_client, tiny_docx_bytes,
     tiny_pdf_bytes, tiny_png_ocr_bytes, tiny_pptx_bytes, tiny_xlsx_bytes, MinioCleanupGuard,
 };
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
@@ -201,13 +201,13 @@ async fn json_post(
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MINIO + QDRANT + built fileconv"]
 async fn live_upload_convert_index_citation_vertical_slice() {
-    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+    let Some(admin) = admin_database_url() else {
         return;
     };
-    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
+    let Some(app_url) = app_database_url() else {
         return;
     };
-    let Some(store) = take_live(test_minio_client(), "MARKHAND_TEST_MINIO_*") else {
+    let Some(store) = test_minio_client() else {
         return;
     };
     // Once DB+MinIO are live (CI sets them), Qdrant is required — do not soft-skip

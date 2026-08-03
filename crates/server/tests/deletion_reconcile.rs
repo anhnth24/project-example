@@ -3,11 +3,13 @@
 //! These tests skip cleanly unless PostgreSQL, MinIO, and Qdrant test endpoints
 //! are provided in the environment.
 
+mod common;
+
 use bytes::Bytes;
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{MinioConfig, Profile, SecretString};
+use fileconv_server::config::Profile;
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
@@ -460,53 +462,15 @@ fn hermetic_purge_finalization_requires_quiesced_writers_and_intents() {
 }
 
 fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_DATABASE_URL unset");
-            None
-        }
-    }
+    common::admin_database_url()
 }
 
 fn test_minio_client() -> Option<MinioClient> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_MINIO_ENDPOINT unset");
-            return None;
-        }
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY").ok()?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY").ok()?;
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION").unwrap_or_else(|_| "us-east-1".into());
-    let bucket = format!("markhand-delete-reconcile-{}", Uuid::new_v4().simple());
-    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
-    let config = MinioConfig::new(
-        endpoint,
-        SecretString::new(access_key),
-        SecretString::new(secret_key),
-        bucket,
-        region,
-        true,
-    )
-    .expect("minio config");
-    Some(MinioClient::from_config(&config).expect("minio client"))
+    common::test_minio_client_with_bucket_prefix("markhand-delete-reconcile")
 }
 
 fn test_qdrant_client() -> Option<QdrantClient> {
-    let url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_QDRANT_URL unset");
-            return None;
-        }
-    };
-    let api_key = std::env::var("MARKHAND_TEST_QDRANT_API_KEY")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(SecretString::new);
-    Some(QdrantClient::with_api_key(url, api_key).expect("qdrant client"))
+    common::test_qdrant_client()
 }
 
 fn test_embedding_plan(base_url: &str) -> EmbeddingPlan {

@@ -4,6 +4,8 @@
 //! `MARKHAND_TEST_MINIO_*` are unset. The missing-scope test does **not**
 //! require live services (unreachable endpoint proves no network call).
 
+mod common;
+
 use std::collections::BTreeSet;
 
 use bytes::Bytes;
@@ -16,31 +18,19 @@ use fileconv_server::services::index_signature::parse_collection_name;
 use fileconv_server::storage::keys::{parse_key_for_org, quarantine_key, trusted_key};
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
 use fileconv_server::storage::qdrant::{
-    point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantAdminApiKey,
-    QdrantAdminClient, QdrantClient, UpsertPoint, VectorScope,
+    point_id_from_org_collection_and_chunk, ChunkPointPayload, QdrantAdminClient, QdrantClient,
+    UpsertPoint, VectorScope,
 };
 use fileconv_server::storage::StorageError;
 use uuid::Uuid;
 
 fn test_qdrant_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_QDRANT_URL unset — Qdrant integration tests require a live instance"
-            );
-            None
-        }
-    }
+    common::test_qdrant_url()
 }
 
-fn test_admin_client(url: &str) -> QdrantAdminClient {
-    // Local Qdrant ignores api-key when auth is disabled; construction still
-    // requires a distinct non-empty operator credential.
-    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
-        .unwrap_or_else(|_| "test-operator-admin-key".into());
-    QdrantAdminClient::new(url, QdrantAdminApiKey::new(SecretString::new(key)).unwrap())
-        .expect("admin client")
+fn test_admin_client(_url: &str) -> QdrantAdminClient {
+    common::test_qdrant_admin_client()
+        .expect("admin client configured with MARKHAND_TEST_QDRANT_URL")
 }
 
 struct TestMinioEnv {
@@ -51,27 +41,12 @@ struct TestMinioEnv {
 }
 
 fn test_minio_env() -> Option<TestMinioEnv> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_MINIO_ENDPOINT unset — MinIO integration tests require a live instance"
-            );
-            return None;
-        }
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY").ok()?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY").ok()?;
-    if access_key.is_empty() || secret_key.is_empty() {
-        eprintln!("skipped: MinIO test credentials empty");
-        return None;
-    }
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION").unwrap_or_else(|_| "us-east-1".into());
+    let creds = common::minio_test_credentials()?;
     Some(TestMinioEnv {
-        endpoint,
-        access_key,
-        secret_key,
-        region,
+        endpoint: creds.endpoint,
+        access_key: creds.access_key,
+        secret_key: creds.secret_key,
+        region: creds.region,
     })
 }
 

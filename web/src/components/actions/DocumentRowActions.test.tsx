@@ -281,7 +281,9 @@ describe('DocumentRowActions', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Xóa tài liệu' }));
 
       await screen.findByText(/đã yêu cầu xóa tài liệu này/i);
-      expect(onChanged).toHaveBeenCalledOnce();
+      // onChanged fires from a passive effect after the success render commits,
+      // so it may land a tick after the message is visible.
+      await waitFor(() => expect(onChanged).toHaveBeenCalledOnce());
       // The row does not vanish by itself — deletion is asynchronous, the
       // parent decides when to stop rendering it (via onChanged's refetch).
       expect(screen.getByRole('button', { name: 'Xóa' })).toBeDisabled();

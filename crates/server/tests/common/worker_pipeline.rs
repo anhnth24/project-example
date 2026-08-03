@@ -13,14 +13,15 @@ use axum::http::{Request, StatusCode};
 use deadpool_postgres::Pool;
 use fileconv_knowledge::embedding::{EmbeddingPlan, ProviderDeployment, RUNTIME_VLLM_LOCAL};
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{Profile, SecretString};
+use fileconv_server::config::Profile;
+use fileconv_server::db::models::JobStatus;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs;
 use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::index_signature::{collection_name_for_signature, CollectionName};
 use fileconv_server::services::indexing::IndexingOutboxSink;
 use fileconv_server::storage::minio::MinioClient;
-use fileconv_server::storage::qdrant::{QdrantAdminApiKey, QdrantAdminClient, QdrantClient};
+use fileconv_server::storage::qdrant::{QdrantAdminClient, QdrantClient};
 use fileconv_server::workers::convert::{ConvertWorker, ConvertWorkerConfig, ConvertWorkerRun};
 use fileconv_server::workers::embedding::{
     EmbeddingWorker, EmbeddingWorkerConfig, EmbeddingWorkerRun,
@@ -38,43 +39,17 @@ const BOUNDARY: &str = "----markhandWorkerPipelineBoundary";
 
 /// Locate the `fileconv` binary used by ConvertWorker sandboxes.
 pub fn fileconv_binary() -> Option<PathBuf> {
-    if let Ok(path) = std::env::var("MARKHAND_TEST_FILECONV_BIN") {
-        let path = PathBuf::from(path);
-        if path.exists() {
-            return Some(path);
-        }
-    }
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv");
-    path.exists().then_some(path)
+    super::fileconv_binary()
 }
 
 /// Live Qdrant client when `MARKHAND_TEST_QDRANT_URL` is set.
 pub fn test_qdrant() -> Option<QdrantClient> {
-    let url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => return None,
-    };
-    Some(QdrantClient::with_api_key(url, None).expect("qdrant client"))
+    super::test_qdrant_client()
 }
 
 /// Admin client for collection cleanup.
-///
-/// Local Qdrant ignores api-key when auth is disabled; construction still needs
-/// a non-empty operator credential (same convention as `tests/storage.rs`).
 pub fn test_qdrant_admin() -> Option<QdrantAdminClient> {
-    let url = match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => return None,
-    };
-    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
-        .unwrap_or_else(|_| "test-operator-admin-key".into());
-    Some(
-        QdrantAdminClient::new(
-            url,
-            QdrantAdminApiKey::new(SecretString::new(key)).expect("admin key"),
-        )
-        .expect("qdrant admin client"),
-    )
+    super::test_qdrant_admin_client()
 }
 
 fn multipart(
@@ -151,6 +126,19 @@ pub struct WorkerProducedDoc {
     pub quote: String,
     /// Exact permissions seeded for this principal (and used for worker `OrgContext`).
     pub permissions: BTreeSet<String>,
+}
+
+/// New document source submitted within an existing org/collection scope.
+pub struct ExistingScopeDocument<'a> {
+    pub access_token: &'a str,
+    pub org_id: Uuid,
+    pub user_id: Uuid,
+    pub collection_id: Uuid,
+    pub permissions: &'a [&'a str],
+    pub filename: &'a str,
+    pub content_type: &'a str,
+    pub source: &'a [u8],
+    pub label: &'a str,
 }
 
 /// Build the worker `OrgContext` from the caller's effective permission set only.
@@ -465,6 +453,32 @@ impl WorkerPipeline {
         .await
     }
 
+    /// Create a document in an existing org collection and run all production workers.
+    ///
+    /// Preserves the caller's exact permission set — no superset injection.
+    pub async fn produce_indexed_in_existing_scope(
+        &self,
+        document: ExistingScopeDocument<'_>,
+    ) -> WorkerProducedDoc {
+        let worker_ctx = worker_org_context(
+            document.org_id,
+            document.user_id,
+            document.collection_id,
+            document.permissions.iter().copied(),
+        );
+        self.upload_convert_index(
+            document.access_token,
+            &worker_ctx,
+            document.collection_id,
+            None,
+            document.filename,
+            document.content_type,
+            document.source,
+            document.label,
+        )
+        .await
+    }
+
     /// Upload a revision onto an existing worker-produced document and re-index.
     pub async fn produce_revision(
         &self,
@@ -534,17 +548,19 @@ impl WorkerPipeline {
             )
             .await
             .unwrap();
-        assert_eq!(
-            upload_response.status(),
-            StatusCode::CREATED,
-            "{label} upload status"
-        );
+        let upload_status = upload_response.status();
         let upload_bytes = upload_response
             .into_body()
             .collect()
             .await
             .unwrap()
             .to_bytes();
+        assert_eq!(
+            upload_status,
+            StatusCode::CREATED,
+            "{label} upload status; body={}",
+            String::from_utf8_lossy(&upload_bytes)
+        );
         let upload: serde_json::Value = serde_json::from_slice(&upload_bytes).unwrap();
         assert_eq!(upload["disposition"], "accepted", "{label} disposition");
         let document_id = Uuid::parse_str(upload["documentId"].as_str().unwrap()).unwrap();
@@ -566,35 +582,20 @@ impl WorkerPipeline {
         );
         convert_config.heartbeat_interval = Duration::from_secs(5);
         convert_config.lease_ttl = Duration::from_secs(60);
-        let convert_worker =
-            ConvertWorker::new(self.pool.clone(), self.store.clone(), convert_config)
-                .expect("convert worker");
-        let convert_run = convert_worker
-            .run_once(worker_ctx)
-            .await
-            .unwrap_or_else(|error| panic!("{label} convert run: {error}"));
-        let worker_org_id = worker_ctx.org_id();
-        let convert_last_error = with_org_txn(&self.pool, worker_ctx, move |txn| {
-            Box::pin(async move {
-                let row = txn
-                    .query_one(
-                        "SELECT last_error FROM jobs WHERE org_id = $1 AND id = $2",
-                        &[&worker_org_id, &convert_job_id],
-                    )
-                    .await?;
-                Ok::<_, fileconv_server::db::error::DbError>(
-                    row.get::<_, Option<String>>("last_error"),
-                )
-            })
-        })
-        .await
-        .unwrap_or_else(|error| panic!("{label} load convert job: {error}"));
+        let convert_run = run_convert_worker_until_completed(
+            &self.pool,
+            &self.store,
+            worker_ctx,
+            convert_job_id,
+            convert_config,
+        )
+        .await;
         assert!(
             matches!(
                 convert_run,
                 ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id
             ),
-            "{label} unexpected convert outcome: {convert_run:?}; last_error={convert_last_error:?}"
+            "{label} unexpected convert outcome: {convert_run:?}"
         );
 
         let (published_version_id, markdown_sha, source_sha) =
@@ -632,6 +633,68 @@ impl WorkerPipeline {
             permissions: worker_ctx.permissions().clone(),
         }
     }
+}
+
+async fn run_convert_worker_until_completed(
+    pool: &Pool,
+    storage: &MinioClient,
+    ctx: &OrgContext,
+    convert_job_id: Uuid,
+    config: ConvertWorkerConfig,
+) -> ConvertWorkerRun {
+    let worker = ConvertWorker::new(pool.clone(), storage.clone(), config).expect("convert worker");
+    for round in 0..12 {
+        let outcome = worker.run_once(ctx).await.expect("convert worker run");
+        if !matches!(outcome, ConvertWorkerRun::Completed { .. })
+            && job_status(pool, ctx, convert_job_id).await == JobStatus::Succeeded
+        {
+            return ConvertWorkerRun::Completed {
+                job_id: convert_job_id,
+                markdown_bytes: 0,
+            };
+        }
+        match outcome {
+            ConvertWorkerRun::Completed { job_id, .. } if job_id == convert_job_id => {
+                return outcome;
+            }
+            ConvertWorkerRun::Failed {
+                job_id,
+                terminal: true,
+                ..
+            } if job_id == convert_job_id => {
+                panic!("convert job {convert_job_id} dead-lettered on round {round}");
+            }
+            ConvertWorkerRun::NoJob if round + 1 < 12 => continue,
+            other if round + 1 < 12 => {
+                let _ = other;
+                continue;
+            }
+            other => panic!(
+                "convert job {convert_job_id} did not complete within run budget; last={other:?}"
+            ),
+        }
+    }
+    unreachable!("convert worker run budget exhausted");
+}
+
+async fn job_status(pool: &Pool, ctx: &OrgContext, job_id: Uuid) -> JobStatus {
+    with_org_txn(pool, ctx, {
+        let ctx = ctx.clone();
+        move |txn| {
+            Box::pin(async move {
+                let row = txn
+                    .query_one(
+                        "SELECT status FROM jobs WHERE org_id = $1 AND id = $2",
+                        &[&ctx.org_id(), &job_id],
+                    )
+                    .await?;
+                let status: String = row.get(0);
+                Ok(JobStatus::parse(&status).unwrap_or(JobStatus::Pending))
+            })
+        }
+    })
+    .await
+    .expect("job status")
 }
 
 pub async fn drain_index_jobs(worker: &IndexWorker, ctx: &OrgContext) -> usize {

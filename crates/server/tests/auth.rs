@@ -3,6 +3,8 @@
 //! Gated on `MARKHAND_TEST_DATABASE_URL` (same ephemeral-DB pattern as
 //! `repositories.rs` / `schema_migrations.rs`).
 
+mod common;
+
 use std::sync::Arc;
 
 use axum::body::Body;
@@ -27,15 +29,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_DATABASE_URL unset — auth integration tests require PostgreSQL"
-            );
-            None
-        }
-    }
+    common::admin_database_url()
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
