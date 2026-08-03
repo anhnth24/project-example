@@ -221,49 +221,21 @@ async fn search_visibility_snapshot(
     org: &BootedOrg,
     marker: &str,
 ) -> Result<String, String> {
-    use fileconv_server::auth::permissions::resolve_org_context_in_txn;
-    use fileconv_server::db::pool::with_org_txn;
-    use fileconv_server::db::search::{
-        collect_fts_visibility_snapshot_parts, format_fts_visibility_snapshot,
-    };
-    use fileconv_server::services::retrieval::{resolve_scope, RetrievalError};
-
     let owner = org.users.get("owner").ok_or("missing owner user")?;
-    let ctx = resolve_org_context_in_txn(pool, org.org_id, owner.user_id)
-        .await
-        .map_err(|err| format!("resolve org context: {err:?}"))?;
-    let scope = resolve_scope(&ctx, None)
-        .map_err(|err: RetrievalError| format!("resolve scope: {err:?}"))?;
-    let collection_ids: Vec<_> = scope.collection_ids.iter().copied().collect();
     let indexed = org
         .indexed_document
         .as_ref()
         .ok_or_else(|| format!("org {} has no worker-produced indexed document", org.slug))?;
-    let document_collection_id = org.collections["org"].collection_id;
-
-    let parts = with_org_txn(pool, &ctx, {
-        let ctx = ctx.clone();
-        let marker = marker.to_string();
-        let document_id = indexed.document_id;
-        move |txn| {
-            Box::pin(async move {
-                collect_fts_visibility_snapshot_parts(
-                    txn,
-                    &ctx,
-                    &collection_ids,
-                    document_id,
-                    document_collection_id,
-                    &marker,
-                    10,
-                )
-                .await
-            })
-        }
-    })
+    crate::common::fts_visibility_diagnostic::search_visibility_snapshot_for_document(
+        pool,
+        org.org_id,
+        owner.user_id,
+        indexed.document_id,
+        org.collections["org"].collection_id,
+        marker,
+        10,
+    )
     .await
-    .map_err(|err| format!("collect fts visibility snapshot: {err}"))?;
-
-    Ok(format_fts_visibility_snapshot(&parts))
 }
 
 async fn read_sse_until(
