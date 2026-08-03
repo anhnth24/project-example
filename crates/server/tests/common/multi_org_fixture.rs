@@ -131,7 +131,11 @@ async fn seed_one_org(pool: &Pool, label: &str) -> (Uuid, OrgUsers, OrgCollectio
             let owner_ctx = owner_ctx.clone();
             let email = email.clone();
             let tag = tag.to_string();
-            move |txn| Box::pin(async move { orgs::ensure_user(txn, &owner_ctx, user_id, &email, &tag).await })
+            move |txn| {
+                Box::pin(
+                    async move { orgs::ensure_user(txn, &owner_ctx, user_id, &email, &tag).await },
+                )
+            }
         })
         .await
         .expect("ensure extra fixture user");
@@ -141,71 +145,85 @@ async fn seed_one_org(pool: &Pool, label: &str) -> (Uuid, OrgUsers, OrgCollectio
     }
 
     let group_id = Uuid::new_v4();
-    let (viewer_role_id, shared_docs, private_notes, team_space) = with_org_txn(pool, &owner_ctx, {
-        let owner_ctx = owner_ctx.clone();
-        move |txn| {
-            Box::pin(async move {
-                create_role(txn, org, "admin", "Admin", ADMIN_PERMISSIONS).await?;
-                // `org_memberships.role` is constrained to
-                // ('owner','admin','editor','viewer') by migration 0001/0003
-                // (`org_memberships_role_check`) — there is no 'member' role
-                // code in that check constraint, so the app-level "member"
-                // tier is stored as 'editor' at the DB layer everywhere
-                // (`roles.code` here and `org_memberships.role` below); the
-                // Rust-level field name stays `member` for readability.
-                create_role(txn, org, "editor", "Member", MEMBER_PERMISSIONS).await?;
-                let viewer_role_id =
-                    create_role(txn, org, "viewer", "Viewer", VIEWER_PERMISSIONS).await?;
+    let (viewer_role_id, shared_docs, private_notes, team_space) =
+        with_org_txn(pool, &owner_ctx, {
+            let owner_ctx = owner_ctx.clone();
+            move |txn| {
+                Box::pin(async move {
+                    create_role(txn, org, "admin", "Admin", ADMIN_PERMISSIONS).await?;
+                    // `org_memberships.role` is constrained to
+                    // ('owner','admin','editor','viewer') by migration 0001/0003
+                    // (`org_memberships_role_check`) — there is no 'member' role
+                    // code in that check constraint, so the app-level "member"
+                    // tier is stored as 'editor' at the DB layer everywhere
+                    // (`roles.code` here and `org_memberships.role` below); the
+                    // Rust-level field name stays `member` for readability.
+                    create_role(txn, org, "editor", "Member", MEMBER_PERMISSIONS).await?;
+                    let viewer_role_id =
+                        create_role(txn, org, "viewer", "Viewer", VIEWER_PERMISSIONS).await?;
 
-                for (user_id, role_code) in
-                    [(admin, "admin"), (member, "editor"), (viewer, "viewer")]
-                {
-                    txn.execute(
-                        "INSERT INTO org_memberships (org_id, user_id, role)
+                    for (user_id, role_code) in
+                        [(admin, "admin"), (member, "editor"), (viewer, "viewer")]
+                    {
+                        txn.execute(
+                            "INSERT INTO org_memberships (org_id, user_id, role)
                          VALUES ($1, $2, $3)
                          ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role",
-                        &[&owner_ctx.org_id(), &user_id, &role_code],
+                            &[&owner_ctx.org_id(), &user_id, &role_code],
+                        )
+                        .await?;
+                    }
+
+                    txn.execute(
+                        "INSERT INTO groups (id, org_id, name) VALUES ($1, $2, 'Team')",
+                        &[&group_id, &org],
                     )
                     .await?;
-                }
-
-                txn.execute(
-                    "INSERT INTO groups (id, org_id, name) VALUES ($1, $2, 'Team')",
-                    &[&group_id, &org],
-                )
-                .await?;
-                txn.execute(
-                    "INSERT INTO group_memberships (org_id, group_id, user_id)
+                    txn.execute(
+                        "INSERT INTO group_memberships (org_id, group_id, user_id)
                      VALUES ($1, $2, $3)",
-                    &[&org, &group_id, &member],
-                )
-                .await?;
+                        &[&org, &group_id, &member],
+                    )
+                    .await?;
 
-                // Duplicate names on purpose across org A / org B — see module docs.
-                let shared_docs =
-                    insert_named_collection(txn, org, owner, "org", "Shared Docs", "shared-docs")
+                    // Duplicate names on purpose across org A / org B — see module docs.
+                    let shared_docs = insert_named_collection(
+                        txn,
+                        org,
+                        owner,
+                        "org",
+                        "Shared Docs",
+                        "shared-docs",
+                    )
+                    .await?;
+                    let private_notes = insert_named_collection(
+                        txn,
+                        org,
+                        owner,
+                        "private",
+                        "Private Notes",
+                        "private-notes",
+                    )
+                    .await?;
+                    let team_space = insert_named_collection(
+                        txn,
+                        org,
+                        owner,
+                        "groups",
+                        "Team Space",
+                        "team-space",
+                    )
+                    .await?;
+                    grant_group_access(txn, org, team_space, group_id, AccessLevel::Write).await?;
+                    grant_role_access(txn, org, team_space, viewer_role_id, AccessLevel::Read)
                         .await?;
-                let private_notes = insert_named_collection(
-                    txn,
-                    org,
-                    owner,
-                    "private",
-                    "Private Notes",
-                    "private-notes",
-                )
-                .await?;
-                let team_space =
-                    insert_named_collection(txn, org, owner, "groups", "Team Space", "team-space")
-                        .await?;
-                grant_group_access(txn, org, team_space, group_id, AccessLevel::Write).await?;
-                grant_role_access(txn, org, team_space, viewer_role_id, AccessLevel::Read).await?;
 
-                Ok((viewer_role_id, shared_docs, private_notes, team_space))
-            })
-        }
-    })
-    .await
-    .expect("seed org roles/collections");
+                    Ok((viewer_role_id, shared_docs, private_notes, team_space))
+                })
+            }
+        })
+        .await
+        .expect("seed org roles/collections");
 
     (
         org,

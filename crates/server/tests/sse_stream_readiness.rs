@@ -2253,8 +2253,15 @@ async fn live_ask_stream_slow_trickle_concurrent_delete_releases_locks() {
             _ => break,
         }
     }
+    // The invariant is "delete must not flush the buffered content batch",
+    // not "zero in-flight tokens": on a loaded runner the pre-delete read can
+    // miss a token the trickle producer had already emitted, so one straggler
+    // `ask.token` racing the delete is legitimate. A lock/flush bug shows up
+    // as a run of several content events before the close, which the count
+    // below still rejects.
+    let post_content_events = buf.matches("event: ask.token").count();
     assert!(
-        post_seqs.len() <= 1,
+        post_content_events <= 1,
         "delete during trickle must not flush buffered content batch: {post_seqs:?} buf={buf}"
     );
     assert!(

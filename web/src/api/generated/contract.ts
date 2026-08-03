@@ -2764,6 +2764,15 @@ export interface operations {
             400: components["responses"]["ApiError"];
             403: components["responses"]["ApiError"];
             404: components["responses"]["ApiError"];
+            /** @description Project name already used in this org (`uq_projects__org_name`). Same `name_taken` mapping precedent as POST /orgs's `slug_taken`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiError"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };

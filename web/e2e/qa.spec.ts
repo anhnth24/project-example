@@ -170,9 +170,7 @@ test('multi-mode conflict warnings display correctly (compare/history)', async (
   await page.getByRole('combobox', { name: 'Phiên bản B' }).click();
   await page.getByRole('option', { name: 'Phiên bản 2 (hiện hành)' }).click();
 
-  await page
-    .getByRole('textbox', { name: 'Câu hỏi' })
-    .fill('Ngân sách vận hành thay đổi thế nào?');
+  await page.getByRole('textbox', { name: 'Câu hỏi' }).fill('Ngân sách vận hành thay đổi thế nào?');
   await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
   const compareTurn = chatLog.locator('.chat-turn').nth(0);
@@ -199,9 +197,7 @@ test('multi-mode conflict warnings display correctly (compare/history)', async (
   await page.getByRole('combobox', { name: 'Chế độ truy vấn' }).click();
   await page.getByRole('option', { name: 'Lịch sử phiên bản' }).click();
 
-  await page
-    .getByRole('textbox', { name: 'Câu hỏi' })
-    .fill('Lịch sử ngân sách vận hành thế nào?');
+  await page.getByRole('textbox', { name: 'Câu hỏi' }).fill('Lịch sử ngân sách vận hành thế nào?');
   await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
   const historyTurn = chatLog.locator('.chat-turn').nth(1);

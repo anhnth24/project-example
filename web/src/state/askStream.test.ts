@@ -198,7 +198,9 @@ describe('reduceAskStreamMessage', () => {
     it('as-of mode: one warning that the resolved version is older than current', () => {
       const final = fold([
         event(1, 'ask.started', { streamSessionId: 's', mode: 'offline_extractive' }),
-        event(2, 'ask.token', { text: 'Ngân sách vận hành được BA duyệt là 10 triệu đồng mỗi quý.' }),
+        event(2, 'ask.token', {
+          text: 'Ngân sách vận hành được BA duyệt là 10 triệu đồng mỗi quý.',
+        }),
         event(3, 'ask.warning', {
           message:
             'Phiên bản 1 của "Chính sách ngân sách vận hành.pdf" không phải phiên bản hiện hành — nội dung: "Ngân sách vận hành được BA duyệt là 10 triệu đồng mỗi quý.". Xung đột đã được giải quyết ở phiên bản 2.',
@@ -230,10 +232,12 @@ describe('reduceAskStreamMessage', () => {
         event(1, 'ask.started', { streamSessionId: 's', mode: 'offline_extractive' }),
         event(2, 'ask.token', { text: 'So sánh hai phiên bản.' }),
         event(3, 'ask.warning', {
-          message: 'Phiên bản 1 của "Doc.pdf" không phải phiên bản hiện hành — nội dung: "10 triệu". Xung đột đã được giải quyết ở phiên bản 3.',
+          message:
+            'Phiên bản 1 của "Doc.pdf" không phải phiên bản hiện hành — nội dung: "10 triệu". Xung đột đã được giải quyết ở phiên bản 3.',
         }),
         event(4, 'ask.warning', {
-          message: 'Phiên bản 2 của "Doc.pdf" không phải phiên bản hiện hành — nội dung: "15 triệu". Xung đột đã được giải quyết ở phiên bản 3.',
+          message:
+            'Phiên bản 2 của "Doc.pdf" không phải phiên bản hiện hành — nội dung: "15 triệu". Xung đột đã được giải quyết ở phiên bản 3.',
         }),
         event(5, 'ask.citations', { citations: [] }),
         event(6, 'ask.version_context', {

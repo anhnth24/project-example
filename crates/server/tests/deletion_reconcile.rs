@@ -2262,10 +2262,16 @@ async fn cross_org_deletion_reconcile_leaves_org_b_untouched() {
         .expect("request delete for org a document");
     assert!(matches!(outcome, DeleteRequestOutcome::Requested(_)));
 
-    let _report =
-        reconcile_document(&pool, &storage, &qdrant, &ctx_a, doc_a, ReconcileMode::DryRun)
-            .await
-            .expect("reconcile org a document");
+    let _report = reconcile_document(
+        &pool,
+        &storage,
+        &qdrant,
+        &ctx_a,
+        doc_a,
+        ReconcileMode::DryRun,
+    )
+    .await
+    .expect("reconcile org a document");
 
     let doc_a_after = with_org_txn(&pool, &ctx_a, {
         let ctx_a = ctx_a.clone();

@@ -68,17 +68,14 @@ test('uploading a file against the real backend reaches indexed, and its preview
   //    purpose) — the state badge below is the stable signal instead.
   await expect(row).toBeVisible({ timeout: 15_000 });
 
-  // 2. Real conversion in progress, per the worker's own state machine
-  //    (`uploaded -> converting -> converted -> indexing -> indexed`,
-  //    documented in `LibraryPage.tsx`). Nothing in this test nudges this —
-  //    unlike the mock's `advanceDocument`, this is the real worker actually
-  //    running. If the real pipeline converts this tiny file fast enough to
-  //    already be past "converting" by the first poll tick, this assertion
-  //    is the one most likely to need loosening once this spec is actually
-  //    run against the real stack (see the task's own "do not run yet" note)
-  //    — [Unverified] real-worker timing, not something inspectable from
-  //    this repo's client-side code alone.
-  await expect(row.getByText('Đang chuyển đổi')).toBeVisible({ timeout: 20_000 });
+  // 2. No intermediate-state assertion on purpose: the real worker converts
+  //    this tiny .txt in well under the list's 5s poll tick, so the
+  //    transient "Đang chuyển đổi" badge is never reliably rendered — the
+  //    first CI run against the real stack confirmed exactly the loosening
+  //    this comment's earlier version predicted (run 30806030510). The state
+  //    machine's intermediate steps stay covered by the mock suite
+  //    (`e2e/document-status-polling.spec.ts`), which can freeze each stage;
+  //    the real-deployment signal here is the terminal state below.
 
   // Open the document's own preview so the badge there is proven too, not
   // just the list row's — same shape as `document-status-polling.spec.ts`'s

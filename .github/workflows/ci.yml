@@ -310,6 +310,10 @@ jobs:
           scan-type: image
           severity: HIGH,CRITICAL
           exit-code: "1"
+          # Debian base packages routinely carry HIGH/CRITICAL CVEs the
+          # distro marks will_not_fix/fix_deferred (no fixed version to move
+          # to) — gate only on findings that have an available fix.
+          ignore-unfixed: true
           trivyignores: .trivyignore
       - name: Scan worker image (Trivy)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -318,6 +322,7 @@ jobs:
           scan-type: image
           severity: HIGH,CRITICAL
           exit-code: "1"
+          ignore-unfixed: true
           trivyignores: .trivyignore
 
   toolchain:

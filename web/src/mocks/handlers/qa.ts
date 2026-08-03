@@ -272,9 +272,7 @@ function currentVersionNumberFor(documentId: string): number | undefined {
 function nonCurrentConflictWarning(passage: Passage): string {
   const currentNumber = currentVersionNumberFor(passage.documentId);
   const resolvedSuffix =
-    currentNumber !== undefined
-      ? ` Xung đột đã được giải quyết ở phiên bản ${currentNumber}.`
-      : '';
+    currentNumber !== undefined ? ` Xung đột đã được giải quyết ở phiên bản ${currentNumber}.` : '';
   return (
     `Phiên bản ${passage.versionNumber} của "${passage.title}" không phải phiên bản hiện hành ` +
     `— nội dung: "${passage.quote}".${resolvedSuffix}`
