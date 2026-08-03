@@ -10,6 +10,16 @@
  * `authContextForHeader(...).orgId` the same way `listCollections` scopes
  * itself — is simpler than adding graph-shaped fields to `Store`.
  *
+ * One deliberate exception to "disjoint": the "Sổ tay nhân viên 2024" node
+ * reuses `mockUuid(100)` — `fixtures.ts`'s real "Onboarding Guide.pdf"
+ * document id (Employee Handbook collection) — instead of a node-only id.
+ * `GraphNode.id` doubles as a document id on the real API (node click deep-
+ * links to `/library/:collectionId?doc=:id`, P2-17 gap close), so at least
+ * one seeded node needs a real, previewable document behind it for that
+ * link to resolve to more than a 404 in tests. The other 12 nodes keep
+ * their node-only ids (200-212 minus 200) since nothing here exercises their
+ * document-preview path.
+ *
  * Permission note: the real server gates `GET /graph` on `qa.query`
  * (`routes/graph.rs`), but this mock does not check it — same precedent
  * `handlers/qa.ts`'s `search`/`ask` already set (the real `/search`/`/ask`
@@ -72,7 +82,10 @@ const SPECS_COLLECTION_NAME = 'Product Specs';
 const ORG_A_NODES: NodeSeed[] = [
   // Cluster "Nhân sự" (Employee Handbook) — 5 nodes.
   {
-    id: mockUuid(200),
+    // Reuses fixtures.ts's real "Onboarding Guide.pdf" document id (see
+    // module doc above) so this node's ?doc= deep-link resolves to a real
+    // preview instead of a 404.
+    id: mockUuid(100),
     title: 'Sổ tay nhân viên 2024',
     collectionId: HANDBOOK_COLLECTION_ID,
     collectionName: HANDBOOK_COLLECTION_NAME,
@@ -168,11 +181,11 @@ const ORG_A_NODES: NodeSeed[] = [
 
 const ORG_A_EDGES: EdgeSeed[] = [
   // Cluster 1 (Nhân sự).
-  { source: mockUuid(200), target: mockUuid(201), kind: 'co_citation', weight: 0.4 },
+  { source: mockUuid(100), target: mockUuid(201), kind: 'co_citation', weight: 0.4 },
   { source: mockUuid(201), target: mockUuid(202), kind: 'conflict', weight: 0.9 },
-  { source: mockUuid(200), target: mockUuid(203), kind: 'co_citation', weight: 0.3 },
+  { source: mockUuid(100), target: mockUuid(203), kind: 'co_citation', weight: 0.3 },
   { source: mockUuid(203), target: mockUuid(204), kind: 'similarity', weight: 0.5 },
-  { source: mockUuid(200), target: mockUuid(204), kind: 'co_citation', weight: 0.2 },
+  { source: mockUuid(100), target: mockUuid(204), kind: 'co_citation', weight: 0.2 },
   // Cluster 2 (Sản phẩm).
   { source: mockUuid(205), target: mockUuid(206), kind: 'similarity', weight: 0.8 },
   { source: mockUuid(206), target: mockUuid(207), kind: 'co_citation', weight: 0.35 },
@@ -188,7 +201,7 @@ const ORG_A_COMMUNITIES: CommunitySeed[] = [
   {
     id: 'community-0',
     label: HANDBOOK_COLLECTION_NAME,
-    nodeIds: [mockUuid(200), mockUuid(201), mockUuid(202), mockUuid(203), mockUuid(204)],
+    nodeIds: [mockUuid(100), mockUuid(201), mockUuid(202), mockUuid(203), mockUuid(204)],
   },
   {
     id: 'community-1',

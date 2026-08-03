@@ -5,11 +5,15 @@
 //
 // Layout: a hand-rolled force simulation (`lib/forceLayout.ts`) — no
 // `d3-force` dependency (see that module's doc + the P2-17 report for the
-// trade-off). Node click navigates to the node's own collection in the
-// library (`/library/:collectionId` — P2-07's existing route; there is no
-// document-level URL to deep-link straight into a single document's preview
-// today, since `LibraryPage`'s selected-document state is local, not a route
-// param — a documented gap, not an oversight; see the report).
+// trade-off). Node click deep-links straight into that node's own document
+// preview: `/library/:collectionId?doc=:documentId` (`buildLibraryDocPath`,
+// the same P2-07 helper `CitationCard`/`CitationFootnotes` already use).
+// `GraphNode.id` doubles as the document id here — confirmed against
+// `crates/server/src/db/graph.rs::list_visible_documents`, which selects
+// `d.id` straight off the `documents` table, so on the real API a graph
+// node's id always names a real, previewable document (small-gap close for
+// P2-17; this module's older comment claiming no document-level route
+// existed predates P2-07 and was stale).
 import { useMemo, useState } from 'react';
 import { apiClient, type ApiClient } from '../api/client';
 import type { components } from '../api/generated/contract';
@@ -19,7 +23,7 @@ import { describeApiError } from '../components/library';
 import { Notice, SelectControl, type SelectOption } from '../components/ui';
 import { useScopeSafeRequest } from '../hooks/useScopeSafeRequest';
 import { computeForceLayout } from '../lib/forceLayout';
-import { buildScopedPath } from '../lib/router';
+import { buildLibraryDocPath } from '../lib/router';
 import { useRouter } from '../state/RouterProvider';
 
 type GraphNode = components['schemas']['GraphNode'];
@@ -130,7 +134,7 @@ export function GraphPage({
   }
 
   function handleActivateNode(node: GraphNode) {
-    navigate(buildScopedPath('library', node.collectionId));
+    navigate(buildLibraryDocPath(node.collectionId, node.id));
   }
 
   const collectionOptions: SelectOption[] = [
