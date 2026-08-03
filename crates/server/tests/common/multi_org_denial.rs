@@ -747,10 +747,14 @@ pub fn assert_object_key_identity(org: &crate::common::multi_org_denial_world::B
         !org.object_key.is_empty(),
         "booted org must record a runtime object key"
     );
+    // Deliberately do NOT echo the offending value: the guard unit test
+    // `object_key_identity_rejects_fixture_template` triggers this panic on
+    // purpose under catch_unwind, and with --nocapture the default panic hook
+    // would print the fixture objectKeyTemplate to stderr — which the Phase 1C
+    // denial runner scans as a foreign-marker needle (false leak finding).
     assert!(
         !org.object_key.contains('{') && !org.object_key.contains('}'),
-        "runtime object key must not be an unresolved fixture template: {}",
-        org.object_key
+        "runtime object key must not be an unresolved fixture template"
     );
     assert!(
         org.object_key.starts_with("trusted/"),
