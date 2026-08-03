@@ -79,9 +79,12 @@ validation uses `make bundle-linux`.
   Both carry `failureDisposition: block-phase-1c` and `environmentId: poc-compose`.
   The job uploads `manifest-run.json` and `phase1c-denial-report.md` (never raw
   cargo output). No branch protection required check is attached yet —
-  informational only until a live deployed run succeeds. See
-  `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`
-  for the evidence template these runs fill in.
+  informational only. First live deployed run succeeded on run
+  [30849375921](https://github.com/anhnth24/project-example/actions/runs/30849375921)
+  (evidence:
+  `plans/reports/gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.{json,md}`).
+  Reusable template:
+  `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`.
 - `dev-stack` uses tiered profiles via `deploy/scripts/dev-stack-ci.sh`:
   - **lite** (`deploy/scripts/**`): compose config + `dev-up`/`dev-health` only.
   - **full** (`deploy/dev/**`, spike compose): adds spike lifecycle and `check-spike`,

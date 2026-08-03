@@ -396,9 +396,20 @@ ADR RLS ───────→ 1C-08 ─────────────�
   `run-live-gates`, boot POC compose, chạy canonical denial runner +
   Markdown renderer, upload sanitized artifact) +
   template report `plans/reports/gate-run-260803-0000-...-phase1c-denial-suite-report.md`.
-  **Còn lại để đóng**: chạy `deployed-1c-integration` lần đầu trên POC stack (job đã
-  wired tới canonical runner + Markdown renderer, chưa kích hoạt live), điền report
-  thật; **export** đã map N/A-until-surface-exists (`na-export-route-absent` —
+  **Deployed half PASS** (first live run
+  [30849375921](https://github.com/anhnth24/project-example/actions/runs/30849375921),
+  job
+  [91805590040](https://github.com/anhnth24/project-example/actions/runs/30849375921/job/91805590040),
+  2026-08-03T20:16:04Z–20:49:11Z): 74 executable / 5 N/A / 0 deferred, 15 binaries,
+  runner=0, teardown=0, failures=0, leakage=0, redaction pass — evidence
+  `plans/reports/gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.{json,md}`
+  (artifact `gitShaFull` `67d27b7ced3c04f25c62f299ed9a50be95009b47`; branch head
+  `bae0f585c2a84d2222b966f8dc620101a68d72f9`). **CI half chưa ổn định**: cùng labeled
+  run `rust-integration` flaked; run trước
+  [30843983333](https://github.com/anhnth24/project-example/actions/runs/30843983333)
+  passed — **1C-12 vẫn In progress**, chưa Done. MinIO root trong test harness chỉ
+  fixture ephemeral buckets; runtime API/workers vẫn narrow — không phải IAM
+  least-privilege evidence. **export** N/A-until-surface-exists (`na-export-route-absent` —
   OpenAPI/guard inventory không có export operation; mọi export tương lai phải vào
   guard inventory + denial manifest trước release).
 
@@ -447,6 +458,11 @@ boot/teardown shape — cùng opt-in trigger (`workflow_dispatch` hoặc PR labe
 `poc-health.sh`, chạy canonical runner `scripts/run-phase1c-denial-suite.py` với
 `MARKHAND_TEST_REQUIRED=1`, render `phase1c-denial-report.md` từ sanitized JSON,
 rồi upload artifact (không raw cargo output). Job này chứng minh deployed half của
-1C-12; 1C-13 vẫn `not_run` trong artifact. Chưa gắn branch-protection required
-check — informational cho tới khi live run thành công. Report template: `plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`.
+1C-12 (live PASS run
+[30849375921](https://github.com/anhnth24/project-example/actions/runs/30849375921));
+1C-13 vẫn `not_run` trong artifact. Chưa gắn branch-protection required
+check — informational. Report evidence:
+`plans/reports/gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.md`;
+template:
+`plans/reports/gate-run-260803-0000-markhand-web-phase1c-denial-suite-report.md`.
 Xem thêm `docs/conventions/ci.md` phần "CI behavior" (`deployed-1c-integration`).

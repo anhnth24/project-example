@@ -1,12 +1,16 @@
 # Phase 1C denial-suite gate run — TEMPLATE
 
-> **This file is a skeleton, not a real run.** No `deployed-1c-integration` job
-> has produced a report yet as of 2026-08-03. Every bracketed field below is a
-> placeholder — do not fill in numbers from memory or inference; copy this file
-> to a new `gate-run-<YYMMDD-HHMM>-markhand-web-phase1c-denial-suite-report.md`
-> and fill it in only from an actual CI run or local reproduction of the commands
-> below. If a field cannot be verified from a real run, leave it as
-> `[unverified]` rather than guessing.
+> **Reusable skeleton for future runs.** The first live deployed run is recorded at
+> [`gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.md`](gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.md)
+> (JSON:
+> [`gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.json`](gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.json))
+> from CI run
+> [30849375921](https://github.com/anhnth24/project-example/actions/runs/30849375921)
+> / job
+> [91805590040](https://github.com/anhnth24/project-example/actions/runs/30849375921/job/91805590040)
+> — deployed half **PASS**, CI half still tracked separately. Copy this file to a new
+> `gate-run-<YYMMDD-HHMM>-markhand-web-phase1c-denial-suite-report.md` and fill bracketed
+> fields only from an actual CI run or local reproduction. Do not fabricate counts.
 
 Date: `[YYYY-MM-DD]`
 Commit under test: `[full 40-char git sha]`

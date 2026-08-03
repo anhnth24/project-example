@@ -465,11 +465,11 @@
       "approver": "security-owner",
       "status": "approved",
       "failureDisposition": "block-phase-1c",
-      "evidence": null,
+      "evidence": "plans/reports/gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.json",
       "blocksIssues": [
         "1C-12"
       ],
-      "notes": "Multi-org denial suite: cross-org ACL/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/cache/audit/worker/reconcile, in-flight ACL revoke, and token/org-switch isolation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-12). CI half runs the canonical manifest runner inside rust-integration; the deployed half runs the same runner in deployed-1c-integration (.github/workflows/ci.yml) against deploy/compose.poc.yml with MARKHAND_TEST_REQUIRED=1. Export is N/A-until-surface-exists (na-export-route-absent in multi-org-denial.manifest.json; OpenAPI/guard inventory contain no export operation — any future export operation must enter guard inventory + denial manifest before release). Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment; deployed evidence pending first live run."
+      "notes": "Multi-org denial suite: cross-org ACL/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/cache/audit/worker/reconcile, in-flight ACL revoke, and token/org-switch isolation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-12). CI half runs the canonical manifest runner inside rust-integration; the deployed half runs the same runner in deployed-1c-integration (.github/workflows/ci.yml) against deploy/compose.poc.yml with MARKHAND_TEST_REQUIRED=1. Export is N/A-until-surface-exists (na-export-route-absent in multi-org-denial.manifest.json; OpenAPI/guard inventory contain no export operation — any future export operation must enter guard inventory + denial manifest before release). Deployed half PASS on run 30849375921 (job 91805590040, 2026-08-03T20:16:04Z–20:49:11Z): 74 executable / 5 N/A / 0 deferred, 15 binaries, runner=0, teardown=0, failures=0, leakage=0, redaction pass — evidence plans/reports/gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.{json,md} (artifact gitShaFull 67d27b7ced3c04f25c62f299ed9a50be95009b47; branch head at run bae0f585c2a84d2222b966f8dc620101a68d72f9). MinIO root in the test harness is fixture-only for ephemeral buckets; runtime API/workers remain narrow — NOT MinIO IAM least-privilege evidence. 1C-12 remains In progress: same labeled run's rust-integration flaked while prior run 30843983333 passed; CI-half stability required before Done. Phase 1C exit gate still requires 1C-12 AND 1C-13 green on both CI and deployed environment; 1C-13 evidence not_run."
     },
     {
       "id": "1C-13",
