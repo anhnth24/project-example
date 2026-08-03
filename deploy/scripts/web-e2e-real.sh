@@ -19,57 +19,50 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-ENV_FILE="$ROOT/deploy/dev/.env"
+ORCHESTRATION_TEST="${WEB_E2E_REAL_ORCHESTRATION_TEST:-0}"
+ENV_FILE="${WEB_E2E_REAL_ENV_FILE:-$ROOT/deploy/dev/.env}"
 WEB_DIR="$ROOT/web"
 REDACT="$ROOT/deploy/scripts/redact_secrets.py"
+SERVER_BIN="${WEB_E2E_REAL_SERVER_BIN:-$ROOT/target/debug/fileconv-server}"
+WORKER_BIN="${WEB_E2E_REAL_WORKER_BIN:-$ROOT/target/debug/fileconv-worker}"
+FILECONV_BIN="${WEB_E2E_REAL_FILECONV_BIN:-$ROOT/target/debug/fileconv}"
 
 # Mock signature / dims must match deploy/dev/.env.example mock block and mock-embedding.py.
 MOCK_INDEX_SIGNATURE="0f59a26d542340c3c2c062a227417e47f9303c2db67569cf9031fe4707e44bf0"
 
+server_pid=""
+worker_pids=()
+server_log=""
+convert_log=""
+index_log=""
+embedding_log=""
 created_env=false
-if [[ ! -f "$ENV_FILE" ]]; then
-  "$ROOT/deploy/scripts/init-dev-env.sh"
-  created_env=true
-fi
 
-# CI sets COMPOSE_PROFILES=mock; do not let .env clobber it.
-incoming_profiles="${COMPOSE_PROFILES:-}"
+cleanup() {
+  local worker_pid
+  if [[ -n "$server_pid" ]]; then
+    kill "$server_pid" 2>/dev/null || true
+    wait "$server_pid" 2>/dev/null || true
+  fi
+  for worker_pid in "${worker_pids[@]}"; do
+    kill "$worker_pid" 2>/dev/null || true
+  done
+  for worker_pid in "${worker_pids[@]}"; do
+    wait "$worker_pid" 2>/dev/null || true
+  done
+  if [[ -n "$server_log" ]]; then
+    rm -f "$server_log" "$convert_log" "$index_log" "$embedding_log"
+  fi
+  if [[ "$created_env" == true ]]; then
+    rm -f "$ENV_FILE"
+  fi
+}
 
-set -a
-# shellcheck disable=SC1090
-source "$ENV_FILE"
-set +a
-
-if [[ -n "$incoming_profiles" ]]; then
-  export COMPOSE_PROFILES="$incoming_profiles"
-fi
-
-if [[ "${COMPOSE_PROFILES:-}" == *mock* ]]; then
-  export MARKHAND_EMBEDDING_MODEL=markhand-mock
-  export MARKHAND_EMBEDDING_REVISION=dev-local
-  export MARKHAND_EMBEDDING_DIMENSIONS=8
-  export MARKHAND_EMBEDDING_API_KEY=dev-mock-key
-  export MARKHAND_INDEX_SIGNATURE="$MOCK_INDEX_SIGNATURE"
-  export MARKHAND_MOCK_EMBEDDING_DIMENSIONS=8
-fi
-
-"$ROOT/deploy/scripts/bootstrap-server-role.sh"
-"$ROOT/deploy/scripts/migrate.sh"
-python3 "$ROOT/deploy/poc/qdrant-init.py"
-
-# Build the SPA before the server starts: resolve_web_dist_dir() is checked
-# once at router bootstrap, so a `web/dist` that appears after the server is
-# already running would never be picked up.
-pnpm --dir "$WEB_DIR" build
-export MARKHAND_WEB_DIST_DIR="$WEB_DIR/dist"
-
-export MARKHAND_WORKER_DATABASE_URL="postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_dev_only}@127.0.0.1:${MARKHAND_POSTGRES_PORT:-54329}/${MARKHAND_POSTGRES_DB:-markhand}"
-export MARKHAND_CONVERTER_ARGV_JSON="[\"${ROOT}/target/debug/fileconv\",\"one\",\"{input}\"]"
 server_log="$(mktemp)"
 convert_log="$(mktemp)"
 index_log="$(mktemp)"
 embedding_log="$(mktemp)"
-worker_pids=()
+trap cleanup EXIT
 
 dump_redacted_logs() {
   local reason="${1:-failure}"
@@ -85,19 +78,22 @@ dump_redacted_logs() {
     label="${entry%%:*}"
     path="${entry#*:}"
     echo "--- ${label} ---" >&2
-    if [[ -f "$path" ]]; then
-      python3 "$REDACT" --allow-residual "$path" >&2 || cat "$path" >&2
-    else
+    if [[ ! -f "$path" ]]; then
       echo "(no log file)" >&2
+      continue
+    fi
+    if ! python3 "$REDACT" "$path" >&2; then
+      echo "(log redaction failed for ${label} — raw log withheld)" >&2
     fi
   done
 }
 
 workers_alive() {
+  local context="${1:-before Playwright}"
   local worker_pid
   for worker_pid in "${worker_pids[@]}"; do
     if ! kill -0 "$worker_pid" 2>/dev/null; then
-      dump_redacted_logs "worker process ${worker_pid} exited before Playwright"
+      dump_redacted_logs "worker process ${worker_pid} exited ${context}"
       return 1
     fi
   done
@@ -128,27 +124,91 @@ start_worker() {
       export MARKHAND_CONVERTER_ARGV_JSON="$converter_argv"
     fi
 
-    exec "$ROOT/target/debug/fileconv-worker" >"$worker_log" 2>&1
+    exec "$WORKER_BIN" >"$worker_log" 2>&1
   ) &
   worker_pids+=("$!")
 }
 
-cleanup() {
-  kill "$server_pid" 2>/dev/null || true
-  local worker_pid
-  for worker_pid in "${worker_pids[@]}"; do
-    kill "$worker_pid" 2>/dev/null || true
-  done
-  wait "$server_pid" 2>/dev/null || true
-  for worker_pid in "${worker_pids[@]}"; do
-    wait "$worker_pid" 2>/dev/null || true
-  done
-  rm -f "$server_log" "$convert_log" "$index_log" "$embedding_log"
-  if [[ "$created_env" == true ]]; then
-    rm -f "$ENV_FILE"
+run_playwright_supervised() {
+  local playwright_pid
+  set +e
+  if [[ -n "${WEB_E2E_REAL_PLAYWRIGHT_CMD:-}" ]]; then
+    bash -c "$WEB_E2E_REAL_PLAYWRIGHT_CMD" &
+    playwright_pid=$!
+  else
+    MARKHAND_E2E_REAL=1 \
+      MARKHAND_E2E_REAL_BASE_URL="http://${bind_addr}" \
+      pnpm --dir "$WEB_DIR" exec playwright test --project=real &
+    playwright_pid=$!
   fi
+  set -e
+
+  while kill -0 "$playwright_pid" 2>/dev/null; do
+    if [[ -n "$server_pid" ]] && ! kill -0 "$server_pid" 2>/dev/null; then
+      kill "$playwright_pid" 2>/dev/null || true
+      wait "$playwright_pid" 2>/dev/null || true
+      dump_redacted_logs "fileconv-server exited during Playwright"
+      return 1
+    fi
+    if ! workers_alive "during Playwright"; then
+      kill -TERM "$playwright_pid" 2>/dev/null || true
+      local _w
+      for _w in $(seq 1 20); do
+        kill -0 "$playwright_pid" 2>/dev/null || break
+        sleep 0.05
+      done
+      kill -KILL "$playwright_pid" 2>/dev/null || true
+      wait "$playwright_pid" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  local playwright_status=0
+  wait "$playwright_pid" 2>/dev/null || playwright_status=$?
+  return "$playwright_status"
 }
-trap cleanup EXIT
+
+if [[ "$ORCHESTRATION_TEST" != "1" && ! -f "$ENV_FILE" ]]; then
+  "$ROOT/deploy/scripts/init-dev-env.sh"
+  created_env=true
+fi
+
+# CI sets COMPOSE_PROFILES=mock; do not let .env clobber it.
+incoming_profiles="${COMPOSE_PROFILES:-}"
+
+set -a
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+set +a
+
+if [[ -n "$incoming_profiles" ]]; then
+  export COMPOSE_PROFILES="$incoming_profiles"
+fi
+
+if [[ "${COMPOSE_PROFILES:-}" == *mock* ]]; then
+  export MARKHAND_EMBEDDING_MODEL=markhand-mock
+  export MARKHAND_EMBEDDING_REVISION=dev-local
+  export MARKHAND_EMBEDDING_DIMENSIONS=8
+  export MARKHAND_EMBEDDING_API_KEY=dev-mock-key
+  export MARKHAND_INDEX_SIGNATURE="$MOCK_INDEX_SIGNATURE"
+  export MARKHAND_MOCK_EMBEDDING_DIMENSIONS=8
+fi
+
+if [[ "$ORCHESTRATION_TEST" != "1" ]]; then
+  "$ROOT/deploy/scripts/bootstrap-server-role.sh"
+  "$ROOT/deploy/scripts/migrate.sh"
+  python3 "$ROOT/deploy/poc/qdrant-init.py"
+fi
+
+# Build the SPA before the server starts: resolve_web_dist_dir() is checked
+# once at router bootstrap, so a `web/dist` that appears after the server is
+# already running would never be picked up.
+pnpm --dir "$WEB_DIR" build
+export MARKHAND_WEB_DIST_DIR="$WEB_DIR/dist"
+
+export MARKHAND_WORKER_DATABASE_URL="postgres://${MARKHAND_WORKER_DB_USER:-markhand_worker}:${MARKHAND_WORKER_DB_PASSWORD:-markhand_worker_dev_only}@127.0.0.1:${MARKHAND_POSTGRES_PORT:-54329}/${MARKHAND_POSTGRES_DB:-markhand}"
+export MARKHAND_CONVERTER_ARGV_JSON="[\"${FILECONV_BIN}\",\"one\",\"{input}\"]"
 
 cargo build -p fileconv-server
 cargo build -p fileconv-cli --bin fileconv
@@ -157,22 +217,27 @@ start_worker convert e2e-real-convert-1 "$convert_log" "$MARKHAND_CONVERTER_ARGV
 start_worker index e2e-real-index-1 "$index_log"
 start_worker embedding e2e-real-embedding-1 "$embedding_log"
 
-"$ROOT/target/debug/fileconv-server" >"$server_log" 2>&1 &
+"$SERVER_BIN" >"$server_log" 2>&1 &
 server_pid=$!
 
 bind_addr="${MARKHAND_BIND_ADDR:-127.0.0.1:8787}"
+readiness_attempts="${WEB_E2E_REAL_READINESS_ATTEMPTS:-60}"
 healthy=false
-for _ in $(seq 1 60); do
+for _ in $(seq 1 "$readiness_attempts"); do
   if curl --fail --silent --show-error \
     "http://${bind_addr}/api/v1/health/ready" >/dev/null; then
-    healthy=true
-    break
+    if kill -0 "$server_pid" 2>/dev/null; then
+      healthy=true
+      break
+    fi
+    dump_redacted_logs "fileconv-server exited during readiness"
+    exit 1
   fi
   if ! kill -0 "$server_pid" 2>/dev/null; then
     dump_redacted_logs "fileconv-server exited during readiness"
     exit 1
   fi
-  if ! workers_alive; then
+  if ! workers_alive "during readiness"; then
     exit 1
   fi
   sleep 1
@@ -184,17 +249,19 @@ if [[ "$healthy" != true ]]; then
   exit 1
 fi
 
-if ! workers_alive; then
+if ! workers_alive "after readiness, before seed"; then
   exit 1
 fi
 
 "$ROOT/deploy/scripts/seed-dev-all.sh" --skip-init
 echo "healthy: fileconv-server + convert/index/embedding workers (web/dist from $MARKHAND_WEB_DIST_DIR)"
 
+if ! workers_alive "after seed, before Playwright"; then
+  exit 1
+fi
+
 set +e
-MARKHAND_E2E_REAL=1 \
-  MARKHAND_E2E_REAL_BASE_URL="http://${bind_addr}" \
-  pnpm --dir "$WEB_DIR" exec playwright test --project=real
+run_playwright_supervised
 playwright_status=$?
 set -e
 
