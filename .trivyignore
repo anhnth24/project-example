@@ -1,0 +1,15 @@
+# Trivy accepted-risk exceptions for deploy/Dockerfile.server and
+# deploy/Dockerfile.worker (security-image job, .github/workflows/ci.yml).
+#
+# Empty by design: no exception has been reviewed/accepted yet. Do not add a
+# CVE id here to silence a scan failure without following the same
+# "documented exception" discipline as deny.toml / docs/adr/TEMPLATE.md's
+# "Exception lifecycle" section:
+#   - one line per accepted CVE/advisory id
+#   - a trailing `#` comment naming: owner, why it cannot be fixed now, and an
+#     expiry/retest date (Trivy also supports an inline `exp:YYYY-MM-DD` after
+#     the id to auto-expire the ignore)
+#
+# Example (uncomment and edit, do not leave unattributed):
+#   CVE-2025-NNNNN exp:2026-09-01  # owner: <name> — base-image fix not yet
+#     released upstream, retest at next debian:bookworm-slim digest bump.

@@ -32,6 +32,7 @@ jobs:
       bundle: ${{ steps.changes.outputs.bundle }}
       toolchain: ${{ steps.changes.outputs.toolchain }}
       corpus: ${{ steps.changes.outputs.corpus }}
+      deploy_images: ${{ steps.changes.outputs.deploy_images }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -249,6 +250,76 @@ jobs:
         if: always()
         run: docker compose -f deploy/dev/compose.yml down -v
 
+  # Fast SCA gate (P2-15 OWASP baseline, tier 1): known-CVE check on both
+  # dependency graphs. Unconditional — no infra needed, seconds-long, and a
+  # known-vulnerable lockfile entry should block a merge immediately, same as
+  # a compile/lint/test failure would in the rust/web jobs. Kept as its own
+  # job (not folded into rust/web) so it reports as a distinct, clearly-named
+  # check in branch protection.
+  security-deps:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      # rustsec/audit-check needs to write a commit status/check for the scan
+      # result; the workflow-level `permissions: contents: read` would
+      # otherwise leave it unable to report anything but stdout.
+      checks: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Rust dependency audit (cargo-audit / RustSec advisory DB)
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.33.3
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # --audit-level high: fail on High/Critical advisories only; Low/Moderate
+      # are reported but non-blocking (npm advisory DB is noisy at low severity
+      # for dev-only deps, per the OWASP-baseline research recommendation).
+      - name: JS/TS dependency audit (pnpm audit)
+        run: pnpm audit --audit-level high
+
+  # Container image scan (P2-15 OWASP baseline, tier 1): Trivy against the two
+  # images actually shipped (deploy/Dockerfile.server, deploy/Dockerfile.worker).
+  # Gated like linux-bundle: only when deploy/** changed, or unconditionally on
+  # a master push so a base-image CVE can't merge silently on an unrelated PR.
+  security-image:
+    needs: changes-and-static
+    if: >-
+      needs.changes-and-static.outputs.deploy_images == 'true' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Build server image
+        run: docker build -f deploy/Dockerfile.server -t markhand-security-scan/server:${{ github.sha }} .
+      - name: Build worker image
+        run: docker build -f deploy/Dockerfile.worker -t markhand-security-scan/worker:${{ github.sha }} .
+      - name: Scan server image (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: markhand-security-scan/server:${{ github.sha }}
+          scan-type: image
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivyignores: .trivyignore
+      - name: Scan worker image (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: markhand-security-scan/worker:${{ github.sha }}
+          scan-type: image
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivyignores: .trivyignore
+
   toolchain:
     needs: changes-and-static
     if: needs.changes-and-static.outputs.toolchain == 'true'
@@ -327,6 +398,62 @@ jobs:
         with:
           name: phase1b-o04-release-${{ github.sha }}
           path: ${{ runner.temp }}/markhand-o04-release/**
+      - name: Dump POC logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose.poc.yml logs --tail=200 || true
+      - name: Tear down POC stack
+        if: always()
+        run: docker compose -f deploy/compose.poc.yml down -v
+
+  # OWASP baseline DAST gate (P2-15). Cloned from phase1b-o04-release-gate's
+  # boot/teardown shape: same opt-in trigger, same POC stack via
+  # deploy/scripts/poc-up.sh + poc-health.sh. ZAP baseline is passive-only
+  # (headers/cookies/information disclosure) — it does not authenticate or
+  # exercise business logic, so it is not a substitute for Phase 1C's denial
+  # suite. Warning-only for now: ZAP's alert set needs one or two real runs
+  # against this app before an alert-filter rules file can be trusted as a
+  # hard merge blocker, so `continue-on-error: true` and no branch-protection
+  # requirement yet (see docs/conventions/ci.md).
+  owasp-baseline:
+    needs: changes-and-static
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-live-gates')
+    runs-on: ubuntu-22.04
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install O04-equivalent native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config \
+            tesseract-ocr tesseract-ocr-vie shellcheck apparmor
+      # See phase1b-o04-release-gate's own comment: the convert worker's
+      # nested sandbox needs the same AppArmor profile loaded to boot.
+      - name: Load the convert sandbox AppArmor profile
+        run: sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: 1.88.0
+      - name: Boot POC Compose stack
+        run: |
+          cp deploy/.env.example deploy/.env
+          deploy/scripts/poc-up.sh
+          deploy/scripts/poc-health.sh
+      - name: Run OWASP ZAP baseline scan
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        with:
+          target: "http://127.0.0.1:8788"
+          # Non-blocking: the action's own exit status stays green even if ZAP
+          # finds alerts. `continue-on-error` above is the second, job-level
+          # safety net so the workflow overall never fails from this gate.
+          fail_action: false
+          # No automated GitHub issue filing while the gate is unconditionally
+          # warning-only; the report artifact below is the evidence trail.
+          allow_issue_writing: false
+          artifact_name: owasp-baseline-${{ github.sha }}
       - name: Dump POC logs on failure
         if: failure()
         run: docker compose -f deploy/compose.poc.yml logs --tail=200 || true

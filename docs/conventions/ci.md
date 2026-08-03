@@ -94,6 +94,40 @@ validation uses `make bundle-linux`.
 - Artifacts follow [`testing-fixtures.md`](testing-fixtures.md): no secret/PII/content
   leakage, explicit retention and checksums.
 
+## Security scanning (P2-15 OWASP baseline)
+
+Three gates, split by the same two-speed philosophy as the rest of this file: fast
+static scans block every relevant push; the live DAST gate stays opt-in like
+`phase1b-o04-release-gate` until its findings have been triaged.
+
+- `security-deps` — **unconditional**, runs on every PR and `master` push (seconds,
+  no infra). `rustsec/audit-check` runs `cargo audit` against `Cargo.lock`/the RustSec
+  advisory DB; `pnpm audit --audit-level high` runs against the root `pnpm-lock.yaml`
+  (covers both `web/` and `app/`). Fails on High/Critical; informational RustSec
+  advisories and pnpm findings below `high` are reported but non-blocking.
+- `security-image` — gated like `linux-bundle`: only when `deploy/**` changed (new
+  `deploy_images` classifier output), or unconditionally on a `master` push. Builds
+  `deploy/Dockerfile.server` and `deploy/Dockerfile.worker`, scans both with
+  `aquasecurity/trivy-action` (`scan-type: image`), fails on High/Critical. Accepted
+  risk goes in `.trivyignore` with the same owner/scope/expiry discipline as any other
+  documented exception (see `docs/adr/TEMPLATE.md`'s "Exception lifecycle").
+- `owasp-baseline` — **opt-in, never per-push**, same trigger as
+  `phase1b-o04-release-gate` (`workflow_dispatch` or a `run-live-gates` PR label):
+  boots the POC stack via `deploy/scripts/poc-up.sh` + `poc-health.sh`, then runs
+  `zaproxy/action-baseline` against the API's base URL. This is the literal "OWASP
+  baseline scan" P2-15 asks for — passive HTTP checks only (missing security headers,
+  cookie flags, information disclosure); it does not authenticate or exercise business
+  logic, so it is **not** a substitute for Phase 1C's denial/authorization suite.
+  **Warning-only**: `fail_action: false` on the action plus job-level
+  `continue-on-error: true` so it can never fail the workflow yet, and it is
+  deliberately **not** added to branch-protection required checks. ZAP baseline's
+  alert set needs one or two real runs against this app's actual POC stack before an
+  alert-filter rules file can be trusted enough to promote this to a blocking gate —
+  that promotion is a deliberate follow-up, not something to guess at during initial
+  wiring.
+- All three new Actions are pinned to a full commit SHA with a version comment, same
+  as every other workflow step; `scripts/check-dependency-policy.py` enforces this.
+
 ## Failure handling
 
 Failures must name the command and recovery action. Do not mute lint/test failures or

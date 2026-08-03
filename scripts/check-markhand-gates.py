@@ -27,6 +27,7 @@ GATE_FAMILIES = {"G0-ARCH", "G0-RET", "G0-SEC", "G0-CAP", "G0-SLO", "G0-LIC"}
 OPERATORS = {">=", ">", "<=", "<", "=="}
 FAILURE_DISPOSITIONS = {
     "block-phase-1b",
+    "block-phase-1c",
     "block-phase-4",
     "block-issue",
     "research-only",
