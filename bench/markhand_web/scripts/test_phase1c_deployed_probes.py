@@ -1933,6 +1933,166 @@ class Phase1cFourthReviewSliceTests(unittest.TestCase):
             self.assertTrue(specs, f"{entry.row_id} produced no specs")
 
 
+class Phase1cFifthReviewSliceTests(unittest.TestCase):
+    """Commit Q RED: fifth-review bounded HTTP slice contracts."""
+
+    SEED_PY = ROOT / "bench/markhand_web/scripts/phase1c_multi_org_seed.py"
+    GATE_PY = GATE_PATH
+    DENIAL_PY = DENIAL_PATH
+    PROBES_PY = PROBES_PATH
+    FAKE_PY = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+
+    def _seed_fixture(self, probes):
+        return probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+
+    def _seed_creds(self, seed, probes):
+        return make_seed_credentials(probes, seed)
+
+    def test_http_contract_schema_table_covers_all_owner_get_operations(self) -> None:
+        denial = load_denial()
+        table = denial.HTTP_OWNER_SUCCESS_SCHEMA
+        mapping = denial.build_http_sse_denial_mapping()
+        get_ops = {
+            entry.operation_id
+            for entry in mapping
+            if entry.method.upper() == "GET" and entry.operation_id not in {"redeemDownload"}
+        }
+        missing = sorted(get_ops - set(table))
+        self.assertFalse(missing, f"HTTP_OWNER_SUCCESS_SCHEMA missing GET operations: {missing}")
+
+    def test_diff_document_versions_owner_path_includes_against_query(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.operation_id == "diffDocumentVersions")
+        spec = denial.build_owner_control_spec(entry, seed=seed, credentials=creds)
+        assert spec is not None
+        self.assertIn("against=", spec.path)
+        self.assertIn(seed.beta_version_id, spec.path)
+
+    def test_get_usage_owner_schema_requires_items(self) -> None:
+        denial = load_denial()
+        self.assertEqual(denial.HTTP_OWNER_SUCCESS_SCHEMA["getUsage"], frozenset({"items"}))
+
+    def test_get_document_version_schema_matches_openapi(self) -> None:
+        denial = load_denial()
+        keys = denial.HTTP_OWNER_SUCCESS_SCHEMA["getDocumentVersion"]
+        for required in ("id", "documentId", "versionNumber", "isCurrent", "sourceContentSha256"):
+            self.assertIn(required, keys)
+
+    def test_diff_document_versions_schema_matches_openapi(self) -> None:
+        denial = load_denial()
+        self.assertEqual(
+            denial.HTTP_OWNER_SUCCESS_SCHEMA["diffDocumentVersions"],
+            frozenset({"documentId", "left", "right", "note", "requestId"}),
+        )
+
+    def test_load_seed_credentials_secure_reads_without_loaded_copy(self) -> None:
+        probes = load_probes()
+        secure_fn = self.PROBES_PY.read_text(encoding="utf-8").split("def load_seed_credentials_secure", 1)[1].split(
+            "\ndef ", 1
+        )[0]
+        self.assertNotIn(".loaded", secure_fn)
+        path = Path(tempfile.mkdtemp()) / "creds.json"
+        payload = complete_credentials_raw()
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+        creds = probes.load_seed_credentials_secure(
+            path, expected_challenge="phase1c-challenge-abc", purge_after_load=False
+        )
+        self.assertEqual(creds.alpha_access_token, "alpha-token")
+        self.assertFalse(path.with_suffix(path.suffix + ".loaded").exists())
+
+    def test_gate_build_context_uses_secure_credential_loader(self) -> None:
+        text = self.GATE_PY.read_text(encoding="utf-8")
+        ctx = text.split("def build_deployed_context", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("load_seed_credentials_secure", ctx)
+        self.assertNotIn("load_seed_credentials(", ctx)
+
+    def test_unrestricted_loader_not_imported_on_gate_credential_path(self) -> None:
+        text = self.GATE_PY.read_text(encoding="utf-8")
+        ctx = text.split("def build_deployed_context", 1)[1].split("\ndef ", 1)[0]
+        self.assertNotIn("load_seed_credentials(", ctx)
+
+    def test_sse_qualifying_paths_require_stream_closed_terminal(self) -> None:
+        denial = load_denial()
+        self.assertEqual(denial.SSE_TERMINAL_EVENT, "stream.closed")
+        envelope = self.DENIAL_PY.read_text(encoding="utf-8").split("def _validate_sse_envelope", 1)[1].split(
+            "\ndef ", 1
+        )[0]
+        self.assertIn("stream.closed", envelope)
+
+    def test_owner_transition_follow_up_covers_member_and_invite_mutations(self) -> None:
+        denial = load_denial()
+        fn = self.DENIAL_PY.read_text(encoding="utf-8").split("def _validate_owner_transition", 1)[1].split(
+            "\ndef ", 1
+        )[0]
+        for transition in (
+            "member_role_updated",
+            "member_deleted",
+            "invite_revoked",
+            "invite_accepted",
+            "collection_updated",
+        ):
+            self.assertIn(transition, fn)
+
+    def test_stale_token_secondary_uses_stale_access_credential(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            beta_denial_stale_access_token="stale-access-token-value",
+        )
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-task13-stale-tokens")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        stale = [s for s in specs if s.scenario == "stale_token"]
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0].token, "stale-access-token-value")
+        self.assertEqual(stale[0].expected_statuses, frozenset({401}))
+
+    def test_seed_reconciles_identity_fixtures_before_invites(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("_reconcile_identity_fixtures", text)
+        reconcile = text.split("def _reconcile_identity_fixtures", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("member_invites", reconcile)
+        self.assertIn("org_memberships", reconcile)
+
+    def test_audit_logout_body_includes_refresh_token(self) -> None:
+        text = self.PROBES_PY.read_text(encoding="utf-8")
+        audit = text.split("def run_audit_probe", 1)[1].split("\n    def run_", 1)[0]
+        self.assertIn('"refreshToken"', audit)
+        self.assertNotIn('body={}', audit)
+
+    def test_stateful_fake_raises_on_unknown_owner_mapping(self) -> None:
+        fake_path = self.FAKE_PY
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake_fifth", fake_path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["phase1c_stateful_fake_fifth"] = module
+        spec.loader.exec_module(module)
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        deployment = module.StatefulFakeDeployment(seed=seed, credentials=creds)
+        with self.assertRaises(RuntimeError):
+            deployment._http_request(
+                method="GET",
+                path="/api/v1/usage",
+                token=creds.alpha_beta_access_token,
+            )
+
+    def test_contract_table_test_generated_from_fixture_requirements(self) -> None:
+        denial = load_denial()
+        self.assertTrue(hasattr(denial, "validate_http_contract_schema_table"))
+        denial.validate_http_contract_schema_table()
+
+
 class DeployedCiRouteTests(unittest.TestCase):
     def test_ci_failure_uploads_safe_diagnostic_not_raw_logs(self) -> None:
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
