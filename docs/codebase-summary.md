@@ -30,8 +30,9 @@ Q&A) đi qua contract `fileconv-knowledge` (`crates/knowledge`) — `types`, `qu
 `locate_chunk_text`) và **embedding runtime** (suy luận/parse runtime path) đều bắt
 nguồn từ `fileconv-core` (`src/chunk.rs`, `src/embedding_runtime.rs`): server path-dep
 thẳng vào `fileconv-core` để chunk (`services/chunking.rs`, `services/citation.rs`),
-còn `fileconv-knowledge` chỉ tái dùng/re-export phần embedding runtime khi cần
-(ví dụ `infer_runtime_path` re-export `fileconv_core::embedding_runtime::infer_embedding_runtime_path`)
+còn `fileconv-knowledge` tái dùng/re-export phần embedding runtime và `normalize_search_text`
+khi cần (ví dụ `infer_runtime_path` re-export `fileconv_core::embedding_runtime::infer_embedding_runtime_path`;
+`rank.rs`/`query.rs`/`citation.rs` gọi trực tiếp `fileconv_core::intelligence::normalize_search_text`)
 chứ không tự định nghĩa lại.
 
 ## `crates/core/` — fileconv-core (engine)

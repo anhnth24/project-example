@@ -103,7 +103,7 @@ Không đo lại = không claims "nhanh/đúng hơn". Quy tắc Fail loud: báo 
 
 - `default = []` — core build tinh gọn, offline.
 - feature `audio` (opt-in) → `whisper-rs`/`symphonia`/`rubato`, mở transcribe. TẮT mặc định: whisper.cpp
-  phải compile C++ qua cmake (~1–2 phút), chỉ cli/desktop cần — server/knowledge dùng lõi text-only
+  phải compile C++ qua cmake (~1–2 phút), chỉ CLI/desktop/MCP cần — server/knowledge dùng lõi text-only
   không gánh chi phí này.
 - `cuda` / `metal` / `vulkan` / `hipblas` / `openblas` / `openmp` → **kéo theo feature `audio`** (proxy
   sang `whisper-rs` để tăng tốc GPU/BLAS), không bật độc lập được.
