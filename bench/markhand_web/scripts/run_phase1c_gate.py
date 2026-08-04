@@ -565,7 +565,12 @@ def evidence_binding_errors(payload: dict[str, Any], *, evidence_path: str) -> l
     return errors
 
 
-def evidence_probe_errors(repo_root: Path, *, status: str) -> list[str]:
+def evidence_probe_errors(
+    repo_root: Path,
+    *,
+    status: str,
+    report_metrics: dict[str, Any] | None = None,
+) -> list[str]:
     if status != "pass":
         return []
     errors: list[str] = []
@@ -589,6 +594,13 @@ def evidence_probe_errors(repo_root: Path, *, status: str) -> list[str]:
             errors.append(f"metrics_not_observed:{rel}")
         if payload.get("status") not in (None, "pass"):
             errors.append(f"evidence_status_not_pass:{rel}")
+        metric_errors = GATES.phase1c_evidence_metric_binding_errors(
+            payload,
+            context=rel,
+            report_metrics=report_metrics,
+            gate_row=row,
+        )
+        errors.extend(metric_errors)
         p1c8_items = payload.get("p1c8Items")
         if not isinstance(p1c8_items, list) or not p1c8_items:
             errors.append(f"p1c8_items_missing:{rel}")
@@ -679,7 +691,8 @@ def evaluate_report(
     blockers.extend(errors)
 
     if status == "pass" and evidence_must_exist:
-        blockers.extend(evidence_probe_errors(workspace, status="pass"))
+        report_metrics = report.get("metrics") if isinstance(report.get("metrics"), dict) else None
+        blockers.extend(evidence_probe_errors(workspace, status="pass", report_metrics=report_metrics))
 
     if bind_current_git and status == "pass":
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
@@ -1145,6 +1158,15 @@ def assemble_pass_report(
             raise RuntimeError(f"gate {gate_id} missing metricsObserved=true")
         if payload.get("status") not in (None, "pass"):
             raise RuntimeError(f"gate {gate_id} evidence status is not pass")
+        row = GATES.g1c_row_for_gate(gate_id)
+        metric_errors = GATES.phase1c_evidence_metric_binding_errors(
+            payload,
+            context=f"gate {gate_id}",
+            report_metrics=metrics,
+            gate_row=row,
+        )
+        if metric_errors:
+            raise RuntimeError("; ".join(metric_errors))
     if coverage_limited:
         raise RuntimeError(
             "coverage-limited gate evidence blocks qualifying pass: "
@@ -1182,7 +1204,7 @@ def assemble_pass_report(
             result["metricsObserved"] and not result["coverageLimited"] and threshold_ok
         )
         all_gate_pass = all_gate_pass and result["pass"]
-    report["coverageLimited"] = []
+    report["coverageLimited"] = sorted(dict.fromkeys(coverage_limited))
     report["status"] = "pass" if all_gate_pass else "fail"
     report["canonicalBinding"] = {
         "registryRevision": 1,

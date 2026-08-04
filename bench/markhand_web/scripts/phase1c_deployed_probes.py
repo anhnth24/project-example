@@ -521,10 +521,13 @@ def qualify_noisy_neighbor_workload(
     upload_timestamps: list[float] | None = None,
     window_start: float | None = None,
     window_end: float | None = None,
-    uploader_alive_at_end: bool = True,
+    uploader_hung_after_join: bool = False,
+    uploader_died_early: bool = False,
 ) -> tuple[bool, str]:
-    if not uploader_alive_at_end:
+    if uploader_died_early:
         return False, "noisy uploader thread died before window completed"
+    if uploader_hung_after_join:
+        return False, "noisy uploader thread hung after join timeout"
     if duration_secs < required_duration_secs:
         return False, f"noisy window too short: {duration_secs:.2f}s < {required_duration_secs}s"
     if len(samples_ns) < min_quiet_samples:
@@ -1713,7 +1716,7 @@ class DeployedProbeRunner:
         elapsed = time.monotonic() - started_at
         noisy_stop.set()
         worker.join(timeout=5)
-        uploader_alive_at_end = worker.is_alive()
+        uploader_hung_after_join = worker.is_alive()
         if noisy_errors:
             raise RuntimeError(f"noisy workload errors: {noisy_errors[0]}")
         qualified, qualify_reason = qualify_noisy_neighbor_workload(
@@ -1725,7 +1728,7 @@ class DeployedProbeRunner:
             duration_secs=elapsed,
             required_duration_secs=float(self.noisy_duration_secs),
             min_quiet_samples=self.quiet_search_samples,
-            uploader_alive_at_end=uploader_alive_at_end,
+            uploader_hung_after_join=uploader_hung_after_join,
         )
         if not qualified:
             return DeployedProbeResult(

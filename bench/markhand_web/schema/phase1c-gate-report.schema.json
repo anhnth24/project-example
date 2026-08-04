@@ -207,6 +207,25 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "pass"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "gateResults": {
+            "items": {
+              "required": ["metricsObserved"],
+              "properties": {
+                "metricsObserved": {"const": true},
+                "coverageLimited": {"not": {"const": true}}
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }

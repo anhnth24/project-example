@@ -2560,8 +2560,6 @@ class Phase1cNoisyLivenessTests(unittest.TestCase):
 
         def uploader() -> None:
             while True:
-                if stop.is_set() and len(upload_statuses) >= 5:
-                    break
                 upload_statuses.append(201)
                 upload_timestamps.append(time.monotonic())
                 time.sleep(0.05)
@@ -2584,7 +2582,7 @@ class Phase1cNoisyLivenessTests(unittest.TestCase):
             min_successful_uploads=5,
             uploader_hung_after_join=uploader_hung_after_join,
         )
-        self.assertTrue(uploader_hung_after_join)
+        self.assertTrue(uploader_hung_after_join, "uploader must remain alive after bounded join")
         self.assertFalse(ok)
         self.assertIn("hung", reason.lower())
 

@@ -371,6 +371,50 @@ def phase1c_evidence_qualification_errors(payload: object, *, context: str) -> l
     return errors
 
 
+def phase1c_evidence_metric_binding_errors(
+    payload: object,
+    *,
+    context: str,
+    report_metrics: dict[str, object] | None = None,
+    gate_row: dict[str, object] | None = None,
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return errors
+    evidence_metrics = payload.get("metrics")
+    if not isinstance(evidence_metrics, dict):
+        errors.append(f"{context}: evidence metrics must be an object")
+        return errors
+    if gate_row is None:
+        gate_id = payload.get("gateId")
+        if isinstance(gate_id, str):
+            gate_row = g1c_row_for_gate(gate_id)
+    if gate_row is None:
+        errors.append(f"{context}: unknown gate for evidence metric binding")
+        return errors
+    required_metrics = g1c_gate_metrics(gate_row)
+    if not required_metrics:
+        errors.append(f"{context}: gate has no qualifying metrics")
+        return errors
+    for metric in required_metrics:
+        if metric not in evidence_metrics:
+            errors.append(f"{context}: evidence missing metric {metric}")
+            continue
+        value = evidence_metrics[metric]
+        if metric in PHASE1C_METRIC_THRESHOLDS:
+            operator, limit = PHASE1C_METRIC_THRESHOLDS[metric]
+            if not threshold_satisfied(value, operator, limit):
+                errors.append(
+                    f"{context}: evidence metric {metric}={value!r} violates threshold"
+                )
+        if isinstance(report_metrics, dict) and metric in report_metrics:
+            if value != report_metrics[metric]:
+                errors.append(
+                    f"{context}: evidence metric {metric} must match report metrics.{metric}"
+                )
+    return errors
+
+
 def phase1c_evidence_path_errors(
     repo_root: Path,
     evidence_path: object,
@@ -1522,6 +1566,13 @@ def phase1c_gate_report_errors(
                                 evidence_payload,
                                 context=f"{path}:{evidence_rel}",
                             )
+                            row = g1c_row_for_gate(str(gate_id))
+                            errors += phase1c_evidence_metric_binding_errors(
+                                evidence_payload,
+                                context=f"{path}:{evidence_rel}",
+                                report_metrics=metrics if isinstance(metrics, dict) else None,
+                                gate_row=row,
+                            )
                             gate_id = result.get("gateId")
                             if evidence_payload.get("gateId") != gate_id:
                                 errors.append(f"{path}: evidence gateId mismatch for {evidence_rel}")
@@ -2067,12 +2118,24 @@ class Phase1cGateContractTests(unittest.TestCase):
             result["coverageLimited"] = False
         return report
 
+    def _qualifying_metric_value(self, metric: str) -> int | float:
+        if metric == "admin_mutation_audit_coverage_ratio":
+            return 1.0
+        if metric == "worker_dedicated_role_verified":
+            return 1
+        if metric in {"membership_acl_revoke_max_ms", "quiet_org_query_p95_ms"}:
+            return 100
+        return 0
+
     def _create_evidence_files(self, repo_root: Path | None = None) -> None:
         root = repo_root or self.repo_root
         for row in G1C_GATE_ROWS:
             path = root / str(row["evidence"])
             path.parent.mkdir(parents=True, exist_ok=True)
-            metrics = {metric: 0 for metric in row["metrics"]}  # type: ignore[index]
+            metrics = {
+                metric: self._qualifying_metric_value(metric)
+                for metric in row["metrics"]  # type: ignore[index]
+            }
             path.write_text(
                 json.dumps(
                     {
@@ -2210,7 +2273,10 @@ class Phase1cGateContractTests(unittest.TestCase):
         for row in G1C_GATE_ROWS:
             path = self.repo_root / str(row["evidence"])
             path.parent.mkdir(parents=True, exist_ok=True)
-            metrics = {metric: 0 for metric in row["metrics"]}  # type: ignore[index]
+            metrics = {
+                metric: self._qualifying_metric_value(metric)
+                for metric in row["metrics"]  # type: ignore[index]
+            }
             path.write_text(
                 json.dumps(
                     {
