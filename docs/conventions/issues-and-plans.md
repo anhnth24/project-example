@@ -14,8 +14,8 @@ trigger nằm tại [`delivery.md`](delivery.md); quality gate nằm tại
   tracking location/milestone với owner trước khi tạo remote issue.
 - Một issue chỉ có một outcome có thể review độc lập. Không tạo issue mới nếu code hoặc issue
   hiện có đã đáp ứng outcome; khi đó phải thu hẹp thành gap hoặc enhancement thực sự.
-- Không tự tạo GitHub issue, milestone, label hay thay đổi trạng thái remote nếu user chưa
-  cho phép rõ ràng.
+- Draft không tạo GitHub issue. Câu xác nhận `Tôi duyệt draft.` là quyền rõ ràng để chuyển
+  draft đủ điều kiện sang `Ready` và đồng bộ GitHub theo quy trình bên dưới.
 
 ## Format issue
 
@@ -89,7 +89,23 @@ Khi thêm issue vào Markhand Web:
    python3 scripts/sync-github-issues.py --dry-run
    ```
 
-Chỉ khi được cho phép mới chạy `--create` hoặc `--update`.
+### Duyệt draft và tự động đồng bộ
+
+`Tôi duyệt draft.` là approval trigger canonical. Khi nhận trigger này, `issue-creator`
+phải tự thực hiện toàn bộ các bước sau, user không cần yêu cầu sync riêng:
+
+1. kiểm tra lại Definition of Ready trên nội dung draft hiện tại;
+2. nếu đạt, đổi catalog status sang `Ready`, cập nhật roadmap/count liên quan và chạy lại
+   validation;
+3. tạo GitHub issue nếu chưa tồn tại, hoặc cập nhật issue đã tồn tại, bằng repository
+   synchronizer;
+4. xác nhận title, milestone, labels, body và source paths khớp catalog;
+5. trả về issue ID/URL và validation evidence.
+
+Approval không miễn bất kỳ điều kiện Ready nào. Nếu draft còn thiếu owner, acceptance,
+dependency evidence, security assessment hoặc dữ kiện bắt buộc khác, không chuyển `Ready`
+và không tạo GitHub issue; báo chính xác phần còn thiếu. Nếu authentication/authorization
+thất bại, giữ catalog đã duyệt làm authority và báo sync action chưa hoàn thành.
 
 ## Format implementation plan
 
@@ -170,16 +186,21 @@ sử quan trọng đã cố gắng truy tìm nhưng không thể phục hồi.
 
 ## Prompt contract cho Cursor
 
-Skill chịu trách nhiệm đọc và thực thi toàn bộ chuẩn trên. Prompt của user chỉ cần nêu:
+Skill chịu trách nhiệm đọc và thực thi toàn bộ chuẩn trên. Prompt tạo draft chỉ cần nêu:
 
 1. mục tiêu hoặc issue ID;
-2. constraint kinh doanh đặc biệt nếu có;
-3. có hay không quyền tạo/sửa resource remote.
+2. constraint kinh doanh đặc biệt nếu có.
 
 Ví dụ:
 
 ```text
-Dùng issue-creator tạo draft issue cho hỗ trợ TXT UTF-16 trong core; chưa sync GitHub.
+Dùng issue-creator tạo draft issue cho hỗ trợ TXT UTF-16 trong core.
+```
+
+Sau khi review draft:
+
+```text
+Tôi duyệt draft.
 ```
 
 ```text

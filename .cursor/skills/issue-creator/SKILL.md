@@ -5,8 +5,9 @@ description: Create or revise a Markhand roadmap issue in the authoritative cata
 
 # Issue creator
 
-Use this workflow when decomposing a phase or creating/revising one issue. The user prompt
-only needs the outcome, special product constraints, and remote-write permission.
+Use this workflow when decomposing a phase or creating/revising one issue. A draft prompt
+only needs the outcome and special product constraints. Drafting never mutates GitHub;
+the canonical approval phrase defined below authorizes automatic synchronization.
 
 1. **Load the mandatory contract.** Read and follow:
    - `docs/conventions/issues-and-plans.md` for canonical issue format, authority, status,
@@ -29,9 +30,15 @@ only needs the outcome, special product constraints, and remote-write permission
 5. **Validate the rendered issue.** For Markhand Web run the roadmap build/check and
    `python3 scripts/sync-github-issues.py --dry-run` commands required by
    `issues-and-plans.md`. Run relevant repository static checks and fix parser/count drift.
-6. **Mutate remote state only when authorized.** Use the repository synchronizer for
-   create/update; do not manually diverge the GitHub body from the catalog. If permission
-   or authentication is unavailable, deliver the authoritative local change and report the
-   remaining sync action.
-7. **Hand off concisely.** Return the issue ID, title, status, authority links, blockers,
+6. **Treat draft approval as the sync trigger.** When the user says `Tôi duyệt draft.`,
+   revalidate the current draft against Definition of Ready. If it passes, change the
+   catalog status to `Ready`, update and validate roadmap metadata, then automatically
+   create the missing GitHub issue or update the existing one with the repository
+   synchronizer. The user does not need to request GitHub sync separately. Verify title,
+   milestone, labels, body, and source links, then return the issue URL.
+7. **Fail closed.** Approval does not waive readiness. If a required fact/evidence is
+   missing, do not mark `Ready` or create the GitHub issue; report the exact gap. Do not
+   manually diverge the GitHub body from the catalog. If authentication or authorization
+   fails, preserve the catalog as authority and report the remaining sync action.
+8. **Hand off concisely.** Return the issue ID, title, status, authority links, blockers,
    and validation evidence. `issue-delivery` may start only when the issue is `Ready`.
