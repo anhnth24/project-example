@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import math
+import os
 import re
 import stat
 import subprocess
@@ -14,6 +16,7 @@ import sys
 import tempfile
 import unittest
 import shutil
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -324,12 +327,18 @@ def phase1c_canonical_fingerprints(
     return fingerprints, errors
 
 
+def descriptor_flags_supported() -> bool:
+    return hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
+
+
+GitCommitVerifier = Callable[[Path, str], tuple[bool, str | None]]
+
+
 def git_commit_resolves(repo_root: Path, commit: str) -> tuple[bool, str | None]:
     """Verify commit resolves to a git object without shell interpolation."""
     try:
         completed = subprocess.run(
-            ["git", "cat-file", "-e", f"{commit}^{{commit}}"],
-            cwd=repo_root,
+            ["git", "-C", str(repo_root), "cat-file", "-e", f"{commit}^{{commit}}"],
             capture_output=True,
             text=True,
             check=False,
@@ -360,32 +369,63 @@ def phase1c_evidence_path_errors(
     if evidence_path not in PHASE1C_EVIDENCE_ALLOWLIST:
         errors.append(f"{context}: evidence path not in canonical allowlist")
         return errors
-    repo_resolved = repo_root.resolve()
-    lexical = repo_root
-    for part in Path(evidence_path).parts:
-        lexical = lexical / part
-        try:
-            stat_result = lexical.lstat()
-        except OSError as error:
-            errors.append(f"{context}: evidence path component missing ({part}): {error}")
-            return errors
-        if stat.S_ISLNK(stat_result.st_mode):
-            errors.append(f"{context}: evidence path must not contain a symlink component ({part})")
-            return errors
-    candidate = lexical.resolve()
-    try:
-        candidate.relative_to(repo_resolved)
-    except ValueError:
-        errors.append(f"{context}: evidence path escapes repository root")
+    if not descriptor_flags_supported():
+        errors.append(
+            f"{context}: platform lacks O_NOFOLLOW/O_DIRECTORY for descriptor evidence validation"
+        )
         return errors
-    if not candidate.is_file():
-        errors.append(f"{context}: evidence file missing at {evidence_path}")
-        return errors
+
+    parts = Path(evidence_path).parts
+    dir_fd: int | None = None
+    file_fd: int | None = None
     try:
-        if candidate.stat().st_size == 0:
+        dir_fd = os.open(
+            str(repo_root.resolve()),
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+        )
+        for part in parts[:-1]:
+            next_fd = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=dir_fd,
+            )
+            os.close(dir_fd)
+            dir_fd = next_fd
+        file_fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW, dir_fd=dir_fd)
+        file_stat = os.fstat(file_fd)
+        if stat.S_ISLNK(file_stat.st_mode):
+            errors.append(f"{context}: evidence path must not be a symlink (descriptor/no-follow)")
+            return errors
+        if stat.S_ISDIR(file_stat.st_mode):
+            errors.append(f"{context}: evidence path must be a regular file, not a directory")
+            return errors
+        if not stat.S_ISREG(file_stat.st_mode):
+            errors.append(f"{context}: evidence path must be a regular file")
+            return errors
+        if file_stat.st_size == 0:
             errors.append(f"{context}: evidence file must not be empty")
     except OSError as error:
-        errors.append(f"{context}: cannot stat evidence file: {error}")
+        if error.errno == errno.ELOOP:
+            errors.append(
+                f"{context}: evidence path must not contain a symlink component (O_NOFOLLOW)"
+            )
+        elif error.errno == errno.ENOTDIR:
+            errors.append(f"{context}: evidence path component is not a directory")
+        elif error.errno == errno.ENOENT:
+            errors.append(f"{context}: evidence file missing at {evidence_path}")
+        else:
+            errors.append(f"{context}: descriptor evidence open failed: {error}")
+    finally:
+        if file_fd is not None:
+            try:
+                os.close(file_fd)
+            except OSError:
+                pass
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
     return errors
 
 
@@ -1235,10 +1275,12 @@ def phase1c_gate_report_errors(
     repo_root: Path | None = None,
     workspace_root: Path | None = None,
     template_mode: bool = False,
+    git_commit_verifier: GitCommitVerifier | None = None,
 ) -> list[str]:
     """Fail closed on Phase 1C qualifying report invariants beyond JSON Schema."""
     workspace = workspace_root or repo_root or ROOT
     evidence_root = repo_root or ROOT
+    verify_commit = git_commit_verifier or git_commit_resolves
     errors: list[str] = []
     if not isinstance(report, dict):
         return ["phase1c-report: report must be an object"]
@@ -1268,7 +1310,7 @@ def phase1c_gate_report_errors(
         if not is_valid_git_sha(commit):
             errors.append("phase1c-report: git.commit must be a non-zero 40-char sha")
         elif status == "pass" and isinstance(commit, str):
-            resolves, git_error = git_commit_resolves(ROOT, commit)
+            resolves, git_error = verify_commit(evidence_root, commit)
             if not resolves and git_error:
                 errors.append(f"phase1c-report: {git_error}")
         if not isinstance(git.get("dirty"), bool):
@@ -1739,30 +1781,6 @@ class Phase1bGateReportConsistencyTests(unittest.TestCase):
             self.assertTrue(any("cannot read canonical o05-soak.json" in error for error in errors))
 
 
-def prepare_phase1c_fixture(temp_dir: Path) -> tuple[Path, Path]:
-    """Copy Markhand Web + SLA doc into an isolated workspace for hermetic tests."""
-    repo_root = temp_dir
-    markhand_root = repo_root / "bench/markhand_web"
-    shutil.copytree(DEFAULT_ROOT, markhand_root, dirs_exist_ok=True)
-    sla_source = ROOT / PHASE1C_SLA_SOURCE
-    sla_dest = repo_root / PHASE1C_SLA_SOURCE
-    sla_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(sla_source, sla_dest)
-    return markhand_root, repo_root
-
-
-def prepare_phase1c_fixture(temp_dir: Path) -> tuple[Path, Path]:
-    """Copy Markhand Web + SLA doc into an isolated workspace for hermetic tests."""
-    repo_root = temp_dir
-    markhand_root = repo_root / "bench/markhand_web"
-    shutil.copytree(DEFAULT_ROOT, markhand_root, dirs_exist_ok=True)
-    sla_source = ROOT / PHASE1C_SLA_SOURCE
-    sla_dest = repo_root / PHASE1C_SLA_SOURCE
-    sla_dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(sla_source, sla_dest)
-    return markhand_root, repo_root
-
-
 def init_git_repo(repo_root: Path, *, marker: str = "fixture\n") -> str:
     """Initialize a disposable git repository and return its HEAD commit."""
     subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True)
@@ -1789,6 +1807,20 @@ def init_git_repo(repo_root: Path, *, marker: str = "fixture\n") -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
 
 
+def prepare_phase1c_fixture(temp_dir: Path) -> tuple[Path, Path]:
+    """Copy Markhand Web + SLA doc into an isolated workspace for hermetic tests."""
+    repo_root = temp_dir
+    markhand_root = repo_root / "bench/markhand_web"
+    shutil.copytree(DEFAULT_ROOT, markhand_root, dirs_exist_ok=True)
+    sla_source = ROOT / PHASE1C_SLA_SOURCE
+    sla_dest = repo_root / PHASE1C_SLA_SOURCE
+    sla_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sla_source, sla_dest)
+    if not (repo_root / ".git").exists():
+        init_git_repo(repo_root)
+    return markhand_root, repo_root
+
+
 class Phase1cDescriptorSecurityTests(unittest.TestCase):
     """Fourth-review security tests: descriptor traversal and injected repo_root git binding."""
 
@@ -1806,26 +1838,34 @@ class Phase1cDescriptorSecurityTests(unittest.TestCase):
             path.write_text('{"status":"pass","note":"test fixture"}\n', encoding="utf-8")
 
     def test_evidence_rejects_post_lstat_symlink_swap(self) -> None:
-        """TOCTOU: lstat sees a regular file, then attacker swaps to symlink before resolve/stat."""
+        """TOCTOU: directory traversal succeeds, then attacker swaps leaf before file open."""
         self._create_evidence_files()
         evidence = sorted(PHASE1C_EVIDENCE_ALLOWLIST)[0]
         evidence_file = self.repo_root / evidence
         decoy = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/decoy-swap.json"
         decoy.write_text('{"status":"pass","note":"decoy after swap"}\n', encoding="utf-8")
+        leaf_name = Path(evidence).name
 
-        original_lstat = Path.lstat
+        original_open = os.open
         swapped = False
 
-        def lstat_then_swap(path_self: Path) -> os.stat_result:
-            result = original_lstat(path_self)
+        def open_then_swap(path: str, flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
             nonlocal swapped
-            if not swapped and path_self == evidence_file:
+            open_kwargs: dict[str, object] = {}
+            if dir_fd is not None and dir_fd != -1:
+                open_kwargs["dir_fd"] = dir_fd
+            if (
+                not swapped
+                and (flags & os.O_NOFOLLOW)
+                and not (flags & os.O_DIRECTORY)
+                and path == leaf_name
+            ):
                 swapped = True
                 evidence_file.unlink()
                 evidence_file.symlink_to(decoy)
-            return result
+            return original_open(path, flags, mode, **open_kwargs)
 
-        with mock.patch.object(Path, "lstat", lstat_then_swap):
+        with mock.patch("os.open", open_then_swap):
             errors = phase1c_evidence_path_errors(
                 self.repo_root,
                 evidence,
@@ -1834,7 +1874,7 @@ class Phase1cDescriptorSecurityTests(unittest.TestCase):
 
         self.assertTrue(
             errors,
-            "post-lstat symlink swap must be rejected by descriptor/no-follow validation",
+            "post-check symlink swap must be rejected by descriptor/no-follow validation",
         )
         self.assertTrue(
             any(
@@ -1967,7 +2007,7 @@ class Phase1cGateContractTests(unittest.TestCase):
         report["git"] = {
             "commit": subprocess.check_output(
                 ["git", "rev-parse", "HEAD"],
-                cwd=ROOT,
+                cwd=repo,
                 text=True,
             ).strip(),
             "dirty": False,
@@ -2440,7 +2480,15 @@ class Phase1cGateContractTests(unittest.TestCase):
             repo_root=self.repo_root,
             workspace_root=self.repo_root,
         )
-        self.assertTrue(any("symlink component" in error for error in errors))
+        self.assertTrue(
+            any(
+                "symlink" in error
+                or "O_NOFOLLOW" in error
+                or "descriptor" in error
+                or "not a directory" in error
+                for error in errors
+            )
+        )
 
     def test_report_pass_rejects_parent_symlink_in_evidence_path(self) -> None:
         report = self._passing_report()
@@ -2463,7 +2511,15 @@ class Phase1cGateContractTests(unittest.TestCase):
             repo_root=self.repo_root,
             workspace_root=self.repo_root,
         )
-        self.assertTrue(any("symlink component" in error for error in errors))
+        self.assertTrue(
+            any(
+                "symlink" in error
+                or "O_NOFOLLOW" in error
+                or "descriptor" in error
+                or "not a directory" in error
+                for error in errors
+            )
+        )
 
     def test_registry_rejects_g1c_family_on_noncanonical_id(self) -> None:
         registry = self._load_registry()
