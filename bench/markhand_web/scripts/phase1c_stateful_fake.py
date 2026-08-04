@@ -193,10 +193,38 @@ class StatefulFakeDeployment:
             if session_id in path:
                 return self._response(status=404, body='{"code":"not_found"}')
 
+        if path.endswith("/api/v1/orgs/switch") and method == "POST":
+            org_id = body.get("orgId") if isinstance(body, dict) else None
+            disposable = getattr(self.seed, "disposable_org_id", "")
+            if org_id == disposable:
+                return self._response(status=403, body='{"code":"membership_missing"}')
+            if token in {
+                getattr(self.credentials, "alpha_beta_access_token", ""),
+                self.credentials.beta_access_token,
+            }:
+                return self._response(status=200, body=json.dumps({"accessToken": token, "refreshToken": "r"}))
+
+        wrong_cap = getattr(self.credentials, "beta_denial_wrong_download_capability", "")
+        if wrong_cap and path.endswith(f"/api/v1/downloads/{wrong_cap}"):
+            return self._response(status=400, body='{"code":"validation_failed"}')
+
+        if path.endswith("/api/v1/members/invites/accept") and method == "POST":
+            invite_token = body.get("token") if isinstance(body, dict) else None
+            negative = getattr(self.credentials, "beta_denial_negative_invite_token", "")
+            owner = getattr(self.credentials, "beta_denial_accept_invite_token", "")
+            if invite_token == negative:
+                return self._response(status=404, body='{"code":"not_found"}')
+            if invite_token == owner:
+                if invite_token in self._accepted_invites:
+                    return self._response(status=409, body='{"code":"conflict"}')
+                self._accepted_invites.add(str(invite_token))
+                return self._response(status=201, body=json.dumps({"userId": self.seed.beta_user_id, "role": "viewer"}))
+
         if token in {
             getattr(self.credentials, "alpha_beta_access_token", ""),
             getattr(self.credentials, "beta_denial_accept_access_token", ""),
             self.credentials.beta_alpha_access_token,
+            self.credentials.beta_access_token,
         }:
             if self.skip_owner_control:
                 return self._response(status=403, body='{"code":"forbidden"}')
@@ -209,6 +237,9 @@ class StatefulFakeDeployment:
                 self._accepted_invites.add(str(invite_token))
                 return self._response(status=201, body=json.dumps({"userId": self.seed.beta_user_id, "role": "viewer"}))
             if path.endswith("/api/v1/citations/resolve") and method == "POST":
+                canonical = body.get("canonicalMarkdownSha256") if isinstance(body, dict) else ""
+                if canonical == "f" * 64:
+                    return self._response(status=403, body='{"code":"forbidden"}')
                 return self._response(
                     status=200,
                     body=json.dumps(
@@ -342,10 +373,13 @@ class StatefulFakeDeployment:
                 )
             if path.endswith("/api/v1/search") or path.endswith("/api/v1/ask"):
                 return self._response(status=200, body=json.dumps({"items": []}))
-            if method in {"POST", "PATCH", "DELETE", "GET"}:
-                if method == "GET":
-                    return self._response(status=200, body=json.dumps({"id": "ok", "items": []}))
-                return self._response(status=204 if method == "DELETE" else 200, body="{}" if method != "DELETE" else "")
+            if method == "GET":
+                return self._response(status=200, body=json.dumps({"id": "ok", "items": []}))
+            if method == "DELETE":
+                return self._response(status=204, body="")
+            if method in {"POST", "PATCH"}:
+                return self._response(status=200, body="{}")
+            return self._response(status=404, body='{"code":"not_found"}')
 
         if token == self.credentials.beta_alpha_access_token:
             if not self._membership_active or (multipart_body is not None and not self._beta_alpha_editor):
@@ -383,10 +417,12 @@ class StatefulFakeDeployment:
             raise RuntimeError("skip_owner_control incompatible with execute_http_denial_suite")
         if report.failures and not self.accept_5xx:
             raise RuntimeError("; ".join(report.failures))
-        foreign_count = sum(1 for item in report.observations if item.scenario == "foreign")
+        negative_count = sum(
+            1 for item in report.observations if item.scenario not in {"owner_control", "unauthenticated"}
+        )
         owner_count = sum(1 for item in report.observations if item.scenario == "owner_control")
         return {
-            "foreignCount": foreign_count,
+            "foreignCount": negative_count,
             "ownerControlCount": owner_count,
             "executableHttpSseCount": len(mapping),
         }

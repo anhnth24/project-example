@@ -10,6 +10,7 @@ import math
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -84,6 +85,7 @@ SEED_REQUIRED_FIELDS: tuple[str, ...] = (
     "betaSessionIdHash",
     "orgAlphaSlug",
     "orgBetaSlug",
+    "disposableOrgId",
 )
 
 CREDENTIAL_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -117,6 +119,8 @@ CREDENTIAL_REQUIRED_FIELDS: tuple[str, ...] = (
     "betaCitationQuoteLocalStart",
     "betaCitationQuoteLocalEnd",
     "betaCitationQuote",
+    "betaDenialNegativeInviteToken",
+    "betaDenialWrongDownloadCapability",
 )
 
 AUDIT_MUTATION_ACTIONS: tuple[str, ...] = (
@@ -263,6 +267,7 @@ class SeedFixture:
     beta_session_id_hash: str
     org_alpha_slug: str
     org_beta_slug: str
+    disposable_org_id: str
 
 
 @dataclass
@@ -298,6 +303,8 @@ class SeedCredentials:
     beta_citation_quote_local_start: int
     beta_citation_quote_local_end: int
     beta_citation_quote: str
+    beta_denial_negative_invite_token: str
+    beta_denial_wrong_download_capability: str
 
 
 @dataclass
@@ -490,6 +497,7 @@ def parse_seed_artifact(raw: dict[str, Any], *, expected_challenge: str) -> Seed
         beta_session_id_hash=_require_string(raw, "betaSessionIdHash"),
         org_alpha_slug=_require_string(raw, "orgAlphaSlug"),
         org_beta_slug=_require_string(raw, "orgBetaSlug"),
+        disposable_org_id=validate_uuid(_require_string(raw, "disposableOrgId"), field="disposableOrgId"),
     )
 
 
@@ -527,6 +535,17 @@ def purge_phase1c_credentials(path: Path) -> None:
 
 
 def validate_fixture_credentials(credentials: SeedCredentials) -> None:
+    disposable_ids = [
+        credentials.beta_denial_disposable_collection_id,
+        credentials.beta_denial_disposable_collection_update_id,
+        credentials.beta_denial_disposable_document_id,
+        credentials.beta_denial_disposable_chat_session_id,
+        credentials.beta_denial_disposable_invite_id,
+        credentials.beta_denial_disposable_member_user_id,
+        credentials.beta_denial_disposable_conflict_id,
+    ]
+    if len(set(disposable_ids)) != len(disposable_ids):
+        raise RuntimeError("disposable fixture ids must be distinct")
     for field_name in (
         "beta_denial_disposable_collection_id",
         "beta_denial_disposable_collection_update_id",
@@ -542,6 +561,8 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
         "beta_citation_canonical_markdown_sha256",
         "beta_citation_quote",
         "alpha_beta_access_token",
+        "beta_denial_negative_invite_token",
+        "beta_denial_wrong_download_capability",
     ):
         value = getattr(credentials, field_name, None)
         if isinstance(value, str):
@@ -551,6 +572,41 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
                 validate_uuid(value, field=field_name)
         elif value is None:
             raise RuntimeError(f"credentials missing {field_name}")
+
+
+def load_seed_credentials_secure(
+    path: Path,
+    *,
+    expected_challenge: str,
+    purge_after_load: bool = False,
+    max_bytes: int = 262_144,
+) -> SeedCredentials:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise RuntimeError("platform lacks O_NOFOLLOW for credential load")
+    stat_result = path.lstat()
+    if not stat.S_ISREG(stat_result.st_mode):
+        raise RuntimeError("credentials path must be regular file")
+    if stat_result.st_uid != os.getuid():
+        raise RuntimeError("credentials file must be owned by current uid")
+    if (stat_result.st_mode & 0o777) != 0o600:
+        raise RuntimeError("credentials file must be mode 0600")
+    if stat_result.st_size > max_bytes:
+        raise RuntimeError("credentials file exceeds bounded size")
+    fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
+    try:
+        raw_bytes = os.read(fd, max_bytes + 1)
+    finally:
+        os.close(fd)
+    if len(raw_bytes) > max_bytes:
+        raise RuntimeError("credentials file exceeds bounded size")
+    tmp_path = path.with_suffix(path.suffix + ".loaded")
+    tmp_path.write_bytes(raw_bytes)
+    try:
+        return load_seed_credentials(tmp_path, expected_challenge=expected_challenge, purge_after_load=False)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+        if purge_after_load:
+            purge_phase1c_credentials(path)
 
 
 def load_seed_credentials(
@@ -623,6 +679,8 @@ def load_seed_credentials(
             beta_citation_quote_local_start=int(raw["betaCitationQuoteLocalStart"]),
             beta_citation_quote_local_end=int(raw["betaCitationQuoteLocalEnd"]),
             beta_citation_quote=_require_string(raw, "betaCitationQuote"),
+            beta_denial_negative_invite_token=_require_string(raw, "betaDenialNegativeInviteToken"),
+            beta_denial_wrong_download_capability=_require_string(raw, "betaDenialWrongDownloadCapability"),
         )
         validate_fixture_credentials(credentials)
         return credentials
@@ -1027,12 +1085,15 @@ class DeployedProbeRunner:
             token=self.credentials.beta_alpha_access_token,
             collection_id=self.seed.alpha_collection_id,
         )
-        if warm.status // 100 == 2:
+        if warm.status in {200, 201}:
             return
-        beta_warm = self._http("GET", "/api/v1/auth/me", token=self.credentials.beta_alpha_access_token)
-        if beta_warm.status // 100 == 2:
-            return
-        self._restore_beta_alpha_membership()
+        self._restore_beta_alpha_membership_role(role="editor")
+        retry = self._acl_probe_upload(
+            token=self.credentials.beta_alpha_access_token,
+            collection_id=self.seed.alpha_collection_id,
+        )
+        if retry.status not in {200, 201}:
+            raise RuntimeError("beta alpha-org editor upload warm failed after role restore")
 
     def run_http_denial_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
@@ -1296,12 +1357,31 @@ class DeployedProbeRunner:
         gate_started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         token = self.credentials.alpha_access_token
         expected: list[dict[str, Any]] = []
+
+        audit_action_map = {
+            "org.switch": "org.switch",
+            "collection.create": "collection.create",
+            "member.invite.create": "member.invite",
+            "member.invite.accept": "member.invite_accept",
+            "member.invite.revoke": "member.invite_revoke",
+            "member.role.update": "member.role_change",
+            "member.delete": "member.remove",
+            "auth.refresh.reuse": "auth.refresh.reuse",
+            "auth.token.revoke": "auth.logout",
+            "conflict.triage": "conflict.triage",
+        }
+
+        for declared in AUDIT_MUTATION_ACTIONS:
+            if declared not in audit_action_map:
+                raise RuntimeError(f"undeclared audit action mapping for {declared}")
+
         switch = self._switch_org(token, self.seed.org_alpha_id)
         switch_request_id = validate_server_request_id(body=switch.body, headers=switch.headers)
         switch_session_target_id = self._session_id_from_switch_access_token(switch)
         expected.append(
             {
-                "action": "org.switch",
+                "declaredAction": "org.switch",
+                "action": audit_action_map["org.switch"],
                 "actorId": self.seed.alpha_user_id,
                 "targetType": "session",
                 "targetId": switch_session_target_id,
@@ -1312,6 +1392,7 @@ class DeployedProbeRunner:
         )
         switch_payload = json.loads(switch.body)
         token = switch_payload.get("accessToken") or switch_payload.get("access_token") or token
+
         slug = f"phase1c-audit-{secrets.token_hex(4)}"
         create = self._http(
             "POST",
@@ -1328,7 +1409,8 @@ class DeployedProbeRunner:
                 collection_id = validate_uuid(raw_id, field="collectionId")
         expected.append(
             {
-                "action": "collection.create",
+                "declaredAction": "collection.create",
+                "action": audit_action_map["collection.create"],
                 "actorId": self.seed.alpha_user_id,
                 "targetType": "collection",
                 "targetId": collection_id,
@@ -1337,8 +1419,199 @@ class DeployedProbeRunner:
                 "attemptStatus": create.status,
             }
         )
-        if any(item["attemptStatus"] // 100 != 2 for item in expected):
-            raise RuntimeError("audit probe mutation attempts must succeed")
+
+        invite_email = "phase1c-accept@poc.example"
+        invite = self._http(
+            "POST",
+            "/api/v1/members/invites",
+            token=token,
+            body={"email": invite_email, "role": "viewer"},
+        )
+        invite_request_id = validate_server_request_id(body=invite.body, headers=invite.headers)
+        invite_payload = json.loads(invite.body) if invite.body else {}
+        invite_row = invite_payload.get("invite") or {}
+        invite_id = invite_row.get("id")
+        invite_token = invite_payload.get("token")
+        expected.append(
+            {
+                "declaredAction": "member.invite.create",
+                "action": audit_action_map["member.invite.create"],
+                "actorId": self.seed.alpha_user_id,
+                "targetType": "member",
+                "targetId": invite_id,
+                "requestId": invite_request_id,
+                "outcome": "success",
+                "attemptStatus": invite.status,
+            }
+        )
+
+        accept_status = 0
+        accept_request_id = ""
+        accept_user_id = "55555555-5555-5555-5555-555555555501"
+        if isinstance(invite_token, str):
+            accept_login = self._login_tokens(invite_email, "")
+            accept = self._http(
+                "POST",
+                "/api/v1/members/invites/accept",
+                token=accept_login[0],
+                body={"token": invite_token},
+            )
+            accept_status = accept.status
+            accept_request_id = validate_server_request_id(body=accept.body, headers=accept.headers)
+        expected.append(
+            {
+                "declaredAction": "member.invite.accept",
+                "action": audit_action_map["member.invite.accept"],
+                "actorId": accept_user_id,
+                "targetType": "member",
+                "targetId": accept_user_id,
+                "requestId": accept_request_id,
+                "outcome": "success" if accept_status // 100 == 2 else "failure",
+                "attemptStatus": accept_status,
+            }
+        )
+
+        revoke_email = f"phase1c-audit-revoke-{secrets.token_hex(3)}@example.com"
+        revoke_invite = self._http(
+            "POST",
+            "/api/v1/members/invites",
+            token=token,
+            body={"email": revoke_email, "role": "viewer"},
+        )
+        revoke_invite_payload = json.loads(revoke_invite.body) if revoke_invite.body else {}
+        revoke_invite_row = revoke_invite_payload.get("invite") or {}
+        revoke_invite_id = revoke_invite_row.get("id")
+        revoke_status = 0
+        revoke_request_id = ""
+        if isinstance(revoke_invite_id, str):
+            revoke = self._http(
+                "POST",
+                f"/api/v1/members/invites/{revoke_invite_id}/revoke",
+                token=token,
+                body={},
+            )
+            revoke_status = revoke.status
+            revoke_request_id = validate_server_request_id(body=revoke.body, headers=revoke.headers)
+        expected.append(
+            {
+                "declaredAction": "member.invite.revoke",
+                "action": audit_action_map["member.invite.revoke"],
+                "actorId": self.seed.alpha_user_id,
+                "targetType": "member",
+                "targetId": revoke_invite_id,
+                "requestId": revoke_request_id,
+                "outcome": "success" if revoke_status // 100 == 2 else "failure",
+                "attemptStatus": revoke_status,
+            }
+        )
+
+        patch = self._http(
+            "PATCH",
+            f"/api/v1/members/{accept_user_id}",
+            token=token,
+            body={"role": "viewer"},
+        )
+        patch_request_id = validate_server_request_id(body=patch.body, headers=patch.headers)
+        expected.append(
+            {
+                "declaredAction": "member.role.update",
+                "action": audit_action_map["member.role.update"],
+                "actorId": self.seed.alpha_user_id,
+                "targetType": "member",
+                "targetId": accept_user_id,
+                "requestId": patch_request_id,
+                "outcome": "success" if patch.status // 100 == 2 else "failure",
+                "attemptStatus": patch.status,
+            }
+        )
+
+        delete = self._http(
+            "DELETE",
+            f"/api/v1/members/{accept_user_id}",
+            token=token,
+        )
+        delete_request_id = extract_server_request_id(delete.body, delete.headers) or ""
+        expected.append(
+            {
+                "declaredAction": "member.delete",
+                "action": audit_action_map["member.delete"],
+                "actorId": self.seed.alpha_user_id,
+                "targetType": "member",
+                "targetId": accept_user_id,
+                "requestId": delete_request_id,
+                "outcome": "success" if delete.status // 100 == 2 else "failure",
+                "attemptStatus": delete.status,
+            }
+        )
+
+        captured_refresh = self.credentials.beta_refresh_token
+        refresh = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": captured_refresh})
+        refresh_payload = json.loads(refresh.body) if refresh.body else {}
+        new_refresh = refresh_payload.get("refreshToken") or refresh_payload.get("refresh_token")
+        reuse = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": captured_refresh})
+        reuse_request_id = extract_server_request_id(reuse.body, reuse.headers) or ""
+        expected.append(
+            {
+                "declaredAction": "auth.refresh.reuse",
+                "action": audit_action_map["auth.refresh.reuse"],
+                "actorId": self.seed.beta_user_id,
+                "targetType": "session",
+                "targetId": self.credentials.beta_session_id,
+                "requestId": reuse_request_id,
+                "outcome": "failure" if reuse.status == 401 else "success",
+                "attemptStatus": reuse.status,
+            }
+        )
+        if isinstance(new_refresh, str):
+            self.credentials.beta_refresh_token = new_refresh
+
+        logout = self._http("POST", "/api/v1/auth/logout", token=token, body={})
+        logout_request_id = extract_server_request_id(logout.body, logout.headers) or ""
+        expected.append(
+            {
+                "declaredAction": "auth.token.revoke",
+                "action": audit_action_map["auth.token.revoke"],
+                "actorId": self.seed.alpha_user_id,
+                "targetType": "session",
+                "targetId": self.credentials.alpha_session_id,
+                "requestId": logout_request_id,
+                "outcome": "success" if logout.status // 100 == 2 else "failure",
+                "attemptStatus": logout.status,
+            }
+        )
+        alpha_access, _, alpha_session = self._login_tokens(
+            os.environ.get("MARKHAND_PHASE1C_SEED_EMAIL", "admin@poc.example"), ""
+        )
+        self.credentials.alpha_access_token = alpha_access
+        self.credentials.alpha_session_id = validate_uuid(alpha_session, field="alphaSessionId")
+        token = alpha_access
+
+        triage = self._http(
+            "POST",
+            f"/api/v1/conflicts/{self.seed.alpha_conflict_id}/triage",
+            token=token,
+            body={"status": "resolved", "resolutionNote": "phase1c-audit"},
+        )
+        triage_request_id = validate_server_request_id(body=triage.body, headers=triage.headers)
+        expected.append(
+            {
+                "declaredAction": "conflict.triage",
+                "action": audit_action_map["conflict.triage"],
+                "actorId": self.seed.alpha_user_id,
+                "targetType": "conflict",
+                "targetId": self.seed.alpha_conflict_id,
+                "requestId": triage_request_id,
+                "outcome": "success" if triage.status // 100 == 2 else "failure",
+                "attemptStatus": triage.status,
+            }
+        )
+
+        if len(expected) != len(AUDIT_MUTATION_ACTIONS):
+            raise RuntimeError("audit probe attempt list must equal AUDIT_MUTATION_ACTIONS denominator")
+        if any(item["attemptStatus"] // 100 != 2 for item in expected if item["declaredAction"] not in {"auth.refresh.reuse"}):
+            failed = [item["declaredAction"] for item in expected if item["attemptStatus"] // 100 != 2 and item["declaredAction"] != "auth.refresh.reuse"]
+            if failed:
+                raise RuntimeError(f"audit probe mutation attempts must succeed: {failed}")
 
         def fetch_audit(path: str) -> HttpResponse:
             return self._http("GET", path, token=token)
@@ -1346,19 +1619,21 @@ class DeployedProbeRunner:
         entries = _fetch_audit_entries_paginated(fetch_audit)
         observed = 0
         for item in expected:
-            if item.get("targetId") is None and item["action"] == "collection.create":
+            match_item = dict(item)
+            match_item["action"] = item["action"]
+            if match_item.get("targetId") is None and item["declaredAction"] == "collection.create":
                 for entry in entries:
                     if (
-                        entry.get("action") == "collection.create"
+                        entry.get("action") == item["action"]
                         and entry.get("requestId") == item["requestId"]
                         and entry.get("outcome") == "success"
                         and str(entry.get("actorId") or entry.get("actor_id")) == str(item["actorId"])
                     ):
                         target_id = entry.get("targetId") or entry.get("target_id")
                         if isinstance(target_id, str) and target_id.strip():
-                            item["targetId"] = validate_uuid(target_id, field="collectionId")
+                            match_item["targetId"] = validate_uuid(target_id, field="collectionId")
                             break
-            if any(_audit_matches(item, entry, gate_started_at=gate_started_at) for entry in entries):
+            if any(_audit_matches(match_item, entry, gate_started_at=gate_started_at) for entry in entries):
                 observed += 1
         ratio = observed / len(expected)
         self._require_correlated_transitions(minimum=2)
@@ -1368,6 +1643,7 @@ class DeployedProbeRunner:
                 "deployedApi": True,
                 "expectedCount": len(expected),
                 "observedCount": observed,
+                "declaredActions": list(AUDIT_MUTATION_ACTIONS),
                 "switchSessionTargetId": switch_session_target_id,
                 "eof": True,
             },

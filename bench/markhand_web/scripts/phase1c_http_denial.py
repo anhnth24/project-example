@@ -34,15 +34,25 @@ DISPOSABLE_INVITE_OPS = frozenset({"revokeMemberInvite"})
 DISPOSABLE_MEMBER_OPS = frozenset({"deleteMember", "patchMember"})
 DISPOSABLE_CONFLICT_OPS = frozenset({"triageConflict"})
 
-SECONDARY_ROW_VARIANTS: dict[str, str] = {
-    "denial-resolveCitation-citation": "citation_matrix",
-    "denial-previewDocument-citation": "citation_preview",
-    "denial-task13-indexed-fts-ask": "indexed_fts",
-    "denial-task13-duplicate-names": "duplicate_names",
-    "denial-task13-stale-tokens": "stale_tokens",
-    "denial-task13-preview-download-sse": "preview_download_sse",
-    "denial-task13-in-flight-ask-revoke": "in_flight_revoke",
+SECONDARY_ROW_IDS: frozenset[str] = frozenset(
+    {
+        "denial-resolveCitation-citation",
+        "denial-previewDocument-citation",
+        "denial-task13-indexed-fts-ask",
+        "denial-task13-duplicate-names",
+        "denial-task13-stale-tokens",
+        "denial-task13-preview-download-sse",
+        "denial-task13-in-flight-ask-revoke",
+    }
+)
+
+OPERATION_FOREIGN_DENIAL: dict[str, frozenset[int]] = {
+    "switchOrg": frozenset({403}),
+    "redeemDownload": frozenset({400}),
+    "acceptMemberInvite": frozenset({404}),
 }
+
+DEFAULT_FOREIGN_DENIAL = frozenset({403, 404})
 
 
 class HttpResponseLike(Protocol):
@@ -110,6 +120,7 @@ class DenialRequestSpec:
     supplied_request_id: str | None = None
     success_schema_keys: frozenset[str] | None = None
     accept: str | None = None
+    owner_transition: str | None = None
 
 
 @dataclass
@@ -122,6 +133,7 @@ class DenialObservation:
     body_sha256: str
     request_id: str | None
     leaked_markers: list[str]
+    owner_transition: str | None = None
 
 
 @dataclass
@@ -153,6 +165,7 @@ class DenialExecutionReport:
                     "bodySha256": item.body_sha256,
                     "requestId": item.request_id,
                     "leakedMarkers": item.leaked_markers,
+                    "ownerTransition": item.owner_transition,
                 }
                 for item in self.observations
             ],
@@ -436,11 +449,23 @@ def _owner_params(seed: Any, *, credentials: Any, operation_id: str) -> dict[str
     return params
 
 
-def _variant_query_suffix(row_id: str, challenge: str) -> str:
-    variant = SECONDARY_ROW_VARIANTS.get(row_id)
-    if not variant:
-        return challenge[:8]
-    return f"{variant}-{challenge[:8]}"
+def _disposable_org_id(seed: Any) -> str:
+    value = getattr(seed, "disposable_org_id", None)
+    if isinstance(value, str) and value.strip():
+        return validate_uuid(value, field="disposableOrgId")
+    raise RuntimeError("seed missing disposableOrgId")
+
+
+def _negative_invite_token(credentials: Any) -> str:
+    return _credential_string(
+        credentials, "beta_denial_negative_invite_token", field="betaDenialNegativeInviteToken"
+    )
+
+
+def _wrong_download_capability(credentials: Any) -> str:
+    return _credential_string(
+        credentials, "beta_denial_wrong_download_capability", field="betaDenialWrongDownloadCapability"
+    )
 
 
 def _body_for_operation(
@@ -449,42 +474,43 @@ def _body_for_operation(
     *,
     credentials: Any,
     foreign: bool,
-    row_id: str = "",
 ) -> dict[str, Any] | None:
     collection_id = seed.beta_collection_id if foreign else seed.alpha_collection_id
     document_id = seed.beta_document_id if foreign else seed.alpha_document_id
     org_id = seed.org_beta_id if foreign else seed.org_alpha_id
-    suffix = _variant_query_suffix(row_id, seed.challenge)
+    suffix = seed.challenge[:8]
     if operation_id in {"search", "ask"}:
         return {"query": f"phase1c-denial-{suffix}", "collectionIds": [collection_id]}
     if operation_id == "askStream":
         return {"query": f"phase1c-denial-stream-{suffix}", "collectionIds": [collection_id]}
     if operation_id == "switchOrg":
-        return {"orgId": org_id}
+        return {"orgId": _disposable_org_id(seed) if foreign else org_id}
     if operation_id == "createOrg":
-        return {"slug": f"denial-probe-{seed.challenge[:8]}", "name": "Denial Probe Org"}
+        return {"slug": f"denial-probe-{suffix}", "name": "Denial Probe Org"}
     if operation_id == "createCollection":
         return {
-            "name": f"denial-{seed.challenge[:8]}",
-            "slug": f"denial-{seed.challenge[:8]}",
+            "name": f"denial-{suffix}",
+            "slug": f"denial-{suffix}",
             "visibility": "org",
         }
     if operation_id == "createProject":
-        return {"name": f"denial-project-{seed.challenge[:8]}"}
+        return {"name": f"denial-project-{suffix}"}
     if operation_id == "createUpload":
         return {"collectionId": collection_id, "filename": "denial.txt", "contentType": "text/plain"}
     if operation_id == "createMemberInvite":
-        return {"email": f"invite-{seed.challenge[:8]}@example.com", "role": "viewer"}
+        return {"email": f"invite-{suffix}@example.com", "role": "viewer"}
     if operation_id == "acceptMemberInvite":
-        return {"token": _credential_string(credentials, "beta_denial_accept_invite_token", field="betaDenialAcceptInviteToken")}
+        token_key = "beta_denial_negative_invite_token" if foreign else "beta_denial_accept_invite_token"
+        field = "betaDenialNegativeInviteToken" if foreign else "betaDenialAcceptInviteToken"
+        return {"token": _credential_string(credentials, token_key, field=field)}
     if operation_id == "resolveCitation":
         return _resolve_citation_body(seed, credentials=credentials, foreign=foreign)
     if operation_id == "appendChatTurn":
-        return {"role": "user", "content": f"phase1c-{seed.challenge[:8]}"}
+        return {"role": "user", "content": f"phase1c-{suffix}"}
     if operation_id == "createChatSession":
-        return {"title": f"phase1c-{seed.challenge[:8]}"}
+        return {"title": f"phase1c-{suffix}"}
     if operation_id == "updateChatSession":
-        return {"title": f"phase1c-updated-{seed.challenge[:8]}"}
+        return {"title": f"phase1c-updated-{suffix}"}
     if operation_id == "patchMember":
         return {"role": "viewer"}
     if operation_id == "publishDocumentVersion":
@@ -498,20 +524,23 @@ def _body_for_operation(
     if operation_id == "issueDownloadCapability":
         return {"purpose": "markdown"}
     if operation_id == "triageConflict":
-        return {"status": "resolved", "resolutionNote": f"phase1c-{seed.challenge[:8]}"}
+        return {"status": "resolved", "resolutionNote": f"phase1c-{suffix}"}
     if operation_id == "updateCollection":
-        return {"name": f"denial-updated-{seed.challenge[:8]}"}
+        return {"name": f"denial-updated-{suffix}"}
     if operation_id == "updateProject":
-        return {"name": f"denial-project-updated-{seed.challenge[:8]}"}
+        return {"name": f"denial-project-updated-{suffix}"}
     if operation_id in {"revokeMemberInvite"}:
         return {}
     return None
 
 
-def _uses_foreign_scope(operation_id: str, path_template: str) -> frozenset[str]:
-    reasons: set[str] = set()
+def _uses_foreign_scope(operation_id: str, path_template: str) -> bool:
+    if operation_id in {"createOrg"}:
+        return False
+    if operation_id == "redeemDownload":
+        return True
     if operation_id == "createUpload":
-        reasons.add("createUpload")
+        return True
     if any(
         token in path_template
         for token in (
@@ -525,10 +554,9 @@ def _uses_foreign_scope(operation_id: str, path_template: str) -> frozenset[str]
             "{versionId}",
             "{conflictId}",
             "{inviteId}",
-            "{capability}",
         )
     ):
-        reasons.add("path_template")
+        return True
     if operation_id in {
         "search",
         "ask",
@@ -538,8 +566,22 @@ def _uses_foreign_scope(operation_id: str, path_template: str) -> frozenset[str]
         "switchOrg",
         "acceptMemberInvite",
     }:
-        reasons.add(operation_id)
-    return frozenset(reasons)
+        return True
+    return False
+
+
+def _negative_scenario(operation_id: str) -> str:
+    if operation_id == "switchOrg":
+        return "membership_missing"
+    if operation_id == "redeemDownload":
+        return "invalid_capability"
+    if operation_id == "acceptMemberInvite":
+        return "invalid_invite_token"
+    return "foreign"
+
+
+def _negative_denial_statuses(operation_id: str) -> frozenset[int]:
+    return OPERATION_FOREIGN_DENIAL.get(operation_id, DEFAULT_FOREIGN_DENIAL)
 
 
 def _multipart_upload_body(*, collection_id: str, filename: str, content: bytes, boundary: str) -> bytes:
@@ -675,7 +717,7 @@ def build_owner_control_spec(
             path=f"{API_PREFIX}/downloads/{credentials.beta_download_capability}",
             body=None,
             expected_statuses=frozenset({200}),
-            token=None,
+            token=credentials.beta_access_token,
         )
 
     if entry.operation_id == "askStream":
@@ -725,6 +767,213 @@ def build_owner_control_spec(
     )
 
 
+def _append_owner_spec(
+    specs: list[DenialRequestSpec],
+    *,
+    entry: DenialMappingEntry,
+    seed: Any,
+    credentials: Any,
+    request_id: str,
+    owner_transition: str | None = None,
+) -> None:
+    owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
+    if owner is None:
+        return
+    token = owner.token if owner.token is not None else credentials.alpha_beta_access_token
+    specs.append(
+        DenialRequestSpec(
+            row_id=entry.row_id,
+            operation_id=entry.operation_id,
+            scenario="owner_control",
+            method=owner.method,
+            path=owner.path,
+            token=token,
+            body=owner.body,
+            expected_statuses=owner.expected_statuses,
+            content_type=owner.content_type,
+            multipart_body=owner.multipart_body,
+            supplied_request_id=f"{request_id}-owner",
+            success_schema_keys=owner.success_schema_keys,
+            accept=owner.accept,
+            owner_transition=owner_transition,
+        )
+    )
+
+
+def _build_primary_row_specs(
+    entry: DenialMappingEntry,
+    *,
+    seed: Any,
+    credentials: Any,
+) -> list[DenialRequestSpec]:
+    specs: list[DenialRequestSpec] = []
+    params = _foreign_params(seed, credentials=credentials)
+    path = _substitute_path(entry.path_template, params)
+    body = _body_for_operation(entry.operation_id, seed, credentials=credentials, foreign=True)
+    request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
+    owner_transition = {
+        "deleteCollection": "collection_deleted",
+        "updateCollection": "collection_updated",
+        "deleteDocument": "document_deleted",
+        "deleteChatSession": "chat_session_deleted",
+        "patchMember": "member_role_updated",
+        "deleteMember": "member_deleted",
+        "revokeMemberInvite": "invite_revoked",
+        "triageConflict": "conflict_triaged",
+        "acceptMemberInvite": "invite_accepted",
+    }.get(entry.operation_id)
+
+    upload_multipart = None
+    content_type = "application/json"
+    if entry.operation_id == "createUpload":
+        upload_multipart = _multipart_upload_body(
+            collection_id=seed.beta_collection_id,
+            filename="denial.txt",
+            content=f"phase1c-denial-{seed.challenge}\n".encode("utf-8"),
+            boundary=MULTIPART_BOUNDARY,
+        )
+        content_type = f"multipart/form-data; boundary={MULTIPART_BOUNDARY}"
+        body = None
+
+    if _uses_foreign_scope(entry.operation_id, entry.path_template):
+        _append_owner_spec(
+            specs,
+            entry=entry,
+            seed=seed,
+            credentials=credentials,
+            request_id=request_id,
+            owner_transition=owner_transition,
+        )
+
+    if entry.authz_kind != "public":
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id=entry.operation_id,
+                scenario="unauthenticated",
+                method=entry.method,
+                path=path,
+                token=None,
+                body=body,
+                expected_statuses=frozenset({401}),
+                content_type=content_type,
+                multipart_body=upload_multipart,
+                supplied_request_id=f"{request_id}-unauth",
+            )
+        )
+
+    if _uses_foreign_scope(entry.operation_id, entry.path_template):
+        negative_path = path
+        negative_token = credentials.alpha_access_token
+        negative_body = body
+        negative_scenario = _negative_scenario(entry.operation_id)
+        if entry.operation_id == "redeemDownload":
+            wrong_cap = _wrong_download_capability(credentials)
+            negative_path = f"{API_PREFIX}/downloads/{wrong_cap}"
+            negative_token = credentials.beta_access_token
+            negative_body = None
+        elif entry.operation_id == "acceptMemberInvite":
+            negative_token = _credential_string(
+                credentials, "beta_denial_accept_access_token", field="betaDenialAcceptAccessToken"
+            )
+            negative_body = {"token": _negative_invite_token(credentials)}
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id=entry.operation_id,
+                scenario=negative_scenario,
+                method=entry.method,
+                path=negative_path,
+                token=negative_token,
+                body=negative_body,
+                expected_statuses=_negative_denial_statuses(entry.operation_id),
+                content_type=content_type,
+                multipart_body=upload_multipart,
+                supplied_request_id=f"{request_id}-negative",
+            )
+        )
+    return specs
+
+
+def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
+    specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    for spec in specs:
+        if spec.scenario == "foreign":
+            spec.scenario = "citation_replay"
+            tampered = dict(spec.body or {})
+            tampered["canonicalMarkdownSha256"] = "f" * 64
+            spec.body = tampered
+            spec.expected_statuses = frozenset({403, 404, 422})
+    return specs
+
+
+def _handler_citation_preview(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
+    return _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+
+
+def _handler_indexed_fts(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
+    specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    for spec in specs:
+        if spec.body is not None and spec.operation_id == "ask":
+            spec.body = {"query": seed.marker_beta, "collectionIds": [seed.beta_collection_id]}
+    return specs
+
+
+def _handler_duplicate_names(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
+    specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    for spec in specs:
+        if spec.scenario == "foreign" and spec.operation_id == "getCollection":
+            spec.scenario = "duplicate_name_non_oracle"
+    return specs
+
+
+def _handler_stale_tokens(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
+    specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    for spec in specs:
+        if spec.scenario == "foreign" and spec.operation_id == "authMe":
+            spec.scenario = "stale_token"
+            spec.token = "unrelated-token-value"
+            spec.expected_statuses = frozenset({401})
+    return specs
+
+
+def _handler_preview_download_sse(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
+    return _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+
+
+def _handler_in_flight_revoke(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
+    specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    for spec in specs:
+        if spec.scenario == "owner_control" and spec.operation_id == "askStream":
+            spec.owner_transition = "ask_stream_started"
+    return specs
+
+
+ROW_SCENARIO_HANDLERS: dict[str, Callable[..., list[DenialRequestSpec]]] = {
+    "denial-resolveCitation-citation": _handler_citation_matrix,
+    "denial-previewDocument-citation": _handler_citation_preview,
+    "denial-task13-indexed-fts-ask": _handler_indexed_fts,
+    "denial-task13-duplicate-names": _handler_duplicate_names,
+    "denial-task13-stale-tokens": _handler_stale_tokens,
+    "denial-task13-preview-download-sse": _handler_preview_download_sse,
+    "denial-task13-in-flight-ask-revoke": _handler_in_flight_revoke,
+}
+
+
+def build_row_denial_specs(
+    entry: DenialMappingEntry,
+    *,
+    seed: Any,
+    credentials: Any,
+) -> list[DenialRequestSpec]:
+    if entry.row_id in SECONDARY_ROW_IDS:
+        handler = ROW_SCENARIO_HANDLERS.get(entry.row_id)
+        if handler is None or handler is _build_primary_row_specs:
+            raise RuntimeError(f"secondary row {entry.row_id} requires dedicated scenario handler")
+        return handler(entry, seed, credentials)
+    return _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+
+
 def build_denial_request_specs(
     mapping: list[DenialMappingEntry],
     *,
@@ -732,80 +981,8 @@ def build_denial_request_specs(
     credentials: Any,
 ) -> list[DenialRequestSpec]:
     specs: list[DenialRequestSpec] = []
-    params = _foreign_params(seed, credentials=credentials)
     for entry in mapping:
-        path = _substitute_path(entry.path_template, params)
-        body = _body_for_operation(
-            entry.operation_id,
-            seed,
-            credentials=credentials,
-            foreign=True,
-            row_id=entry.row_id,
-        )
-        request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
-        if _uses_foreign_scope(entry.operation_id, entry.path_template):
-            owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
-            if owner is not None:
-                specs.append(
-                    DenialRequestSpec(
-                        row_id=entry.row_id,
-                        operation_id=entry.operation_id,
-                        scenario="owner_control",
-                        method=owner.method,
-                        path=owner.path,
-                        token=owner.token if owner.token is not None else credentials.alpha_beta_access_token,
-                        body=owner.body,
-                        expected_statuses=owner.expected_statuses,
-                        content_type=owner.content_type,
-                        multipart_body=owner.multipart_body,
-                        supplied_request_id=f"{request_id}-owner",
-                        success_schema_keys=owner.success_schema_keys,
-                        accept=owner.accept,
-                    )
-                )
-        upload_multipart = None
-        content_type = "application/json"
-        if entry.operation_id == "createUpload":
-            upload_multipart = _multipart_upload_body(
-                collection_id=seed.beta_collection_id,
-                filename="denial.txt",
-                content=f"phase1c-denial-{seed.challenge}\n".encode("utf-8"),
-                boundary=MULTIPART_BOUNDARY,
-            )
-            content_type = f"multipart/form-data; boundary={MULTIPART_BOUNDARY}"
-            body = None
-        if entry.authz_kind != "public":
-            specs.append(
-                DenialRequestSpec(
-                    row_id=entry.row_id,
-                    operation_id=entry.operation_id,
-                    scenario="unauthenticated",
-                    method=entry.method,
-                    path=path,
-                    token=None,
-                    body=body,
-                    expected_statuses=frozenset({401}),
-                    content_type=content_type,
-                    multipart_body=upload_multipart,
-                    supplied_request_id=f"{request_id}-unauth",
-                )
-            )
-        if _uses_foreign_scope(entry.operation_id, entry.path_template):
-            specs.append(
-                DenialRequestSpec(
-                    row_id=entry.row_id,
-                    operation_id=entry.operation_id,
-                    scenario="foreign",
-                    method=entry.method,
-                    path=path,
-                    token=credentials.alpha_access_token,
-                    body=body,
-                    expected_statuses=frozenset({403, 404}),
-                    content_type=content_type,
-                    multipart_body=upload_multipart,
-                    supplied_request_id=f"{request_id}-foreign",
-                )
-            )
+        specs.extend(build_row_denial_specs(entry, seed=seed, credentials=credentials))
     return specs
 
 
@@ -818,23 +995,18 @@ def scan_marker_leakage(body: str, *, forbidden_markers: set[str]) -> list[str]:
 
 
 def validate_denial_observation_matrix(observations: list[DenialObservation]) -> None:
-    foreign_rows = {item.row_id for item in observations if item.scenario == "foreign"}
-    if not foreign_rows:
-        return
     by_row: dict[str, list[DenialObservation]] = {}
     for item in observations:
         by_row.setdefault(item.row_id, []).append(item)
     for row_id, rows in by_row.items():
-        foreign = [row for row in rows if row.scenario == "foreign"]
-        owner = [row for row in rows if row.scenario == "owner_control"]
-        if foreign and owner:
-            if all(row.actual_status == 403 for row in foreign) and all(row.actual_status == 403 for row in owner):
-                operation_id = foreign[0].operation_id
+        negatives = [row for row in rows if row.scenario not in {"owner_control", "unauthenticated"}]
+        owners = [row for row in rows if row.scenario == "owner_control"]
+        if negatives and owners:
+            if all(row.actual_status == 403 for row in negatives) and all(row.actual_status == 403 for row in owners):
+                operation_id = negatives[0].operation_id
                 raise RuntimeError(f"all-403 shim detected for {operation_id}/{row_id}")
-    owner_rows = {item.row_id for item in observations if item.scenario == "owner_control"}
-    missing = foreign_rows - owner_rows
-    if missing:
-        raise RuntimeError(f"foreign rows missing owner_control: {sorted(missing)}")
+        if negatives and not owners:
+            raise RuntimeError(f"negative rows missing owner_control: {row_id}")
 
 
 def _validate_success_schema(body: str, required_keys: frozenset[str]) -> None:
@@ -846,6 +1018,52 @@ def _validate_success_schema(body: str, required_keys: frozenset[str]) -> None:
             raise RuntimeError(f"owner control response missing {key}")
 
 
+def parse_sse_stream(
+    body: str,
+    *,
+    required_terminal: str | None = None,
+    max_bytes: int = 65536,
+) -> list[dict[str, Any]]:
+    if len(body.encode("utf-8")) > max_bytes:
+        raise RuntimeError("SSE stream exceeds bounded size")
+    if not body.strip():
+        raise RuntimeError("SSE stream empty")
+    events: list[dict[str, Any]] = []
+    event_name = ""
+    data_lines: list[str] = []
+    terminal_seen = False
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip("\r")
+        if not line:
+            if event_name or data_lines:
+                payload_text = "\n".join(data_lines)
+                payload: Any = {}
+                if payload_text:
+                    try:
+                        payload = json.loads(payload_text)
+                    except json.JSONDecodeError as error:
+                        raise RuntimeError(f"SSE data must be JSON: {error}") from error
+                events.append({"event": event_name or "message", "data": payload})
+                if required_terminal and (event_name or "message") == required_terminal:
+                    terminal_seen = True
+            event_name = ""
+            data_lines = []
+            continue
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].strip())
+        elif line.startswith(":"):
+            continue
+        else:
+            raise RuntimeError("SSE frame malformed")
+    if required_terminal and not terminal_seen:
+        raise RuntimeError(f"SSE missing terminal event {required_terminal}")
+    if not events:
+        raise RuntimeError("SSE response missing frames")
+    return events
+
+
 def _validate_sse_envelope(body: str, *, operation_id: str, headers: dict[str, str]) -> None:
     content_type = ""
     for key, value in headers.items():
@@ -854,10 +1072,51 @@ def _validate_sse_envelope(body: str, *, operation_id: str, headers: dict[str, s
             break
     if "text/event-stream" not in content_type:
         raise RuntimeError(f"{operation_id} SSE response missing text/event-stream content-type")
-    if not body.strip():
-        raise RuntimeError(f"{operation_id} SSE response empty")
-    if "event:" not in body and "data:" not in body:
-        raise RuntimeError(f"{operation_id} SSE response missing event envelope")
+    parse_sse_stream(body, required_terminal=None)
+
+
+def _validate_owner_transition(
+    spec: DenialRequestSpec,
+    *,
+    response: HttpResponseLike,
+    seed: Any,
+    credentials: Any,
+    http_request: HttpRequestFn,
+    api_base: str,
+    transition: str | None,
+    report: DenialExecutionReport,
+) -> str | None:
+    if transition is None:
+        return None
+    follow_up_path: str | None = None
+    expected_status = 404
+    token = spec.token or credentials.alpha_beta_access_token
+    if transition == "collection_deleted":
+        follow_up_path = f"{API_PREFIX}/collections/{credentials.beta_denial_disposable_collection_id}"
+    elif transition == "collection_updated":
+        follow_up_path = f"{API_PREFIX}/collections/{credentials.beta_denial_disposable_collection_update_id}"
+        expected_status = 200
+    elif transition == "document_deleted":
+        follow_up_path = f"{API_PREFIX}/documents/{credentials.beta_denial_disposable_document_id}"
+    elif transition == "chat_session_deleted":
+        follow_up_path = f"{API_PREFIX}/chat-sessions/{credentials.beta_denial_disposable_chat_session_id}"
+    elif transition == "conflict_triaged":
+        follow_up_path = f"{API_PREFIX}/conflicts/{credentials.beta_denial_disposable_conflict_id}"
+        expected_status = 200
+    if follow_up_path is None:
+        return transition
+    follow = http_request(
+        method="GET",
+        url=api_base.rstrip("/") + follow_up_path,
+        token=token,
+        body=None,
+        path=follow_up_path,
+    )
+    if follow.status != expected_status:
+        report.failures.append(
+            f"{spec.operation_id}/owner_control transition {transition} follow-up expected {expected_status} got {follow.status}"
+        )
+    return transition
 
 
 def _mint_fake_server_request_id() -> str:
@@ -905,7 +1164,16 @@ def execute_http_denial_suite(
             accept=spec.accept,
         )
         scan_body = response.body
-        if spec.scenario in {"foreign", "unauthenticated"}:
+        if spec.scenario in {
+            "foreign",
+            "membership_missing",
+            "invalid_capability",
+            "invalid_invite_token",
+            "citation_replay",
+            "duplicate_name_non_oracle",
+            "stale_token",
+            "unauthenticated",
+        }:
             leaked = scan_marker_leakage(scan_body, forbidden_markers=forbidden)
         else:
             leaked = []
@@ -913,7 +1181,19 @@ def execute_http_denial_suite(
             report.failures.append(
                 f"{spec.operation_id}/{spec.scenario} expected {sorted(spec.expected_statuses)} got {response.status}"
             )
+        try:
+            server_request_id = validate_server_request_id(body=response.body, headers=response.headers)
+        except RuntimeError as error:
+            report.failures.append(f"{spec.operation_id}/{spec.scenario} request-id: {error}")
+            server_request_id = extract_server_request_id(response.body, response.headers)
+        if leaked:
+            report.leakage_count += len(leaked)
+            report.failures.append(
+                f"{spec.operation_id}/{spec.scenario} leaked markers: {', '.join(leaked)}"
+            )
+        transition: str | None = None
         if spec.scenario == "owner_control" and response.status // 100 == 2:
+            transition = spec.owner_transition
             if spec.success_schema_keys:
                 try:
                     _validate_success_schema(response.body, spec.success_schema_keys)
@@ -928,15 +1208,15 @@ def execute_http_denial_suite(
                     )
                 except RuntimeError as error:
                     report.failures.append(f"{spec.operation_id}/owner_control sse: {error}")
-        try:
-            server_request_id = validate_server_request_id(body=response.body, headers=response.headers)
-        except RuntimeError as error:
-            report.failures.append(f"{spec.operation_id}/{spec.scenario} request-id: {error}")
-            server_request_id = extract_server_request_id(response.body, response.headers)
-        if leaked:
-            report.leakage_count += len(leaked)
-            report.failures.append(
-                f"{spec.operation_id}/{spec.scenario} leaked markers: {', '.join(leaked)}"
+            transition = _validate_owner_transition(
+                spec,
+                response=response,
+                seed=seed,
+                credentials=credentials,
+                http_request=http_request,
+                api_base=api_base,
+                transition=transition,
+                report=report,
             )
         report.observations.append(
             DenialObservation(
@@ -948,6 +1228,7 @@ def execute_http_denial_suite(
                 body_sha256=sha256_text(response.body),
                 request_id=server_request_id,
                 leaked_markers=leaked,
+                owner_transition=transition if spec.scenario == "owner_control" else None,
             )
         )
     try:

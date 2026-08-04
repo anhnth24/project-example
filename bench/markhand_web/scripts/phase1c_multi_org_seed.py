@@ -11,6 +11,7 @@ import secrets
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -116,7 +117,7 @@ def _bootstrap_identity_users(password_hash_sql: str) -> None:
         VALUES ('{BETA_USER_ID}', '{BETA_EMAIL}', 'Phase 1C Beta', '{password_hash_sql}')
         ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
         INSERT INTO org_memberships (org_id, user_id, role, state)
-        VALUES ('{ALPHA_ORG_ID}', '{BETA_USER_ID}', 'viewer', 'active')
+        VALUES ('{ALPHA_ORG_ID}', '{BETA_USER_ID}', 'editor', 'active')
         ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, state = 'active';
         INSERT INTO users (id, email, display_name, password_hash)
         VALUES ('{DISPOSABLE_USER_ID}', '{DISPOSABLE_EMAIL}', 'Phase 1C Disposable', '{password_hash_sql}')
@@ -137,9 +138,9 @@ def _bootstrap_identity_users(password_hash_sql: str) -> None:
         raise RuntimeError("identity fixture bootstrap validation failed")
 
 
-def _claim_pair_for_org(org_id: str) -> tuple[str, str]:
-    claim_low = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{org_id}:claim-a"))
-    claim_high = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{org_id}:claim-b"))
+def _claim_pair_for_conflict(org_id: str, conflict_id: str) -> tuple[str, str]:
+    claim_low = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{org_id}:{conflict_id}:claim-a"))
+    claim_high = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{org_id}:{conflict_id}:claim-b"))
     if claim_low > claim_high:
         claim_low, claim_high = claim_high, claim_low
     if claim_low == claim_high:
@@ -156,7 +157,7 @@ def _bootstrap_conflict_fixture(
 ) -> tuple[str, str]:
     # RESOURCE_FIXTURE_BOUNDARY: conflicts have no production create HTTP route.
     # Migration 0006 claims columns + 0007 ck_conflicts__canonical_pair (claim_a_id < claim_b_id).
-    claim_low, claim_high = _claim_pair_for_org(org_id)
+    claim_low, claim_high = _claim_pair_for_conflict(org_id, conflict_id)
     claim_pair_order = "claim_a_id < claim_b_id"
     if not (claim_low < claim_high):
         raise RuntimeError(f"conflict fixture violates {claim_pair_order}")
@@ -393,6 +394,37 @@ def _verify_conflict(api_base: str, token: str, conflict_id: str) -> None:
         raise RuntimeError("conflict get verification failed")
 
 
+def _wait_for_citation_index(
+    *,
+    org_id: str,
+    document_id: str,
+    version_id: str,
+    timeout_ms: int = 60_000,
+    interval_ms: int = 500,
+) -> str:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    while time.monotonic() <= deadline:
+        chunk_row = _psql(
+            f"""
+            SELECT c.id::text || '|' || coalesce(c.span_start, 0)::text || '|' || coalesce(c.span_end, 0)::text || '|' || c.body
+            FROM chunks c
+            WHERE c.org_id = '{org_id}' AND c.document_id = '{document_id}' AND c.version_id = '{version_id}'
+            ORDER BY c.ordinal ASC
+            LIMIT 1
+            """
+        )
+        markdown_sha = _psql(
+            f"""
+            SELECT content_sha256 FROM derived_artifacts
+            WHERE org_id = '{org_id}' AND version_id = '{version_id}' AND artifact_kind = 'markdown'
+            """
+        )
+        if chunk_row.strip() and markdown_sha.strip():
+            return chunk_row
+        time.sleep(interval_ms / 1000.0)
+    raise RuntimeError("citation fixture indexing timeout")
+
+
 def _load_citation_fixture(
     *,
     api_base: str,
@@ -410,23 +442,16 @@ def _load_citation_fixture(
     )
     if preview_status != 200:
         raise RuntimeError("citation fixture preview failed")
-    chunk_row = _psql(
-        f"""
-        SELECT c.id::text || '|' || coalesce(c.span_start, 0)::text || '|' || coalesce(c.span_end, {len(marker)})::text || '|' || c.body
-        FROM chunks c
-        WHERE c.org_id = '{org_id}' AND c.document_id = '{document_id}' AND c.version_id = '{version_id}'
-        ORDER BY c.ordinal ASC
-        LIMIT 1
-        """
-    )
-    if not chunk_row.strip():
-        raise RuntimeError("citation fixture missing chunk row")
+    chunk_row = _wait_for_citation_index(org_id=org_id, document_id=document_id, version_id=version_id)
     chunk_id, span_start, span_end, body = chunk_row.split("|", 3)
     source_sha = _psql(
-        f"SELECT source_content_sha256 FROM document_versions WHERE org_id = '{org_id}' AND document_id = '{document_id}' AND id = '{version_id}'"
+        f"SELECT content_sha256 FROM document_versions WHERE org_id = '{org_id}' AND document_id = '{document_id}' AND id = '{version_id}'"
     )
     markdown_sha = _psql(
-        f"SELECT canonical_markdown_sha256 FROM document_versions WHERE org_id = '{org_id}' AND document_id = '{document_id}' AND id = '{version_id}'"
+        f"""
+        SELECT content_sha256 FROM derived_artifacts
+        WHERE org_id = '{org_id}' AND version_id = '{version_id}' AND artifact_kind = 'markdown'
+        """
     )
     if not source_sha.strip() or not markdown_sha.strip():
         raise RuntimeError("citation fixture missing version hashes")
@@ -437,7 +462,7 @@ def _load_citation_fixture(
         "betaCitationSourceContentSha256": source_sha.strip(),
         "betaCitationCanonicalMarkdownSha256": markdown_sha.strip(),
         "betaCitationSourceSpanStart": int(span_start),
-        "betaCitationSourceSpanEnd": int(span_end),
+        "betaCitationSourceSpanEnd": int(span_end) if int(span_end) > 0 else quote_len,
         "betaCitationQuoteLocalStart": 0,
         "betaCitationQuoteLocalEnd": quote_len,
         "betaCitationQuote": quote,
@@ -715,6 +740,37 @@ def run_seed() -> int:
         api_base=api_base, token=beta_org_access, title=f"phase1c-beta-disposable-chat-{secrets.token_hex(3)}"
     )
 
+    disposable_org_status, _, disposable_org_raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/orgs",
+        token=beta_org_access,
+        body={"slug": f"phase1c-disposable-{secrets.token_hex(3)}", "name": "Phase 1C Disposable Org"},
+    )
+    if disposable_org_status not in {200, 201}:
+        raise RuntimeError("disposable org create failed")
+    disposable_org_payload = json.loads(disposable_org_raw)
+    disposable_org_id = disposable_org_payload.get("id") or disposable_org_payload.get("orgId")
+    if not isinstance(disposable_org_id, str):
+        raise RuntimeError("disposable org response missing id")
+    disposable_org_id = validate_uuid(disposable_org_id, field="disposableOrgId")
+
+    negative_invite_status, _, negative_invite_raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites",
+        token=beta_org_access,
+        body={"email": f"phase1c-negative-{secrets.token_hex(4)}@example.com", "role": "viewer"},
+    )
+    if negative_invite_status not in {200, 201}:
+        raise RuntimeError("negative invite create failed")
+    negative_invite_payload = json.loads(negative_invite_raw)
+    beta_denial_negative_invite_token = negative_invite_payload.get("token")
+    if not isinstance(beta_denial_negative_invite_token, str):
+        raise RuntimeError("negative invite response missing token")
+
+    beta_denial_wrong_download_capability = "mhcap1.phase1c-invalid-capability"
+
     alpha_conflict_id = str(uuid.uuid4())
     beta_conflict_id = str(uuid.uuid4())
     beta_denial_disposable_conflict_id = str(uuid.uuid4())
@@ -786,6 +842,7 @@ def run_seed() -> int:
         "betaSessionIdHash": _sha256_text(beta_session_id),
         "orgAlphaSlug": "poc",
         "orgBetaSlug": org_beta_slug,
+        "disposableOrgId": disposable_org_id,
     }
     evidence = build_public_seed_evidence(seed_raw)
     credentials = {
@@ -813,6 +870,8 @@ def run_seed() -> int:
         "betaDenialDisposableConflictId": beta_denial_disposable_conflict_id,
         "betaDenialAcceptInviteToken": beta_denial_accept_invite_token,
         "betaDenialAcceptAccessToken": beta_denial_accept_access_token,
+        "betaDenialNegativeInviteToken": beta_denial_negative_invite_token,
+        "betaDenialWrongDownloadCapability": beta_denial_wrong_download_capability,
         **citation_fixture,
     }
     _atomic_write(out, evidence, mode=0o644)

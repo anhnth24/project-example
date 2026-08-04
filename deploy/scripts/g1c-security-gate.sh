@@ -127,7 +127,6 @@ if [[ -n "${MARKHAND_O04_API_PASSWORD:-}" ]]; then
     >/dev/null
 fi
 
-bash deploy/scripts/phase1c-multi-org-seed.sh
 SEED_JSON="${MARKHAND_PHASE1C_SEED_JSON:-$ROOT/.artifacts/phase1c-multi-org-seed.json}"
 export MARKHAND_PHASE1C_SEED_JSON="$SEED_JSON"
 export MARKHAND_PHASE1C_CREDENTIALS_JSON="${MARKHAND_PHASE1C_CREDENTIALS_JSON:-$ROOT/.artifacts/phase1c-multi-org-seed.credentials.json}"
@@ -149,6 +148,8 @@ if cred_path:
 PY
 }
 trap '[[ "$GATE_CRED_OK" == "1" ]] || purge_phase1c_credentials' EXIT HUP INT TERM
+
+bash deploy/scripts/phase1c-multi-org-seed.sh
 
 export MARKHAND_PHASE1C_CHALLENGE="$(
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["challenge"])' "$SEED_JSON"
