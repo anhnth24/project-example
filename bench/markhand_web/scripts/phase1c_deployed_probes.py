@@ -16,8 +16,9 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 ROOT = Path(__file__).resolve().parents[3]
 DENIAL_MANIFEST = ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json"
@@ -34,9 +35,9 @@ ACL_CACHE_POLL_TIMEOUT_MS = 3_000
 
 DEPLOYED_PROBE_GATES: tuple[str, ...] = (
     "G1C-SEC-LEAKAGE",
-    "G1C-SEC-REVOKE",
     "G1C-SEC-ACL-CACHE",
     "G1C-SEC-STALE-TOKENS",
+    "G1C-SEC-REVOKE",
     "G1C-SEC-QUOTA-RECOVERY",
     "G1C-SEC-NOISY-NEIGHBOR",
     "G1C-SEC-AUDIT-COVERAGE",
@@ -71,7 +72,6 @@ SEED_REQUIRED_FIELDS: tuple[str, ...] = (
     "betaMemberUserId",
     "alphaInviteId",
     "betaInviteId",
-    "betaInviteAcceptToken",
     "betaDownloadCapability",
     "alphaSessionIdHash",
     "betaSessionIdHash",
@@ -143,7 +143,6 @@ class SeedFixture:
     beta_member_user_id: str
     alpha_invite_id: str
     beta_invite_id: str
-    beta_invite_accept_token: str
     beta_download_capability: str
     alpha_session_id_hash: str
     beta_session_id_hash: str
@@ -160,6 +159,7 @@ class SeedCredentials:
     beta_refresh_token: str
     alpha_session_id: str
     beta_session_id: str
+    beta_invite_token: str
 
 
 @dataclass
@@ -179,6 +179,9 @@ class DeployedProbeShims:
         token: str | None = None,
         body: dict[str, Any] | None = None,
         path: str = "",
+        content_type: str = "application/json",
+        multipart_body: bytes | None = None,
+        supplied_request_id: str | None = None,
     ) -> HttpResponse:
         raise NotImplementedError
 
@@ -198,12 +201,20 @@ class LiveDeployedProbeShims(DeployedProbeShims):
         token: str | None = None,
         body: dict[str, Any] | None = None,
         path: str = "",
+        content_type: str = "application/json",
+        multipart_body: bytes | None = None,
+        supplied_request_id: str | None = None,
     ) -> HttpResponse:
-        data = None
-        headers = {"content-type": "application/json", "x-phase1c-challenge": os.environ.get("MARKHAND_PHASE1C_CHALLENGE", "")}
+        headers = {
+            "content-type": content_type,
+            "x-phase1c-challenge": os.environ.get("MARKHAND_PHASE1C_CHALLENGE", ""),
+        }
+        if supplied_request_id:
+            headers["x-request-id"] = supplied_request_id
         if token:
             headers["authorization"] = f"Bearer {token}"
-        if body is not None:
+        data = multipart_body
+        if data is None and body is not None:
             data = json.dumps(body).encode("utf-8")
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
@@ -330,7 +341,6 @@ def parse_seed_artifact(raw: dict[str, Any], *, expected_challenge: str) -> Seed
         beta_member_user_id=_require_string(raw, "betaMemberUserId"),
         alpha_invite_id=_require_string(raw, "alphaInviteId"),
         beta_invite_id=_require_string(raw, "betaInviteId"),
-        beta_invite_accept_token=_require_string(raw, "betaInviteAcceptToken"),
         beta_download_capability=_require_string(raw, "betaDownloadCapability"),
         alpha_session_id_hash=_require_string(raw, "alphaSessionIdHash"),
         beta_session_id_hash=_require_string(raw, "betaSessionIdHash"),
@@ -340,11 +350,7 @@ def parse_seed_artifact(raw: dict[str, Any], *, expected_challenge: str) -> Seed
 
 
 def build_public_seed_evidence(raw: dict[str, Any]) -> dict[str, Any]:
-    public = {
-        key: raw[key]
-        for key in SEED_REQUIRED_FIELDS
-        if key not in {"betaInviteAcceptToken"}
-    }
+    public = {key: raw[key] for key in SEED_REQUIRED_FIELDS if key not in {"sourceRevision", "schemaVersion"}}
     if isinstance(raw.get("sourceRevision"), dict):
         public["sourceRevision"] = {
             "commit": raw["sourceRevision"].get("commit"),
@@ -357,13 +363,37 @@ def build_public_seed_evidence(raw: dict[str, Any]) -> dict[str, Any]:
     return public
 
 
-def load_seed_credentials(path: Path, *, expected_challenge: str) -> SeedCredentials:
+def purge_phase1c_credentials(path: Path) -> None:
+    """Securely remove private credential artifact (mode 0600 expected)."""
+    if not path.exists():
+        return
+    try:
+        with path.open("r+b") as handle:
+            size = path.stat().st_size
+            if size:
+                handle.write(b"\x00" * size)
+                handle.flush()
+                os.fsync(handle.fileno())
+    except OSError:
+        pass
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as error:
+        raise RuntimeError("credential purge failed") from error
+
+
+def load_seed_credentials(
+    path: Path,
+    *,
+    expected_challenge: str,
+    purge_after_load: bool = False,
+) -> SeedCredentials:
     raw = json.loads(path.read_text(encoding="utf-8"))
     if raw.get("schemaVersion") != 1:
         raise RuntimeError("credential schemaVersion mismatch")
     if raw.get("challenge") != expected_challenge:
         raise RuntimeError("credential challenge mismatch")
-    return SeedCredentials(
+    creds = SeedCredentials(
         challenge=expected_challenge,
         alpha_access_token=_require_string(raw, "alphaAccessToken"),
         alpha_refresh_token=_require_string(raw, "alphaRefreshToken"),
@@ -371,7 +401,11 @@ def load_seed_credentials(path: Path, *, expected_challenge: str) -> SeedCredent
         beta_refresh_token=_require_string(raw, "betaRefreshToken"),
         alpha_session_id=_require_string(raw, "alphaSessionId"),
         beta_session_id=_require_string(raw, "betaSessionId"),
+        beta_invite_token=_require_string(raw, "betaInviteToken"),
     )
+    if purge_after_load:
+        purge_phase1c_credentials(path)
+    return creds
 
 
 def load_seed_artifact(path: Path, *, expected_challenge: str) -> SeedFixture:
@@ -430,18 +464,49 @@ def _parse_audit_page(body: str) -> list[dict[str, Any]]:
     return parsed
 
 
-def _audit_matches(expected: dict[str, Any], entry: dict[str, Any]) -> bool:
+def _audit_matches(expected: dict[str, Any], entry: dict[str, Any], *, gate_started_at: str | None = None) -> bool:
     if entry.get("action") != expected["action"]:
+        return False
+    if entry.get("outcome") != expected.get("outcome", "success"):
         return False
     actor = entry.get("actorId") or entry.get("actor_id")
     if str(actor) != str(expected.get("actorId")):
+        return False
+    target_type = entry.get("targetType") or entry.get("target_type")
+    if expected.get("targetType") is not None and target_type != expected["targetType"]:
         return False
     target_id = entry.get("targetId") or entry.get("target_id")
     if expected.get("targetId") is not None and str(target_id) != str(expected["targetId"]):
         return False
     if expected.get("requestId") and entry.get("requestId") != expected["requestId"]:
         return False
+    if gate_started_at is not None:
+        occurred = entry.get("occurredAt") or entry.get("occurred_at")
+        if not isinstance(occurred, str) or occurred < gate_started_at:
+            return False
     return True
+
+
+def _fetch_audit_entries_paginated(
+    http_get_audit: Callable[[str | None], HttpResponse],
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    cursor: str | None = None
+    for _ in range(100):
+        path = "/api/v1/audit" if cursor is None else f"/api/v1/audit?cursor={cursor}"
+        response = http_get_audit(path)
+        if response.status != 200:
+            raise RuntimeError("audit fetch failed")
+        payload = json.loads(response.body)
+        entries.extend(_parse_audit_page(response.body))
+        page = payload.get("page") if isinstance(payload, dict) else None
+        if not isinstance(page, dict) or not page.get("hasMore"):
+            break
+        next_cursor = page.get("nextCursor")
+        if not isinstance(next_cursor, str) or not next_cursor.strip():
+            break
+        cursor = next_cursor
+    return entries
 
 
 @dataclass
@@ -477,6 +542,8 @@ class DeployedProbeRunner:
         self.quiet_search_samples = quiet_search_samples
         self.git_sha_full = git_sha_full or str(seed.source_revision.get("commit") or "")
         self._transition_kinds: set[str] = set()
+        self._membership_revoked = False
+        self._beta_email = os.environ.get("MARKHAND_PHASE1C_BETA_EMAIL", "phase1c-beta@poc.example")
 
     def _record_transition(self, kind: str) -> None:
         self._transition_kinds.add(kind)
@@ -552,6 +619,72 @@ class DeployedProbeRunner:
             time.sleep(REVOKE_POLL_INTERVAL_MS / 1000.0)
         raise RuntimeError(f"protected resource still authorized after {timeout_ms}ms")
 
+    def _login_tokens(self, email: str, password: str) -> tuple[str, str, str]:
+        password_value = os.environ.get(
+            "MARKHAND_PHASE1C_SEED_PASSWORD",
+            os.environ.get("MARKHAND_O04_API_PASSWORD", "markhand-dev"),
+        )
+        response = self._http(
+            "POST",
+            "/api/v1/auth/login",
+            body={"email": email, "password": password or password_value},
+        )
+        if response.status != 200:
+            raise RuntimeError(f"login failed for {email}")
+        payload = json.loads(response.body)
+        access = payload.get("accessToken") or payload.get("access_token")
+        refresh = payload.get("refreshToken") or payload.get("refresh_token")
+        if not isinstance(access, str) or not isinstance(refresh, str):
+            raise RuntimeError("login missing token pair")
+        me = self._http("GET", "/api/v1/auth/me", token=access)
+        if me.status != 200:
+            raise RuntimeError("auth/me failed after login")
+        me_payload = json.loads(me.body)
+        session_id = me_payload.get("sessionId") or me_payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise RuntimeError("auth/me missing sessionId")
+        return access, refresh, session_id
+
+    def _restore_beta_membership(self) -> None:
+        alpha_email = os.environ.get("MARKHAND_PHASE1C_SEED_EMAIL", "admin@poc.example")
+        alpha_access, _, _ = self._login_tokens(alpha_email, "")
+        invite = self._http(
+            "POST",
+            "/api/v1/members/invites",
+            token=alpha_access,
+            body={"email": self._beta_email, "role": "editor"},
+        )
+        if invite.status // 100 != 2:
+            raise RuntimeError(f"membership restore invite failed: {invite.status}")
+        invite_payload = json.loads(invite.body)
+        invite_token = invite_payload.get("token")
+        if not isinstance(invite_token, str):
+            raise RuntimeError("membership restore invite missing token")
+        beta_access, beta_refresh, beta_session = self._login_tokens(self._beta_email, "")
+        accept = self._http(
+            "POST",
+            "/api/v1/members/invites/accept",
+            token=beta_access,
+            body={"token": invite_token},
+        )
+        if accept.status // 100 != 2:
+            raise RuntimeError(f"membership restore accept failed: {accept.status}")
+        beta_access, beta_refresh, beta_session = self._login_tokens(self._beta_email, "")
+        self.credentials.beta_access_token = beta_access
+        self.credentials.beta_refresh_token = beta_refresh
+        self.credentials.beta_session_id = beta_session
+        self.credentials.beta_invite_token = invite_token
+        self._membership_revoked = False
+
+    def _ensure_beta_membership(self) -> None:
+        if self._membership_revoked:
+            self._restore_beta_membership()
+            return
+        warm = self._http("GET", "/api/v1/auth/me", token=self.credentials.beta_access_token)
+        if warm.status // 100 == 2:
+            return
+        self._restore_beta_membership()
+
     def run_http_denial_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
 
@@ -586,10 +719,10 @@ class DeployedProbeRunner:
 
     def run_revoke_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
+        self._ensure_beta_membership()
         warm = self._http("GET", "/api/v1/auth/me", token=self.credentials.beta_access_token)
         if warm.status != 200:
             raise RuntimeError("beta warm auth failed before revoke")
-        commit_started = time.monotonic()
         delete = self._http(
             "DELETE",
             f"/api/v1/members/{self.seed.beta_member_user_id}",
@@ -604,6 +737,7 @@ class DeployedProbeRunner:
         )
         if stale > 0:
             raise RuntimeError(f"post-commit stale authorizations observed: {stale}")
+        self._membership_revoked = True
         self._require_correlated_transitions(minimum=2)
         return DeployedProbeResult(
             gate_id="G1C-SEC-REVOKE",
@@ -622,6 +756,7 @@ class DeployedProbeRunner:
 
     def run_acl_cache_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
+        self._ensure_beta_membership()
         warm = self._http("GET", self._protected_resource_path(), token=self.credentials.beta_access_token)
         if warm.status != 200:
             raise RuntimeError("beta warm collection read failed before acl cache probe")
@@ -655,6 +790,7 @@ class DeployedProbeRunner:
 
     def run_stale_tokens_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
+        self._ensure_beta_membership()
         unrelated = self._http("GET", "/api/v1/auth/me", token="unrelated-token-value")
         if unrelated.status == 200:
             raise RuntimeError("unrelated token must not authorize protected resource")
@@ -674,13 +810,18 @@ class DeployedProbeRunner:
         new_refresh = payload.get("refreshToken") or payload.get("refresh_token")
         if not isinstance(new_access, str) or not isinstance(new_refresh, str):
             raise RuntimeError("refresh response missing token pair")
+        rotated_warm = self._http("GET", "/api/v1/auth/me", token=new_access)
+        if rotated_warm.status != 200:
+            raise RuntimeError("rotated access token must authorize")
         reuse = self._http(
             "POST",
             "/api/v1/auth/refresh",
             body={"refreshToken": captured_refresh},
         )
-        if reuse.status // 100 == 2:
+        if reuse.status in {200, 201, 204}:
             raise RuntimeError("reuse of old refresh token must fail")
+        if reuse.status // 100 == 5:
+            raise RuntimeError(f"stale refresh reuse must not return 5xx, got {reuse.status}")
         delete = self._http(
             "DELETE",
             f"/api/v1/members/{self.seed.beta_member_user_id}",
@@ -688,11 +829,14 @@ class DeployedProbeRunner:
         )
         if delete.status // 100 != 2:
             raise RuntimeError(f"revoke membership must succeed, got {delete.status}")
+        self._membership_revoked = True
         stale = 0
         for token in (self.credentials.beta_access_token, new_access):
             after = self._http("GET", "/api/v1/auth/me", token=token)
             if after.status // 100 == 2:
                 stale += 1
+            if after.status // 100 == 5:
+                raise RuntimeError(f"post-revoke auth probe must not return 5xx, got {after.status}")
         self._psql("SELECT COUNT(*) FROM refresh_tokens")
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
@@ -788,6 +932,7 @@ class DeployedProbeRunner:
 
     def run_audit_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
+        gate_started_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         token = self.credentials.alpha_access_token
         expected: list[dict[str, Any]] = []
         switch = self._http(
@@ -796,12 +941,33 @@ class DeployedProbeRunner:
             token=token,
             body={"orgId": self.seed.org_alpha_id},
         )
+        switch_request_id = switch.headers.get("x-request-id") or switch.headers.get("X-Request-Id")
+        if switch.status // 100 != 2:
+            raise RuntimeError(f"org switch must succeed, got {switch.status}")
+        if not isinstance(switch_request_id, str) or not switch_request_id.strip():
+            raise RuntimeError("org switch missing x-request-id correlation")
+        switch_payload = json.loads(switch.body)
+        switch_session_target_id = (
+            switch_payload.get("switchSessionTargetId")
+            or switch_payload.get("sessionId")
+            or switch_payload.get("session_id")
+        )
+        if not isinstance(switch_session_target_id, str) or not switch_session_target_id.strip():
+            me = self._http("GET", "/api/v1/auth/me", token=token)
+            if me.status != 200:
+                raise RuntimeError("auth/me failed after org switch")
+            me_payload = json.loads(me.body)
+            switch_session_target_id = me_payload.get("sessionId") or me_payload.get("session_id")
+        if not isinstance(switch_session_target_id, str) or not switch_session_target_id.strip():
+            raise RuntimeError("org.switch audit target session id unavailable")
         expected.append(
             {
                 "action": "org.switch",
                 "actorId": self.seed.alpha_user_id,
-                "targetId": self.seed.org_alpha_id,
-                "requestId": switch.headers.get("x-request-id"),
+                "targetType": "session",
+                "targetId": switch_session_target_id,
+                "requestId": switch_request_id,
+                "outcome": "success",
                 "attemptStatus": switch.status,
             }
         )
@@ -812,24 +978,46 @@ class DeployedProbeRunner:
             token=token,
             body={"name": "phase1c-audit", "slug": slug, "visibility": "org"},
         )
+        create_request_id = create.headers.get("x-request-id") or create.headers.get("X-Request-Id")
+        collection_id = None
+        if create.status // 100 == 2:
+            create_payload = json.loads(create.body)
+            collection_id = create_payload.get("id")
         expected.append(
             {
                 "action": "collection.create",
                 "actorId": self.seed.alpha_user_id,
-                "targetId": None,
-                "requestId": create.headers.get("x-request-id"),
+                "targetType": "collection",
+                "targetId": collection_id,
+                "requestId": create_request_id,
+                "outcome": "success",
                 "attemptStatus": create.status,
             }
         )
         if any(item["attemptStatus"] // 100 != 2 for item in expected):
             raise RuntimeError("audit probe mutation attempts must succeed")
-        audit = self._http("GET", "/api/v1/audit", token=token)
-        if audit.status != 200:
-            raise RuntimeError("audit fetch failed")
-        entries = _parse_audit_page(audit.body)
+        if any(not item.get("requestId") for item in expected):
+            raise RuntimeError("audit probe mutations must carry request ids")
+
+        def fetch_audit(path: str) -> HttpResponse:
+            return self._http("GET", path, token=token)
+
+        entries = _fetch_audit_entries_paginated(fetch_audit)
         observed = 0
         for item in expected:
-            if any(_audit_matches(item, entry) for entry in entries):
+            if item.get("targetId") is None and item["action"] == "collection.create":
+                for entry in entries:
+                    if (
+                        entry.get("action") == "collection.create"
+                        and entry.get("requestId") == item["requestId"]
+                        and entry.get("outcome") == "success"
+                        and str(entry.get("actorId") or entry.get("actor_id")) == str(item["actorId"])
+                    ):
+                        target_id = entry.get("targetId") or entry.get("target_id")
+                        if isinstance(target_id, str) and target_id.strip():
+                            item["targetId"] = target_id
+                            break
+            if any(_audit_matches(item, entry, gate_started_at=gate_started_at) for entry in entries):
                 observed += 1
         ratio = observed / len(expected)
         self._require_correlated_transitions(minimum=2)
@@ -839,6 +1027,7 @@ class DeployedProbeRunner:
                 "deployedApi": True,
                 "expectedCount": len(expected),
                 "observedCount": observed,
+                "switchSessionTargetId": switch_session_target_id,
                 "eof": True,
             },
             metrics={"admin_mutation_audit_coverage_ratio": ratio},

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -63,6 +64,10 @@ class DenialRequestSpec:
     token: str | None
     body: dict[str, Any] | None
     expected_statuses: frozenset[int]
+    content_type: str = "application/json"
+    multipart_body: bytes | None = None
+    supplied_request_id: str | None = None
+    success_schema_keys: frozenset[str] | None = None
 
 
 @dataclass
@@ -270,7 +275,13 @@ def _foreign_params(seed: Any) -> dict[str, str]:
     }
 
 
-def _body_for_operation(operation_id: str, seed: Any, *, foreign: bool) -> dict[str, Any] | None:
+def _body_for_operation(
+    operation_id: str,
+    seed: Any,
+    *,
+    credentials: Any,
+    foreign: bool,
+) -> dict[str, Any] | None:
     collection_id = seed.beta_collection_id if foreign else seed.alpha_collection_id
     document_id = seed.beta_document_id if foreign else seed.alpha_document_id
     org_id = seed.org_beta_id if foreign else seed.org_alpha_id
@@ -295,7 +306,7 @@ def _body_for_operation(operation_id: str, seed: Any, *, foreign: bool) -> dict[
     if operation_id == "createMemberInvite":
         return {"email": f"invite-{seed.challenge[:8]}@example.com", "role": "viewer"}
     if operation_id == "acceptMemberInvite":
-        return {"token": seed.beta_invite_accept_token}
+        return {"token": credentials.beta_invite_token}
     if operation_id == "resolveCitation":
         return {"documentId": document_id, "versionId": seed.beta_version_id if foreign else seed.alpha_version_id}
     if operation_id == "appendChatTurn":
@@ -356,6 +367,84 @@ def _uses_foreign_scope(operation_id: str, path_template: str) -> bool:
     }
 
 
+def _owner_control_spec(
+    entry: DenialMappingEntry,
+    *,
+    seed: Any,
+    params: dict[str, str],
+) -> tuple[str, str, dict[str, Any] | None, frozenset[int], frozenset[str]] | None:
+    path = _substitute_path(entry.path_template, params)
+    read_map: dict[str, tuple[str, str, frozenset[str]]] = {
+        "getCollection": ("GET", path, frozenset({"id", "name"})),
+        "getDocument": ("GET", f"{API_PREFIX}/documents/{params['documentId']}", frozenset({"id"})),
+        "getJob": ("GET", f"{API_PREFIX}/jobs/{params['jobId']}", frozenset({"id"})),
+        "getDocumentVersion": (
+            "GET",
+            f"{API_PREFIX}/documents/{params['documentId']}/versions/{params['versionId']}",
+            frozenset({"id", "versionId"}),
+        ),
+        "getConflict": ("GET", f"{API_PREFIX}/conflicts/{params['conflictId']}", frozenset({"id"})),
+        "getChatSession": ("GET", f"{API_PREFIX}/chat-sessions/{params['sessionId']}", frozenset({"id"})),
+        "getProject": ("GET", f"{API_PREFIX}/projects/{params['projectId']}", frozenset({"id"})),
+        "listConflicts": ("GET", f"{API_PREFIX}/conflicts", frozenset({"items"})),
+        "listDocuments": (
+            "GET",
+            f"{API_PREFIX}/collections/{params['collectionId']}/documents",
+            frozenset({"items"}),
+        ),
+    }
+    if entry.operation_id in read_map:
+        method, read_path, schema = read_map[entry.operation_id]
+        return method, read_path, None, frozenset({200}), schema
+    if entry.operation_id in {"search", "ask"}:
+        body = {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [params["collectionId"]]}
+        return "POST", f"{API_PREFIX}/search", body, frozenset({200}), frozenset({"items"})
+    if entry.operation_id == "authMe":
+        return "GET", f"{API_PREFIX}/auth/me", None, frozenset({200}), frozenset({"userId", "sessionId"})
+    if entry.operation_id == "switchOrg":
+        return "GET", f"{API_PREFIX}/auth/me", None, frozenset({200}), frozenset({"orgId", "sessionId"})
+    if entry.operation_id == "createUpload":
+        return (
+            "GET",
+            f"{API_PREFIX}/collections/{params['collectionId']}",
+            None,
+            frozenset({200}),
+            frozenset({"id"}),
+        )
+    if entry.operation_id == "askStream":
+        body = {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [params["collectionId"]]}
+        return "POST", f"{API_PREFIX}/search", body, frozenset({200}), frozenset({"items"})
+    if entry.operation_id == "jobEvents":
+        return "GET", f"{API_PREFIX}/jobs/{params['jobId']}", None, frozenset({200}), frozenset({"id"})
+    if entry.method == "GET":
+        return entry.method, path, None, frozenset({200}), frozenset({"id"})
+    return (
+        "GET",
+        f"{API_PREFIX}/collections/{params['collectionId']}",
+        None,
+        frozenset({200}),
+        frozenset({"id"}),
+    )
+
+
+def _multipart_upload_body(*, collection_id: str, filename: str, content: bytes, boundary: str) -> bytes:
+    parts: list[bytes] = []
+    parts.append(
+        f'--{boundary}\r\nContent-Disposition: form-data; name="collectionId"\r\n\r\n{collection_id}\r\n'.encode(
+            "utf-8"
+        )
+    )
+    parts.append(
+        (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: text/plain\r\n\r\n"
+        ).encode("utf-8")
+    )
+    parts.append(content)
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts)
+
+
 def build_denial_request_specs(
     mapping: list[DenialMappingEntry],
     *,
@@ -366,7 +455,38 @@ def build_denial_request_specs(
     params = _foreign_params(seed)
     for entry in mapping:
         path = _substitute_path(entry.path_template, params)
-        body = _body_for_operation(entry.operation_id, seed, foreign=True)
+        body = _body_for_operation(entry.operation_id, seed, credentials=credentials, foreign=True)
+        request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
+        if _uses_foreign_scope(entry.operation_id, entry.path_template):
+            owner = _owner_control_spec(entry, seed=seed, params=params)
+            if owner is not None:
+                owner_method, owner_path, owner_body, owner_statuses, owner_schema = owner
+                specs.append(
+                    DenialRequestSpec(
+                        row_id=entry.row_id,
+                        operation_id=entry.operation_id,
+                        scenario="owner_control",
+                        method=owner_method,
+                        path=owner_path,
+                        token=credentials.beta_access_token,
+                        body=owner_body,
+                        expected_statuses=owner_statuses,
+                        supplied_request_id=f"{request_id}-owner",
+                        success_schema_keys=owner_schema,
+                    )
+                )
+        upload_multipart = None
+        content_type = "application/json"
+        if entry.operation_id == "createUpload":
+            boundary = "----markhandPhase1cDenialBoundary"
+            upload_multipart = _multipart_upload_body(
+                collection_id=seed.beta_collection_id,
+                filename="denial.txt",
+                content=f"phase1c-denial-{seed.challenge}\n".encode("utf-8"),
+                boundary=boundary,
+            )
+            content_type = f"multipart/form-data; boundary={boundary}"
+            body = None
         if entry.authz_kind != "public":
             specs.append(
                 DenialRequestSpec(
@@ -377,7 +497,10 @@ def build_denial_request_specs(
                     path=path,
                     token=None,
                     body=body,
-                    expected_statuses=frozenset({401, 403}),
+                    expected_statuses=frozenset({401}),
+                    content_type=content_type,
+                    multipart_body=upload_multipart,
+                    supplied_request_id=f"{request_id}-unauth",
                 )
             )
         if _uses_foreign_scope(entry.operation_id, entry.path_template):
@@ -390,7 +513,10 @@ def build_denial_request_specs(
                     path=path,
                     token=credentials.alpha_access_token,
                     body=body,
-                    expected_statuses=frozenset({401, 403, 404}),
+                    expected_statuses=frozenset({403, 404}),
+                    content_type=content_type,
+                    multipart_body=upload_multipart,
+                    supplied_request_id=f"{request_id}-foreign",
                 )
             )
     return specs
@@ -428,6 +554,49 @@ def scan_marker_leakage(body: str, *, forbidden_markers: set[str]) -> list[str]:
     return leaks
 
 
+def validate_request_id_correlation(
+    *,
+    supplied_request_id: str,
+    response_request_id: str | None,
+    response_headers: dict[str, str],
+) -> None:
+    header_id = None
+    for key, value in response_headers.items():
+        if key.lower() == "x-request-id" and value.strip():
+            header_id = value.strip()
+            break
+    actual = response_request_id or header_id
+    if actual != supplied_request_id:
+        raise RuntimeError(
+            f"request id not correlated: supplied={supplied_request_id!r} actual={actual!r}"
+        )
+
+
+def validate_denial_observation_matrix(observations: list[DenialObservation]) -> None:
+    foreign_ops = {item.operation_id for item in observations if item.scenario == "foreign"}
+    if not foreign_ops:
+        return
+    by_op: dict[str, list[DenialObservation]] = {}
+    for item in observations:
+        by_op.setdefault(item.operation_id, []).append(item)
+    for operation_id, rows in by_op.items():
+        if len(rows) >= 2 and all(row.actual_status == 403 for row in rows):
+            raise RuntimeError(f"all-403 shim detected for {operation_id}")
+    owner_ops = {item.operation_id for item in observations if item.scenario == "owner_control"}
+    missing = foreign_ops - owner_ops
+    if missing:
+        raise RuntimeError(f"foreign rows missing owner_control: {sorted(missing)}")
+
+
+def _validate_success_schema(body: str, required_keys: frozenset[str]) -> None:
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise RuntimeError("owner control response must be object")
+    for key in required_keys:
+        if key not in payload:
+            raise RuntimeError(f"owner control response missing {key}")
+
+
 def execute_http_denial_suite(
     *,
     seed: Any,
@@ -462,12 +631,32 @@ def execute_http_denial_suite(
             token=spec.token,
             body=spec.body,
             path=spec.path,
+            content_type=spec.content_type,
+            multipart_body=spec.multipart_body,
+            supplied_request_id=spec.supplied_request_id,
         )
         leaked = scan_marker_leakage(response.body, forbidden_markers=forbidden)
         if response.status not in spec.expected_statuses:
             report.failures.append(
                 f"{spec.operation_id}/{spec.scenario} expected {sorted(spec.expected_statuses)} got {response.status}"
             )
+        if spec.scenario == "owner_control" and response.status // 100 == 2:
+            if spec.success_schema_keys:
+                try:
+                    _validate_success_schema(response.body, spec.success_schema_keys)
+                except RuntimeError as error:
+                    report.failures.append(f"{spec.operation_id}/owner_control schema: {error}")
+            if seed.marker_beta in response.body:
+                report.failures.append(f"{spec.operation_id}/owner_control leaked beta marker")
+        if spec.supplied_request_id:
+            try:
+                validate_request_id_correlation(
+                    supplied_request_id=spec.supplied_request_id,
+                    response_request_id=_extract_request_id(response.body, response.headers),
+                    response_headers=response.headers,
+                )
+            except RuntimeError as error:
+                report.failures.append(f"{spec.operation_id}/{spec.scenario} request-id: {error}")
         if leaked:
             report.leakage_count += len(leaked)
             report.failures.append(
@@ -486,6 +675,10 @@ def execute_http_denial_suite(
                 leaked_markers=leaked,
             )
         )
+    try:
+        validate_denial_observation_matrix(report.observations)
+    except RuntimeError as error:
+        report.failures.append(str(error))
     return report
 
 

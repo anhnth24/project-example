@@ -60,7 +60,6 @@ def complete_seed_raw(probes, **overrides: object) -> dict:
         "betaMemberUserId": "33333333-3333-3333-3333-333333333301",
         "alphaInviteId": "99999999-9999-9999-9999-999999999999",
         "betaInviteId": "88888888-8888-8888-8888-888888888888",
-        "betaInviteAcceptToken": "mhinv1.test-token",
         "betaDownloadCapability": "cap-denial-test",
         "alphaSessionIdHash": "sha256:" + "a" * 64,
         "betaSessionIdHash": "sha256:" + "b" * 64,
@@ -202,6 +201,7 @@ class DeployedArchitectureContractTests(unittest.TestCase):
             beta_refresh_token="beta-refresh",
             alpha_session_id="sess-alpha",
             beta_session_id="sess-beta",
+            beta_invite_token="mhinv1.test-token",
         )
         runner = probes.DeployedProbeRunner(
             api_base="http://127.0.0.1:8788",
@@ -222,7 +222,35 @@ class DeployedArchitectureContractTests(unittest.TestCase):
         class TrackingShims(probes.DeployedProbeShims):
             def http_request(self, **kwargs):  # type: ignore[override]
                 journal.append(f"http:{kwargs.get('method')}:{kwargs.get('path')}")
-                return probes.HttpResponse(status=403, body="{}", headers={})
+                token = kwargs.get("token")
+                path = str(kwargs.get("path") or "")
+                supplied_request_id = kwargs.get("supplied_request_id")
+                headers = {}
+                if isinstance(supplied_request_id, str):
+                    headers["x-request-id"] = supplied_request_id
+                if token is None:
+                    return probes.HttpResponse(status=401, body='{"code":"unauthorized"}', headers=headers)
+                if token == creds.beta_access_token:
+                    if path.endswith("/api/v1/auth/me"):
+                        body = json.dumps(
+                            {
+                                "userId": seed.beta_user_id,
+                                "orgId": seed.org_alpha_id,
+                                "sessionId": creds.beta_session_id,
+                            }
+                        )
+                    elif "/versions/" in path:
+                        body = json.dumps({"id": seed.beta_version_id, "versionId": seed.beta_version_id})
+                    elif "/documents/" in path:
+                        body = json.dumps({"id": seed.beta_document_id})
+                    elif "/jobs/" in path:
+                        body = json.dumps({"id": seed.beta_job_id})
+                    elif path.endswith("/api/v1/search") or "/documents" in path and path.endswith("/documents"):
+                        body = json.dumps({"items": []})
+                    else:
+                        body = json.dumps({"id": seed.beta_collection_id, "name": "owner-control-ok"})
+                    return probes.HttpResponse(status=200, body=body, headers=headers)
+                return probes.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
 
             def compose(self, args, **kwargs):  # type: ignore[override]
                 journal.append("compose:" + " ".join(args[:2]))
@@ -244,6 +272,7 @@ class DeployedArchitectureContractTests(unittest.TestCase):
             beta_refresh_token="beta-refresh",
             alpha_session_id="sess-alpha",
             beta_session_id="sess-beta",
+            beta_invite_token="mhinv1.test-token",
         )
         runner = probes.DeployedProbeRunner(
             api_base="http://127.0.0.1:8788",
@@ -421,6 +450,7 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
             beta_refresh_token="beta-refresh",
             alpha_session_id="sess-alpha",
             beta_session_id="sess-beta",
+            beta_invite_token="mhinv1.test-token",
         )
 
         class Revoke404Shim(probes.DeployedProbeShims):
@@ -465,13 +495,22 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
             beta_refresh_token="beta-refresh",
             alpha_session_id="sess-alpha",
             beta_session_id="sess-beta",
+            beta_invite_token="mhinv1.test-token",
         )
 
         class AuditShim(probes.DeployedProbeShims):
             def http_request(self, **kwargs):  # type: ignore[override]
                 path = str(kwargs.get("path") or "")
+                headers = {}
+                request_id = kwargs.get("supplied_request_id") or "req-audit"
+                headers["x-request-id"] = request_id
                 if path.endswith("/api/v1/orgs/switch"):
-                    return probes.HttpResponse(status=200, body='{"orgId":"11111111-1111-1111-1111-111111111111"}', headers={})
+                    session_target = "session-family-audit"
+                    return probes.HttpResponse(
+                        status=200,
+                        body=json.dumps({"switchSessionTargetId": session_target, "sessionId": session_target}),
+                        headers={"x-request-id": "req-switch"},
+                    )
                 if path.endswith("/api/v1/collections") and kwargs.get("method") == "POST":
                     return probes.HttpResponse(
                         status=201,
@@ -487,12 +526,12 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
                                     "seq": 1,
                                     "actorId": seed.alpha_user_id,
                                     "action": "org.switch",
-                                    "targetType": "org",
-                                    "targetId": seed.org_alpha_id,
+                                    "targetType": "session",
+                                    "targetId": "session-family-audit",
                                     "outcome": "success",
                                     "metadata": {},
                                     "requestId": "req-switch",
-                                    "occurredAt": "2026-08-04T00:00:00Z",
+                                    "occurredAt": "2026-08-04T12:00:00Z",
                                 }
                             ],
                             "page": {"nextCursor": None, "hasMore": False},
@@ -532,6 +571,7 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
             beta_refresh_token="beta-refresh",
             alpha_session_id="sess-alpha",
             beta_session_id="sess-beta",
+            beta_invite_token="mhinv1.test-token",
         )
 
         class AuditFailShim(probes.DeployedProbeShims):
@@ -616,6 +656,7 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
             beta_refresh_token="beta-refresh",
             alpha_session_id="sess-alpha",
             beta_session_id="sess-beta",
+            beta_invite_token="mhinv1.test-token",
         )
 
         class UnrelatedTokenShim(probes.DeployedProbeShims):
@@ -667,6 +708,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
             beta_refresh_token="beta-refresh",
             alpha_session_id="sess-alpha",
             beta_session_id="sess-beta",
+            beta_invite_token="mhinv1.test-token",
         )
 
     def test_seed_declares_identity_fixture_boundary(self) -> None:
@@ -830,22 +872,28 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
             "betaRefreshToken": "br",
             "alphaSessionId": "sa",
             "betaSessionId": "sb",
+            "betaInviteToken": "invite-token",
         }
         path.write_text(json.dumps(payload), encoding="utf-8")
         path.chmod(0o600)
         probes.load_seed_credentials(path, expected_challenge="phase1c-challenge-abc", purge_after_load=True)
         self.assertFalse(path.exists())
 
+    def _load_stateful_fake(self):
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake_under_test", fake_path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["phase1c_stateful_fake_under_test"] = module
+        spec.loader.exec_module(module)
+        return module
+
     def test_stateful_fake_deployment_module_required(self) -> None:
         fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
         self.assertTrue(fake_path.is_file(), "phase1c_stateful_fake.py required")
 
     def test_stateful_fake_runs_denial_with_owner_control(self) -> None:
-        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
-        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
-        assert spec and spec.loader
-        fake = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fake)
+        fake = self._load_stateful_fake()
         probes = load_probes()
         seed = self._seed_fixture(probes)
         creds = self._seed_creds(seed, probes)
@@ -855,11 +903,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
         self.assertGreater(report["ownerControlCount"], 0)
 
     def test_stateful_fake_negative_missing_owner_control_fails(self) -> None:
-        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
-        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
-        assert spec and spec.loader
-        fake = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fake)
+        fake = self._load_stateful_fake()
         probes = load_probes()
         seed = self._seed_fixture(probes)
         creds = self._seed_creds(seed, probes)
@@ -872,11 +916,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
             deployment.run_denial_suite()
 
     def test_stateful_fake_negative_all_403_shim_rejected(self) -> None:
-        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
-        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
-        assert spec and spec.loader
-        fake = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fake)
+        fake = self._load_stateful_fake()
         probes = load_probes()
         seed = self._seed_fixture(probes)
         creds = self._seed_creds(seed, probes)
@@ -889,11 +929,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
             deployment.run_denial_suite()
 
     def test_stateful_fake_negative_credentials_survive_cleanup(self) -> None:
-        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
-        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
-        assert spec and spec.loader
-        fake = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(fake)
+        fake = self._load_stateful_fake()
         path = Path(tempfile.mkdtemp()) / "creds.json"
         path.write_text('{"token":"secret"}\n', encoding="utf-8")
         path.chmod(0o600)
