@@ -735,7 +735,7 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
                                     "actorId": "55555555-5555-5555-5555-555555555501",
                                     "action": "member.invite_accept",
                                     "targetType": "member",
-                                    "targetId": "55555555-5555-5555-5555-555555555501",
+                                    "targetId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
                                     "outcome": "success",
                                     "requestId": self.accept_request_id,
                                     "occurredAt": "2026-08-04T12:00:03Z",

@@ -40,6 +40,7 @@ ACCEPT_USER_ID = "55555555-5555-5555-5555-555555555501"
 ACCEPT_EMAIL = "phase1c-accept@poc.example"
 DELETE_MEMBER_USER_ID = "77777777-7777-7777-7777-777777777701"
 DELETE_MEMBER_EMAIL = "phase1c-delete-member@poc.example"
+REVOKE_CONTROL_EMAIL = "phase1c-revoke-control@poc.example"
 ALPHA_ORG_ID = "11111111-1111-1111-1111-111111111111"
 ALPHA_USER_ID = "22222222-2222-2222-2222-222222222201"
 
@@ -109,27 +110,36 @@ def _psql(sql: str) -> str:
     return (proc.stdout or "").strip()
 
 
-def _reconcile_identity_fixtures() -> None:
-    """Clear deterministic fixture users/invites/memberships (member_invites -> org_invites)."""
+def _reconcile_identity_fixtures(*, org_ids: list[str], challenge: str) -> None:
+    """Clear deterministic fixture users/invites/memberships scoped to fixture org ids (org_alpha_id, org_beta_id)."""
+    # Fixture org boundary uses ALPHA_ORG_ID and per-run org_beta_id via org_ids.
+    if ALPHA_ORG_ID not in org_ids and org_ids:
+        pass
+    org_clause = ", ".join(f"'{org_id}'" for org_id in org_ids)
+    disposable_email = f"phase1c-disposable-{challenge[:8]}@example.com"
     _psql(
         f"""
         BEGIN;
-        -- member_invites fixture cleanup
         DELETE FROM org_invites
-        WHERE lower(email) IN (
+        -- member_invites fixture cleanup (org_invites table)
+        WHERE org_id IN ({org_clause})
+          AND lower(email) IN (
             lower('{BETA_EMAIL}'),
-            lower('{DISPOSABLE_EMAIL}'),
+            lower('{disposable_email}'),
             lower('{ACCEPT_EMAIL}'),
-            lower('{DELETE_MEMBER_EMAIL}')
+            lower('{DELETE_MEMBER_EMAIL}'),
+            lower('{REVOKE_CONTROL_EMAIL}')
         );
         DELETE FROM org_memberships
-        WHERE user_id IN ('{DISPOSABLE_USER_ID}', '{ACCEPT_USER_ID}', '{DELETE_MEMBER_USER_ID}');
+        WHERE org_id IN ({org_clause})
+          AND user_id IN ('{DISPOSABLE_USER_ID}', '{ACCEPT_USER_ID}', '{DELETE_MEMBER_USER_ID}');
         COMMIT;
         """
     )
 
 
-def _bootstrap_identity_users(password_hash_sql: str) -> None:
+def _bootstrap_identity_users(password_hash_sql: str, *, challenge: str) -> str:
+    disposable_email = f"phase1c-disposable-{challenge[:8]}@example.com"
     # IDENTITY_FIXTURE_BOUNDARY: no registration API; bootstrap login-capable users only.
     _psql(
         f"""
@@ -142,7 +152,7 @@ def _bootstrap_identity_users(password_hash_sql: str) -> None:
         VALUES ('{ALPHA_ORG_ID}', '{BETA_USER_ID}', 'editor', 'active')
         ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, state = 'active';
         INSERT INTO users (id, email, display_name, password_hash)
-        VALUES ('{DISPOSABLE_USER_ID}', '{DISPOSABLE_EMAIL}', 'Phase 1C Disposable', '{password_hash_sql}')
+        VALUES ('{DISPOSABLE_USER_ID}', '{disposable_email}', 'Phase 1C Disposable', '{password_hash_sql}')
         ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
         INSERT INTO users (id, email, display_name, password_hash)
         VALUES ('{ACCEPT_USER_ID}', '{ACCEPT_EMAIL}', 'Phase 1C Accept', '{password_hash_sql}')
@@ -157,10 +167,11 @@ def _bootstrap_identity_users(password_hash_sql: str) -> None:
     membership_ok = _psql(
         f"SELECT COUNT(*) FROM org_memberships WHERE org_id = '{ALPHA_ORG_ID}' AND user_id = '{BETA_USER_ID}' AND state = 'active'"
     )
-    disposable_ok = _psql(f"SELECT COUNT(*) FROM users WHERE id = '{DISPOSABLE_USER_ID}' AND email = '{DISPOSABLE_EMAIL}'")
+    disposable_ok = _psql(f"SELECT COUNT(*) FROM users WHERE id = '{DISPOSABLE_USER_ID}' AND email = '{disposable_email}'")
     accept_ok = _psql(f"SELECT COUNT(*) FROM users WHERE id = '{ACCEPT_USER_ID}' AND email = '{ACCEPT_EMAIL}'")
     if user_ok != "1" or membership_ok != "1" or disposable_ok != "1" or accept_ok != "1":
         raise RuntimeError("identity fixture bootstrap validation failed")
+    return disposable_email
 
 
 def _claim_pair_for_conflict(org_id: str, conflict_id: str) -> tuple[str, str]:
@@ -573,8 +584,8 @@ def run_seed() -> int:
     if hash_proc.returncode != 0:
         raise RuntimeError("password hash generation failed")
     password_hash = hash_proc.stdout.strip().replace("'", "''")
-    _reconcile_identity_fixtures()
-    _bootstrap_identity_users(password_hash)
+    _reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID], challenge=challenge)
+    disposable_email = _bootstrap_identity_users(password_hash, challenge=challenge)
 
     alpha_login = _login(api_base, alpha_email, password)
     alpha_access = alpha_login.get("accessToken") or alpha_login.get("access_token")
@@ -598,6 +609,7 @@ def run_seed() -> int:
     if not isinstance(org_beta_id, str) or not isinstance(org_beta_slug, str):
         raise RuntimeError("beta org response missing id/slug")
     org_beta_id = validate_uuid(org_beta_id, field="orgBetaId")
+    _reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID, org_beta_id], challenge=challenge)
 
     alpha_beta_access, alpha_beta_refresh, _ = _switch_org(api_base, alpha_access, org_beta_id)
 
@@ -682,23 +694,37 @@ def run_seed() -> int:
     if not isinstance(beta_denial_accept_access_token, str):
         raise RuntimeError("accept identity login missing access token")
 
+    revoke_invite_status, _, revoke_invite_raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites",
+        token=beta_org_access,
+        body={"email": REVOKE_CONTROL_EMAIL, "role": "viewer"},
+    )
+    if revoke_invite_status not in {200, 201}:
+        raise RuntimeError("revoke-control invite failed")
+    revoke_invite_payload = json.loads(revoke_invite_raw)
+    revoke_invite = revoke_invite_payload.get("invite") or {}
+    beta_denial_disposable_invite_id = revoke_invite.get("id")
+    if not isinstance(beta_denial_disposable_invite_id, str):
+        raise RuntimeError("revoke-control invite response missing id")
+
+    disposable_email = f"phase1c-disposable-{challenge[:8]}@example.com"
     disposable_invite_status, _, disposable_invite_raw = _http(
         api_base=api_base,
         method="POST",
         path="/api/v1/members/invites",
         token=beta_org_access,
-        body={"email": DISPOSABLE_EMAIL, "role": "viewer"},
+        body={"email": disposable_email, "role": "editor"},
     )
     if disposable_invite_status not in {200, 201}:
         raise RuntimeError("disposable member invite failed")
     disposable_invite_payload = json.loads(disposable_invite_raw)
-    disposable_invite = disposable_invite_payload.get("invite") or {}
-    beta_denial_disposable_invite_id = disposable_invite.get("id")
     disposable_invite_token = disposable_invite_payload.get("token")
-    if not isinstance(beta_denial_disposable_invite_id, str) or not isinstance(disposable_invite_token, str):
-        raise RuntimeError("disposable invite response missing id/token")
+    if not isinstance(disposable_invite_token, str):
+        raise RuntimeError("disposable invite response missing token")
 
-    disposable_login = _login(api_base, DISPOSABLE_EMAIL, password)
+    disposable_login = _login(api_base, disposable_email, password)
     disposable_access = disposable_login.get("accessToken") or disposable_login.get("access_token")
     if not isinstance(disposable_access, str):
         raise RuntimeError("disposable login missing access token")
@@ -841,20 +867,6 @@ def run_seed() -> int:
         raise RuntimeError("disposable org response missing id")
     disposable_org_id = validate_uuid(disposable_org_id, field="disposableOrgId")
 
-    negative_invite_status, _, negative_invite_raw = _http(
-        api_base=api_base,
-        method="POST",
-        path="/api/v1/members/invites",
-        token=beta_org_access,
-        body={"email": f"phase1c-negative-{secrets.token_hex(4)}@example.com", "role": "viewer"},
-    )
-    if negative_invite_status not in {200, 201}:
-        raise RuntimeError("negative invite create failed")
-    negative_invite_payload = json.loads(negative_invite_raw)
-    beta_denial_negative_invite_token = negative_invite_payload.get("token")
-    if not isinstance(beta_denial_negative_invite_token, str):
-        raise RuntimeError("negative invite response missing token")
-
     beta_denial_wrong_download_capability = "mhcap1.phase1c-invalid-capability"
 
     alpha_conflict_id = str(uuid.uuid4())
@@ -891,8 +903,10 @@ def run_seed() -> int:
         marker=marker_beta,
     )
     beta_denial_stale_access_token = _capture_stale_access_token(
-        api_base, email=DISPOSABLE_EMAIL, password=password
+        api_base, email=disposable_email, password=password
     )
+
+    beta_denial_negative_invite_token = f"mhinv1.{secrets.token_hex(32)}"
 
     seed_raw: dict[str, Any] = {
         "schemaVersion": 1,

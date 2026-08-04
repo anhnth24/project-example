@@ -520,22 +520,20 @@ def build_public_seed_evidence(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def purge_phase1c_credentials(path: Path) -> None:
-    """Securely remove private credential artifact (mode 0600 expected)."""
-    if not path.exists():
+    """Securely remove private credential artifact via descriptor-safe unlink."""
+    parent = path.parent
+    name = path.name
+    parent_fd: int | None = None
+    try:
+        parent_fd = os.open(str(parent), os.O_RDONLY | os.O_DIRECTORY)
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
         return
-    try:
-        with path.open("r+b") as handle:
-            size = path.stat().st_size
-            if size:
-                handle.write(b"\x00" * size)
-                handle.flush()
-                os.fsync(handle.fileno())
-    except OSError:
-        pass
-    try:
-        path.unlink(missing_ok=True)
     except OSError as error:
         raise RuntimeError("credential purge failed") from error
+    finally:
+        if parent_fd is not None:
+            os.close(parent_fd)
 
 
 def validate_fixture_credentials(credentials: SeedCredentials) -> None:
@@ -1468,8 +1466,6 @@ class DeployedProbeRunner:
             }
         )
 
-        accept_status = 0
-        accept_request_id = ""
         accept_user_id = "55555555-5555-5555-5555-555555555501"
         if isinstance(invite_token, str):
             accept_login = self._login_tokens(invite_email, "")
@@ -1487,9 +1483,9 @@ class DeployedProbeRunner:
                 "action": audit_action_map["member.invite.accept"],
                 "actorId": accept_user_id,
                 "targetType": "member",
-                "targetId": accept_user_id,
+                "targetId": invite_id,
                 "requestId": accept_request_id,
-                "outcome": "success" if accept_status // 100 == 2 else "failure",
+                "outcome": "success" if accept_status // 100 == 2 else "deny",
                 "attemptStatus": accept_status,
             }
         )
@@ -1541,7 +1537,7 @@ class DeployedProbeRunner:
                 "action": audit_action_map["member.role.update"],
                 "actorId": self.seed.alpha_user_id,
                 "targetType": "member",
-                "targetId": accept_user_id,
+                "targetId": str(accept_user_id),
                 "requestId": patch_request_id,
                 "outcome": "success" if patch.status // 100 == 2 else "failure",
                 "attemptStatus": patch.status,
@@ -1560,7 +1556,7 @@ class DeployedProbeRunner:
                 "action": audit_action_map["member.delete"],
                 "actorId": self.seed.alpha_user_id,
                 "targetType": "member",
-                "targetId": accept_user_id,
+                "targetId": str(accept_user_id),
                 "requestId": delete_request_id,
                 "outcome": "success" if delete.status // 100 == 2 else "failure",
                 "attemptStatus": delete.status,
@@ -1581,7 +1577,7 @@ class DeployedProbeRunner:
                 "targetType": "session",
                 "targetId": self.credentials.beta_session_id,
                 "requestId": reuse_request_id,
-                "outcome": "failure" if reuse.status == 401 else "success",
+                "outcome": "deny" if reuse.status == 401 else "success",
                 "attemptStatus": reuse.status,
             }
         )

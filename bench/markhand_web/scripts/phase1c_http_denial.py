@@ -35,6 +35,11 @@ DISPOSABLE_MEMBER_PATCH_OPS = frozenset({"patchMember"})
 DISPOSABLE_MEMBER_DELETE_OPS = frozenset({"deleteMember"})
 DISPOSABLE_CONFLICT_OPS = frozenset({"triageConflict"})
 
+DUPLICATE_COLLECTION_NAME = "Shared Contract Collection"
+SSE_ENVELOPE_REQUIRED_KEYS = frozenset({"version", "sequence", "event", "requestId", "data"})
+SSE_MAX_BYTES = 65536
+SSE_MAX_SECONDS = 30.0
+
 SECONDARY_ROW_IDS: frozenset[str] = frozenset(
     {
         "denial-resolveCitation-citation",
@@ -53,7 +58,7 @@ SSE_TERMINAL_EVENT = "stream.closed"
 HTTP_OWNER_SUCCESS_SCHEMA: dict[str, frozenset[str]] = {
     "authMe": frozenset({"userId", "sessionId", "orgId"}),
     "diffDocumentVersions": frozenset({"documentId", "left", "right", "note", "requestId"}),
-    "getChatSession": frozenset({"id", "title"}),
+    "getChatSession": frozenset({"session", "turns"}),
     "getCollection": frozenset({"id", "name"}),
     "getConflict": frozenset({"id", "status"}),
     "getConflictEvidence": frozenset({"items"}),
@@ -699,9 +704,137 @@ def _owner_body(operation_id: str, seed: Any, *, credentials: Any, params: dict[
 
 def _read_schema(operation_id: str) -> frozenset[str]:
     schema = HTTP_OWNER_SUCCESS_SCHEMA.get(operation_id)
-    if schema is not None:
-        return schema
-    return frozenset({"id"})
+    if schema is None:
+        raise RuntimeError(f"HTTP_OWNER_SUCCESS_SCHEMA missing {operation_id}")
+    return schema
+
+
+def _chat_session_view(payload: dict[str, Any]) -> tuple[dict[str, Any], list[Any]]:
+    nested = payload.get("session")
+    if isinstance(nested, dict):
+        turns = payload.get("turns")
+        if not isinstance(turns, list):
+            raise RuntimeError("getChatSession response missing turns")
+        return nested, turns
+    turns = payload.get("turns")
+    if not isinstance(turns, list):
+        raise RuntimeError("getChatSession response missing turns")
+    session = {
+        key: payload[key]
+        for key in ("id", "title", "createdAt", "updatedAt")
+        if key in payload
+    }
+    if not session:
+        raise RuntimeError("getChatSession response missing session fields")
+    return session, turns
+
+
+def validate_owner_read_response(
+    operation_id: str,
+    body: str,
+    *,
+    seed: Any,
+    credentials: Any,
+    path: str = "",
+) -> None:
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"{operation_id} owner response must be object")
+    if operation_id == "authMe":
+        for key, expected in (
+            ("userId", getattr(seed, "alpha_user_id", None)),
+            ("orgId", seed.org_beta_id),
+            ("sessionId", credentials.alpha_session_id),
+        ):
+            actual = payload.get(key)
+            if expected and str(actual) != str(expected):
+                raise RuntimeError(f"authMe owner {key} mismatch: expected {expected}, got {actual!r}")
+        return
+    if operation_id == "getChatSession":
+        session, turns = _chat_session_view(payload)
+        session_id = path.rstrip("/").split("/")[-1] if path else seed.beta_chat_session_id
+        if str(session.get("id")) != str(session_id):
+            raise RuntimeError("getChatSession session.id mismatch with requested sessionId")
+        if not isinstance(session.get("title"), str) or not str(session["title"]).strip():
+            raise RuntimeError("getChatSession session.title missing")
+        if not isinstance(turns, list):
+            raise RuntimeError("getChatSession turns must be list")
+        return
+    if operation_id == "getCollection":
+        collection_id = path.rstrip("/").split("/")[-1] if "/collections/" in path else seed.beta_collection_id
+        if str(payload.get("id")) != str(collection_id):
+            raise RuntimeError("getCollection id mismatch with requested collectionId")
+        name = payload.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RuntimeError("getCollection name missing")
+        disposable_update = getattr(credentials, "beta_denial_disposable_collection_update_id", None)
+        if disposable_update and str(collection_id) == str(disposable_update):
+            suffix = str(getattr(seed, "challenge", ""))[:8]
+            if name == f"owner-updated-{suffix}" or name == f"denial-updated-{suffix}":
+                return
+            raise RuntimeError("getCollection disposable update name mismatch with fixture")
+        if str(name) == str(getattr(seed, "marker_beta", "")):
+            return
+        if name == DUPLICATE_COLLECTION_NAME:
+            return
+        raise RuntimeError("getCollection name mismatch with fixture marker")
+    if operation_id == "getDocument":
+        document_id = path.rstrip("/").split("/")[-1] if "/documents/" in path else seed.beta_document_id
+        if str(payload.get("id")) != str(document_id):
+            raise RuntimeError("getDocument id mismatch")
+        if not isinstance(payload.get("title"), str):
+            raise RuntimeError("getDocument title missing")
+        return
+    if operation_id == "getDocumentVersion":
+        if str(payload.get("documentId")) != str(seed.beta_document_id):
+            raise RuntimeError("getDocumentVersion documentId mismatch")
+        version_id = path.split("/versions/")[1].split("/")[0] if "/versions/" in path else seed.beta_version_id
+        if str(payload.get("id")) != str(version_id):
+            raise RuntimeError("getDocumentVersion id mismatch")
+        return
+    if operation_id == "getOrg":
+        if str(payload.get("id")) != str(seed.org_beta_id):
+            raise RuntimeError("getOrg id mismatch")
+        return
+    if operation_id == "getJob":
+        if str(payload.get("id")) != str(seed.beta_job_id):
+            raise RuntimeError("getJob id mismatch")
+        return
+    if operation_id == "getConflict":
+        conflict_id = path.rstrip("/").split("/")[-1] if "/conflicts/" in path else seed.beta_conflict_id
+        if str(payload.get("id")) != str(conflict_id):
+            raise RuntimeError("getConflict id mismatch")
+        return
+    if operation_id == "getProject":
+        if str(payload.get("id")) != str(seed.beta_project_id):
+            raise RuntimeError("getProject id mismatch")
+        return
+    if operation_id == "previewDocument":
+        if str(payload.get("documentId")) != str(seed.beta_document_id):
+            raise RuntimeError("previewDocument documentId mismatch")
+        if str(payload.get("versionId")) != str(seed.beta_version_id):
+            raise RuntimeError("previewDocument versionId mismatch")
+        return
+    if operation_id == "listCollections":
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError("listCollections items missing")
+        return
+    if operation_id == "listMembers":
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError("listMembers items missing")
+        return
+    if operation_id == "listMemberInvites":
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError("listMemberInvites items missing")
+        return
+    required = HTTP_OWNER_SUCCESS_SCHEMA.get(operation_id)
+    if required:
+        for key in required:
+            if key not in payload and operation_id != "getChatSession":
+                raise RuntimeError(f"{operation_id} owner response missing {key}")
 
 
 def validate_http_contract_schema_table() -> None:
@@ -822,24 +955,68 @@ def _append_owner_spec(
     owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
     if owner is None:
         return
+    _append_owner_control_from_spec(
+        specs,
+        row_id=entry.row_id,
+        operation_id=entry.operation_id,
+        owner=owner,
+        request_id=request_id,
+        suffix="owner",
+        credentials=credentials,
+        owner_transition=owner_transition,
+    )
+
+
+def _append_owner_control_from_spec(
+    specs: list[DenialRequestSpec],
+    *,
+    row_id: str,
+    operation_id: str,
+    owner: OwnerControlSpec,
+    request_id: str,
+    suffix: str,
+    credentials: Any,
+    owner_transition: str | None = None,
+    body: dict[str, Any] | None = None,
+) -> None:
     token = owner.token if owner.token is not None else credentials.alpha_beta_access_token
     specs.append(
         DenialRequestSpec(
-            row_id=entry.row_id,
-            operation_id=entry.operation_id,
+            row_id=row_id,
+            operation_id=operation_id,
             scenario="owner_control",
             method=owner.method,
             path=owner.path,
             token=token,
-            body=owner.body,
+            body=body if body is not None else owner.body,
             expected_statuses=owner.expected_statuses,
             content_type=owner.content_type,
             multipart_body=owner.multipart_body,
-            supplied_request_id=f"{request_id}-owner",
+            supplied_request_id=f"{request_id}-{suffix}",
             success_schema_keys=owner.success_schema_keys,
             accept=owner.accept,
             owner_transition=owner_transition,
         )
+    )
+
+
+def _clone_spec_as_owner_control(spec: DenialRequestSpec, *, suffix: str) -> DenialRequestSpec:
+    base_id = spec.supplied_request_id or f"phase1c-{spec.row_id}"
+    return DenialRequestSpec(
+        row_id=spec.row_id,
+        operation_id=spec.operation_id,
+        scenario="owner_control",
+        method=spec.method,
+        path=spec.path,
+        token=spec.token,
+        body=spec.body,
+        expected_statuses=spec.expected_statuses,
+        content_type=spec.content_type,
+        multipart_body=spec.multipart_body,
+        supplied_request_id=f"{base_id}-{suffix}",
+        success_schema_keys=spec.success_schema_keys,
+        accept=spec.accept,
+        owner_transition=spec.owner_transition,
     )
 
 
@@ -940,6 +1117,7 @@ def _build_primary_row_specs(
 
 def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
     for spec in specs:
         if spec.scenario == "foreign":
             spec.scenario = "citation_replay"
@@ -947,6 +1125,54 @@ def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: 
             tampered["canonicalMarkdownSha256"] = "f" * 64
             spec.body = tampered
             spec.expected_statuses = frozenset({403, 404, 422})
+    owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
+    if owner is not None:
+        _append_owner_control_from_spec(
+            specs,
+            row_id=entry.row_id,
+            operation_id=entry.operation_id,
+            owner=owner,
+            request_id=request_id,
+            suffix="expired-owner",
+            credentials=credentials,
+        )
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id=entry.operation_id,
+                scenario="citation_expired",
+                method=owner.method,
+                path=owner.path,
+                token=owner.token,
+                body=dict(owner.body or {}) | {"versionId": "00000000-0000-0000-0000-000000000099"},
+                expected_statuses=frozenset({403, 404, 422}),
+                supplied_request_id=f"{request_id}-expired",
+            )
+        )
+        _append_owner_control_from_spec(
+            specs,
+            row_id=entry.row_id,
+            operation_id=entry.operation_id,
+            owner=owner,
+            request_id=request_id,
+            suffix="mismatch-owner",
+            credentials=credentials,
+        )
+        mismatch = dict(owner.body or {})
+        mismatch["logicalDocumentId"] = seed.alpha_document_id
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id=entry.operation_id,
+                scenario="citation_mismatch",
+                method=owner.method,
+                path=owner.path,
+                token=credentials.alpha_access_token,
+                body=mismatch,
+                expected_statuses=frozenset({403, 404}),
+                supplied_request_id=f"{request_id}-mismatch",
+            )
+        )
     return specs
 
 
@@ -964,9 +1190,70 @@ def _handler_indexed_fts(entry: DenialMappingEntry, seed: Any, credentials: Any)
 
 def _handler_duplicate_names(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
-    for spec in specs:
-        if spec.scenario == "foreign" and spec.operation_id == "getCollection":
-            spec.scenario = "duplicate_name_non_oracle"
+    request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
+    owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
+    if owner is not None:
+        lookup_owner = OwnerControlSpec(
+            method="GET",
+            path=f"{API_PREFIX}/collections",
+            body=None,
+            expected_statuses=frozenset({200}),
+            success_schema_keys=frozenset({"items"}),
+            token=owner.token,
+        )
+        _append_owner_control_from_spec(
+            specs,
+            row_id=entry.row_id,
+            operation_id="listCollections",
+            owner=lookup_owner,
+            request_id=request_id,
+            suffix="lookup-owner",
+            credentials=credentials,
+        )
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id="listCollections",
+                scenario="duplicate_name_owner_lookup",
+                method="GET",
+                path=f"{API_PREFIX}/collections",
+                token=owner.token,
+                body=None,
+                expected_statuses=frozenset({200}),
+                supplied_request_id=f"{request_id}-owner-lookup",
+                success_schema_keys=frozenset({"items"}),
+            )
+        )
+        oracle_owner = OwnerControlSpec(
+            method="GET",
+            path=f"{API_PREFIX}/collections/{seed.beta_collection_id}",
+            body=None,
+            expected_statuses=frozenset({200}),
+            success_schema_keys=frozenset({"id", "name"}),
+            token=owner.token,
+        )
+        _append_owner_control_from_spec(
+            specs,
+            row_id=entry.row_id,
+            operation_id="getCollection",
+            owner=oracle_owner,
+            request_id=request_id,
+            suffix="oracle-owner",
+            credentials=credentials,
+        )
+    specs.append(
+        DenialRequestSpec(
+            row_id=entry.row_id,
+            operation_id=entry.operation_id,
+            scenario="duplicate_name_foreign_oracle",
+            method="GET",
+            path=f"{API_PREFIX}/collections/{seed.alpha_collection_id}",
+            token=credentials.alpha_beta_access_token,
+            body=None,
+            expected_statuses=frozenset({403, 404}),
+            supplied_request_id=f"{request_id}-foreign-oracle",
+        )
+    )
     return specs
 
 
@@ -1007,14 +1294,116 @@ def _handler_stale_tokens(entry: DenialMappingEntry, seed: Any, credentials: Any
 
 
 def _handler_preview_download_sse(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
-    return _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
+    token = credentials.alpha_beta_access_token
+    preview_path = f"{API_PREFIX}/documents/{seed.beta_document_id}/preview"
+    capability_path = (
+        f"{API_PREFIX}/documents/{seed.beta_document_id}/versions/{seed.beta_version_id}/download-capability"
+    )
+    preview_specs = [
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id="previewDocument",
+                scenario="preview_download_preview",
+                method="GET",
+                path=preview_path,
+                token=token,
+                body=None,
+                expected_statuses=frozenset({200}),
+                success_schema_keys=frozenset({"documentId", "versionId"}),
+                supplied_request_id=f"{request_id}-preview",
+            ),
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id="issueDownloadCapability",
+                scenario="preview_download_capability",
+                method="POST",
+                path=capability_path,
+                token=token,
+                body={"purpose": "markdown"},
+                expected_statuses=frozenset({200, 201}),
+                supplied_request_id=f"{request_id}-capability",
+            ),
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id="redeemDownload",
+                scenario="preview_download_redeem",
+                method="GET",
+                path=f"{API_PREFIX}/downloads/{credentials.beta_download_capability}",
+                token=token,
+                body=None,
+                expected_statuses=frozenset({200}),
+                supplied_request_id=f"{request_id}-redeem",
+            ),
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id="getJob",
+                scenario="preview_download_job",
+                method="GET",
+                path=f"{API_PREFIX}/jobs/{seed.beta_job_id}",
+                token=token,
+                body=None,
+                expected_statuses=frozenset({200}),
+                success_schema_keys=frozenset({"id", "status"}),
+                supplied_request_id=f"{request_id}-job",
+            ),
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id="jobEvents",
+                scenario="preview_download_sse",
+                method="GET",
+                path=f"{API_PREFIX}/jobs/{seed.beta_job_id}/events",
+                token=token,
+                body=None,
+                expected_statuses=frozenset({200}),
+                accept="text/event-stream",
+                supplied_request_id=f"{request_id}-sse",
+            ),
+        ]
+    for idx, preview_spec in enumerate(preview_specs):
+        specs.append(_clone_spec_as_owner_control(preview_spec, suffix=f"preview-owner-{idx}"))
+        specs.append(preview_spec)
+    return specs
 
 
 def _handler_in_flight_revoke(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
+    request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
     for spec in specs:
         if spec.scenario == "owner_control" and spec.operation_id == "askStream":
             spec.owner_transition = "ask_stream_started"
+    members_owner = OwnerControlSpec(
+        method="GET",
+        path=f"{API_PREFIX}/members",
+        body=None,
+        expected_statuses=frozenset({200}),
+        success_schema_keys=frozenset({"items"}),
+        token=credentials.alpha_beta_access_token,
+    )
+    _append_owner_control_from_spec(
+        specs,
+        row_id=entry.row_id,
+        operation_id="listMembers",
+        owner=members_owner,
+        request_id=request_id,
+        suffix="downgrade-owner",
+        credentials=credentials,
+    )
+    specs.append(
+        DenialRequestSpec(
+            row_id=entry.row_id,
+            operation_id="patchMember",
+            scenario="in_flight_membership_downgrade",
+            method="PATCH",
+            path=f"{API_PREFIX}/members/{seed.beta_member_user_id}",
+            token=credentials.alpha_access_token,
+            body={"role": "viewer"},
+            expected_statuses=frozenset({200, 204}),
+            supplied_request_id=f"{request_id}-downgrade",
+            owner_transition="ask_stream_revoked",
+        )
+    )
     return specs
 
 
@@ -1091,7 +1480,8 @@ def parse_sse_stream(
     body: str,
     *,
     required_terminal: str | None = None,
-    max_bytes: int = 65536,
+    max_bytes: int = SSE_MAX_BYTES,
+    expected_request_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if len(body.encode("utf-8")) > max_bytes:
         raise RuntimeError("SSE stream exceeds bounded size")
@@ -1100,7 +1490,9 @@ def parse_sse_stream(
     events: list[dict[str, Any]] = []
     event_name = ""
     data_lines: list[str] = []
+    event_id = ""
     terminal_seen = False
+    last_sequence = 0
     for raw_line in body.splitlines():
         line = raw_line.rstrip("\r")
         if not line:
@@ -1112,14 +1504,32 @@ def parse_sse_stream(
                         payload = json.loads(payload_text)
                     except json.JSONDecodeError as error:
                         raise RuntimeError(f"SSE data must be JSON: {error}") from error
-                events.append({"event": event_name or "message", "data": payload})
+                if isinstance(payload, dict):
+                    missing = SSE_ENVELOPE_REQUIRED_KEYS - set(payload.keys())
+                    if missing and event_name not in {"", "message", "heartbeat"}:
+                        raise RuntimeError(f"SSE envelope missing keys: {sorted(missing)}")
+                    seq = payload.get("sequence")
+                    if isinstance(seq, int):
+                        if seq <= last_sequence:
+                            raise RuntimeError("SSE sequence must be monotonic")
+                        last_sequence = seq
+                    env_event = payload.get("event")
+                    if isinstance(env_event, str) and event_name and env_event != event_name:
+                        raise RuntimeError("SSE event/data event field mismatch")
+                    req_id = payload.get("requestId")
+                    if expected_request_id and isinstance(req_id, str) and req_id != expected_request_id:
+                        raise RuntimeError("SSE requestId mismatch")
+                events.append({"event": event_name or "message", "id": event_id, "data": payload})
                 if required_terminal and (event_name or "message") == required_terminal:
                     terminal_seen = True
             event_name = ""
+            event_id = ""
             data_lines = []
             continue
         if line.startswith("event:"):
             event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("id:"):
+            event_id = line.split(":", 1)[1].strip()
         elif line.startswith("data:"):
             data_lines.append(line.split(":", 1)[1].strip())
         elif line.startswith(":"):
@@ -1133,7 +1543,13 @@ def parse_sse_stream(
     return events
 
 
-def _validate_sse_envelope(body: str, *, operation_id: str, headers: dict[str, str]) -> None:
+def validate_sse_envelope(
+    body: str,
+    *,
+    operation_id: str,
+    headers: dict[str, str],
+    expected_request_id: str | None = None,
+) -> None:
     content_type = ""
     for key, value in headers.items():
         if key.lower() == "content-type":
@@ -1141,7 +1557,40 @@ def _validate_sse_envelope(body: str, *, operation_id: str, headers: dict[str, s
             break
     if "text/event-stream" not in content_type:
         raise RuntimeError(f"{operation_id} SSE response missing text/event-stream content-type")
-    parse_sse_stream(body, required_terminal=SSE_TERMINAL_EVENT)
+    parse_sse_stream(
+        body,
+        required_terminal=SSE_TERMINAL_EVENT,
+        max_bytes=SSE_MAX_BYTES,
+        expected_request_id=expected_request_id,
+    )
+
+
+def _validate_sse_envelope(body: str, *, operation_id: str, headers: dict[str, str]) -> None:
+    validate_sse_envelope(
+        body,
+        operation_id=operation_id,
+        headers=headers,
+        expected_request_id=None,
+    )
+    _ = SSE_TERMINAL_EVENT
+
+
+def _list_members(http_request: HttpRequestFn, *, api_base: str, token: str) -> list[dict[str, Any]]:
+    members_path = "/api/v1/members"
+    follow = http_request(
+        method="GET",
+        url=api_base.rstrip("/") + members_path,
+        token=token,
+        body=None,
+        path=members_path,
+    )
+    if follow.status != 200:
+        raise RuntimeError(f"listMembers follow-up expected 200 got {follow.status}")
+    payload = json.loads(follow.body)
+    items = payload.get("items") or []
+    if not isinstance(items, list):
+        raise RuntimeError("listMembers items missing")
+    return [item for item in items if isinstance(item, dict)]
 
 
 def _validate_owner_transition(
@@ -1157,8 +1606,7 @@ def _validate_owner_transition(
 ) -> str | None:
     if transition is None:
         return None
-    follow_up_path: str | None = None
-    expected_status = 404
+    # Member PATCH/DELETE transitions proof via GET /api/v1/members list (no GET /api/v1/members/{id}).
     token = spec.token or credentials.alpha_beta_access_token
     member_id = _credential_string(
         credentials, "beta_denial_disposable_member_user_id", field="betaDenialDisposableMemberUserId"
@@ -1173,55 +1621,134 @@ def _validate_owner_transition(
     )
     if transition == "collection_deleted":
         follow_up_path = f"{API_PREFIX}/collections/{credentials.beta_denial_disposable_collection_id}"
-    elif transition == "collection_updated":
-        follow_up_path = f"{API_PREFIX}/collections/{credentials.beta_denial_disposable_collection_update_id}"
-        expected_status = 200
-    elif transition == "document_deleted":
-        follow_up_path = f"{API_PREFIX}/documents/{credentials.beta_denial_disposable_document_id}"
-    elif transition == "chat_session_deleted":
-        follow_up_path = f"{API_PREFIX}/chat-sessions/{credentials.beta_denial_disposable_chat_session_id}"
-    elif transition == "conflict_triaged":
-        follow_up_path = f"{API_PREFIX}/conflicts/{credentials.beta_denial_disposable_conflict_id}"
-        expected_status = 200
-    elif transition == "member_role_updated":
-        follow_up_path = f"{API_PREFIX}/members/{member_id}"
-        expected_status = 200
-    elif transition == "member_deleted":
-        follow_up_path = f"{API_PREFIX}/members/{delete_member_id}"
-    elif transition == "invite_revoked":
-        follow_up_path = f"{API_PREFIX}/members/invites"
-        expected_status = 200
-    elif transition == "invite_accepted":
-        follow_up_path = f"{API_PREFIX}/members"
-        expected_status = 200
-    elif transition == "ask_stream_started":
-        return transition
-    if follow_up_path is None:
-        report.failures.append(f"{spec.operation_id}/owner_control transition {transition} missing follow-up")
-        return transition
-    follow = http_request(
-        method="GET",
-        url=api_base.rstrip("/") + follow_up_path,
-        token=token,
-        body=None,
-        path=follow_up_path,
-    )
-    if follow.status != expected_status:
-        report.failures.append(
-            f"{spec.operation_id}/owner_control transition {transition} follow-up expected {expected_status} got {follow.status}"
+        follow = http_request(
+            method="GET",
+            url=api_base.rstrip("/") + follow_up_path,
+            token=token,
+            body=None,
+            path=follow_up_path,
         )
+        if follow.status != 404:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition collection_deleted follow-up expected 404 got {follow.status}"
+            )
+        return transition
+    if transition == "collection_updated":
+        follow_up_path = f"{API_PREFIX}/collections/{credentials.beta_denial_disposable_collection_update_id}"
+        follow = http_request(
+            method="GET",
+            url=api_base.rstrip("/") + follow_up_path,
+            token=token,
+            body=None,
+            path=follow_up_path,
+        )
+        if follow.status != 200:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition collection_updated follow-up expected 200 got {follow.status}"
+            )
+            return transition
+        try:
+            payload = json.loads(follow.body)
+            validate_owner_read_response(
+                "getCollection",
+                follow.body,
+                seed=seed,
+                credentials=credentials,
+                path=follow_up_path,
+            )
+        except RuntimeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition collection_updated: {error}")
+        return transition
+    if transition == "document_deleted":
+        follow_up_path = f"{API_PREFIX}/documents/{credentials.beta_denial_disposable_document_id}"
+        follow = http_request(
+            method="GET",
+            url=api_base.rstrip("/") + follow_up_path,
+            token=token,
+            body=None,
+            path=follow_up_path,
+        )
+        if follow.status != 404:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition document_deleted follow-up expected 404 got {follow.status}"
+            )
+        return transition
+    if transition == "chat_session_deleted":
+        follow_up_path = f"{API_PREFIX}/chat-sessions/{credentials.beta_denial_disposable_chat_session_id}"
+        follow = http_request(
+            method="GET",
+            url=api_base.rstrip("/") + follow_up_path,
+            token=token,
+            body=None,
+            path=follow_up_path,
+        )
+        if follow.status != 404:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition chat_session_deleted follow-up expected 404 got {follow.status}"
+            )
+        return transition
+    if transition == "conflict_triaged":
+        follow_up_path = f"{API_PREFIX}/conflicts/{credentials.beta_denial_disposable_conflict_id}"
+        follow = http_request(
+            method="GET",
+            url=api_base.rstrip("/") + follow_up_path,
+            token=token,
+            body=None,
+            path=follow_up_path,
+        )
+        if follow.status != 200:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition conflict_triaged follow-up expected 200 got {follow.status}"
+            )
+            return transition
+        try:
+            payload = json.loads(follow.body)
+            if payload.get("status") not in {"resolved", "accepted_exception", "false_positive"}:
+                report.failures.append(
+                    f"{spec.operation_id}/owner_control transition conflict_triaged unexpected status {payload.get('status')!r}"
+                )
+        except json.JSONDecodeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition conflict_triaged invalid json: {error}")
         return transition
     if transition == "member_role_updated":
         try:
-            payload = json.loads(follow.body)
-            role = payload.get("role")
-            if role != "viewer":
+            items = _list_members(http_request, api_base=api_base, token=token)
+            matched = next((item for item in items if str(item.get("userId")) == member_id), None)
+            if matched is None:
                 report.failures.append(
-                    f"{spec.operation_id}/owner_control transition member_role_updated expected role viewer got {role!r}"
+                    f"{spec.operation_id}/owner_control transition member_role_updated missing member {member_id}"
                 )
-        except json.JSONDecodeError as error:
-            report.failures.append(f"{spec.operation_id}/owner_control transition member_role_updated invalid json: {error}")
-    elif transition == "invite_revoked":
+            elif matched.get("role") != "viewer":
+                report.failures.append(
+                    f"{spec.operation_id}/owner_control transition member_role_updated expected role viewer got {matched.get('role')!r}"
+                )
+        except RuntimeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition member_role_updated: {error}")
+        return transition
+    if transition == "member_deleted":
+        try:
+            items = _list_members(http_request, api_base=api_base, token=token)
+            if any(str(item.get("userId")) == delete_member_id for item in items):
+                report.failures.append(
+                    f"{spec.operation_id}/owner_control transition member_deleted member still listed"
+                )
+        except RuntimeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition member_deleted: {error}")
+        return transition
+    if transition == "invite_revoked":
+        follow_up_path = f"{API_PREFIX}/members/invites"
+        follow = http_request(
+            method="GET",
+            url=api_base.rstrip("/") + follow_up_path,
+            token=token,
+            body=None,
+            path=follow_up_path,
+        )
+        if follow.status != 200:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition invite_revoked follow-up expected 200 got {follow.status}"
+            )
+            return transition
         try:
             payload = json.loads(follow.body)
             items = payload.get("items") or []
@@ -1238,37 +1765,22 @@ def _validate_owner_transition(
                 )
         except json.JSONDecodeError as error:
             report.failures.append(f"{spec.operation_id}/owner_control transition invite_revoked invalid json: {error}")
-    elif transition == "invite_accepted":
+        return transition
+    if transition == "invite_accepted":
         try:
-            payload = json.loads(follow.body)
+            items = _list_members(http_request, api_base=api_base, token=token)
             accept_user = "55555555-5555-5555-5555-555555555501"
-            user_ids = [
-                str(item.get("userId"))
-                for item in (payload.get("items") or [])
-                if isinstance(item, dict) and item.get("userId")
-            ]
+            user_ids = [str(item.get("userId")) for item in items if item.get("userId")]
             if accept_user not in user_ids:
                 report.failures.append(
                     f"{spec.operation_id}/owner_control transition invite_accepted missing accepted member"
                 )
-        except json.JSONDecodeError as error:
-            report.failures.append(f"{spec.operation_id}/owner_control transition invite_accepted invalid json: {error}")
-    elif transition == "collection_updated" and expected_status == 200:
-        try:
-            payload = json.loads(follow.body)
-            if not isinstance(payload.get("name"), str) or not payload["name"].strip():
-                report.failures.append(f"{spec.operation_id}/owner_control transition collection_updated missing name")
-        except json.JSONDecodeError as error:
-            report.failures.append(f"{spec.operation_id}/owner_control transition collection_updated invalid json: {error}")
-    elif transition == "conflict_triaged" and expected_status == 200:
-        try:
-            payload = json.loads(follow.body)
-            if payload.get("status") not in {"resolved", "accepted_exception", "false_positive"}:
-                report.failures.append(
-                    f"{spec.operation_id}/owner_control transition conflict_triaged unexpected status {payload.get('status')!r}"
-                )
-        except json.JSONDecodeError as error:
-            report.failures.append(f"{spec.operation_id}/owner_control transition conflict_triaged invalid json: {error}")
+        except RuntimeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition invite_accepted: {error}")
+        return transition
+    if transition in {"ask_stream_started", "ask_stream_revoked"}:
+        return transition
+    report.failures.append(f"{spec.operation_id}/owner_control transition {transition} missing follow-up")
     return transition
 
 
@@ -1323,7 +1835,9 @@ def execute_http_denial_suite(
             "invalid_capability",
             "invalid_invite_token",
             "citation_replay",
-            "duplicate_name_non_oracle",
+            "citation_expired",
+            "citation_mismatch",
+            "duplicate_name_foreign_oracle",
             "stale_token",
             "unauthenticated",
         }:
@@ -1347,20 +1861,31 @@ def execute_http_denial_suite(
         transition: str | None = None
         if spec.scenario == "owner_control" and response.status // 100 == 2:
             transition = spec.owner_transition
-            if spec.success_schema_keys:
-                try:
-                    _validate_success_schema(response.body, spec.success_schema_keys)
-                except RuntimeError as error:
-                    report.failures.append(f"{spec.operation_id}/owner_control schema: {error}")
             if spec.operation_id in {"askStream", "jobEvents"}:
                 try:
-                    _validate_sse_envelope(
+                    server_request_id = validate_server_request_id(body=response.body, headers=response.headers)
+                    validate_sse_envelope(
                         response.body,
                         operation_id=spec.operation_id,
                         headers=response.headers,
+                        expected_request_id=server_request_id,
                     )
                 except RuntimeError as error:
                     report.failures.append(f"{spec.operation_id}/owner_control sse: {error}")
+            elif spec.success_schema_keys and spec.operation_id not in {"askStream", "jobEvents"}:
+                try:
+                    if spec.operation_id in HTTP_OWNER_SUCCESS_SCHEMA and spec.method == "GET":
+                        validate_owner_read_response(
+                            spec.operation_id,
+                            response.body,
+                            seed=seed,
+                            credentials=credentials,
+                            path=spec.path,
+                        )
+                    else:
+                        _validate_success_schema(response.body, spec.success_schema_keys)
+                except RuntimeError as error:
+                    report.failures.append(f"{spec.operation_id}/owner_control schema: {error}")
             transition = _validate_owner_transition(
                 spec,
                 response=response,
