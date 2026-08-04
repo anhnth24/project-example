@@ -2145,6 +2145,67 @@ class Phase1cGateContractTests(unittest.TestCase):
         )
         self.assertTrue(any("metricsObserved" in err for err in errors))
 
+    def test_rejects_pass_when_evidence_metrics_empty(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"] = {}
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metric" in err.lower() for err in errors))
+
+    def test_rejects_pass_when_evidence_metric_mismatches_report(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["cross_tenant_leakage_count"] = 99
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("match" in err.lower() or "metric" in err.lower() for err in errors))
+
+    def test_rejects_pass_when_evidence_metric_violates_threshold(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["cross_tenant_leakage_count"] = 5
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("threshold" in err.lower() or "violat" in err.lower() for err in errors))
+
+    def test_rejects_pass_when_gate_result_missing_metrics_observed(self) -> None:
+        self._create_qualifying_evidence_files()
+        report = self._passing_report()
+        report["gateResults"][0].pop("metricsObserved", None)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metricsObserved" in err for err in errors))
+
     def _create_qualifying_evidence_files(self) -> None:
         for row in G1C_GATE_ROWS:
             path = self.repo_root / str(row["evidence"])

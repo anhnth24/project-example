@@ -2473,7 +2473,6 @@ class Phase1cNoisyLivenessTests(unittest.TestCase):
             duration_secs=60.0,
             required_duration_secs=60.0,
             min_quiet_samples=100,
-            uploader_alive_at_end=True,
         )
         self.assertTrue(ok)
         bad, reason = probes.qualify_noisy_neighbor_workload(
@@ -2485,12 +2484,11 @@ class Phase1cNoisyLivenessTests(unittest.TestCase):
             duration_secs=60.0,
             required_duration_secs=60.0,
             min_quiet_samples=100,
-            uploader_alive_at_end=True,
         )
         self.assertFalse(bad)
         self.assertIn("span", reason.lower())
 
-    def test_noisy_uploader_dead_thread_fails_closed(self) -> None:
+    def test_noisy_uploader_died_early_fails_closed(self) -> None:
         probes = load_probes()
         start = 1000.0
         end = 1060.0
@@ -2503,10 +2501,109 @@ class Phase1cNoisyLivenessTests(unittest.TestCase):
             duration_secs=60.0,
             required_duration_secs=60.0,
             min_quiet_samples=100,
-            uploader_alive_at_end=False,
+            uploader_died_early=True,
         )
         self.assertFalse(bad)
         self.assertIn("uploader", reason.lower())
+
+    def test_noisy_healthy_full_window_uploader_passes_stop_join_orchestration(self) -> None:
+        import threading
+        import time
+
+        probes = load_probes()
+        stop = threading.Event()
+        upload_statuses: list[int] = []
+        upload_timestamps: list[float] = []
+        window_start = time.monotonic()
+        window_secs = 0.35
+        window_end = window_start + window_secs
+
+        def uploader() -> None:
+            while not stop.is_set():
+                upload_statuses.append(201)
+                upload_timestamps.append(time.monotonic())
+                time.sleep(0.01)
+
+        worker = threading.Thread(target=uploader, name="test-noisy-uploader", daemon=True)
+        worker.start()
+        while time.monotonic() < window_end:
+            time.sleep(0.01)
+        stop.set()
+        worker.join(timeout=5)
+        uploader_hung_after_join = worker.is_alive()
+        elapsed = time.monotonic() - window_start
+        ok, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=upload_statuses,
+            upload_timestamps=upload_timestamps,
+            window_start=window_start,
+            window_end=window_end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=elapsed,
+            required_duration_secs=window_secs,
+            min_quiet_samples=100,
+            min_successful_uploads=10,
+            uploader_hung_after_join=uploader_hung_after_join,
+        )
+        self.assertFalse(uploader_hung_after_join, "healthy uploader must exit after stop+join")
+        self.assertTrue(ok, reason)
+
+    def test_noisy_hung_uploader_fails_closed_after_bounded_join(self) -> None:
+        import threading
+        import time
+
+        probes = load_probes()
+        stop = threading.Event()
+        upload_statuses: list[int] = []
+        upload_timestamps: list[float] = []
+        window_start = time.monotonic()
+        window_end = window_start + 0.2
+
+        def uploader() -> None:
+            while True:
+                if stop.is_set() and len(upload_statuses) >= 5:
+                    break
+                upload_statuses.append(201)
+                upload_timestamps.append(time.monotonic())
+                time.sleep(0.05)
+
+        worker = threading.Thread(target=uploader, name="test-noisy-hung", daemon=True)
+        worker.start()
+        time.sleep(0.25)
+        stop.set()
+        worker.join(timeout=0.05)
+        uploader_hung_after_join = worker.is_alive()
+        ok, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=upload_statuses,
+            upload_timestamps=upload_timestamps,
+            window_start=window_start,
+            window_end=window_end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=0.25,
+            required_duration_secs=0.2,
+            min_quiet_samples=100,
+            min_successful_uploads=5,
+            uploader_hung_after_join=uploader_hung_after_join,
+        )
+        self.assertTrue(uploader_hung_after_join)
+        self.assertFalse(ok)
+        self.assertIn("hung", reason.lower())
+
+    def test_noisy_short_window_fails_closed(self) -> None:
+        probes = load_probes()
+        start = 1000.0
+        end = 1060.0
+        bad, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 50,
+            upload_timestamps=[start + 1 + (end - start - 2) * (index / 49) for index in range(50)],
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=30.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertFalse(bad)
+        self.assertIn("short", reason.lower())
 
 
 class DeployedCiRouteTests(unittest.TestCase):
