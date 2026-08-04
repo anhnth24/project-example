@@ -686,6 +686,23 @@ class Phase1cSeedScriptContractTests(unittest.TestCase):
         self.assertNotIn("accessToken", text.split("seed =")[1] if "seed = {" in text else text)
 
 
+class Phase1cDeployedArchitectureTests(unittest.TestCase):
+    def test_deployed_probes_module_required(self) -> None:
+        path = gate.ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py"
+        self.assertTrue(path.is_file(), "deployed probe module required for qualifying PASS")
+
+    def test_no_cargo_probe_specs_for_qualifying_pass(self) -> None:
+        self.assertFalse(
+            getattr(gate, "CARGO_PROBE_SPECS", None),
+            "CARGO_PROBE_SPECS must be removed; use deployed HTTP/SQL/compose probes",
+        )
+        self.assertTrue(hasattr(gate, "DEPLOYED_PROBE_GATES"))
+
+    def test_run_live_probes_accepts_deployed_context(self) -> None:
+        params = inspect.signature(gate.run_live_probes).parameters
+        self.assertIn("deployed_context", params)
+
+
 class Phase1cHarnessCiRoutingTests(unittest.TestCase):
     def test_rust_test_registered_as_ignored_e2e_phase1c_gate(self) -> None:
         listing = subprocess.check_output(
