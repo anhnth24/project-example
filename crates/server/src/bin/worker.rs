@@ -120,7 +120,10 @@ async fn run_db_role_probe(config: &fileconv_server::config::ServerConfig) -> Re
     let current_user: String = row.get(0);
     let rolsuper: bool = row.get(1);
     let rolbypassrls: bool = row.get(2);
-    let nonce = Uuid::new_v4().simple().to_string();
+    let nonce = std::env::var("MARKHAND_PHASE1C_WORKER_NONCE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let payload = serde_json::json!({
         "schemaVersion": 1,
         "currentUser": current_user,

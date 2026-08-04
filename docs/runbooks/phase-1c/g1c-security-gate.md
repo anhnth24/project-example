@@ -31,15 +31,41 @@ Required inputs:
 - Dedicated worker DB URL on all qualifying workers (`MARKHAND_WORKER_DATABASE_URL`)
 - AppArmor profile loaded: `sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert`
 
-## What the harness proves
+## Deployed probe architecture (Task 16)
 
-1. Two orgs seeded via production HTTP APIs (`deploy/scripts/phase1c-multi-org-seed.sh`)
-2. Canonical PR4 denial runner (`scripts/run-phase1c-denial-suite.py`)
-3. Membership/ACL revoke, quota recovery, noisy-neighbor, audit coverage via deployed DB probes
-4. Worker runtime role via `docker compose exec worker-convert fileconv-worker --db-role-probe`
-   (queries `pg_roles`/`current_user` through the worker DB pool — not compose-text proof)
-5. Container vulnerability scan via digest-pinned Trivy
-6. Sanitized `phase-1c-gate.json` + ten allowlisted evidence files
+Qualifying PASS metrics come **only** from deployed probes in
+`bench/markhand_web/scripts/phase1c_deployed_probes.py` wired through
+`run_phase1c_gate.py`. There are **no** test-only HTTP endpoints, no
+`test-hooks`, and no in-process Cargo tests as qualifying evidence.
+
+| Subsystem | Source |
+|-----------|--------|
+| Cross-tenant denial | Black-box HTTP driver against `MARKHAND_API_BASE` with manifest SHA256 + git revision binding |
+| Revoke / ACL cache / stale tokens | Production auth + member PATCH/DELETE/refresh APIs |
+| Quota recovery | Real upload + authoritative POC jobs SQL + worker lifecycle + `quota.reconcile` audit |
+| Noisy neighbor | 60s concurrent uploads + 100 quiet-org search samples (canonical duration enforced) |
+| Qdrant fail-closed | Compose stop/start single-node Qdrant; search/ask must fail closed with zero foreign markers |
+| Audit coverage | Real admin mutations + `/audit` correlation (ratio computed, never hard-coded) |
+| Worker role | Harness-supplied `MARKHAND_PHASE1C_WORKER_NONCE`; worker echoes exact nonce |
+| Container vulns | Digest-pinned Trivy (no `--ignore-unfixed`); both API and worker reports validated |
+
+**Seed boundary:** `deploy/scripts/phase1c-multi-org-seed.sh` seeds the second org
+via production HTTP APIs. The primary POC org (`11111111-…`) is fixture-bound in
+the POC database when account self-registration is unavailable. All membership,
+collection, and marker setup after bootstrap uses production APIs. Seed output is
+challenge-bound, staged, and sanitized — never prints tokens, raw bodies, or
+absolute paths.
+
+**CI substrate:** Cargo integration tests (`crates/server/tests/*` with
+`PHASE1C_PROBE_RESULT`) and `scripts/run-phase1c-denial-suite.py` remain CI
+substrate only. They do not qualify PASS alone.
+
+## Transactional evidence
+
+- Private temp staging dir; sanitize/residual-scan before commit
+- Lock + atomic per-file renames; `phase-1c-gate.json` committed **last**
+- Purge allowlisted artifacts before run and on any failure
+- Symlink/path escape rejected in Python and shell entrypoints
 
 ## Trivy pin provenance
 
@@ -57,6 +83,7 @@ Never use `:latest`, unpinned actions, or `curl | bash` for scanner install.
 ## Validation commands
 
 ```bash
+python3 bench/markhand_web/scripts/test_phase1c_deployed_probes.py
 python3 bench/markhand_web/scripts/test_run_phase1c_gate.py
 python3 scripts/check-markhand-gates.py
 python3 bench/markhand_web/scripts/run_phase1c_gate.py \
@@ -72,6 +99,8 @@ cargo test -p fileconv-server --test e2e_phase1c_gate -- --ignored e2e_phase1c_g
 - Residual secrets in report/evidence → write rejected (`HarnessWriteError`)
 - Path traversal/symlinks in evidence paths → rejected by Task 15 validators
 - `targetMatch=false` with `status=pass` → rejected
+- CI enforces harness result before artifact upload; failure uploads only
+  `phase1c-gate-failure.json` (schema-valid diagnostic, never raw logs)
 
 ## No live evidence in repository
 

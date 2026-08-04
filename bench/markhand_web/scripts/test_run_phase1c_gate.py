@@ -468,11 +468,14 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
 
     def test_parse_trivy_reports_combines_both_images(self) -> None:
         self.assertTrue(hasattr(gate, "parse_combined_trivy_scan"))
+        digest_a = "sha256:" + "a" * 64
+        digest_b = "sha256:" + "b" * 64
         api_report = {
             "SchemaVersion": 2,
+            "ArtifactName": f"markhand-api:poc@{digest_a}",
             "Results": [
                 {
-                    "Target": "markhand-api:poc",
+                    "Target": f"markhand-api:poc ({digest_a})",
                     "Vulnerabilities": [
                         {"VulnerabilityID": "CVE-2026-0001", "Severity": "HIGH"}
                     ],
@@ -481,13 +484,14 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
         }
         worker_report = {
             "SchemaVersion": 2,
-            "Results": [{"Target": "markhand-worker:poc", "Vulnerabilities": []}],
+            "ArtifactName": f"markhand-worker:poc@{digest_b}",
+            "Results": [{"Target": f"markhand-worker:poc ({digest_b})", "Vulnerabilities": []}],
         }
         outcome = gate.parse_combined_trivy_scan(
             api_report=api_report,
             worker_report=worker_report,
-            api_ref="markhand-api:poc@sha256:" + "a" * 64,
-            worker_ref="markhand-worker:poc@sha256:" + "b" * 64,
+            api_ref="markhand-api:poc@" + digest_a,
+            worker_ref="markhand-worker:poc@" + digest_b,
             trivyignore_text="# empty\n",
         )
         self.assertEqual(outcome["undispositionedHighCritical"], 1)

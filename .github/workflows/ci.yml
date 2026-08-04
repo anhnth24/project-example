@@ -488,6 +488,14 @@ jobs:
           cargo test -p fileconv-server --test e2e_phase1c_gate -- --ignored e2e_phase1c_gate --nocapture \
             || fail=1
           exit "$fail"
+      - name: Upload Phase 1C gate failure report
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase1c-g1c-security-gate-failure-${{ github.sha }}
+          path: ${{ runner.temp }}/markhand-phase1c-gate/phase1c-gate-failure.json
+          if-no-files-found: warn
+          retention-days: 14
       - name: Upload Phase 1C gate evidence
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
