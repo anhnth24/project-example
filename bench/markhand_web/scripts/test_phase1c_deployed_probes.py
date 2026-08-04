@@ -644,6 +644,263 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
             runner.run_stale_tokens_probe()
 
 
+class Phase1cReviewerFixSliceTests(unittest.TestCase):
+    """Commit I RED: reviewer rejection findings for HTTP slice (I→J)."""
+
+    SEED_PY = ROOT / "bench/markhand_web/scripts/phase1c_multi_org_seed.py"
+    SEED_SH = ROOT / "deploy/scripts/phase1c-multi-org-seed.sh"
+    PROBES_PY = PROBES_PATH
+    DENIAL_PY = DENIAL_PATH
+
+    def _seed_fixture(self, probes):
+        return probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+
+    def _seed_creds(self, seed, probes):
+        return probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="alpha-token",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="beta-token",
+            beta_refresh_token="beta-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
+        )
+
+    def test_seed_declares_identity_fixture_boundary(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("IDENTITY_FIXTURE_BOUNDARY", text)
+        self.assertIn("org_memberships", text)
+
+    def test_seed_rejects_placeholder_resource_uuid_literals(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        for placeholder in (
+            "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "dddddddd-dddd-dddd-dddd-dddddddddddd",
+            "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        ):
+            self.assertNotIn(placeholder, text, f"placeholder UUID still present: {placeholder}")
+
+    def test_seed_never_synthesizes_session_ids(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertNotIn("secrets.token_hex(16)", text)
+        self.assertIn("/api/v1/auth/me", text)
+
+    def test_seed_stores_invite_token_in_credentials_not_public_evidence(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("betaInviteToken", text)
+        self.assertNotIn("betaInviteAcceptToken", text.split("build_public_seed_evidence")[0])
+
+    def test_shell_seed_purges_credentials_on_exit(self) -> None:
+        text = self.SEED_SH.read_text(encoding="utf-8")
+        self.assertIn("trap", text)
+        self.assertIn("purge_phase1c_credentials", text)
+
+    def test_denial_unauthenticated_requires_exact_401(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        specs = denial.build_denial_request_specs(
+            denial.build_http_sse_denial_mapping(),
+            seed=seed,
+            credentials=creds,
+        )
+        unauth = [spec for spec in specs if spec.scenario == "unauthenticated"]
+        self.assertTrue(unauth, "expected unauthenticated denial specs")
+        for spec in unauth:
+            self.assertEqual(
+                spec.expected_statuses,
+                frozenset({401}),
+                f"{spec.operation_id} must require exact 401, got {spec.expected_statuses}",
+            )
+
+    def test_denial_foreign_rows_include_owner_control(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        specs = denial.build_denial_request_specs(
+            denial.build_http_sse_denial_mapping(),
+            seed=seed,
+            credentials=creds,
+        )
+        foreign_ops = {spec.operation_id for spec in specs if spec.scenario == "foreign"}
+        owner_ops = {spec.operation_id for spec in specs if spec.scenario == "owner_control"}
+        self.assertTrue(owner_ops, "owner_control scenarios required")
+        self.assertTrue(foreign_ops.issubset(owner_ops | foreign_ops))
+        self.assertEqual(
+            foreign_ops,
+            owner_ops,
+            "every foreign denial row must have a matching owner_control warm-up",
+        )
+
+    def test_denial_rejects_all_403_observation_matrix(self) -> None:
+        denial = load_denial()
+        observations = [
+            denial.DenialObservation(
+                operation_id="getCollection",
+                row_id="denial-getCollection",
+                scenario="foreign",
+                expected_statuses=[403],
+                actual_status=403,
+                body_sha256="abc",
+                request_id="req-1",
+                challenge_echo=None,
+                leaked_markers=[],
+            )
+            for _ in range(3)
+        ]
+        with self.assertRaises(RuntimeError):
+            denial.validate_denial_observation_matrix(observations)
+
+    def test_denial_requires_supplied_request_id_echo(self) -> None:
+        denial = load_denial()
+        self.assertTrue(hasattr(denial, "validate_request_id_correlation"))
+        with self.assertRaises(RuntimeError):
+            denial.validate_request_id_correlation(
+                supplied_request_id="req-supplied-abc",
+                response_request_id="req-different",
+                response_headers={},
+            )
+
+    def test_denial_create_upload_uses_multipart_spec(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        mapping = [
+            entry
+            for entry in denial.build_http_sse_denial_mapping()
+            if entry.operation_id == "createUpload"
+        ]
+        self.assertEqual(len(mapping), 1)
+        specs = denial.build_denial_request_specs(mapping, seed=seed, credentials=creds)
+        self.assertTrue(
+            any(
+                spec.content_type.startswith("multipart/form-data")
+                for spec in specs
+            ),
+            "createUpload must use multipart/form-data",
+        )
+
+    def test_probe_gate_order_acl_before_revoke(self) -> None:
+        probes = load_probes()
+        order = list(probes.DEPLOYED_PROBE_GATES)
+        self.assertLess(
+            order.index("G1C-SEC-ACL-CACHE"),
+            order.index("G1C-SEC-REVOKE"),
+            "ACL cache probe must run before membership delete revoke probe",
+        )
+        self.assertLess(
+            order.index("G1C-SEC-STALE-TOKENS"),
+            order.index("G1C-SEC-REVOKE"),
+        )
+
+    def test_deployed_runner_restores_membership_between_destructive_probes(self) -> None:
+        text = self.PROBES_PY.read_text(encoding="utf-8")
+        self.assertIn("_ensure_beta_membership", text)
+        self.assertIn("_restore_beta_membership", text)
+
+    def test_audit_org_switch_target_is_session_family_not_org(self) -> None:
+        text = self.PROBES_PY.read_text(encoding="utf-8")
+        self.assertIn("switchSessionTargetId", text)
+        self.assertIn("_fetch_audit_entries_paginated", text)
+
+    def test_credential_purge_helper_exists(self) -> None:
+        probes = load_probes()
+        self.assertTrue(hasattr(probes, "purge_phase1c_credentials"))
+        path = Path(tempfile.mkdtemp()) / "creds.json"
+        path.write_text('{"secret":"value"}\n', encoding="utf-8")
+        path.chmod(0o600)
+        probes.purge_phase1c_credentials(path)
+        self.assertFalse(path.exists())
+
+    def test_load_credentials_purges_after_read(self) -> None:
+        probes = load_probes()
+        path = Path(tempfile.mkdtemp()) / "creds.json"
+        payload = {
+            "schemaVersion": 1,
+            "challenge": "phase1c-challenge-abc",
+            "alphaAccessToken": "a",
+            "alphaRefreshToken": "ar",
+            "betaAccessToken": "b",
+            "betaRefreshToken": "br",
+            "alphaSessionId": "sa",
+            "betaSessionId": "sb",
+        }
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+        probes.load_seed_credentials(path, expected_challenge="phase1c-challenge-abc", purge_after_load=True)
+        self.assertFalse(path.exists())
+
+    def test_stateful_fake_deployment_module_required(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        self.assertTrue(fake_path.is_file(), "phase1c_stateful_fake.py required")
+
+    def test_stateful_fake_runs_denial_with_owner_control(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
+        assert spec and spec.loader
+        fake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fake)
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        deployment = fake.StatefulFakeDeployment(seed=seed, credentials=creds)
+        report = deployment.run_denial_suite()
+        self.assertEqual(report["ownerControlCount"], report["foreignCount"])
+        self.assertGreater(report["ownerControlCount"], 0)
+
+    def test_stateful_fake_negative_missing_owner_control_fails(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
+        assert spec and spec.loader
+        fake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fake)
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        deployment = fake.StatefulFakeDeployment(
+            seed=seed,
+            credentials=creds,
+            skip_owner_control=True,
+        )
+        with self.assertRaises(RuntimeError):
+            deployment.run_denial_suite()
+
+    def test_stateful_fake_negative_all_403_shim_rejected(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
+        assert spec and spec.loader
+        fake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fake)
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        deployment = fake.StatefulFakeDeployment(
+            seed=seed,
+            credentials=creds,
+            force_all_403=True,
+        )
+        with self.assertRaises(RuntimeError):
+            deployment.run_denial_suite()
+
+    def test_stateful_fake_negative_credentials_survive_cleanup(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake", fake_path)
+        assert spec and spec.loader
+        fake = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(fake)
+        path = Path(tempfile.mkdtemp()) / "creds.json"
+        path.write_text('{"token":"secret"}\n', encoding="utf-8")
+        path.chmod(0o600)
+        with self.assertRaises(RuntimeError):
+            fake.StatefulFakeDeployment.assert_credentials_purged(path)
+
+
 class DeployedCiRouteTests(unittest.TestCase):
     def test_ci_failure_uploads_safe_diagnostic_not_raw_logs(self) -> None:
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
