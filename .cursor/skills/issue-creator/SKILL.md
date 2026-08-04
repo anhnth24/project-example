@@ -40,10 +40,12 @@ the canonical approval phrase defined below authorizes automatic synchronization
    `Acceptance criteria`, `Required tests/evidence`, and `Out of scope`. For example, a
    TXT UTF-16 core request must distinguish direct CLI/desktop/MCP calls from a server
    upload gate that may reject the bytes before core.
-3. **Create the authoritative record.** Write the catalog entry first using the exact
+3. **Create or reuse the issue branch before file mutation.** Start from the required base
+   branch and follow repository branch policy before changing the catalog or roadmap. Keep
+   one issue per branch and logical PR. Then write the catalog entry first using the exact
    fields and status rules in `issues-and-plans.md`. Record concrete blockers instead of
-   inventing owner, approval, dependency completion, benchmark, or security evidence.
-   Use `Ready` only when every Definition of Ready condition passes.
+   inventing owner, approval, dependency completion, benchmark, or security evidence. Use
+   `Ready` only when every Definition of Ready condition passes.
 4. **Keep the roadmap consistent.** Update dependency graph, phase summary, phase count,
    total count, and generated roadmap as required by the owning catalog. Do not create a
    placeholder plan link; `issue-delivery` creates and links the real file.
