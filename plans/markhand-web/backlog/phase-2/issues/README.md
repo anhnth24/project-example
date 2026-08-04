@@ -52,8 +52,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #311. Web workspace, no Tauri import, CI job `web` xanh.
 
-
-- **Plan file:** [P2-01 detailed implementation plan](../../../../reports/plan-260804-1617-p2-01-react-vite-workspace-va-ui-foundations.md)
+- **Plan file:** [P2-01 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-01-react-vite-workspace-va-ui-foundations.md)
 - **Plan/files:** Tạo `web/` scripts/layout; copy browser-safe tokens/icons/primitives.
 - **Depends:** Không. **Acceptance/tests:** Build/test độc lập; no Tauri import;
   typecheck/lint/unit/dependency-boundary; desktop vẫn xanh.
@@ -63,8 +62,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #311. Generated types + `pnpm api:check` drift gate; mock server sinh từ OpenAPI.
 
-
-- **Plan file:** [P2-02 detailed implementation plan](../../../../reports/plan-260804-1617-p2-02-openapi-contracts-va-mock-server.md)
+- **Plan file:** [P2-02 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-02-openapi-contracts-va-mock-server.md)
 - **Plan/files:** Pin generator; generated types; drift check; auth/org/library/job/
   Q&A/admin/error/SSE fixtures và mock scenarios.
 - **Depends:** Stable 1B OpenAPI. **Acceptance/tests:** Drift fails CI; generated files
@@ -77,8 +75,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #311. Refresh single-flight; ADR 0010 rotation; concurrent-401/revoke tests.
 
-
-- **Plan file:** [P2-03 detailed implementation plan](../../../../reports/plan-260804-1617-p2-03-typed-http-client-session-refresh.md)
+- **Plan file:** [P2-03 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-03-typed-http-client-session-refresh.md)
 - **Plan/files:** Fetch wrapper, access token memory, refresh single-flight, one retry,
   normalized errors/request ID/quota, abort.
 - **Depends:** P2-02. **Acceptance/tests:** Concurrent 401 một refresh; revoked refresh
@@ -89,8 +86,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #311. Fetch-based (không EventSource), Last-Event-ID, reconnect/backoff, abort-on-scope.
 
-
-- **Plan file:** [P2-04 detailed implementation plan](../../../../reports/plan-260804-1617-p2-04-fetch-based-sse-transport.md)
+- **Plan file:** [P2-04 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-04-fetch-based-sse-transport.md)
 - **Plan/files:** Streaming parser với bearer, Last-Event-ID, dedupe/gap, refresh/
   reconnect/backoff/snapshot, abort on scope change.
 - **Depends:** P2-02/03. **Acceptance/tests:** Không native EventSource/token URL;
@@ -101,8 +97,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #311. Bearer refresh trong memory (không cookie/CSRF); router + guard matrix.
 
-
-- **Plan file:** [P2-05 detailed implementation plan](../../../../reports/plan-260804-1617-p2-05-login-session-application-shell.md)
+- **Plan file:** [P2-05 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-05-login-session-application-shell.md)
 - **Plan/files:** Router, auth bootstrap/login/protected shell/guards/logout/help stub.
 - **Depends:** P2-01/03 + P1B-F05 browser refresh contract. **Acceptance/tests:**
   Intended route, expiry, guard matrix, login/refresh/logout component tests và
@@ -115,8 +110,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #311. Scope epoch; `useScopeSafeRequest`/`useScopeSafeSse` bỏ response scope cũ.
 
-
-- **Plan file:** [P2-06 detailed implementation plan](../../../../reports/plan-260804-1617-p2-06-org-switch-va-scope-safe-state.md)
+- **Plan file:** [P2-06 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-06-org-switch-va-scope-safe-state.md)
 - **Plan/files:** Org-scoped cache keys; atomic switch; abort REST/SSE; clear stores;
   scope generation ignores late response.
 - **Depends:** P2-03…05 + backend 1C org APIs. **Acceptance/tests:** No old-org render;
@@ -143,8 +137,7 @@ P2-15 + Phase 1C gate → P2-16
   hướng thôi, không phải panel upload cross-collection — giữ đúng giới hạn ghi ở dòng
   Status phía trên).
 
-
-- **Plan file:** [P2-07 detailed implementation plan](../../../../reports/plan-260804-1617-p2-07-library-list-sanitized-preview.md)
+- **Plan file:** [P2-07 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-07-library-list-sanitized-preview.md)
 - **Plan/files:** Adapt browser-safe LibraryView; collection navigation, filter/page,
   status, preview states + SafeMarkdown; unresolved conflict badge/count, side-by-side
   cited BA/design/dev claims và resolved-history link.
@@ -180,8 +173,7 @@ P2-15 + Phase 1C gate → P2-16
   `e2e/document-status-polling.spec.ts` (upload → converting → advance seam 3 lần →
   badge tự chuyển converted/indexing/indexed, không `page.reload()`/`page.goto()`).
 
-
-- **Plan file:** [P2-08 detailed implementation plan](../../../../reports/plan-260804-1617-p2-08-upload-progress-va-job-lifecycle.md)
+- **Plan file:** [P2-08 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-08-upload-progress-va-job-lifecycle.md)
 - **Plan/files:** Multipart/progress/cancel; job SSE; reconnect snapshot; accessible
   status for uploaded→indexed/failed.
 - **Depends:** P2-04/07. **Acceptance/tests:** Client/server progress distinct; recover
@@ -193,8 +185,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #312. Capability issue+redeem, delete tombstone có confirm. Không có endpoint retry-convert nên "thử lại" = reindex (ghi rõ trong UI).
 
-
-- **Plan file:** [P2-09 detailed implementation plan](../../../../reports/plan-260804-1617-p2-09-download-delete-reindex-retry.md)
+- **Plan file:** [P2-09 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-09-download-delete-reindex-retry.md)
 - **Plan/files:** Authorized actions, permission/confirm/conflict/idempotency handling.
 - **Depends:** P2-07/08 + backend 1C guards. **Acceptance/tests:** Delete closes preview;
   server deny wins; confirm/concurrency/stale/signed-route tests.
@@ -367,8 +358,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #317. UI member table/invite (one-time token)/suspend/role/remove, owner-tier fail-closed mirror server, last-owner 409 + owner-tier 403 mapped. Mở khoá nhờ lát membership API (1C-02/1C-11) landed cùng #317.
 
-
-- **Plan file:** [P2-11 detailed implementation plan](../../../../reports/plan-260804-1617-p2-11-member-role-admin.md)
+- **Plan file:** [P2-11 detailed implementation plan](../../../../reports/plan-2026-07-28-p2-11-member-role-admin.md)
 - **Plan/files:** Member table/invite/suspend/role selector; owner restrictions from API.
 - **Depends:** P2-02/03/05 + backend 1C-02…04. **Acceptance/tests:** Owner/admin matrix,
   last-owner conflict, invite/suspend/role/403/409/stale-update tests.
@@ -378,8 +368,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #317. Usage cards từ `GET /usage` (endpoint tổng hợp landed cùng lát membership); route gate `member.manage`. Actionable 429 dùng chung path với document actions.
 
-
-- **Plan file:** [P2-12 detailed implementation plan](../../../../reports/plan-260804-1617-p2-12-usage-quota-reservations.md)
+- **Plan file:** [P2-12 detailed implementation plan](../../../../reports/plan-2026-07-28-p2-12-usage-quota-reservations.md)
 - **Plan/files:** Usage cards, limits, active reservations/jobs, actionable 429.
 - **Depends:** P2-03/05 + backend 1C-09…11. **Acceptance/tests:** API numbers match;
   unit/timezone/403/429/stale tests.
@@ -389,8 +378,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — SafeMarkdown + sanitize allowlist + content bound ở #311; CSP/frame/nosniff/referrer landed cùng P2-16 (#313). HSTS để cho reverse proxy (không set ở app).
 
-
-- **Plan file:** [P2-13 detailed implementation plan](../../../../reports/plan-260804-1617-p2-13-browser-safemarkdown-hardening.md)
+- **Plan file:** [P2-13 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-13-browser-safemarkdown-hardening.md)
 - **Plan/files:** CSP-compatible app, protocol allowlist, raw HTML/SVG/data URL denial,
   content bounds, header checks.
 - **Depends:** P2-01/07/10. **Acceptance/tests:** Malicious corpus không execute; CSP
@@ -401,8 +389,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Done — #313. axe không critical/serious (login/library/modal), focus-sau-route-change, progressbar job. Keyboard cho "ask" chưa làm được vì P2-10 chưa tồn tại.
 
-
-- **Plan file:** [P2-14 detailed implementation plan](../../../../reports/plan-260804-1617-p2-14-accessibility-interaction-quality.md)
+- **Plan file:** [P2-14 detailed implementation plan](../../../../reports/plan-2026-07-27-p2-14-accessibility-interaction-quality.md)
 - **Plan/files:** Skip/landmark/focus/keyboard/progress labels/contrast/reduced motion.
 - **Depends:** P2-05/07…12. **Acceptance/tests:** No axe critical; keyboard primary
   flows; focus/reduced-motion/screen reader tests.

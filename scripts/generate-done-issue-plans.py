@@ -28,7 +28,7 @@ PLAN_LINK_PATTERN = re.compile(
 FIELD_PATTERN = re.compile(r"\*\*(?P<key>[^*]+?):\*\*\s*")
 SHA_PATTERN = re.compile(r"(?<![0-9a-f])(?P<sha>[0-9a-f]{7,40})(?![0-9a-f])")
 REF_PATTERN = re.compile(r"(?:PR\s*)?#(?P<number>\d+)", re.IGNORECASE)
-STAMP_PATTERN = re.compile(r"^\d{6}-\d{4}$")
+ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def load_module(name: str, path: Path):
@@ -231,10 +231,20 @@ def slugify(value: str, max_length: int = 52) -> str:
     return value or "issue"
 
 
-def filename_for(issue: IssueRecord, stamp: str) -> str:
+def filename_for(issue: IssueRecord, github_issue: GitHubIssue | None) -> str:
+    if not github_issue or not github_issue.closed_at:
+        raise ValueError(
+            f"{issue.issue_id}: matching GitHub issue has no closed timestamp"
+        )
+    closed_date = github_issue.closed_at[:10]
+    if not ISO_DATE_PATTERN.fullmatch(closed_date):
+        raise ValueError(
+            f"{issue.issue_id}: invalid GitHub closed timestamp "
+            f"{github_issue.closed_at!r}"
+        )
     issue_slug = slugify(issue.issue_id, max_length=24)
     title_slug = slugify(issue.title)
-    return f"plan-{stamp}-{issue_slug}-{title_slug}.md"
+    return f"plan-{closed_date}-{issue_slug}-{title_slug}.md"
 
 
 def gh_json(args: list[str]) -> object:
@@ -443,11 +453,16 @@ def render_plan(
         if github_issue and github_issue.closed_at
         else "- GitHub sync-closed timestamp: UNKNOWN."
     )
+    issue_closed_date = (
+        github_issue.closed_at[:10]
+        if github_issue and github_issue.closed_at
+        else "UNKNOWN — matching GitHub issue has no closed timestamp"
+    )
 
     return f"""<!-- {PLAN_MARKER}: {issue.issue_id} -->
 # {issue.issue_id} — {issue.title}
 
-Date: 2026-08-04
+Issue closed: {issue_closed_date}
 Source issue: {source_issue}
 Catalog: [`{issue.catalog_html_path}`]({catalog_link})
 Phase plan: [`{issue.phase_plan_html_path}`]({phase_link})
@@ -533,53 +548,52 @@ def section_with_plan_link(section: str, link: str) -> str:
             continue
         key = canonical_key(match.group("key"))
         if key is not None and key not in {"Status", "Plan file"}:
-            return f"{section[:match.start()]}{link}\n{section[match.start():]}"
-    return f"{section.rstrip()}\n{link}\n"
+            prefix = section[: match.start()].rstrip()
+            suffix = section[match.start() :].lstrip()
+            return f"{prefix}\n\n{link}\n{suffix}"
+    return f"{section.rstrip()}\n\n{link}\n"
 
 
 def write_plans(
     records: list[IssueRecord],
-    stamp: str,
-    use_github: bool,
     refresh_generated: bool,
 ) -> None:
-    if not STAMP_PATTERN.fullmatch(stamp):
-        raise ValueError("--stamp must use YYMMDD-HHMM")
     done = [issue for issue in records if issue.status == "done"]
-    github_issues: dict[str, GitHubIssue] = {}
-    github_prs: dict[int, GitHubPr] = {}
-    if use_github:
-        github_issues = fetch_github_issues(records)
-        github_prs = fetch_github_prs()
+    github_issues = fetch_github_issues(records)
+    github_prs = fetch_github_prs()
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     catalog_replacements: dict[Path, list[tuple[int, int, str]]] = {}
     created = 0
+    renamed = 0
     for issue in done:
+        github_issue = github_issues.get(issue.issue_id)
+        filename = filename_for(issue, github_issue)
+        destination = REPORTS_DIR / filename
         existing = PLAN_LINK_PATTERN.search(issue.section)
         if existing:
-            filename = Path(existing.group("path")).name
+            current = resolve_plan_path(issue, existing.group("path"))
+            marker = f"<!-- {PLAN_MARKER}: {issue.issue_id} -->"
+            if not current.is_file() or marker not in current.read_text(encoding="utf-8"):
+                raise ValueError(
+                    f"refusing to modify non-generated plan for {issue.issue_id}: "
+                    f"{current}"
+                )
+            if current != destination:
+                if destination.exists():
+                    raise FileExistsError(f"refusing to overwrite {destination}")
+                current.rename(destination)
+                renamed += 1
             if refresh_generated:
-                destination = resolve_plan_path(issue, existing.group("path"))
-                marker = f"<!-- {PLAN_MARKER}: {issue.issue_id} -->"
-                if not destination.is_file() or marker not in destination.read_text(
-                    encoding="utf-8"
-                ):
-                    raise ValueError(
-                        f"refusing to refresh non-generated plan for {issue.issue_id}: "
-                        f"{destination}"
-                    )
                 destination.write_text(
-                    render_plan(issue, github_issues.get(issue.issue_id), github_prs),
+                    render_plan(issue, github_issue, github_prs),
                     encoding="utf-8",
                 )
         else:
-            filename = filename_for(issue, stamp)
-            destination = REPORTS_DIR / filename
             if destination.exists():
                 raise FileExistsError(f"refusing to overwrite {destination}")
             destination.write_text(
-                render_plan(issue, github_issues.get(issue.issue_id), github_prs),
+                render_plan(issue, github_issue, github_prs),
                 encoding="utf-8",
             )
             created += 1
@@ -598,7 +612,7 @@ def write_plans(
             markdown = f"{markdown[:start]}{section}{markdown[end:]}"
         catalog.write_text(markdown, encoding="utf-8")
     print(
-        f"created {created} Done issue plans; normalized links in "
+        f"created {created} and renamed {renamed} Done issue plans; normalized links in "
         f"{len(catalog_replacements)} catalogs"
     )
 
@@ -632,6 +646,14 @@ def check_plans(records: list[IssueRecord]) -> list[str]:
         marker = f"<!-- {PLAN_MARKER}: {issue.issue_id} -->"
         if marker not in content:
             errors.append(f"{issue.issue_id}: missing marker in {target}")
+        closed_match = re.search(r"(?m)^Issue closed: (?P<date>\d{4}-\d{2}-\d{2})$", content)
+        if not closed_match:
+            errors.append(f"{issue.issue_id}: missing Issue closed date in {target}")
+        elif not target.name.startswith(f"plan-{closed_match.group('date')}-"):
+            errors.append(
+                f"{issue.issue_id}: filename date does not match Issue closed date: "
+                f"{target.name}"
+            )
         for heading in (
             "## Objective",
             "## Context",
@@ -670,12 +692,6 @@ def parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
-    parser.add_argument("--stamp", help="Plan filename stamp (YYMMDD-HHMM)")
-    parser.add_argument(
-        "--no-github",
-        action="store_true",
-        help="Do not resolve direct GitHub issue/PR evidence links",
-    )
     parser.add_argument(
         "--refresh-generated",
         action="store_true",
@@ -688,13 +704,8 @@ def main() -> int:
     args = parse_args()
     records = load_records()
     if args.write:
-        if not args.stamp:
-            print("--write requires --stamp YYMMDD-HHMM", file=sys.stderr)
-            return 2
         write_plans(
             records,
-            args.stamp,
-            not args.no_github,
             args.refresh_generated,
         )
         records = load_records()
