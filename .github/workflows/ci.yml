@@ -217,6 +217,7 @@ jobs:
           cargo test -p fileconv-server --no-fail-fast --
           --include-ignored
           --skip e2e_live_vertical_slice
+          --skip e2e_phase1c_gate
       - name: Run Phase 1C denial suite
         id: phase1c_denial_suite
         if: steps.integration_tests.outcome == 'success'
@@ -409,6 +410,93 @@ jobs:
       - name: Tear down POC stack
         if: always()
         run: docker compose -f deploy/compose.poc.yml down -v
+
+  # Phase 1C G1C-SEC qualification harness (Task 16). Opt-in like O04: boots POC,
+  # seeds two orgs, runs g1c-security-gate.sh, validates phase-1c-gate.json.
+  # rust-integration explicitly skips e2e_phase1c_gate; this job is the only
+  # place the ignored test runs with MARKHAND_PHASE1C_GATE=1.
+  phase1c-g1c-security-gate:
+    needs: changes-and-static
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      contains(github.event.pull_request.labels.*.name, 'run-phase1c-gate')
+    runs-on: ubuntu-22.04
+    env:
+      MARKHAND_PHASE1C_GATE: "1"
+      MARKHAND_TEST_REQUIRED: "1"
+      GITHUB_SHA: ${{ github.sha }}
+    steps:
+      - name: Resolve Phase 1C gate output dir
+        run: echo "MARKHAND_PHASE1C_OUTPUT_DIR=$RUNNER_TEMP/markhand-phase1c-gate" >> "$GITHUB_ENV"
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang cmake pkg-config \
+            tesseract-ocr tesseract-ocr-vie shellcheck apparmor
+      - name: Load the convert sandbox AppArmor profile
+        run: sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
+        with:
+          toolchain: 1.88.0
+      - uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696 # v0.0.10
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - name: Boot POC Compose stack
+        run: |
+          cp deploy/.env.example deploy/.env
+          deploy/scripts/poc-up.sh
+          deploy/scripts/poc-health.sh
+      - name: Run G1C security gate harness
+        id: g1c_gate
+        run: |
+          set +e
+          bash deploy/scripts/g1c-security-gate.sh \
+            --output-dir "$MARKHAND_PHASE1C_OUTPUT_DIR"
+          exit_code=$?
+          echo "gate_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Dump POC logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose.poc.yml logs --tail=200 || true
+      - name: Tear down POC stack
+        id: g1c_teardown
+        if: always()
+        run: |
+          set +e
+          docker compose -f deploy/compose.poc.yml down -v
+          exit_code=$?
+          echo "teardown_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload Phase 1C gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase1c-g1c-security-gate-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/markhand-phase1c-gate/**
+            bench/markhand_web/reports/phase-1c-gate/**
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce G1C gate
+        if: always()
+        run: |
+          set -euo pipefail
+          fail=0
+          gate_exit="${{ steps.g1c_gate.outputs.gate_exit_code }}"
+          teardown_exit="${{ steps.g1c_teardown.outputs.teardown_exit_code }}"
+          if [ -z "${gate_exit:-}" ] || [ "$gate_exit" -ne 0 ]; then
+            echo "G1C harness exited ${gate_exit:-missing}" >&2
+            fail=1
+          fi
+          if [ -z "${teardown_exit:-}" ] || [ "$teardown_exit" -ne 0 ]; then
+            echo "POC teardown exited ${teardown_exit:-missing}" >&2
+            fail=1
+          fi
+          MARKHAND_PHASE1C_GATE=1 \
+          MARKHAND_PHASE1C_REPORT_PATH="${MARKHAND_PHASE1C_OUTPUT_DIR}/phase-1c-gate.json" \
+          cargo test -p fileconv-server --test e2e_phase1c_gate -- --ignored e2e_phase1c_gate --nocapture \
+            || fail=1
+          exit "$fail"
 
   # Phase 1C exit-gate infrastructure (1C-12 denial suite / 1C-13 security-load
   # gate; bench/markhand_web/gates.yaml, failureDisposition block-phase-1c).
