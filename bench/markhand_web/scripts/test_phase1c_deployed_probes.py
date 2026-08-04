@@ -111,6 +111,12 @@ def complete_credentials_raw(**overrides: object) -> dict:
         "betaDenialNegativeInviteToken": "mhinv1.negative-token",
         "betaDenialWrongDownloadCapability": "mhcap1.wrong-token",
         "betaDenialStaleAccessToken": "stale-access-token-value",
+        "betaDenialQuarantinedDocumentId": "28282828-2828-2828-2828-282828282828",
+        "betaDenialQuarantinedCollectionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "betaDenialAlreadyMemberInviteToken": "mhinv1.already-member-token",
+        "betaCitationExpiredVersionId": "12121212-1212-1212-1212-121212121212",
+        "betaDenialStaleAfterDowngradeToken": "stale-after-downgrade-token",
+        "betaDenialStaleAfterRemoveToken": "stale-after-remove-token",
     }
     payload.update(overrides)
     return payload
@@ -153,6 +159,12 @@ def make_seed_credentials(probes, seed, **overrides: object):
         "beta_denial_negative_invite_token": "mhinv1.negative-token",
         "beta_denial_wrong_download_capability": "mhcap1.wrong-token",
         "beta_denial_stale_access_token": "stale-access-token-value",
+        "beta_denial_quarantined_document_id": "28282828-2828-2828-2828-282828282828",
+        "beta_denial_quarantined_collection_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "beta_denial_already_member_invite_token": "mhinv1.already-member-token",
+        "beta_citation_expired_version_id": "12121212-1212-1212-1212-121212121212",
+        "beta_denial_stale_after_downgrade_token": "stale-after-downgrade-token",
+        "beta_denial_stale_after_remove_token": "stale-after-remove-token",
     }
     payload.update(overrides)
     return probes.SeedCredentials(**payload)
@@ -1074,8 +1086,8 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
         creds = self._seed_creds(seed, probes)
         deployment = fake.StatefulFakeDeployment(seed=seed, credentials=creds)
         report = deployment.run_denial_suite()
-        self.assertEqual(report["ownerControlCount"], report["foreignCount"])
         self.assertGreater(report["ownerControlCount"], 0)
+        self.assertGreater(report["foreignCount"], report["ownerControlCount"])
         self.assertEqual(report["executableHttpSseCount"], 60)
 
     def test_stateful_fake_negative_missing_owner_control_fails(self) -> None:
@@ -1654,7 +1666,7 @@ class Phase1cFourthReviewSliceTests(unittest.TestCase):
         self.assertEqual(owner.body["token"], "mhinv1.owner-accept-token")
         self.assertEqual(negative.body["token"], "mhinv1.negative-invite-token")
         self.assertNotEqual(owner.body["token"], negative.body["token"])
-        self.assertEqual(negative.expected_statuses, frozenset({404}))
+        self.assertEqual(negative.expected_statuses, frozenset({400}))
 
     def test_validate_fixture_credentials_requires_distinct_disposable_ids(self) -> None:
         probes = load_probes()
@@ -1894,11 +1906,13 @@ class Phase1cFifthReviewSliceTests(unittest.TestCase):
             probes,
             seed,
             beta_denial_stale_access_token="stale-access-token-value",
+            beta_denial_stale_after_downgrade_token="stale-downgrade-token",
+            beta_denial_stale_after_remove_token="stale-remove-token",
         )
         entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-task13-stale-tokens")
         specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
-        stale = [s for s in specs if s.scenario == "stale_token"]
-        self.assertEqual(len(stale), 1)
+        stale = [s for s in specs if s.scenario.startswith("stale_token")]
+        self.assertGreaterEqual(len(stale), 1)
         self.assertEqual(stale[0].token, "stale-access-token-value")
         self.assertEqual(stale[0].expected_statuses, frozenset({401}))
 
@@ -2140,6 +2154,119 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
         sys.modules["phase1c_stateful_fake_sixth"] = module
         spec.loader.exec_module(module)
         return module
+
+
+class Phase1cSemanticsSliceTests(unittest.TestCase):
+    """Task 16 semantics: production-correct HTTP/probe contracts."""
+
+    FAKE_PY = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+
+    def _seed_fixture(self, probes):
+        return probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+
+    def _seed_creds(self, seed, probes):
+        return make_seed_credentials(probes, seed)
+
+    def _load_stateful_fake(self):
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake_sem", self.FAKE_PY)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["phase1c_stateful_fake_sem"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_ask_and_stream_bodies_use_question(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        ask_body = denial._owner_body("ask", seed, credentials=creds, params={})
+        stream_body = denial._owner_body("askStream", seed, credentials=creds, params={})
+        assert ask_body is not None and stream_body is not None
+        self.assertIn("question", ask_body)
+        self.assertNotIn("query", ask_body)
+        self.assertIn("question", stream_body)
+
+    def test_append_chat_turn_body_matches_production(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        body = denial._owner_body(
+            "appendChatTurn",
+            seed,
+            credentials=creds,
+            params={"sessionId": seed.beta_chat_session_id},
+        )
+        assert body is not None
+        for key in ("question", "answer", "answerMode"):
+            self.assertIn(key, body)
+
+    def test_current_org_ops_include_authenticated_foreign_isolation(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.operation_id == "authMe")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        self.assertIn("authenticated_foreign_isolation", {s.scenario for s in specs})
+
+    def test_quota_probe_fails_closed_without_docker(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        runner = probes.DeployedProbeRunner(
+            api_base="http://fake",
+            seed=seed,
+            credentials=creds,
+            shims=probes.DeployedProbeShims(),
+            git_sha_full=seed.source_revision["commit"],
+        )
+        with mock.patch("phase1c_deployed_probes.shutil.which", return_value=None):
+            with self.assertRaises(RuntimeError):
+                runner.run_quota_recovery_probe()
+
+    def test_qdrant_probe_uses_distinct_leakage_metric(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+
+        class QdrantShim(probes.DeployedProbeShims):
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                if args[:2] == ["stop", "qdrant"]:
+                    return probes.CommandOutcome(0, "", "")
+                if args[:2] == ["start", "qdrant"]:
+                    return probes.CommandOutcome(0, "", "")
+                if args[:2] == ["ps", "-q"]:
+                    return probes.CommandOutcome(0, "qdrant\n", "")
+                return probes.CommandOutcome(1, "", "")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                import hashlib
+
+                digest = hashlib.sha256(seed.challenge.encode("utf-8")).hexdigest()
+                return probes.CommandOutcome(0, digest, "")
+
+            def http_request(self, **kwargs):  # type: ignore[override]
+                path = kwargs.get("path") or ""
+                if path.endswith("/ask"):
+                    return probes.HttpResponse(status=503, body="{}", headers={})
+                return probes.HttpResponse(status=503, body="{}", headers={})
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://fake",
+            seed=seed,
+            credentials=creds,
+            shims=QdrantShim(),
+            git_sha_full=seed.source_revision["commit"],
+        )
+        with mock.patch("phase1c_deployed_probes.shutil.which", return_value="/usr/bin/docker"):
+            result = runner.run_qdrant_fail_closed_probe()
+        self.assertIn("qdrant_fail_closed_leakage_count", result.metrics)
+        self.assertNotIn("cross_tenant_leakage_count", result.metrics)
 
 
 class DeployedCiRouteTests(unittest.TestCase):

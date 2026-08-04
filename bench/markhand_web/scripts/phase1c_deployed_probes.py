@@ -10,6 +10,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -309,6 +310,12 @@ class SeedCredentials:
     beta_denial_negative_invite_token: str
     beta_denial_wrong_download_capability: str
     beta_denial_stale_access_token: str
+    beta_denial_quarantined_document_id: str
+    beta_denial_quarantined_collection_id: str
+    beta_denial_already_member_invite_token: str = ""
+    beta_citation_expired_version_id: str = ""
+    beta_denial_stale_after_downgrade_token: str = ""
+    beta_denial_stale_after_remove_token: str = ""
 
 
 @dataclass
@@ -568,6 +575,8 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
         "beta_denial_negative_invite_token",
         "beta_denial_wrong_download_capability",
         "beta_denial_stale_access_token",
+        "beta_denial_quarantined_document_id",
+        "beta_denial_quarantined_collection_id",
     ):
         value = getattr(credentials, field_name, None)
         if isinstance(value, str):
@@ -649,6 +658,16 @@ def _parse_seed_credentials_raw(raw: dict[str, Any], *, expected_challenge: str)
         beta_denial_negative_invite_token=_require_string(raw, "betaDenialNegativeInviteToken"),
         beta_denial_wrong_download_capability=_require_string(raw, "betaDenialWrongDownloadCapability"),
         beta_denial_stale_access_token=_require_string(raw, "betaDenialStaleAccessToken"),
+        beta_denial_quarantined_document_id=validate_uuid(
+            _require_string(raw, "betaDenialQuarantinedDocumentId"), field="betaDenialQuarantinedDocumentId"
+        ),
+        beta_denial_quarantined_collection_id=validate_uuid(
+            _require_string(raw, "betaDenialQuarantinedCollectionId"), field="betaDenialQuarantinedCollectionId"
+        ),
+        beta_denial_already_member_invite_token=str(raw.get("betaDenialAlreadyMemberInviteToken") or ""),
+        beta_citation_expired_version_id=str(raw.get("betaCitationExpiredVersionId") or ""),
+        beta_denial_stale_after_downgrade_token=str(raw.get("betaDenialStaleAfterDowngradeToken") or ""),
+        beta_denial_stale_after_remove_token=str(raw.get("betaDenialStaleAfterRemoveToken") or ""),
     )
     validate_fixture_credentials(credentials)
     return credentials
@@ -718,10 +737,15 @@ def load_seed_artifact(path: Path, *, expected_challenge: str) -> SeedFixture:
 def validate_trivy_report_target(report: dict[str, Any], *, requested_ref: str) -> None:
     if report.get("SchemaVersion") != 2:
         raise RuntimeError("trivy SchemaVersion must be 2")
-    requested_digest = requested_ref.split("@", 1)[-1]
-    blob = json.dumps(report)
-    if requested_digest not in blob:
-        raise RuntimeError("trivy report target/digest mismatch")
+    artifact_name = str(report.get("ArtifactName") or "")
+    if "@" in requested_ref:
+        requested_digest = requested_ref.split("@", 1)[1]
+        if requested_digest not in artifact_name:
+            raise RuntimeError("trivy report ArtifactName/digest mismatch")
+    else:
+        requested_tag = requested_ref
+        if requested_tag not in artifact_name:
+            raise RuntimeError("trivy report ArtifactName/target mismatch")
 
 
 def extract_high_critical_findings(report: dict[str, Any]) -> list[dict[str, str]]:
@@ -1298,27 +1322,90 @@ class DeployedProbeRunner:
 
     def run_quota_recovery_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
-        before = self._psql(
-            "SELECT documents, storage_bytes, reserved_concurrent_slots FROM usage_counters LIMIT 1"
+        if not shutil.which("docker"):
+            raise RuntimeError("quota recovery requires live docker deployment; unavailable in hermetic VM")
+        org_id = self.seed.org_beta_id
+        upload = self._http(
+            "POST",
+            "/api/v1/uploads",
+            token=self.credentials.beta_access_token,
+            body=None,
+        )
+        if upload.status // 100 == 2:
+            upload_payload = json.loads(upload.body)
+            document_id = upload_payload.get("documentId")
+            if isinstance(document_id, str):
+                self._http(
+                    "DELETE",
+                    f"/api/v1/documents/{document_id}",
+                    token=self.credentials.beta_access_token,
+                )
+        counter_rows = self._psql(
+            f"""
+            SELECT counter_key, value FROM usage_counters
+            WHERE org_id = '{org_id}'
+            ORDER BY counter_key, period_start
+            """
+        )
+        if counter_rows.exit_code != 0:
+            raise RuntimeError("usage_counters query failed")
+        self._psql(
+            f"""
+            UPDATE usage_counters SET value = value + 1
+            WHERE org_id = '{org_id}' AND counter_key = 'documents'
+            """
         )
         self._compose(["stop", "worker-convert"], timeout_secs=120)
+        reconcile_before = self._psql(
+            f"""
+            SELECT action FROM audit_log
+            WHERE org_id = '{org_id}' AND action = 'quota.reconcile'
+            ORDER BY occurred_at DESC LIMIT 1
+            """
+        )
         self._compose(["start", "worker-convert"], timeout_secs=120)
-        after = self._psql(
-            "SELECT documents, storage_bytes, reserved_concurrent_slots FROM usage_counters LIMIT 1"
+        deadline = time.monotonic() + 90
+        saw_reconcile = False
+        while time.monotonic() < deadline:
+            reconcile = self._psql(
+                f"""
+                SELECT action FROM audit_log
+                WHERE org_id = '{org_id}' AND action = 'quota.reconcile'
+                ORDER BY occurred_at DESC LIMIT 1
+                """
+            )
+            if reconcile.stdout.strip() and reconcile.stdout != reconcile_before.stdout:
+                saw_reconcile = True
+                break
+            time.sleep(2)
+        if not saw_reconcile:
+            raise RuntimeError("quota reconcile audit missing after recovery window")
+        ground_truth = self._psql(
+            f"""
+            SELECT COUNT(*)::bigint FROM documents
+            WHERE org_id = '{org_id}' AND deleted_at IS NULL
+            """
         )
-        reconcile = self._psql(
-            "SELECT action FROM audit_events WHERE action='quota.reconcile' ORDER BY id DESC LIMIT 1"
+        counter_after = self._psql(
+            f"""
+            SELECT value FROM usage_counters
+            WHERE org_id = '{org_id}' AND counter_key = 'documents'
+            ORDER BY period_start DESC LIMIT 1
+            """
         )
-        if reconcile.exit_code != 0:
-            raise RuntimeError("quota reconcile audit missing")
-        drift = 0
+        try:
+            gt = int((ground_truth.stdout or "0").strip() or "0")
+            cv = int((counter_after.stdout or "0").strip() or "0")
+            drift = abs(gt - cv)
+        except ValueError as error:
+            raise RuntimeError(f"quota drift parse failed: {error}") from error
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-QUOTA-RECOVERY",
             probe={
                 "deployedApi": True,
-                "beforeSha256": _sha256_text(before.stdout),
-                "afterSha256": _sha256_text(after.stdout),
+                "groundTruthDocuments": gt,
+                "counterDocuments": cv,
                 "eof": True,
             },
             metrics={"quota_drift_after_recovery": drift},
@@ -1329,11 +1416,44 @@ class DeployedProbeRunner:
             raise RuntimeError(
                 f"qualifying noisy duration must be {CANONICAL_NOISY_UPLOAD_DURATION_SECS}s"
             )
+        if not shutil.which("docker"):
+            raise RuntimeError("noisy-neighbor probe requires live docker deployment; unavailable in hermetic VM")
+        import threading
+
+        noisy_stop = threading.Event()
+        noisy_errors: list[str] = []
+
+        def noisy_uploader() -> None:
+            noisy_token = self.credentials.alpha_access_token
+            noisy_collection = self.seed.alpha_collection_id
+            while not noisy_stop.is_set():
+                try:
+                    boundary = "----phase1cNoisy"
+                    body = (
+                        f'--{boundary}\r\nContent-Disposition: form-data; name="collectionId"\r\n\r\n'
+                        f"{noisy_collection}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+                        f'filename="noisy.txt"\r\nContent-Type: text/plain\r\n\r\nphase1c-noisy\n'
+                        f"\r\n--{boundary}--\r\n"
+                    ).encode("utf-8")
+                    self.shims.http_request(
+                        method="POST",
+                        url=self._url("/api/v1/uploads"),
+                        token=noisy_token,
+                        multipart_body=body,
+                        path="/api/v1/uploads",
+                        content_type=f"multipart/form-data; boundary={boundary}",
+                    )
+                except Exception as error:  # noqa: BLE001
+                    noisy_errors.append(str(error))
+                time.sleep(0.05)
+
+        worker = threading.Thread(target=noisy_uploader, name="phase1c-noisy-uploader", daemon=True)
+        worker.start()
         samples_ns: list[int] = []
         starvation = 0
         token = self.credentials.beta_access_token
-        deadline = time.monotonic() + min(self.noisy_duration_secs, 5)
-        while time.monotonic() < deadline:
+        deadline = time.monotonic() + self.noisy_duration_secs
+        while time.monotonic() < deadline and len(samples_ns) < self.quiet_search_samples:
             started = time.perf_counter_ns()
             response = self._http(
                 "POST",
@@ -1347,22 +1467,17 @@ class DeployedProbeRunner:
                 starvation += 1
             if elapsed_ns / 1_000_000 > STARVATION_SLOW_MS:
                 starvation += 1
-        while len(samples_ns) < self.quiet_search_samples:
-            started = time.perf_counter_ns()
-            response = self._http(
-                "POST",
-                "/api/v1/search",
-                token=token,
-                body={"query": "phase1c-quiet-probe"},
-            )
-            samples_ns.append(time.perf_counter_ns() - started)
-            if response.status != 200:
-                starvation += 1
+        noisy_stop.set()
+        worker.join(timeout=5)
+        if noisy_errors:
+            raise RuntimeError(f"noisy workload errors: {noisy_errors[0]}")
+        ps = self._compose(["ps", "-q", "worker-convert"], timeout_secs=120)
+        if "worker-convert" not in ps.stdout and ps.exit_code != 0:
+            raise RuntimeError("worker-convert must remain observable during noisy-neighbor probe")
         forbidden = {self.seed.marker_alpha, self.seed.marker_beta}
         for marker in forbidden:
             if marker and marker in json.dumps(samples_ns):
                 starvation += 1
-        self._compose(["ps", "-q", "worker-convert"])
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-NOISY-NEIGHBOR",
@@ -1528,7 +1643,7 @@ class DeployedProbeRunner:
             "PATCH",
             f"/api/v1/members/{accept_user_id}",
             token=token,
-            body={"role": "viewer"},
+            body={"role": "editor"},
         )
         patch_request_id = validate_server_request_id(body=patch.body, headers=patch.headers)
         expected.append(
@@ -1564,10 +1679,15 @@ class DeployedProbeRunner:
         )
 
         captured_refresh = self.credentials.beta_refresh_token
-        refresh = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": captured_refresh})
+        switch_for_audit = self._switch_org(self.credentials.beta_access_token, self.seed.org_beta_id)
+        switch_payload = json.loads(switch_for_audit.body) if switch_for_audit.body else {}
+        switched_refresh = switch_payload.get("refreshToken") or switch_payload.get("refresh_token")
+        switched_session = self._session_id_from_switch_access_token(switch_for_audit)
+        refresh_token_for_reuse = switched_refresh if isinstance(switched_refresh, str) else captured_refresh
+        refresh = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": refresh_token_for_reuse})
         refresh_payload = json.loads(refresh.body) if refresh.body else {}
         new_refresh = refresh_payload.get("refreshToken") or refresh_payload.get("refresh_token")
-        reuse = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": captured_refresh})
+        reuse = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": refresh_token_for_reuse})
         reuse_request_id = extract_server_request_id(reuse.body, reuse.headers) or ""
         expected.append(
             {
@@ -1575,7 +1695,7 @@ class DeployedProbeRunner:
                 "action": audit_action_map["auth.refresh.reuse"],
                 "actorId": self.seed.beta_user_id,
                 "targetType": "session",
-                "targetId": self.credentials.beta_session_id,
+                "targetId": switched_session,
                 "requestId": reuse_request_id,
                 "outcome": "deny" if reuse.status == 401 else "success",
                 "attemptStatus": reuse.status,
@@ -1676,41 +1796,57 @@ class DeployedProbeRunner:
 
     def run_qdrant_fail_closed_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
+        if not shutil.which("docker"):
+            raise RuntimeError("qdrant fail-closed probe requires live docker deployment; unavailable in hermetic VM")
         token = self.credentials.alpha_access_token
         stop = self._compose(["stop", "qdrant"], timeout_secs=120)
         if stop.exit_code != 0:
             raise RuntimeError("qdrant stop failed")
-        search = self._http(
-            "POST",
-            "/api/v1/search",
-            token=token,
-            body={"query": "phase1c-qdrant-down"},
-        )
-        ask = self._http(
-            "POST",
-            "/api/v1/ask",
-            token=token,
-            body={"query": "phase1c-qdrant-down"},
-        )
-        leakage = _DENIAL.scan_marker_leakage(
-            search.body + ask.body,
-            forbidden_markers={self.seed.marker_beta},
-        )
-        if search.status == 200 and ask.status == 200:
-            raise RuntimeError("qdrant unavailable must not return 200 success")
-        self._compose(["start", "qdrant"], timeout_secs=120)
-        self._compose(["ps", "-q", "qdrant"], timeout_secs=120)
+        search_status = 0
+        ask_status = 0
+        leakage_count = 0
+        try:
+            search = self._http(
+                "POST",
+                "/api/v1/search",
+                token=token,
+                body={"query": "phase1c-qdrant-down"},
+            )
+            search_status = search.status
+            if search.status == 200:
+                raise RuntimeError("search must fail closed when qdrant unavailable")
+            ask = self._http(
+                "POST",
+                "/api/v1/ask",
+                token=token,
+                body={"question": "phase1c-qdrant-down?"},
+            )
+            ask_status = ask.status
+            if ask.status == 200:
+                raise RuntimeError("ask must fail closed when qdrant unavailable")
+            leakage = _DENIAL.scan_marker_leakage(
+                search.body + ask.body,
+                forbidden_markers={self.seed.marker_beta},
+            )
+            leakage_count = len(leakage)
+        finally:
+            start = self._compose(["start", "qdrant"], timeout_secs=120)
+            if start.exit_code != 0:
+                raise RuntimeError("qdrant start failed")
+            health = self._compose(["ps", "-q", "qdrant"], timeout_secs=120)
+            if health.exit_code != 0:
+                raise RuntimeError("qdrant recovery health check failed")
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-QDRANT-FAIL-CLOSED",
             probe={
                 "deployedApi": True,
                 "singleNodeUnavailable": True,
-                "searchStatus": search.status,
-                "askStatus": ask.status,
+                "searchStatus": search_status,
+                "askStatus": ask_status,
                 "eof": True,
             },
-            metrics={"cross_tenant_leakage_count": len(leakage)},
+            metrics={"qdrant_fail_closed_leakage_count": leakage_count},
         )
 
     def run_gate(self, gate_id: str) -> DeployedProbeResult:
