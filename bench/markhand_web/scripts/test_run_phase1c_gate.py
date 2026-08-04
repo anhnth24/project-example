@@ -450,6 +450,23 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
         self.assertIs(parsed["bypassRls"], False)
         self.assertEqual(parsed["nonce"], nonce)
 
+    def test_parse_worker_role_probe_rejects_preamble_lines(self) -> None:
+        line = json.dumps(
+            {
+                "schemaVersion": 1,
+                "currentUser": "markhand_worker",
+                "superuser": False,
+                "bypassRls": False,
+                "dedicatedDatabaseUrlVerified": True,
+                "databaseUrlRolePath": "markhand_worker",
+                "nonce": "n1",
+            },
+            sort_keys=True,
+        )
+        stdout = f"noise before probe\nPHASE1C_WORKER_ROLE_PROBE\t{line}\nPHASE1C_WORKER_ROLE_PROBE_EOF\ttrue\n"
+        with self.assertRaises(RuntimeError):
+            gate.parse_worker_role_probe(stdout)
+
     def test_parse_worker_role_probe_rejects_string_booleans(self) -> None:
         line = json.dumps(
             {
@@ -463,6 +480,27 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
             }
         )
         stdout = f"PHASE1C_WORKER_ROLE_PROBE\t{line}\nPHASE1C_WORKER_ROLE_PROBE_EOF\ttrue\n"
+        with self.assertRaises(RuntimeError):
+            gate.parse_worker_role_probe(stdout)
+
+    def test_parse_worker_role_probe_rejects_multiple_payloads(self) -> None:
+        line = json.dumps(
+            {
+                "schemaVersion": 1,
+                "currentUser": "markhand_worker",
+                "superuser": False,
+                "bypassRls": False,
+                "dedicatedDatabaseUrlVerified": True,
+                "databaseUrlRolePath": "markhand_worker",
+                "nonce": "n1",
+            },
+            sort_keys=True,
+        )
+        stdout = (
+            f"PHASE1C_WORKER_ROLE_PROBE\t{line}\n"
+            f"PHASE1C_WORKER_ROLE_PROBE\t{line}\n"
+            f"PHASE1C_WORKER_ROLE_PROBE_EOF\ttrue\n"
+        )
         with self.assertRaises(RuntimeError):
             gate.parse_worker_role_probe(stdout)
 

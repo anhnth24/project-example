@@ -68,6 +68,8 @@ def complete_seed_raw(probes, **overrides: object) -> dict:
         "orgAlphaSlug": "poc",
         "orgBetaSlug": "phase1c-beta",
         "disposableOrgId": "66666666-6666-6666-6666-666666666666",
+        "alphaDuplicateCollectionId": "12121212-1212-1212-1212-121212121211",
+        "betaDuplicateCollectionId": "23232323-2323-2323-2323-232323232322",
     }
     base.update(overrides)
     return base
@@ -156,7 +158,7 @@ def make_seed_credentials(probes, seed, **overrides: object):
         "beta_citation_quote_local_start": 0,
         "beta_citation_quote_local_end": 12,
         "beta_citation_quote": "phase1c-beta",
-        "beta_denial_negative_invite_token": "mhinv1.negative-token",
+        "beta_denial_negative_invite_token": "mhinv1.22222222-2222-2222-2222-222222222222.0123456789abcdef",
         "beta_denial_wrong_download_capability": "mhcap1.wrong-token",
         "beta_denial_stale_access_token": "stale-access-token-value",
         "beta_denial_quarantined_document_id": "28282828-2828-2828-2828-282828282828",
@@ -228,19 +230,25 @@ class DeployedArchitectureContractTests(unittest.TestCase):
         expected = hashlib.sha256(manifest.read_bytes()).hexdigest()
         self.assertEqual(probes.canonical_denial_manifest_sha256(), expected)
 
-    def test_trivy_parser_requires_target_digest_match(self) -> None:
+    def test_trivy_parser_requires_exact_artifact_name_match(self) -> None:
         probes = load_probes()
         digest = "sha256:" + "a" * 64
+        ref = f"markhand-api:poc@{digest}"
         report = {
             "SchemaVersion": 2,
-            "ArtifactName": f"markhand-api:poc@{digest}",
+            "ArtifactName": ref,
             "Results": [{"Target": f"markhand-api:poc ({digest})", "Vulnerabilities": []}],
         }
-        probes.validate_trivy_report_target(report, requested_ref=f"markhand-api:poc@{digest}")
+        probes.validate_trivy_report_target(report, requested_ref=ref)
         with self.assertRaises(RuntimeError):
             probes.validate_trivy_report_target(
-                report,
+                {"SchemaVersion": 2, "ArtifactName": ref, "Results": []},
                 requested_ref="markhand-api:poc@sha256:" + "b" * 64,
+            )
+        with self.assertRaises(RuntimeError):
+            probes.validate_trivy_report_target(
+                {"SchemaVersion": 2, "ArtifactName": f"other:{digest}", "Results": []},
+                requested_ref=ref,
             )
 
     def test_trivy_includes_unfixed_high_critical(self) -> None:
@@ -1970,11 +1978,11 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
     def _seed_creds(self, seed, probes):
         return make_seed_credentials(probes, seed)
 
-    def test_get_chat_session_schema_is_session_and_turns(self) -> None:
+    def test_get_chat_session_schema_is_flattened_session_fields(self) -> None:
         denial = load_denial()
         self.assertEqual(
             denial.HTTP_OWNER_SUCCESS_SCHEMA["getChatSession"],
-            frozenset({"session", "turns"}),
+            frozenset({"id", "title", "turns"}),
         )
         self.assertTrue(hasattr(denial, "validate_owner_read_response"))
 
@@ -1988,12 +1996,21 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
         self.assertNotIn('f"{API_PREFIX}/members/{delete_member_id}"', fn)
         self.assertNotIn('f"{API_PREFIX}/members/{disposable_member}"', fn)
 
-    def test_negative_invite_token_is_synthetic_not_created_invite(self) -> None:
+    def test_negative_invite_token_uses_valid_mhinv1_syntax(self) -> None:
         text = self.SEED_PY.read_text(encoding="utf-8")
         negative = text.split("beta_denial_negative_invite_token", 1)[1].split("\n", 8)[0:8]
         joined = "\n".join(negative)
         self.assertIn("mhinv1.", joined)
+        self.assertIn("org_beta_id", joined)
         self.assertNotIn("phase1c-negative-", joined)
+
+    def test_seed_bootstrap_memberships_after_final_reconcile(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        reconcile = text.index("_reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID, org_beta_id]")
+        bootstrap = text.index("_bootstrap_identity_users(password_hash", reconcile)
+        self.assertLess(reconcile, bootstrap)
+        login_block = text.split("accept_login = _login(api_base, ACCEPT_EMAIL", 1)[0]
+        self.assertIn("_bootstrap_identity_users", login_block)
 
     def test_seed_provisions_three_independent_invite_controls(self) -> None:
         text = self.SEED_PY.read_text(encoding="utf-8")
@@ -2025,7 +2042,8 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
         entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-resolveCitation-citation")
         specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
         scenarios = {spec.scenario for spec in specs}
-        self.assertIn("citation_replay", scenarios)
+        self.assertIn("citation_repeat", scenarios)
+        self.assertTrue(any(getattr(s, "coverage_limited", False) for s in specs if s.scenario == "citation_repeat"))
         self.assertIn("citation_expired", scenarios)
         self.assertIn("citation_mismatch", scenarios)
 
@@ -2252,8 +2270,17 @@ class Phase1cSemanticsSliceTests(unittest.TestCase):
 
             def http_request(self, **kwargs):  # type: ignore[override]
                 path = kwargs.get("path") or ""
+                degraded = json.dumps(
+                    {
+                        "items": [],
+                        "warnings": ["Vector leg unavailable; continuing with FTS-only retrieval."],
+                        "requestId": "11111111-1111-1111-1111-111111111111",
+                    }
+                )
                 if path.endswith("/ask"):
-                    return probes.HttpResponse(status=503, body="{}", headers={})
+                    return probes.HttpResponse(status=200, body=degraded, headers={})
+                if path.endswith("/search"):
+                    return probes.HttpResponse(status=200, body=degraded, headers={})
                 return probes.HttpResponse(status=503, body="{}", headers={})
 
         runner = probes.DeployedProbeRunner(
@@ -2265,8 +2292,23 @@ class Phase1cSemanticsSliceTests(unittest.TestCase):
         )
         with mock.patch("phase1c_deployed_probes.shutil.which", return_value="/usr/bin/docker"):
             result = runner.run_qdrant_fail_closed_probe()
-        self.assertIn("qdrant_fail_closed_leakage_count", result.metrics)
+        self.assertIn("qdrant_degraded_leakage_count", result.metrics)
+        self.assertEqual(result.probe.get("searchStatus"), 200)
         self.assertNotIn("cross_tenant_leakage_count", result.metrics)
+
+    def test_quota_probe_orders_audit_log_by_created_at(self) -> None:
+        text = (ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py").read_text(encoding="utf-8")
+        self.assertIn("ORDER BY created_at DESC", text)
+        self.assertNotIn("ORDER BY occurred_at DESC", text)
+
+    def test_seed_fixture_parses_duplicate_collection_ids(self) -> None:
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        self.assertEqual(seed.alpha_duplicate_collection_id, "12121212-1212-1212-1212-121212121211")
+        self.assertEqual(seed.beta_duplicate_collection_id, "23232323-2323-2323-2323-232323232322")
 
 
 class DeployedCiRouteTests(unittest.TestCase):
