@@ -583,6 +583,12 @@ def evidence_probe_errors(repo_root: Path, *, status: str) -> list[str]:
         errors.extend(evidence_binding_errors(payload, evidence_path=rel))
         if payload.get("gateId") != row["id"]:
             errors.append(f"evidence_gate_mismatch:{rel}")
+        if payload.get("coverageLimited") is True:
+            errors.append(f"coverage_limited:{rel}")
+        if payload.get("metricsObserved") is False:
+            errors.append(f"metrics_not_observed:{rel}")
+        if payload.get("status") not in (None, "pass"):
+            errors.append(f"evidence_status_not_pass:{rel}")
         p1c8_items = payload.get("p1c8Items")
         if not isinstance(p1c8_items, list) or not p1c8_items:
             errors.append(f"p1c8_items_missing:{rel}")
@@ -612,6 +618,16 @@ def opt_in_errors(report: dict[str, Any], *, status: str) -> list[str]:
     return []
 
 
+def report_coverage_limited_errors(report: dict[str, Any], *, status: str) -> list[str]:
+    if status != "pass":
+        return []
+    errors: list[str] = []
+    coverage = report.get("coverageLimited")
+    if coverage:
+        errors.append("report_coverage_limited")
+    return errors
+
+
 def evaluate_report(
     report: dict[str, Any],
     *,
@@ -634,6 +650,7 @@ def evaluate_report(
     blockers.extend(opt_in_errors(report, status=str(status)))
     blockers.extend(embedding_profile_errors(report.get("embeddingProfile"), status=str(status)))
     blockers.extend(p1c8_mapping_errors(report, status=str(status)))
+    blockers.extend(report_coverage_limited_errors(report, status=str(status)))
     if status == "pass" and isinstance(report.get("vulnerabilityScan"), dict):
         blockers.extend(scanner_pin_errors(report["vulnerabilityScan"].get("scanner")))
     blockers.extend(residual_secret_errors(json.dumps(report, sort_keys=True), context="report"))
@@ -768,10 +785,14 @@ def build_evidence_payload(
     source_revision: dict[str, Any],
     markhand_root: Path,
     repo_root: Path,
+    coverage_limited: bool = False,
+    coverage_limited_reasons: list[str] | None = None,
+    metrics_observed: bool = True,
 ) -> dict[str, Any]:
     rel = next(str(row["evidence"]) for row in GATES.G1C_GATE_ROWS if row["id"] == gate_id)
     binding, _errors = GATES.phase1c_canonical_fingerprints(markhand_root, workspace_root=repo_root)
-    return {
+    qualifying = metrics_observed and not coverage_limited
+    payload = {
         "schemaVersion": EVIDENCE_SCHEMA_VERSION,
         "gateId": gate_id,
         "scenario": scenario,
@@ -784,10 +805,16 @@ def build_evidence_payload(
         "thresholdDecisions": GATES.canonical_threshold_decisions(),
         "targetMatch": True,
         "p1c8Items": list(GATE_TO_P1C8[gate_id]),
-        "status": "pass",
+        "status": "pass" if qualifying else "fail",
+        "coverageLimited": bool(coverage_limited),
         "probe": sanitize_probe(probe),
         "metrics": metrics,
     }
+    if coverage_limited:
+        payload["coverageLimitedReasons"] = list(coverage_limited_reasons or [])
+    if not metrics_observed:
+        payload["metricsObserved"] = False
+    return payload
 
 
 def write_gate_evidence_staged(
@@ -798,6 +825,9 @@ def write_gate_evidence_staged(
     probe: dict[str, Any],
     metrics: dict[str, Any],
     markhand_root: Path,
+    coverage_limited: bool = False,
+    coverage_limited_reasons: list[str] | None = None,
+    metrics_observed: bool = True,
 ) -> str:
     rel = next(str(row["evidence"]) for row in GATES.G1C_GATE_ROWS if row["id"] == gate_id)
     payload = build_evidence_payload(
@@ -808,6 +838,9 @@ def write_gate_evidence_staged(
         source_revision=staging.source_revision,
         markhand_root=markhand_root,
         repo_root=staging.repo_root,
+        coverage_limited=coverage_limited,
+        coverage_limited_reasons=coverage_limited_reasons,
+        metrics_observed=metrics_observed,
     )
     errors = evidence_binding_errors(payload, evidence_path=rel)
     if errors:
@@ -893,6 +926,7 @@ def run_live_probes(
     staging = StagingWorkspace(repo_root=repo_root, final_dir=final_dir)
     staging.purge_final_allowlisted_artifacts()
     metrics: dict[str, Any] = {}
+    coverage_reasons: list[str] = []
     context = deployed_context or build_deployed_context(repo_root, command_runner=runner)
     probe_runner = _DEPLOYED.DeployedProbeRunner(
         api_base=context.api_base,
@@ -906,6 +940,8 @@ def run_live_probes(
     try:
         for gate_id in DEPLOYED_PROBE_GATES:
             result = probe_runner.run_gate(gate_id)
+            if result.coverage_limited:
+                coverage_reasons.extend(result.coverage_limited_reasons)
             probe = _DEPLOYED.deployed_probe_to_command_probe(result)
             gate_metrics = dict(result.metrics)
             if gate_id == "G1C-SEC-QDRANT-FAIL-CLOSED":
@@ -914,10 +950,11 @@ def run_live_probes(
                     qdrant_leakage = gate_metrics.pop("qdrant_fail_closed_leakage_count", None)
                 if qdrant_leakage is not None:
                     gate_metrics["cross_tenant_leakage_count"] = qdrant_leakage
-            for key, value in gate_metrics.items():
-                if gate_id == "G1C-SEC-QDRANT-FAIL-CLOSED" and key == "cross_tenant_leakage_count":
-                    continue
-                metrics[key] = value
+            if result.metrics_observed:
+                for key, value in gate_metrics.items():
+                    if gate_id == "G1C-SEC-QDRANT-FAIL-CLOSED" and key == "cross_tenant_leakage_count":
+                        continue
+                    metrics[key] = value
             write_gate_evidence_staged(
                 staging,
                 gate_id,
@@ -925,6 +962,15 @@ def run_live_probes(
                 probe=probe,
                 metrics=gate_metrics,
                 markhand_root=markhand_root,
+                coverage_limited=result.coverage_limited,
+                coverage_limited_reasons=result.coverage_limited_reasons,
+                metrics_observed=result.metrics_observed,
+            )
+
+        if coverage_reasons:
+            raise RuntimeError(
+                "coverage-limited gates block qualifying pass: "
+                + "; ".join(sorted(dict.fromkeys(coverage_reasons)))
             )
 
         compose = ["docker", "compose", "-f", str(COMPOSE_FILE)]
@@ -1090,6 +1136,7 @@ def assemble_pass_report(
     }
     report["git"] = source_revision
     report["denialManifestSha256"] = hashlib.sha256(DENIAL_MANIFEST.read_bytes()).hexdigest()
+    report["coverageLimited"] = []
     status, blockers = evaluate_report(
         report,
         repo_root=repo_root,

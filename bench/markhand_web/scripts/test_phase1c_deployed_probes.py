@@ -214,13 +214,17 @@ class DeployedArchitectureContractTests(unittest.TestCase):
         drift = probes.compute_quota_drift(
             documents=0,
             storage_bytes=0,
-            reserved_concurrent_slots=0,
+            concurrent_reserved=0,
+            counter_documents=0,
+            counter_storage=0,
         )
         self.assertEqual(drift, 0)
         drift_bad = probes.compute_quota_drift(
             documents=3,
             storage_bytes=999,
-            reserved_concurrent_slots=1,
+            concurrent_reserved=1,
+            counter_documents=0,
+            counter_storage=0,
         )
         self.assertEqual(drift_bad, 1003)
 
@@ -2367,11 +2371,10 @@ class Phase1cBackboneSemanticsTests(unittest.TestCase):
         self.assertIn("noisy upload", bad_reason.lower())
 
     def test_logout_audit_binds_submitted_refresh_token_family(self) -> None:
-        probes = load_probes()
-        text = PROBES_PY.read_text(encoding="utf-8")
+        text = PROBES_PATH.read_text(encoding="utf-8")
         audit = text.split("def run_audit_probe", 1)[1].split("\n    def run_", 1)[0]
         self.assertIn("_family_id_from_refresh_token", audit)
-        self.assertIn("alpha_refresh_token", audit)
+        self.assertIn("logout_refresh", audit)
         self.assertNotIn("me_before_logout = self._http", audit)
 
     def test_qdrant_scans_structured_foreign_ids(self) -> None:

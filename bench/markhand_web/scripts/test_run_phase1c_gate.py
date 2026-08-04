@@ -425,14 +425,8 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         self.assertFalse(payload.get("metricsObserved", True))
 
     def test_deployed_probe_to_command_probe_propagates_coverage_limited(self) -> None:
-        probes = importlib.util.spec_from_file_location(
-            "phase1c_deployed_probes_backbone",
-            gate.ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py",
-        )
-        assert probes and probes.loader
-        module = importlib.util.module_from_spec(probes)
-        probes.loader.exec_module(module)
-        result = module.DeployedProbeResult(
+        probes_mod = gate._DEPLOYED
+        result = probes_mod.DeployedProbeResult(
             gate_id="G1C-SEC-QUOTA-RECOVERY",
             probe={"deployedApi": True, "eof": True},
             metrics={},
@@ -440,7 +434,7 @@ class Phase1cHarnessContractTests(unittest.TestCase):
             coverage_limited_reasons=["quota:docker_unavailable"],
             metrics_observed=False,
         )
-        command_probe = module.deployed_probe_to_command_probe(result)
+        command_probe = probes_mod.deployed_probe_to_command_probe(result)
         self.assertTrue(command_probe.get("coverageLimited"))
         self.assertIn("quota:docker_unavailable", command_probe.get("coverageLimitedReasons", []))
         self.assertFalse(command_probe.get("metricsObserved", True))

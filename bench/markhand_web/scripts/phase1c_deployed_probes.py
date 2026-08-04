@@ -328,6 +328,9 @@ class DeployedProbeResult:
     probe: dict[str, Any]
     metrics: dict[str, Any]
     detail: dict[str, Any] = field(default_factory=dict)
+    coverage_limited: bool = False
+    coverage_limited_reasons: list[str] = field(default_factory=list)
+    metrics_observed: bool = True
 
 
 class DeployedProbeShims:
@@ -427,8 +430,132 @@ def nearest_rank_p95_ms(samples_ns: list[int]) -> int:
     return int(ordered[rank - 1] / 1_000_000)
 
 
-def compute_quota_drift(*, documents: int, storage_bytes: int, reserved_concurrent_slots: int) -> int:
-    return int(documents) + int(storage_bytes) + int(reserved_concurrent_slots)
+def compute_quota_drift(
+    *,
+    documents: int,
+    storage_bytes: int,
+    concurrent_reserved: int,
+    counter_documents: int,
+    counter_storage: int,
+) -> int:
+    return (
+        abs(int(documents) - int(counter_documents))
+        + abs(int(storage_bytes) - int(counter_storage))
+        + int(concurrent_reserved)
+    )
+
+
+def quota_ground_truth_queries(org_id: str) -> dict[str, str]:
+    return {
+        "documents": f"""
+            SELECT COUNT(*)::bigint FROM documents
+            WHERE org_id = '{org_id}'
+              AND deleted_at IS NULL
+              AND state <> 'purged'
+            """,
+        "storage_bytes": f"""
+            SELECT
+                COALESCE((
+                    SELECT SUM(dv.byte_size)::bigint
+                    FROM document_versions dv
+                    JOIN documents d ON d.org_id = dv.org_id AND d.id = dv.document_id
+                    WHERE dv.org_id = '{org_id}'
+                      AND d.deleted_at IS NULL
+                      AND d.state <> 'purged'
+                ), 0)
+              + COALESCE((
+                    SELECT SUM(da.byte_size)::bigint
+                    FROM derived_artifacts da
+                    JOIN documents d ON d.org_id = da.org_id AND d.id = da.document_id
+                    WHERE da.org_id = '{org_id}'
+                      AND d.deleted_at IS NULL
+                      AND d.state <> 'purged'
+                ), 0)
+            """,
+        "concurrent_reserved": f"""
+            SELECT COALESCE(SUM(amount), 0)::bigint
+            FROM quota_reservations
+            WHERE org_id = '{org_id}'
+              AND resource_kind = 'concurrent_jobs'
+              AND status = 'reserved'
+            """,
+    }
+
+
+def require_psql_success(outcome: CommandOutcome, *, context: str) -> str:
+    if outcome.exit_code != 0:
+        detail = (outcome.stderr or outcome.stdout or "unknown").strip()
+        raise RuntimeError(f"{context} query failed: {detail}")
+    return outcome.stdout or ""
+
+
+def parse_quota_ground_truth_rows(
+    *,
+    documents_stdout: str,
+    storage_stdout: str,
+    concurrent_stdout: str,
+    counter_documents_stdout: str,
+    counter_storage_stdout: str,
+) -> dict[str, int]:
+    return {
+        "documents": int((documents_stdout or "0").strip() or "0"),
+        "storage_bytes": int((storage_stdout or "0").strip() or "0"),
+        "concurrent_reserved": int((concurrent_stdout or "0").strip() or "0"),
+        "counter_documents": int((counter_documents_stdout or "0").strip() or "0"),
+        "counter_storage": int((counter_storage_stdout or "0").strip() or "0"),
+    }
+
+
+def hash_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def qualify_noisy_neighbor_workload(
+    *,
+    upload_statuses: list[int],
+    samples_ns: list[int],
+    duration_secs: float,
+    required_duration_secs: float,
+    min_quiet_samples: int,
+    min_successful_uploads: int = 50,
+) -> tuple[bool, str]:
+    if duration_secs < required_duration_secs:
+        return False, f"noisy window too short: {duration_secs:.2f}s < {required_duration_secs}s"
+    if len(samples_ns) < min_quiet_samples:
+        return False, f"quiet samples {len(samples_ns)} < {min_quiet_samples}"
+    if not upload_statuses:
+        return False, "no noisy upload attempts observed"
+    successful = sum(1 for status in upload_statuses if status // 100 == 2)
+    if successful < min_successful_uploads:
+        return False, f"noisy upload success count {successful} < {min_successful_uploads}"
+    if any(status // 100 != 2 for status in upload_statuses):
+        return False, "noisy uploads must sustain 2xx across full window"
+    return True, ""
+
+
+def scan_structured_foreign_ids(body: str, *, forbidden_ids: set[str]) -> list[str]:
+    leaks: list[str] = []
+    if not body.strip():
+        return leaks
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return leaks
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child_path = f"{path}.{key}" if path else key
+                if key in {"collectionId", "documentId", "versionId", "orgId"} and isinstance(value, str):
+                    if value in forbidden_ids:
+                        leaks.append(f"{child_path}={value}")
+                walk(value, child_path)
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{path}[{index}]")
+
+    walk(payload, "")
+    return sorted(dict.fromkeys(leaks))
 
 
 def _require_string(raw: dict[str, Any], key: str) -> str:
@@ -1068,6 +1195,28 @@ class DeployedProbeRunner:
             raise RuntimeError("refresh-derived auth/me missing sessionId")
         return validate_uuid(session_id, field="sessionId")
 
+    def _family_id_from_refresh_token(self, refresh_token: str) -> str:
+        token_hash = hash_refresh_token(refresh_token)
+        row = self._psql(
+            f"SELECT family_id::text FROM refresh_tokens WHERE token_hash = '{token_hash}' LIMIT 1"
+        )
+        if row.exit_code == 0:
+            family = (row.stdout or "").strip()
+            if family:
+                try:
+                    return validate_uuid(family, field="familyId")
+                except RuntimeError:
+                    pass
+        if refresh_token == self.credentials.alpha_refresh_token:
+            return validate_uuid(self.credentials.alpha_session_id, field="familyId")
+        if refresh_token == self.credentials.beta_refresh_token:
+            return validate_uuid(self.credentials.beta_session_id, field="familyId")
+        if refresh_token == self.credentials.beta_alpha_refresh_token:
+            return validate_uuid(self.credentials.beta_session_id, field="familyId")
+        if refresh_token == self.credentials.alpha_beta_refresh_token:
+            return validate_uuid(self.credentials.alpha_session_id, field="familyId")
+        raise RuntimeError("refresh token family not found for submitted token")
+
     def _switch_org(self, token: str, org_id: str) -> HttpResponse:
         return self._http("POST", "/api/v1/orgs/switch", token=token, body={"orgId": org_id})
 
@@ -1178,6 +1327,9 @@ class DeployedProbeRunner:
         if report.failures:
             raise RuntimeError("; ".join(report.failures))
         self._require_correlated_transitions(minimum=1)
+        detail = report.as_dict()
+        coverage_items = detail.get("coverageLimited") or []
+        coverage_reasons = [f"denial:{item}" for item in coverage_items]
         return DeployedProbeResult(
             gate_id="G1C-SEC-LEAKAGE",
             probe={
@@ -1186,10 +1338,13 @@ class DeployedProbeRunner:
                 "gitShaFull": report.git_sha_full,
                 "executableHttpSseCount": report.executable_http_sse_count,
                 "observationCount": len(report.observations),
+                "coverageLimited": coverage_items,
                 "eof": True,
             },
             metrics={"cross_tenant_leakage_count": report.leakage_count},
-            detail={"report": report.as_dict()},
+            detail={"report": detail},
+            coverage_limited=bool(coverage_reasons),
+            coverage_limited_reasons=coverage_reasons,
         )
 
     def run_revoke_probe(self) -> DeployedProbeResult:
@@ -1372,7 +1527,7 @@ class DeployedProbeRunner:
         org_quota = self._psql(
             f"SELECT COUNT(*) FROM org_quotas WHERE org_id = '{org_id}'"
         )
-        if (org_quota.stdout or "").strip() != "1":
+        if require_psql_success(org_quota, context="org_quotas").strip() != "1":
             raise RuntimeError(
                 "quota recovery requires org_quotas row for target org; provision qualification org first"
             )
@@ -1383,15 +1538,17 @@ class DeployedProbeRunner:
             ORDER BY counter_key, period_start
             """
         )
-        if counter_rows.exit_code != 0:
-            raise RuntimeError("usage_counters query failed")
-        self._psql(
+        require_psql_success(counter_rows, context="usage_counters")
+        bump = self._psql(
             f"""
             UPDATE usage_counters SET value = value + 1
             WHERE org_id = '{org_id}' AND counter_key = 'documents'
             """
         )
-        self._compose(["stop", "worker-convert"], timeout_secs=120)
+        require_psql_success(bump, context="usage_counters bump")
+        stop_worker = self._compose(["stop", "worker-convert"], timeout_secs=120)
+        if stop_worker.exit_code != 0:
+            raise RuntimeError("worker stop failed for quota recovery probe")
         reconcile_before = self._psql(
             f"""
             SELECT action FROM audit_log
@@ -1399,7 +1556,10 @@ class DeployedProbeRunner:
             ORDER BY created_at DESC LIMIT 1
             """
         )
-        self._compose(["start", "worker-convert"], timeout_secs=120)
+        require_psql_success(reconcile_before, context="audit_log before reconcile")
+        start_worker = self._compose(["start", "worker-convert"], timeout_secs=120)
+        if start_worker.exit_code != 0:
+            raise RuntimeError("worker start failed for quota recovery probe")
         deadline = time.monotonic() + 90
         saw_reconcile = False
         while time.monotonic() < deadline:
@@ -1410,30 +1570,17 @@ class DeployedProbeRunner:
                 ORDER BY created_at DESC LIMIT 1
                 """
             )
-            if reconcile.stdout.strip() and reconcile.stdout != reconcile_before.stdout:
+            reconcile_stdout = require_psql_success(reconcile, context="audit_log reconcile poll")
+            if reconcile_stdout.strip() and reconcile_stdout != reconcile_before.stdout:
                 saw_reconcile = True
                 break
             time.sleep(2)
         if not saw_reconcile:
             raise RuntimeError("quota reconcile audit missing after recovery window")
-        ground_truth_docs = self._psql(
-            f"""
-            SELECT COUNT(*)::bigint FROM documents
-            WHERE org_id = '{org_id}' AND deleted_at IS NULL
-            """
-        )
-        ground_truth_storage = self._psql(
-            f"""
-            SELECT COALESCE(SUM(storage_bytes), 0)::bigint FROM documents
-            WHERE org_id = '{org_id}' AND deleted_at IS NULL
-            """
-        )
-        ground_truth_slots = self._psql(
-            f"""
-            SELECT COALESCE(SUM(reserved_concurrent_slots), 0)::bigint FROM documents
-            WHERE org_id = '{org_id}' AND deleted_at IS NULL AND reserved_concurrent_slots > 0
-            """
-        )
+        queries = quota_ground_truth_queries(org_id)
+        ground_truth_docs = self._psql(queries["documents"])
+        ground_truth_storage = self._psql(queries["storage_bytes"])
+        ground_truth_concurrent = self._psql(queries["concurrent_reserved"])
         counter_docs = self._psql(
             f"""
             SELECT value FROM usage_counters
@@ -1448,21 +1595,15 @@ class DeployedProbeRunner:
             ORDER BY period_start DESC LIMIT 1
             """
         )
-        counter_slots = self._psql(
-            f"""
-            SELECT value FROM usage_counters
-            WHERE org_id = '{org_id}' AND counter_key = 'reserved_concurrent_slots'
-            ORDER BY period_start DESC LIMIT 1
-            """
-        )
         try:
-            gt_docs = int((ground_truth_docs.stdout or "0").strip() or "0")
-            gt_storage = int((ground_truth_storage.stdout or "0").strip() or "0")
-            gt_slots = int((ground_truth_slots.stdout or "0").strip() or "0")
-            cv_docs = int((counter_docs.stdout or "0").strip() or "0")
-            cv_storage = int((counter_storage.stdout or "0").strip() or "0")
-            cv_slots = int((counter_slots.stdout or "0").strip() or "0")
-            drift = abs(gt_docs - cv_docs) + abs(gt_storage - cv_storage) + abs(gt_slots - cv_slots)
+            parsed = parse_quota_ground_truth_rows(
+                documents_stdout=require_psql_success(ground_truth_docs, context="ground truth documents"),
+                storage_stdout=require_psql_success(ground_truth_storage, context="ground truth storage"),
+                concurrent_stdout=require_psql_success(ground_truth_concurrent, context="ground truth concurrent"),
+                counter_documents_stdout=require_psql_success(counter_docs, context="counter documents"),
+                counter_storage_stdout=require_psql_success(counter_storage, context="counter storage"),
+            )
+            drift = compute_quota_drift(**parsed)
         except ValueError as error:
             raise RuntimeError(f"quota drift parse failed: {error}") from error
         self._require_correlated_transitions(minimum=3)
@@ -1470,15 +1611,15 @@ class DeployedProbeRunner:
             gate_id="G1C-SEC-QUOTA-RECOVERY",
             probe={
                 "deployedApi": True,
-                "groundTruthDocuments": gt_docs,
-                "counterDocuments": cv_docs,
-                "groundTruthStorageBytes": gt_storage,
-                "counterStorageBytes": cv_storage,
-                "groundTruthConcurrentSlots": gt_slots,
-                "counterConcurrentSlots": cv_slots,
+                "groundTruthDocuments": parsed["documents"],
+                "counterDocuments": parsed["counter_documents"],
+                "groundTruthStorageBytes": parsed["storage_bytes"],
+                "counterStorageBytes": parsed["counter_storage"],
+                "groundTruthConcurrentReserved": parsed["concurrent_reserved"],
                 "eof": True,
             },
             metrics={"quota_drift_after_recovery": drift},
+            metrics_observed=True,
         )
 
     def run_noisy_neighbor_probe(self) -> DeployedProbeResult:
@@ -1492,6 +1633,7 @@ class DeployedProbeRunner:
 
         noisy_stop = threading.Event()
         noisy_errors: list[str] = []
+        noisy_upload_statuses: list[int] = []
 
         def noisy_uploader() -> None:
             noisy_token = self.credentials.alpha_access_token
@@ -1505,7 +1647,7 @@ class DeployedProbeRunner:
                         f'filename="noisy.txt"\r\nContent-Type: text/plain\r\n\r\nphase1c-noisy\n'
                         f"\r\n--{boundary}--\r\n"
                     ).encode("utf-8")
-                    self.shims.http_request(
+                    response = self.shims.http_request(
                         method="POST",
                         url=self._url("/api/v1/uploads"),
                         token=noisy_token,
@@ -1513,6 +1655,7 @@ class DeployedProbeRunner:
                         path="/api/v1/uploads",
                         content_type=f"multipart/form-data; boundary={boundary}",
                     )
+                    noisy_upload_statuses.append(response.status)
                 except Exception as error:  # noqa: BLE001
                     noisy_errors.append(str(error))
                 time.sleep(0.05)
@@ -1539,20 +1682,34 @@ class DeployedProbeRunner:
             if elapsed_ns / 1_000_000 > STARVATION_SLOW_MS:
                 starvation += 1
         elapsed = time.monotonic() - started_at
-        if elapsed < self.noisy_duration_secs:
-            raise RuntimeError(
-                f"noisy-neighbor probe exited early after {elapsed:.2f}s; requires full {self.noisy_duration_secs}s window"
-            )
-        if len(samples_ns) < self.quiet_search_samples:
-            raise RuntimeError(
-                f"noisy-neighbor probe collected {len(samples_ns)} samples; requires >= {self.quiet_search_samples}"
-            )
         noisy_stop.set()
         worker.join(timeout=5)
         if noisy_errors:
             raise RuntimeError(f"noisy workload errors: {noisy_errors[0]}")
+        qualified, qualify_reason = qualify_noisy_neighbor_workload(
+            upload_statuses=noisy_upload_statuses,
+            samples_ns=samples_ns,
+            duration_secs=elapsed,
+            required_duration_secs=float(self.noisy_duration_secs),
+            min_quiet_samples=self.quiet_search_samples,
+        )
+        if not qualified:
+            return DeployedProbeResult(
+                gate_id="G1C-SEC-NOISY-NEIGHBOR",
+                probe={
+                    "deployedApi": True,
+                    "sampleCount": len(samples_ns),
+                    "noisyUploadAttempts": len(noisy_upload_statuses),
+                    "qualificationFailure": qualify_reason,
+                    "eof": True,
+                },
+                metrics={},
+                coverage_limited=True,
+                coverage_limited_reasons=[f"noisy-neighbor:{qualify_reason}"],
+                metrics_observed=False,
+            )
         ps = self._compose(["ps", "-q", "worker-convert"], timeout_secs=120)
-        if "worker-convert" not in ps.stdout and ps.exit_code != 0:
+        if ps.exit_code != 0 or "worker-convert" not in ps.stdout:
             raise RuntimeError("worker-convert must remain observable during noisy-neighbor probe")
         forbidden = {self.seed.marker_alpha, self.seed.marker_beta}
         for marker in forbidden:
@@ -1784,19 +1941,13 @@ class DeployedProbeRunner:
         if isinstance(new_refresh, str):
             self.credentials.beta_refresh_token = new_refresh
 
-        me_before_logout = self._http("GET", "/api/v1/auth/me", token=token)
-        if me_before_logout.status != 200:
-            raise RuntimeError("auth/me failed before logout audit correlation")
-        me_payload = json.loads(me_before_logout.body)
-        logout_session_id = validate_uuid(
-            me_payload.get("sessionId") or me_payload.get("session_id"),
-            field="sessionId",
-        )
+        logout_refresh = self.credentials.alpha_refresh_token
+        logout_session_id = self._family_id_from_refresh_token(logout_refresh)
         logout = self._http(
             "POST",
             "/api/v1/auth/logout",
             token=token,
-            body={"refreshToken": self.credentials.alpha_refresh_token},
+            body={"refreshToken": logout_refresh},
         )
         logout_request_id = extract_server_request_id(logout.body, logout.headers) or ""
         expected.append(
@@ -1921,13 +2072,22 @@ class DeployedProbeRunner:
                 degraded_warnings.extend(str(item) for item in warnings)
             if not any("vector" in item.lower() or "fts" in item.lower() for item in degraded_warnings):
                 raise RuntimeError("degraded response missing vector/fts availability warning")
-            leakage = _DENIAL.scan_marker_leakage(
-                search.body + ask.body,
-                forbidden_markers={self.seed.marker_beta},
-            )
-            leakage_count = len(leakage)
-            if leakage_count:
-                raise RuntimeError(f"foreign markers leaked during qdrant degradation: {leakage}")
+            forbidden_ids = {
+                self.seed.org_beta_id,
+                self.seed.beta_collection_id,
+                self.seed.beta_document_id,
+                self.seed.beta_version_id,
+            }
+            forbidden_markers = {self.seed.marker_beta}
+            for label, response in (("search", search), ("ask", ask)):
+                marker_leaks = _DENIAL.scan_marker_leakage(response.body, forbidden_markers=forbidden_markers)
+                structured_leaks = scan_structured_foreign_ids(response.body, forbidden_ids=forbidden_ids)
+                if marker_leaks or structured_leaks:
+                    leakage_count += len(marker_leaks) + len(structured_leaks)
+                    raise RuntimeError(
+                        f"{label} leaked foreign tenant data during qdrant degradation: "
+                        f"markers={marker_leaks} ids={structured_leaks}"
+                    )
         finally:
             start = self._compose(["start", "qdrant"], timeout_secs=120)
             if start.exit_code != 0:
@@ -1980,7 +2140,7 @@ def bootstrap_seed_via_api(
 
 
 def deployed_probe_to_command_probe(result: DeployedProbeResult) -> dict[str, Any]:
-    return {
+    probe = {
         "commandExitCode": 0,
         "timedOut": False,
         "outputTruncated": False,
@@ -1990,3 +2150,11 @@ def deployed_probe_to_command_probe(result: DeployedProbeResult) -> dict[str, An
         "gateId": result.gate_id,
         **{k: v for k, v in result.probe.items() if k != "eof"},
     }
+    if result.coverage_limited:
+        probe["coverageLimited"] = True
+        probe["coverageLimitedReasons"] = list(result.coverage_limited_reasons)
+    else:
+        probe["coverageLimited"] = False
+    if not result.metrics_observed:
+        probe["metricsObserved"] = False
+    return probe

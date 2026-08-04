@@ -42,8 +42,8 @@ Qualifying PASS metrics come **only** from deployed probes in
 |-----------|--------|
 | Cross-tenant denial | `phase1c_http_denial.py` black-box driver: all primary HTTP/SSE manifest rows mapped through guard inventory/OpenAPI paths; foreign/unauth scenarios; `leakageCount` from observed marker violations only |
 | Revoke / ACL cache / stale tokens | Production auth + member PATCH/DELETE/refresh APIs |
-| Quota recovery | Real upload + authoritative POC jobs SQL + worker lifecycle + `quota.reconcile` audit |
-| Noisy neighbor | 60s concurrent uploads + 100 quiet-org search samples (canonical duration enforced) |
+| Quota recovery | Real upload + authoritative POC jobs SQL + worker lifecycle + `quota.reconcile` audit (**coverage-limited** until live Docker cycle completes; drift metric must not PASS hermetically) |
+| Noisy neighbor | 60s concurrent **successful** uploads + 100 quiet-org search samples (**coverage-limited** until live Docker cycle; non-2xx noisy uploads fail closed) |
 | Qdrant degraded isolation | Compose stop/start single-node Qdrant; search/ask must return 200 with vector-degradation warnings and zero foreign markers/cross-tenant results |
 | Audit coverage | Real admin mutations + `/audit` correlation (ratio computed, never hard-coded) |
 | Worker role | Harness-supplied `MARKHAND_PHASE1C_WORKER_NONCE`; worker echoes exact nonce |
@@ -92,11 +92,16 @@ properties that cannot be exercised black-box as `coverageLimited` in evidence:
 |----------------|-------------------|-------------------|
 | `approveIntake` quarantine approval | `doc.quarantine.review` has no built-in grants; fixture not genuinely quarantined | Owner control expects 403/404; `coverageLimited: true` |
 | Citation single-use replay | Repeated valid resolves succeed (`services/citation.rs`) | Repeat resolve expects 200; replay property `coverageLimited` |
-| In-flight ask stream revoke | Requires suspend/remove (not viewer downgrade) + real concurrency | DELETE member transition; stream revoke property `coverageLimited` |
+| In-flight ask stream revoke | Requires suspend/remove (not viewer downgrade) + real concurrency | DELETE member transition; post-remove stream expects **403**; concurrent in-flight property `coverageLimited` |
+| Citation expiry (single-use TTL) | True expiry not black-box reproducible with current fixtures | Cross-document `requireCurrent` returns **404**; expiry property `coverageLimited` |
+| Quota drift after recovery | Requires live worker stop/start + authoritative SQL ground truth | Hermetic VM fail-closed; evidence `coverageLimited` / `metricsObserved=false` until operator live run |
+| Noisy-neighbor P95 | Requires sustained 2xx noisy uploads for full 60s window | Hermetic VM fail-closed; non-2xx uploads cannot yield qualifying P95 |
 
 Qualifying PASS for these properties requires a live deployed run with the
 documented fixtures; hermetic runs must not emit PASS metrics that depend on
-fabricated behavior.
+fabricated behavior. Any evidence row with `coverageLimited: true` or
+`metricsObserved: false` forces the gate report to **non-PASS** (`fail` /
+`not_run`).
 
 ## Validation commands
 

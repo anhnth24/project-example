@@ -1245,6 +1245,7 @@ def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: 
                 body=expired_body,
                 expected_statuses=frozenset({404}),
                 supplied_request_id=f"{request_id}-expired",
+                coverage_limited=True,
             )
         )
         mismatch = dict(owner.body or {})
@@ -1910,14 +1911,9 @@ def _validate_owner_transition(
             path=stream_path,
             accept="text/event-stream",
         )
-        if stream.status != 200:
+        if stream.status != 403:
             report.failures.append(
-                f"{spec.operation_id}/owner_control transition ask_stream_revoked expected 200 stream got {stream.status}"
-            )
-            return transition
-        if "stream.closed" not in stream.body and "principal_denied" not in stream.body:
-            report.failures.append(
-                f"{spec.operation_id}/owner_control transition ask_stream_revoked missing terminal deny"
+                f"{spec.operation_id}/owner_control transition ask_stream_revoked expected 403 got {stream.status}"
             )
         return transition
     report.failures.append(f"{spec.operation_id}/owner_control transition {transition} missing follow-up")

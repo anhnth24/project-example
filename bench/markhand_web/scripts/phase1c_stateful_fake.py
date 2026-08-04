@@ -613,10 +613,20 @@ class StatefulFakeDeployment:
                 logical_id = body.get("logicalDocumentId") if isinstance(body, dict) else ""
                 require_current = bool((body or {}).get("requireCurrent")) if isinstance(body, dict) else False
                 expired_version = getattr(self.credentials, "beta_citation_expired_version_id", "")
-                if require_current and str(version_id) == str(expired_version):
-                    return self._response(status=404, body='{"code":"not_found"}')
                 if str(logical_id) == str(self.seed.alpha_document_id):
                     return self._response(status=404, body='{"code":"not_found"}')
+                if (
+                    require_current
+                    and str(version_id) == str(expired_version)
+                    and str(logical_id) == str(self.seed.beta_document_id)
+                ):
+                    return self._response(status=404, body='{"code":"not_found"}')
+                if (
+                    require_current
+                    and str(logical_id) == str(self.seed.beta_document_id)
+                    and str(version_id) != str(self.seed.beta_version_id)
+                ):
+                    return self._response(status=400, body='{"code":"validation_failed"}')
                 return self._response(
                     status=200,
                     body=json.dumps(
@@ -741,8 +751,6 @@ class StatefulFakeDeployment:
             if path.endswith(f"/api/v1/collections/{self.seed.alpha_collection_id}") and method == "GET":
                 return self._response(status=404, body='{"code":"not_found"}')
             if path.endswith("/api/v1/ask/stream") and method == "POST":
-                denial_mod = self._denial()
-                request_id = _mint_server_request_id()
                 body_dict = body if isinstance(body, dict) else {}
                 if "question" not in body_dict:
                     return self._response(status=422, body='{"code":"validation_failed"}')
@@ -750,23 +758,9 @@ class StatefulFakeDeployment:
                     not self._membership_active
                     or (token == self.credentials.beta_alpha_access_token and (not self._beta_alpha_editor or self._stream_revoked))
                 ):
-                    envelope = {
-                        "version": 1,
-                        "sequence": 1,
-                        "event": "stream.closed",
-                        "requestId": request_id,
-                        "data": {"reason": "principal_denied"},
-                    }
-                    return self._response(
-                        status=200,
-                        body=(
-                            f"id: 1\n"
-                            f"event: stream.closed\n"
-                            f"data: {json.dumps(envelope)}\n\n"
-                        ),
-                        content_type="text/event-stream",
-                        request_id=request_id,
-                    )
+                    return self._response(status=403, body='{"code":"forbidden"}')
+                denial_mod = self._denial()
+                request_id = _mint_server_request_id()
                 token_env = {
                     "version": 1,
                     "sequence": 1,

@@ -1296,6 +1296,9 @@ def phase1c_gate_report_errors(
         errors.append("phase1c-report: status pass requires targetMatch=true")
     if status == "pass" and template_mode:
         errors.append("phase1c-report: template/report must not claim status pass")
+    coverage = report.get("coverageLimited")
+    if status == "pass" and coverage:
+        errors.append("phase1c-report: status pass forbidden when coverageLimited is set")
     if status == "not_run" and target_match is True:
         errors.append("phase1c-report: status not_run requires targetMatch=false")
 
