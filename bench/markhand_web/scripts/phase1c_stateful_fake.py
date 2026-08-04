@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import secrets
 import sys
 import uuid
 from dataclasses import dataclass, field
@@ -48,6 +49,15 @@ class StatefulFakeDeployment:
     _revoked_refresh_tokens: set[str] = field(default_factory=set)
     _member_roles: dict[str, str] = field(default_factory=dict)
     _collection_names: dict[str, str] = field(default_factory=dict)
+    _redeemed_download_capabilities: set[str] = field(default_factory=set)
+    _redeemed_citation_canonical: set[str] = field(default_factory=set)
+    _quarantined_documents: set[str] = field(default_factory=set)
+    _stream_revoked: bool = False
+
+    def __post_init__(self) -> None:
+        quarantined = getattr(self.credentials, "beta_denial_quarantined_document_id", "")
+        if isinstance(quarantined, str) and quarantined.strip():
+            self._quarantined_documents.add(quarantined.strip())
 
     def _probes(self):
         return _load("phase1c_deployed_probes_fake", ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py")
@@ -133,10 +143,16 @@ class StatefulFakeDeployment:
             )
         if operation_id == "assignCollectionProject":
             return self._response(status=200, body=json.dumps({"id": self.seed.beta_collection_id, "requestId": request_id}))
-        if operation_id in {"publishDocumentVersion", "reindexDocument", "approveIntake"}:
+        if operation_id in {"publishDocumentVersion", "reindexDocument"}:
+            return self._response(status=200, body=json.dumps({"requestId": request_id}))
+        if operation_id == "approveIntake":
+            document_id = path.split("/documents/")[1].split("/")[0] if "/documents/" in path else ""
+            if document_id not in self._quarantined_documents:
+                return self._response(status=404, body='{"code":"not_found"}')
             return self._response(status=200, body=json.dumps({"requestId": request_id}))
         if operation_id == "issueDownloadCapability":
-            return self._response(status=200, body=json.dumps({"capability": self.credentials.beta_download_capability, "requestId": request_id}))
+            minted = f"mhcap1.{request_id.replace('-', '')[:16]}"
+            return self._response(status=200, body=json.dumps({"capability": minted, "requestId": request_id}))
         if operation_id == "updateCollection":
             return self._response(status=200, body=json.dumps({"id": self.seed.beta_collection_id, "name": (body or {}).get("name", "updated")}))
         if operation_id == "updateProject":
@@ -144,6 +160,11 @@ class StatefulFakeDeployment:
         if operation_id == "switchOrg":
             return self._response(status=200, body=json.dumps({"accessToken": self.credentials.alpha_beta_access_token, "refreshToken": "r", "requestId": request_id}))
         if operation_id in {"search", "ask"}:
+            if isinstance(body, dict):
+                if operation_id == "ask" and "question" not in body:
+                    return None
+                if operation_id == "search" and "query" not in body:
+                    return None
             return self._response(status=200, body=json.dumps({"items": [], "requestId": request_id}))
         if operation_id == "resolveCitation":
             return None
@@ -250,53 +271,6 @@ class StatefulFakeDeployment:
                     }
                 ),
             )
-        if path.endswith("/api/v1/ask/stream") and method == "POST":
-            request_id = _mint_server_request_id()
-            if not self._beta_alpha_editor:
-                envelope = {
-                    "version": 1,
-                    "sequence": 1,
-                    "event": "stream.closed",
-                    "requestId": request_id,
-                    "data": {"reason": "principal_denied"},
-                }
-                return self._response(
-                    status=200,
-                    body=(
-                        f"id: 1\n"
-                        f"event: stream.closed\n"
-                        f"data: {json.dumps(envelope)}\n\n"
-                    ),
-                    content_type="text/event-stream",
-                    request_id=request_id,
-                )
-            token_env = {
-                "version": 1,
-                "sequence": 1,
-                "event": "ask.token",
-                "requestId": request_id,
-                "data": {"text": "ok"},
-            }
-            close_env = {
-                "version": 1,
-                "sequence": 2,
-                "event": denial_mod.SSE_TERMINAL_EVENT,
-                "requestId": request_id,
-                "data": {"reason": "done"},
-            }
-            return self._response(
-                status=200,
-                body=(
-                    f"id: 1\n"
-                    f"event: ask.token\n"
-                    f"data: {json.dumps(token_env)}\n\n"
-                    f"id: 2\n"
-                    f"event: {denial_mod.SSE_TERMINAL_EVENT}\n"
-                    f"data: {json.dumps(close_env)}\n\n"
-                ),
-                content_type="text/event-stream",
-                request_id=request_id,
-            )
         if path.endswith("/events") and method == "GET":
             request_id = _mint_server_request_id()
             status_env = {
@@ -359,7 +333,10 @@ class StatefulFakeDeployment:
             return self._response(status=200, body=json.dumps({"id": self.seed.beta_job_id, "status": "queued"}))
         if path.endswith("/api/v1/collections") and method == "GET" and "?" not in path:
             items = [{"id": self.seed.beta_collection_id, "name": self.seed.marker_beta}]
-            if denial_mod.DUPLICATE_COLLECTION_NAME != self.seed.marker_beta:
+            dup_id = getattr(self.seed, "alpha_duplicate_collection_id", "")
+            if dup_id:
+                items.append({"id": dup_id, "name": denial_mod.DUPLICATE_COLLECTION_NAME})
+            elif denial_mod.DUPLICATE_COLLECTION_NAME != self.seed.marker_beta:
                 items.append({"id": self.seed.alpha_collection_id, "name": denial_mod.DUPLICATE_COLLECTION_NAME})
             return self._response(status=200, body=json.dumps({"items": items, "page": {"hasMore": False}}))
         if path.endswith("/api/v1/auth/me") and method == "GET":
@@ -398,6 +375,53 @@ class StatefulFakeDeployment:
 
     def _unknown_owner_mapping(self, *, method: str, path: str) -> Any:
         raise RuntimeError(f"stateful fake missing explicit handler: {method} {path}")
+
+    def _alpha_foreign_isolation_response(self, *, path: str, method: str) -> Any | None:
+        if method != "GET":
+            return None
+        if path.endswith("/api/v1/auth/me"):
+            return self._response(
+                status=200,
+                body=json.dumps(
+                    {
+                        "userId": self.seed.alpha_user_id,
+                        "orgId": self.seed.org_alpha_id,
+                        "sessionId": self.credentials.alpha_session_id,
+                    }
+                ),
+            )
+        if path.endswith("/api/v1/graph"):
+            return self._response(status=200, body=json.dumps({"nodes": []}))
+        if path.endswith("/api/v1/usage"):
+            return self._response(status=200, body=json.dumps({"items": []}))
+        if path.endswith("/api/v1/collections") and "?" not in path:
+            return self._response(
+                status=200,
+                body=json.dumps({"items": [{"id": self.seed.alpha_collection_id, "name": self.seed.marker_alpha}]}),
+            )
+        if "/collections/" in path and path.endswith("/documents"):
+            collection_id = path.split("/collections/", 1)[1].split("/documents", 1)[0]
+            if collection_id == self.seed.beta_collection_id:
+                return self._response(status=404, body='{"code":"not_found"}')
+            if collection_id == self.seed.alpha_collection_id:
+                return self._response(
+                    status=200,
+                    body=json.dumps({"items": [{"id": self.seed.alpha_document_id, "title": "alpha"}]}),
+                )
+            return self._response(status=404, body='{"code":"not_found"}')
+        if path.endswith("/api/v1/projects"):
+            return self._response(status=200, body=json.dumps({"items": [{"id": self.seed.alpha_project_id, "name": "project"}]}))
+        if path.endswith("/api/v1/chat-sessions"):
+            return self._response(status=200, body=json.dumps({"items": [{"id": self.seed.alpha_chat_session_id, "title": "chat"}]}))
+        if path.endswith("/api/v1/orgs"):
+            return self._response(status=200, body=json.dumps({"items": [{"id": self.seed.org_alpha_id, "name": "alpha"}]}))
+        if path.endswith("/api/v1/members") and path.count("/") == 3:
+            return self._response(status=200, body=json.dumps({"items": [], "page": {"hasMore": False}}))
+        if path.endswith("/api/v1/members/invites"):
+            return self._response(status=200, body=json.dumps({"items": []}))
+        if path.endswith("/api/v1/conflicts"):
+            return self._response(status=200, body=json.dumps({"items": []}))
+        return None
 
     def _http_request(self, **kwargs: Any):
         method = str(kwargs.get("method") or "GET").upper()
@@ -494,14 +518,30 @@ class StatefulFakeDeployment:
             return self._response(status=401, body='{"code":"unauthorized"}')
 
         if token == self.credentials.alpha_access_token:
+            if "/collections/" in path and path.endswith("/documents"):
+                collection_id = path.split("/collections/", 1)[1].split("/documents", 1)[0]
+                if collection_id == self.seed.beta_collection_id:
+                    return self._response(status=404, body='{"code":"not_found"}')
+            isolated = self._alpha_foreign_isolation_response(path=path, method=method)
+            if isolated is not None:
+                return isolated
             if self.seed.beta_member_user_id in path and method in {"PATCH", "DELETE"}:
                 if method == "DELETE":
                     self._membership_active = False
                 if method == "PATCH" and isinstance(body, dict) and body.get("role") == "viewer":
                     self._beta_alpha_editor = False
+                    self._stream_revoked = True
                 return self._response(status=204 if method == "DELETE" else 200, body="" if method == "DELETE" else "{}")
             if path.endswith("/download-capability") and method == "POST" and self.seed.alpha_document_id in path:
-                return self._response(status=200, body=json.dumps({"capability": "mhcap1.preview-cap"}))
+                minted = f"mhcap1.alpha-{secrets.token_hex(4)}"
+                return self._response(status=200, body=json.dumps({"capability": minted}))
+            if path.endswith(f"/api/v1/collections/{self.seed.alpha_collection_id}") and method == "GET":
+                return self._response(
+                    status=200,
+                    body=json.dumps({"id": self.seed.alpha_collection_id, "name": self.seed.marker_alpha}),
+                )
+            if path.endswith(f"/api/v1/documents/{self.seed.beta_document_id}/preview") and method == "GET":
+                return self._response(status=404, body='{"code":"not_found"}')
             if self.accept_5xx:
                 return self._response(status=500, body='{"code":"error"}')
             return self._response(status=403, body='{"code":"forbidden"}')
@@ -538,7 +578,10 @@ class StatefulFakeDeployment:
             negative = getattr(self.credentials, "beta_denial_negative_invite_token", "")
             owner = getattr(self.credentials, "beta_denial_accept_invite_token", "")
             if invite_token == negative:
-                return self._response(status=404, body='{"code":"not_found"}')
+                return self._response(status=400, body='{"code":"validation_failed"}')
+            already = getattr(self.credentials, "beta_denial_already_member_invite_token", "")
+            if already and invite_token == already:
+                return self._response(status=409, body='{"code":"already_member"}')
             if invite_token == owner:
                 if invite_token in self._accepted_invites:
                     return self._response(status=409, body='{"code":"conflict"}')
@@ -565,12 +608,16 @@ class StatefulFakeDeployment:
                 canonical = body.get("canonicalMarkdownSha256") if isinstance(body, dict) else ""
                 version_id = body.get("versionId") if isinstance(body, dict) else ""
                 logical_id = body.get("logicalDocumentId") if isinstance(body, dict) else ""
-                if canonical == "f" * 64:
+                require_current = bool((body or {}).get("requireCurrent")) if isinstance(body, dict) else False
+                expired_version = getattr(self.credentials, "beta_citation_expired_version_id", "")
+                if canonical and canonical in self._redeemed_citation_canonical:
                     return self._response(status=403, body='{"code":"forbidden"}')
-                if str(version_id) == "00000000-0000-0000-0000-000000000099":
+                if require_current and str(version_id) == str(expired_version):
                     return self._response(status=404, body='{"code":"not_found"}')
                 if str(logical_id) == str(self.seed.alpha_document_id):
                     return self._response(status=404, body='{"code":"not_found"}')
+                if canonical:
+                    self._redeemed_citation_canonical.add(str(canonical))
                 return self._response(
                     status=200,
                     body=json.dumps(
@@ -604,7 +651,17 @@ class StatefulFakeDeployment:
                         }
                     ),
                 )
+            if "/downloads/" in path and method == "GET":
+                cap = path.rstrip("/").split("/")[-1]
+                if cap in self._redeemed_download_capabilities:
+                    return self._response(status=400, body='{"code":"replay"}')
+                self._redeemed_download_capabilities.add(cap)
+                return self._response(status=200, body=self.seed.marker_beta, content_type="text/plain")
             if path.endswith(f"/api/v1/downloads/{self.credentials.beta_download_capability}"):
+                cap = self.credentials.beta_download_capability
+                if cap in self._redeemed_download_capabilities:
+                    return self._response(status=400, body='{"code":"replay"}')
+                self._redeemed_download_capabilities.add(cap)
                 return self._response(status=200, body=self.seed.marker_beta, content_type="text/plain")
             if path.endswith("/api/v1/uploads") and method == "POST" and multipart_body is not None:
                 if token == self.credentials.beta_alpha_access_token and not self._beta_alpha_editor:
@@ -631,6 +688,11 @@ class StatefulFakeDeployment:
             if disposable_member and path.endswith(f"/api/v1/members/{disposable_member}") and method == "PATCH":
                 role = body.get("role") if isinstance(body, dict) else "viewer"
                 self._member_roles[disposable_member] = str(role)
+                return self._response(status=200, body="{}")
+            if path.endswith(f"/api/v1/members/{self.seed.beta_member_user_id}") and method == "PATCH":
+                if body.get("role") == "viewer":
+                    self._beta_alpha_editor = False
+                    self._stream_revoked = True
                 return self._response(status=200, body="{}")
             if delete_member and path.endswith(f"/api/v1/members/{delete_member}") and method == "DELETE":
                 self._deleted_members.add(delete_member)
@@ -674,9 +736,70 @@ class StatefulFakeDeployment:
                         }
                     ),
                 )
+            if "/approve-intake" in path and method == "POST":
+                document_id = path.split("/documents/")[1].split("/")[0] if "/documents/" in path else ""
+                if document_id not in self._quarantined_documents:
+                    return self._response(status=404, body='{"code":"not_found"}')
+                return self._response(status=200, body=json.dumps({"requestId": _mint_server_request_id()}))
             if path.endswith(f"/api/v1/collections/{self.seed.alpha_collection_id}") and method == "GET":
                 return self._response(status=404, body='{"code":"not_found"}')
+            if path.endswith("/api/v1/ask/stream") and method == "POST":
+                denial_mod = self._denial()
+                request_id = _mint_server_request_id()
+                body_dict = body if isinstance(body, dict) else {}
+                if "question" not in body_dict:
+                    return self._response(status=422, body='{"code":"validation_failed"}')
+                if (
+                    not self._membership_active
+                    or (token == self.credentials.beta_alpha_access_token and (not self._beta_alpha_editor or self._stream_revoked))
+                ):
+                    envelope = {
+                        "version": 1,
+                        "sequence": 1,
+                        "event": "stream.closed",
+                        "requestId": request_id,
+                        "data": {"reason": "principal_denied"},
+                    }
+                    return self._response(
+                        status=200,
+                        body=(
+                            f"id: 1\n"
+                            f"event: stream.closed\n"
+                            f"data: {json.dumps(envelope)}\n\n"
+                        ),
+                        content_type="text/event-stream",
+                        request_id=request_id,
+                    )
+                token_env = {
+                    "version": 1,
+                    "sequence": 1,
+                    "event": "ask.token",
+                    "requestId": request_id,
+                    "data": {"text": "ok"},
+                }
+                close_env = {
+                    "version": 1,
+                    "sequence": 2,
+                    "event": denial_mod.SSE_TERMINAL_EVENT,
+                    "requestId": request_id,
+                    "data": {"reason": "done"},
+                }
+                return self._response(
+                    status=200,
+                    body=(
+                        f"id: 1\n"
+                        f"event: ask.token\n"
+                        f"data: {json.dumps(token_env)}\n\n"
+                        f"id: 2\n"
+                        f"event: {denial_mod.SSE_TERMINAL_EVENT}\n"
+                        f"data: {json.dumps(close_env)}\n\n"
+                    ),
+                    content_type="text/event-stream",
+                    request_id=request_id,
+                )
             operation_id = self._resolve_operation_id(path, method)
+            if path.endswith("/api/v1/ask") and isinstance(body, dict) and "question" not in body:
+                return self._response(status=422, body='{"code":"validation_failed"}')
             handled = self._owner_success(operation_id=operation_id, path=path, method=method)
             if handled is not None:
                 return handled

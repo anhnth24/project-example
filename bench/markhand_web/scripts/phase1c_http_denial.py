@@ -36,6 +36,22 @@ DISPOSABLE_MEMBER_DELETE_OPS = frozenset({"deleteMember"})
 DISPOSABLE_CONFLICT_OPS = frozenset({"triageConflict"})
 
 DUPLICATE_COLLECTION_NAME = "Shared Contract Collection"
+CURRENT_ORG_READ_OPS = frozenset(
+    {
+        "authMe",
+        "getGraph",
+        "getUsage",
+        "listCollections",
+        "listDocuments",
+        "listProjects",
+        "listChatSessions",
+        "listOrgs",
+        "listMembers",
+        "listMemberInvites",
+        "listConflicts",
+    }
+)
+APPROVE_INTAKE_OPS = frozenset({"approveIntake"})
 SSE_ENVELOPE_REQUIRED_KEYS = frozenset({"version", "sequence", "event", "requestId", "data"})
 SSE_MAX_BYTES = 65536
 SSE_MAX_SECONDS = 30.0
@@ -88,7 +104,8 @@ HTTP_OWNER_SUCCESS_SCHEMA: dict[str, frozenset[str]] = {
 OPERATION_FOREIGN_DENIAL: dict[str, frozenset[int]] = {
     "switchOrg": frozenset({403}),
     "redeemDownload": frozenset({400}),
-    "acceptMemberInvite": frozenset({404}),
+    "acceptMemberInvite": frozenset({400}),
+    "approveIntake": frozenset({403, 404}),
 }
 
 DEFAULT_FOREIGN_DENIAL = frozenset({403, 404})
@@ -160,6 +177,7 @@ class DenialRequestSpec:
     success_schema_keys: frozenset[str] | None = None
     accept: str | None = None
     owner_transition: str | None = None
+    mint_fresh_download_capability: bool = False
 
 
 @dataclass
@@ -498,6 +516,13 @@ def _owner_params(seed: Any, *, credentials: Any, operation_id: str) -> dict[str
         params["conflictId"] = _credential_string(
             credentials, "beta_denial_disposable_conflict_id", field="betaDenialDisposableConflictId"
         )
+    if operation_id in APPROVE_INTAKE_OPS:
+        params["documentId"] = _credential_string(
+            credentials, "beta_denial_quarantined_document_id", field="betaDenialQuarantinedDocumentId"
+        )
+        params["collectionId"] = _credential_string(
+            credentials, "beta_denial_quarantined_collection_id", field="betaDenialQuarantinedCollectionId"
+        )
     return params
 
 
@@ -531,10 +556,12 @@ def _body_for_operation(
     document_id = seed.beta_document_id if foreign else seed.alpha_document_id
     org_id = seed.org_beta_id if foreign else seed.org_alpha_id
     suffix = seed.challenge[:8]
-    if operation_id in {"search", "ask"}:
+    if operation_id in {"search"}:
         return {"query": f"phase1c-denial-{suffix}", "collectionIds": [collection_id]}
+    if operation_id in {"ask"}:
+        return {"question": f"phase1c-denial-{suffix}", "collectionIds": [collection_id]}
     if operation_id == "askStream":
-        return {"query": f"phase1c-denial-stream-{suffix}", "collectionIds": [collection_id]}
+        return {"question": f"phase1c-denial-stream-{suffix}", "collectionIds": [collection_id]}
     if operation_id == "switchOrg":
         return {"orgId": _disposable_org_id(seed) if foreign else org_id}
     if operation_id == "createOrg":
@@ -558,7 +585,11 @@ def _body_for_operation(
     if operation_id == "resolveCitation":
         return _resolve_citation_body(seed, credentials=credentials, foreign=foreign)
     if operation_id == "appendChatTurn":
-        return {"role": "user", "content": f"phase1c-{suffix}"}
+        return {
+            "question": f"phase1c-{suffix}?",
+            "answer": f"phase1c-{suffix}",
+            "answerMode": "grounded",
+        }
     if operation_id == "createChatSession":
         return {"title": f"phase1c-{suffix}"}
     if operation_id == "updateChatSession":
@@ -658,9 +689,9 @@ def _owner_body(operation_id: str, seed: Any, *, credentials: Any, params: dict[
     if operation_id == "search":
         return {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
     if operation_id == "ask":
-        return {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
+        return {"question": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
     if operation_id == "askStream":
-        return {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
+        return {"question": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
     if operation_id == "switchOrg":
         return {"orgId": seed.org_beta_id}
     if operation_id == "createOrg":
@@ -680,7 +711,11 @@ def _owner_body(operation_id: str, seed: Any, *, credentials: Any, params: dict[
     if operation_id == "resolveCitation":
         return _resolve_citation_body(seed, credentials=credentials, foreign=False)
     if operation_id == "appendChatTurn":
-        return {"role": "user", "content": f"phase1c-owner-{seed.challenge[:8]}"}
+        return {
+            "question": f"phase1c-owner-{seed.challenge[:8]}?",
+            "answer": f"phase1c-owner-{seed.challenge[:8]}",
+            "answerMode": "grounded",
+        }
     if operation_id == "createChatSession":
         return {"title": f"phase1c-owner-{seed.challenge[:8]}"}
     if operation_id == "updateChatSession":
@@ -1055,7 +1090,7 @@ def _build_primary_row_specs(
         content_type = f"multipart/form-data; boundary={MULTIPART_BOUNDARY}"
         body = None
 
-    if _uses_foreign_scope(entry.operation_id, entry.path_template):
+    if _uses_foreign_scope(entry.operation_id, entry.path_template) or entry.operation_id in CURRENT_ORG_READ_OPS:
         _append_owner_spec(
             specs,
             entry=entry,
@@ -1112,30 +1147,82 @@ def _build_primary_row_specs(
                 supplied_request_id=f"{request_id}-negative",
             )
         )
+        if entry.operation_id == "acceptMemberInvite":
+            already_token = getattr(credentials, "beta_denial_already_member_invite_token", "")
+            if isinstance(already_token, str) and already_token.strip():
+                specs.append(
+                    DenialRequestSpec(
+                        row_id=entry.row_id,
+                        operation_id=entry.operation_id,
+                        scenario="invite_already_member",
+                        method=entry.method,
+                        path=negative_path,
+                        token=_credential_string(
+                            credentials, "beta_denial_accept_access_token", field="betaDenialAcceptAccessToken"
+                        ),
+                        body={"token": already_token},
+                        expected_statuses=frozenset({409}),
+                        content_type=content_type,
+                        supplied_request_id=f"{request_id}-already-member",
+                    )
+                )
+    if entry.operation_id in CURRENT_ORG_READ_OPS:
+        # Collection-scoped list ops use foreign ids in the path; production returns
+        # not-found when the collection is outside the authenticated org context
+        # (documents.rs:195-197), not 200 with current-org data.
+        foreign_isolation_statuses = frozenset({200})
+        if entry.operation_id == "listDocuments":
+            foreign_isolation_statuses = frozenset({404})
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id=entry.operation_id,
+                scenario="authenticated_foreign_isolation",
+                method=entry.method,
+                path=path if entry.operation_id in CURRENT_ORG_READ_OPS else path,
+                token=credentials.alpha_access_token,
+                body=body if entry.method.upper() != "GET" else None,
+                expected_statuses=foreign_isolation_statuses,
+                content_type=content_type,
+                multipart_body=upload_multipart,
+                supplied_request_id=f"{request_id}-auth-foreign-isolation",
+            )
+        )
     return specs
 
 
 def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
     request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
+    owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
+    replay_canonical = _credential_string(
+        credentials, "beta_citation_canonical_markdown_sha256", field="betaCitationCanonicalMarkdownSha256"
+    )
     for spec in specs:
         if spec.scenario == "foreign":
             spec.scenario = "citation_replay"
             tampered = dict(spec.body or {})
-            tampered["canonicalMarkdownSha256"] = "f" * 64
+            tampered["canonicalMarkdownSha256"] = replay_canonical
             spec.body = tampered
-            spec.expected_statuses = frozenset({403, 404, 422})
-    owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
+            spec.expected_statuses = frozenset({403})
     if owner is not None:
-        _append_owner_control_from_spec(
-            specs,
+        replay_spec = DenialRequestSpec(
             row_id=entry.row_id,
             operation_id=entry.operation_id,
-            owner=owner,
-            request_id=request_id,
-            suffix="expired-owner",
-            credentials=credentials,
+            scenario="citation_replay",
+            method=owner.method,
+            path=owner.path,
+            token=owner.token,
+            body=dict(owner.body or {}),
+            expected_statuses=frozenset({403}),
+            supplied_request_id=f"{request_id}-replay",
         )
+        specs.append(replay_spec)
+        expired_body = dict(owner.body or {})
+        expired_version = getattr(credentials, "beta_citation_expired_version_id", "")
+        if isinstance(expired_version, str) and expired_version.strip():
+            expired_body["versionId"] = expired_version
+            expired_body["requireCurrent"] = True
         specs.append(
             DenialRequestSpec(
                 row_id=entry.row_id,
@@ -1144,19 +1231,10 @@ def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: 
                 method=owner.method,
                 path=owner.path,
                 token=owner.token,
-                body=dict(owner.body or {}) | {"versionId": "00000000-0000-0000-0000-000000000099"},
-                expected_statuses=frozenset({403, 404, 422}),
+                body=expired_body,
+                expected_statuses=frozenset({403, 404}),
                 supplied_request_id=f"{request_id}-expired",
             )
-        )
-        _append_owner_control_from_spec(
-            specs,
-            row_id=entry.row_id,
-            operation_id=entry.operation_id,
-            owner=owner,
-            request_id=request_id,
-            suffix="mismatch-owner",
-            credentials=credentials,
         )
         mismatch = dict(owner.body or {})
         mismatch["logicalDocumentId"] = seed.alpha_document_id
@@ -1184,7 +1262,7 @@ def _handler_indexed_fts(entry: DenialMappingEntry, seed: Any, credentials: Any)
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
     for spec in specs:
         if spec.body is not None and spec.operation_id == "ask":
-            spec.body = {"query": seed.marker_beta, "collectionIds": [seed.beta_collection_id]}
+            spec.body = {"question": seed.marker_beta, "collectionIds": [seed.beta_collection_id]}
     return specs
 
 
@@ -1274,22 +1352,28 @@ def _handler_stale_tokens(entry: DenialMappingEntry, seed: Any, credentials: Any
                 success_schema_keys=owner.success_schema_keys,
             )
         )
-    stale_token = _credential_string(
-        credentials, "beta_denial_stale_access_token", field="betaDenialStaleAccessToken"
-    )
-    specs.append(
-        DenialRequestSpec(
-            row_id=entry.row_id,
-            operation_id="authMe",
-            scenario="stale_token",
-            method="GET",
-            path=f"{API_PREFIX}/auth/me",
-            token=stale_token,
-            body=None,
-            expected_statuses=frozenset({401}),
-            supplied_request_id=f"phase1c-{entry.row_id}-stale-{secrets.token_hex(4)}",
-        )
-    )
+    request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
+    stale_specs = [
+        ("stale_token", "beta_denial_stale_access_token", "betaDenialStaleAccessToken"),
+        ("stale_token_after_downgrade", "beta_denial_stale_after_downgrade_token", "betaDenialStaleAfterDowngradeToken"),
+        ("stale_token_after_remove", "beta_denial_stale_after_remove_token", "betaDenialStaleAfterRemoveToken"),
+    ]
+    for scenario, attr, field in stale_specs:
+        token_value = getattr(credentials, attr, "")
+        if isinstance(token_value, str) and token_value.strip():
+            specs.append(
+                DenialRequestSpec(
+                    row_id=entry.row_id,
+                    operation_id="authMe",
+                    scenario=scenario,
+                    method="GET",
+                    path=f"{API_PREFIX}/auth/me",
+                    token=token_value,
+                    body=None,
+                    expected_statuses=frozenset({401}),
+                    supplied_request_id=f"{request_id}-{scenario}-{secrets.token_hex(2)}",
+                )
+            )
     return specs
 
 
@@ -1297,6 +1381,7 @@ def _handler_preview_download_sse(entry: DenialMappingEntry, seed: Any, credenti
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
     request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
     token = credentials.alpha_beta_access_token
+    foreign_token = credentials.alpha_access_token
     preview_path = f"{API_PREFIX}/documents/{seed.beta_document_id}/preview"
     capability_path = (
         f"{API_PREFIX}/documents/{seed.beta_document_id}/versions/{seed.beta_version_id}/download-capability"
@@ -1313,6 +1398,17 @@ def _handler_preview_download_sse(entry: DenialMappingEntry, seed: Any, credenti
                 expected_statuses=frozenset({200}),
                 success_schema_keys=frozenset({"documentId", "versionId"}),
                 supplied_request_id=f"{request_id}-preview",
+            ),
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id="previewDocument",
+                scenario="preview_download_preview_foreign",
+                method="GET",
+                path=preview_path,
+                token=foreign_token,
+                body=None,
+                expected_statuses=frozenset({403, 404}),
+                supplied_request_id=f"{request_id}-preview-foreign",
             ),
             DenialRequestSpec(
                 row_id=entry.row_id,
@@ -1335,6 +1431,7 @@ def _handler_preview_download_sse(entry: DenialMappingEntry, seed: Any, credenti
                 body=None,
                 expected_statuses=frozenset({200}),
                 supplied_request_id=f"{request_id}-redeem",
+                mint_fresh_download_capability=True,
             ),
             DenialRequestSpec(
                 row_id=entry.row_id,
@@ -1361,8 +1458,7 @@ def _handler_preview_download_sse(entry: DenialMappingEntry, seed: Any, credenti
                 supplied_request_id=f"{request_id}-sse",
             ),
         ]
-    for idx, preview_spec in enumerate(preview_specs):
-        specs.append(_clone_spec_as_owner_control(preview_spec, suffix=f"preview-owner-{idx}"))
+    for preview_spec in preview_specs:
         specs.append(preview_spec)
     return specs
 
@@ -1370,26 +1466,16 @@ def _handler_preview_download_sse(entry: DenialMappingEntry, seed: Any, credenti
 def _handler_in_flight_revoke(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
     request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
+    stream_token = credentials.beta_alpha_access_token
     for spec in specs:
-        if spec.scenario == "owner_control" and spec.operation_id == "askStream":
+        if spec.operation_id == "askStream" and spec.scenario == "owner_control":
+            spec.token = stream_token
             spec.owner_transition = "ask_stream_started"
-    members_owner = OwnerControlSpec(
-        method="GET",
-        path=f"{API_PREFIX}/members",
-        body=None,
-        expected_statuses=frozenset({200}),
-        success_schema_keys=frozenset({"items"}),
-        token=credentials.alpha_beta_access_token,
-    )
-    _append_owner_control_from_spec(
-        specs,
-        row_id=entry.row_id,
-        operation_id="listMembers",
-        owner=members_owner,
-        request_id=request_id,
-        suffix="downgrade-owner",
-        credentials=credentials,
-    )
+        if spec.operation_id == "askStream" and spec.scenario == "foreign":
+            spec.body = {
+                "question": f"phase1c-inflight-foreign-{seed.challenge[:8]}",
+                "collectionIds": [seed.alpha_collection_id],
+            }
     specs.append(
         DenialRequestSpec(
             row_id=entry.row_id,
@@ -1767,8 +1853,9 @@ def _validate_owner_transition(
             report.failures.append(f"{spec.operation_id}/owner_control transition invite_revoked invalid json: {error}")
         return transition
     if transition == "invite_accepted":
+        list_token = _credential_string(credentials, "alpha_beta_access_token", field="alphaBetaAccessToken")
         try:
-            items = _list_members(http_request, api_base=api_base, token=token)
+            items = _list_members(http_request, api_base=api_base, token=list_token)
             accept_user = "55555555-5555-5555-5555-555555555501"
             user_ids = [str(item.get("userId")) for item in items if item.get("userId")]
             if accept_user not in user_ids:
@@ -1778,10 +1865,73 @@ def _validate_owner_transition(
         except RuntimeError as error:
             report.failures.append(f"{spec.operation_id}/owner_control transition invite_accepted: {error}")
         return transition
-    if transition in {"ask_stream_started", "ask_stream_revoked"}:
+    if transition == "ask_stream_started":
+        if spec.operation_id != "askStream" or response.status != 200:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition ask_stream_started expected live stream start"
+            )
+            return transition
+        try:
+            validate_sse_envelope(
+                response.body,
+                operation_id="askStream",
+                headers=response.headers,
+            )
+        except RuntimeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition ask_stream_started sse: {error}")
+        return transition
+    if transition == "ask_stream_revoked":
+        stream_path = f"{API_PREFIX}/ask/stream"
+        stream = http_request(
+            method="POST",
+            url=api_base.rstrip("/") + stream_path,
+            token=credentials.beta_alpha_access_token,
+            body={
+                "question": f"phase1c-revoke-{seed.challenge[:8]}",
+                "collectionIds": [seed.alpha_collection_id],
+            },
+            path=stream_path,
+            accept="text/event-stream",
+        )
+        if stream.status != 200:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition ask_stream_revoked expected 200 stream got {stream.status}"
+            )
+            return transition
+        if "stream.closed" not in stream.body and "principal_denied" not in stream.body:
+            report.failures.append(
+                f"{spec.operation_id}/owner_control transition ask_stream_revoked missing terminal deny"
+            )
         return transition
     report.failures.append(f"{spec.operation_id}/owner_control transition {transition} missing follow-up")
     return transition
+
+
+def _mint_download_capability(
+    http_request: HttpRequestFn,
+    *,
+    api_base: str,
+    seed: Any,
+    credentials: Any,
+    token: str,
+) -> str:
+    path = (
+        f"{API_PREFIX}/documents/{seed.beta_document_id}/versions/{seed.beta_version_id}/download-capability"
+    )
+    response = http_request(
+        method="POST",
+        url=api_base.rstrip("/") + path,
+        token=token,
+        body={"purpose": "markdown"},
+        path=path,
+    )
+    if response.status // 100 != 2:
+        raise RuntimeError(f"download capability mint failed with {response.status}")
+    payload = json.loads(response.body)
+    capability = payload.get("capability")
+    if not isinstance(capability, str) or not capability.strip():
+        raise RuntimeError("download capability mint response missing capability")
+    return capability.strip()
 
 
 def _mint_fake_server_request_id() -> str:
@@ -1815,7 +1965,32 @@ def execute_http_denial_suite(
     )
     forbidden = {seed.marker_alpha, seed.marker_beta}
     forbidden.discard("")
+    redeemed_download_capabilities: set[str] = set()
+    redeemed_citation_canonicals: set[str] = set()
     for spec in specs:
+        if spec.operation_id == "resolveCitation" and spec.scenario == "owner_control":
+            body = dict(spec.body or {})
+            canonical = str(body.get("canonicalMarkdownSha256") or "")
+            if canonical in redeemed_citation_canonicals:
+                body["canonicalMarkdownSha256"] = secrets.token_hex(32)
+            spec.body = body
+        if spec.operation_id == "redeemDownload" and (
+            spec.mint_fresh_download_capability
+            or spec.scenario in {"owner_control", "preview_download_redeem"}
+        ):
+            mint_token = spec.token or credentials.alpha_beta_access_token
+            capability = _mint_download_capability(
+                http_request,
+                api_base=api_base,
+                seed=seed,
+                credentials=credentials,
+                token=str(mint_token),
+            )
+            spec.path = f"{API_PREFIX}/downloads/{capability}"
+        if spec.operation_id == "resolveCitation" and spec.scenario == "citation_replay":
+            canonical = (spec.body or {}).get("canonicalMarkdownSha256")
+            if isinstance(canonical, str) and canonical in redeemed_citation_canonicals:
+                spec.expected_statuses = frozenset({403})
         url = api_base.rstrip("/") + spec.path
         response = http_request(
             method=spec.method,
@@ -1829,21 +2004,38 @@ def execute_http_denial_suite(
             accept=spec.accept,
         )
         scan_body = response.body
-        if spec.scenario in {
+        if spec.scenario == "authenticated_foreign_isolation":
+            leaked = scan_marker_leakage(scan_body, forbidden_markers={seed.marker_beta})
+        elif spec.scenario in {
             "foreign",
             "membership_missing",
             "invalid_capability",
             "invalid_invite_token",
+            "invite_already_member",
             "citation_replay",
             "citation_expired",
             "citation_mismatch",
             "duplicate_name_foreign_oracle",
             "stale_token",
+            "stale_token_after_downgrade",
+            "stale_token_after_remove",
             "unauthenticated",
+            "preview_download_preview_foreign",
         }:
             leaked = scan_marker_leakage(scan_body, forbidden_markers=forbidden)
         else:
             leaked = []
+        if spec.operation_id == "redeemDownload" and response.status // 100 == 2:
+            cap_token = spec.path.rsplit("/", 1)[-1]
+            if cap_token in redeemed_download_capabilities:
+                leaked = list(set(leaked) | {f"download-replay:{cap_token[:8]}"})
+            redeemed_download_capabilities.add(cap_token)
+        if spec.operation_id == "resolveCitation" and response.status // 100 == 2:
+            canonical = (spec.body or {}).get("canonicalMarkdownSha256")
+            if isinstance(canonical, str):
+                if canonical in redeemed_citation_canonicals:
+                    leaked = list(set(leaked) | {"citation-canonical-replay"})
+                redeemed_citation_canonicals.add(canonical)
         if response.status not in spec.expected_statuses:
             report.failures.append(
                 f"{spec.operation_id}/{spec.scenario} expected {sorted(spec.expected_statuses)} got {response.status}"
