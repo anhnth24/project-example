@@ -37,4 +37,16 @@ ignore = [
     # and does not bind 0.0.0.0; no semver-compatible rmcp fix available.
     # Retire: when rmcp ships the Host-validation fix and we adopt it.
     "RUSTSEC-2026-0189",
+
+    # RUSTSEC-2026-0235 — rkyv 0.7 archive validation can allow out-of-bounds
+    # reads for crafted Rc/Arc archives. The lockfile-only chain is
+    # fileconv-server -> rust_decimal 1.42.1 -> optional rkyv 0.7.46:
+    # fileconv-server enables serde + db-tokio-postgres, not rkyv/rkyv-safe,
+    # and `cargo tree --workspace --all-features --target all -i rkyv@0.7.46`
+    # resolves no active edge. The repository does not process rkyv archives.
+    # rust_decimal 1.42.1 is current and intentionally keeps its optional rkyv
+    # support on 0.7; no patched version is reachable without that feature.
+    # Retire: when rust_decimal removes/upgrades the optional rkyv 0.7 edge, or
+    # immediately if this workspace ever enables rust_decimal's rkyv features.
+    "RUSTSEC-2026-0235",
 ]

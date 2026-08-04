@@ -1,0 +1,16 @@
+---
+description: Repository architecture, security, and delivery invariants
+alwaysApply: true
+---
+
+# Repository delivery guardrails
+
+- Use `CLAUDE.md` for architecture/native constraints, `CONTRIBUTING.md` and `docs/conventions/delivery.md` for delivery/review policy, and `docs/runbooks/contributor-setup.md` for quality gates. Do not duplicate or override them.
+- Keep each PR to one issue/outcome. Preserve project-owned converter boundaries, intentional dependency pins/fallbacks, GNU native linking, and bounded/thread-local PDF/Whisper resource caches; changes to these need explicit evidence and the required review.
+- Never commit secrets, customer documents, model binaries or identifiers, corpora, or secret-bearing logs.
+- A merge is not automatically `Done`: deployment, benchmark, acceptance, and other external evidence must be complete when applicable.
+- Require review for auth/session, tenant/RBAC/ACL, upload/converter sandboxing, storage/signed URLs, SQL/RLS/migrations, secrets/egress, LLM policy, audit/logging, dependencies/native binaries, CI permissions, and public contract or native-runtime changes.
+- Before every push containing Rust changes, run:
+  - `cargo fmt --all -- --check`
+  - `cargo metadata --locked --format-version 1 --no-deps`
+  - `python3 scripts/check-dependency-policy.py`
