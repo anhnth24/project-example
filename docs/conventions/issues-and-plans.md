@@ -98,7 +98,12 @@ phải tự thực hiện toàn bộ các bước sau, user không cần yêu c�
 2. nếu đạt, đổi catalog status sang `Ready`, cập nhật roadmap/count liên quan và chạy lại
    validation;
 3. tạo GitHub issue nếu chưa tồn tại, hoặc cập nhật issue đã tồn tại, bằng repository
-   synchronizer;
+   synchronizer:
+
+   ```bash
+   python3 scripts/sync-github-issues.py --create --update --sync-status
+   ```
+
 4. xác nhận title, milestone, labels, body và source paths khớp catalog;
 5. trả về issue ID/URL và validation evidence.
 

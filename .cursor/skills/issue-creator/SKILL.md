@@ -34,8 +34,10 @@ the canonical approval phrase defined below authorizes automatic synchronization
    revalidate the current draft against Definition of Ready. If it passes, change the
    catalog status to `Ready`, update and validate roadmap metadata, then automatically
    create the missing GitHub issue or update the existing one with the repository
-   synchronizer. The user does not need to request GitHub sync separately. Verify title,
-   milestone, labels, body, and source links, then return the issue URL.
+   synchronizer by running
+   `python3 scripts/sync-github-issues.py --create --update --sync-status`. The user does
+   not need to request GitHub sync separately. Verify title, milestone, labels, body, and
+   source links, then return the issue URL.
 7. **Fail closed.** Approval does not waive readiness. If a required fact/evidence is
    missing, do not mark `Ready` or create the GitHub issue; report the exact gap. Do not
    manually diverge the GitHub body from the catalog. If authentication or authorization

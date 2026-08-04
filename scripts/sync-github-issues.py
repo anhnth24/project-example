@@ -710,6 +710,10 @@ def main() -> int:
         if not args.create:
             skipped += 1
             continue
+        if issue.status != "ready":
+            skipped += 1
+            print(f"skipped unapproved {issue.github_title} ({issue.status})")
+            continue
         number = create_issue(issue, milestone_ids[issue.phase_code])
         created += 1
         print(f"created #{number} {issue.github_title}")
