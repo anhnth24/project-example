@@ -60,7 +60,9 @@ def complete_seed_raw(probes, **overrides: object) -> dict:
         "betaMemberUserId": "33333333-3333-3333-3333-333333333301",
         "alphaInviteId": "99999999-9999-9999-9999-999999999999",
         "betaInviteId": "88888888-8888-8888-8888-888888888888",
-        "betaDownloadCapability": "cap-denial-test",
+        "betaDownloadCapabilityHash": "sha256:" + "c" * 64,
+        "alphaDownloadCapabilityHash": "sha256:" + "d" * 64,
+        "betaInviteTokenHash": "sha256:" + "e" * 64,
         "alphaSessionIdHash": "sha256:" + "a" * 64,
         "betaSessionIdHash": "sha256:" + "b" * 64,
         "orgAlphaSlug": "poc",
@@ -798,15 +800,11 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             denial.validate_denial_observation_matrix(observations)
 
-    def test_denial_requires_supplied_request_id_echo(self) -> None:
+    def test_denial_requires_server_minted_request_id(self) -> None:
         denial = load_denial()
-        self.assertTrue(hasattr(denial, "validate_request_id_correlation"))
+        self.assertTrue(hasattr(denial, "validate_server_request_id"))
         with self.assertRaises(RuntimeError):
-            denial.validate_request_id_correlation(
-                supplied_request_id="req-supplied-abc",
-                response_request_id="req-different",
-                response_headers={},
-            )
+            denial.validate_server_request_id(body="{}", headers={})
 
     def test_denial_create_upload_uses_multipart_spec(self) -> None:
         denial = load_denial()
@@ -935,6 +933,159 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
         path.chmod(0o600)
         with self.assertRaises(RuntimeError):
             fake.StatefulFakeDeployment.assert_credentials_purged(path)
+
+
+class Phase1cSecondReviewSliceTests(unittest.TestCase):
+    """Commit K RED: second-review production-correct HTTP slice contracts."""
+
+    SEED_PY = ROOT / "bench/markhand_web/scripts/phase1c_multi_org_seed.py"
+    SEED_SH = ROOT / "deploy/scripts/phase1c-multi-org-seed.sh"
+    DENIAL_PY = DENIAL_PATH
+    PROBES_PY = PROBES_PATH
+
+    def test_seed_invites_beta_into_beta_org_after_alpha_switch(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("/api/v1/orgs/switch", text)
+        self.assertIn("beta_org_invite", text)
+        self.assertNotIn(
+            'body={"email": BETA_EMAIL, "role": "editor"}',
+            text.replace(" ", ""),
+        )
+
+    def test_seed_creates_beta_resources_with_beta_org_token(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("beta_org_access", text)
+        self.assertIn("switch_org", text)
+
+    def test_conflict_fixture_uses_migration_claim_columns(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        for column in ("claim_key", "subject", "predicate", "value_type", "value_money", "effective_from"):
+            self.assertIn(column, text)
+        self.assertIn("claim_a_id < claim_b_id", text.replace(" ", ""))
+
+    def test_public_evidence_excludes_download_capability_plaintext(self) -> None:
+        probes = load_probes()
+        self.assertNotIn("betaDownloadCapability", probes.SEED_REQUIRED_FIELDS)
+        self.assertIn("betaDownloadCapabilityHash", probes.SEED_REQUIRED_FIELDS)
+
+    def test_validate_server_request_id_requires_minted_uuid(self) -> None:
+        probes = load_probes()
+        server_id = probes.validate_server_request_id(
+            body='{"requestId":"11111111-1111-1111-1111-111111111111"}',
+            headers={"x-request-id": "11111111-1111-1111-1111-111111111111"},
+        )
+        self.assertEqual(server_id, "11111111-1111-1111-1111-111111111111")
+        with self.assertRaises(RuntimeError):
+            probes.validate_server_request_id(body="{}", headers={})
+
+    def test_validate_server_request_id_does_not_require_client_equality(self) -> None:
+        denial = load_denial()
+        server_id = denial.validate_server_request_id(
+            body='{"requestId":"22222222-2222-2222-2222-222222222222"}',
+            headers={"x-request-id": "22222222-2222-2222-2222-222222222222"},
+        )
+        self.assertNotEqual(server_id, "client-advisory-id")
+
+    def test_owner_control_uses_exact_mapped_method_not_substitute(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="alpha-token",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="beta-token",
+            beta_refresh_token="beta-refresh",
+            beta_alpha_access_token="beta-alpha-token",
+            beta_alpha_refresh_token="beta-alpha-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
+            beta_invite_token="invite-token",
+            alpha_download_capability="cap-alpha",
+            beta_download_capability="cap-beta",
+        )
+        entry = next(
+            e for e in denial.build_http_sse_denial_mapping() if e.operation_id == "deleteCollection"
+        )
+        spec = denial.build_owner_control_spec(entry, seed=seed, credentials=creds)
+        self.assertEqual(spec.method, "DELETE")
+        self.assertIn("/collections/", spec.path)
+
+    def test_create_upload_in_foreign_scope(self) -> None:
+        denial = load_denial()
+        self.assertIn("createUpload", denial._uses_foreign_scope("createUpload", "/uploads"))
+
+    def test_shell_trap_covers_hup_and_never_unsets_without_unlink(self) -> None:
+        text = self.SEED_SH.read_text(encoding="utf-8")
+        self.assertIn("HUP", text)
+        self.assertIn("purge_phase1c_credentials", text)
+        self.assertNotIn("trap -", text)
+
+    def test_load_credentials_finally_purges_on_malformed_json(self) -> None:
+        probes = load_probes()
+        path = Path(tempfile.mkdtemp()) / "creds.json"
+        path.write_text("{not-json", encoding="utf-8")
+        path.chmod(0o600)
+        with self.assertRaises((RuntimeError, json.JSONDecodeError)):
+            probes.load_seed_credentials(path, expected_challenge="phase1c-challenge-abc", purge_after_load=True)
+        self.assertFalse(path.exists())
+
+    def test_acl_probe_restores_editor_role(self) -> None:
+        text = self.PROBES_PY.read_text(encoding="utf-8")
+        self.assertIn("_restore_beta_alpha_membership_role", text)
+
+    def test_stale_token_probe_does_not_delete_membership(self) -> None:
+        text = self.PROBES_PY.read_text(encoding="utf-8")
+        stale = text.split("def run_stale_tokens_probe", 1)[1].split("def run_", 1)[0]
+        self.assertNotIn("DELETE", stale)
+
+    def test_revoke_probe_is_last_membership_gate(self) -> None:
+        probes = load_probes()
+        order = list(probes.DEPLOYED_PROBE_GATES)
+        membership = [
+            i
+            for i, gate in enumerate(order)
+            if gate in {"G1C-SEC-ACL-CACHE", "G1C-SEC-STALE-TOKENS", "G1C-SEC-REVOKE"}
+        ]
+        self.assertEqual(membership, sorted(membership))
+        self.assertEqual(order[membership[-1]], "G1C-SEC-REVOKE")
+
+    def test_audit_uses_switch_access_token_auth_me_session(self) -> None:
+        text = self.PROBES_PY.read_text(encoding="utf-8")
+        self.assertIn("_session_id_from_switch_access_token", text)
+
+    def test_audit_pagination_validates_cursor_monotonic(self) -> None:
+        probes = load_probes()
+        pages = [
+            {"items": [{"id": "1", "action": "a", "targetType": "t", "outcome": "success", "occurredAt": "t"}], "page": {"hasMore": True, "nextCursor": "c1"}},
+            {"items": [{"id": "2", "action": "b", "targetType": "t", "outcome": "success", "occurredAt": "t"}], "page": {"hasMore": False, "nextCursor": None}},
+        ]
+        probes.validate_audit_pages(pages, seen_cursors=set())
+
+    def test_stateful_fake_invokes_execute_http_denial_suite(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        text = fake_path.read_text(encoding="utf-8")
+        self.assertIn("execute_http_denial_suite", text)
+        self.assertIn("build_http_sse_denial_mapping", text)
+
+    def test_denial_report_omits_unused_challenge_echo(self) -> None:
+        denial = load_denial()
+        payload = denial.DenialExecutionReport(
+            schema_version=1,
+            git_sha_full="a" * 40,
+            manifest_sha256=denial.canonical_manifest_sha256(),
+            challenge="c1",
+            executable_http_sse_count=1,
+        ).as_dict()
+        self.assertNotIn("challengeEcho", json.dumps(payload))
+
+    def test_validate_uuid_helper_rejects_non_uuid(self) -> None:
+        probes = load_probes()
+        with self.assertRaises(RuntimeError):
+            probes.validate_uuid("not-a-uuid", field="collectionId")
 
 
 class DeployedCiRouteTests(unittest.TestCase):

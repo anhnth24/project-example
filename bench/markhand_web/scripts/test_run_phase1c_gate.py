@@ -698,8 +698,9 @@ class Phase1cSeedScriptContractTests(unittest.TestCase):
     def test_seed_shell_purges_credentials_on_exit(self) -> None:
         text = self.SEED.read_text(encoding="utf-8")
         self.assertIn("trap", text)
+        self.assertIn("HUP", text)
         self.assertIn("purge_phase1c_credentials", text)
-        self.assertNotIn('echo "$MARKHAND_PHASE1C_CREDENTIALS_JSON"', text)
+        self.assertNotIn("trap -", text)
 
 
 class Phase1cDeployedArchitectureTests(unittest.TestCase):
