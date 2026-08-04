@@ -153,6 +153,8 @@ class Phase1cHarnessContractTests(unittest.TestCase):
             metric = result["metric"]
             result["value"] = report["metrics"][metric]
             result["pass"] = True
+            result["metricsObserved"] = True
+            result["coverageLimited"] = False
         report["canonicalBinding"] = {
             "registryRevision": 1,
             **GATES.phase1c_canonical_fingerprints(
@@ -160,6 +162,7 @@ class Phase1cHarnessContractTests(unittest.TestCase):
             )[0],
         }
         report["git"] = {"commit": self.git_commit, "dirty": False}
+        report["coverageLimited"] = []
         return report
 
     def _write_evidence(self, *, include_p1c8: bool = True) -> None:
@@ -500,6 +503,13 @@ class Phase1cBackboneEndToEndTests(unittest.TestCase):
         report["vulnerabilityScan"]["passed"] = True
         report["vulnerabilityScan"]["undispositionedHighCritical"] = 0
         report["git"] = {"commit": self.git_commit, "dirty": False}
+        report["coverageLimited"] = []
+        for result in report["gateResults"]:
+            metric = result["metric"]
+            result["value"] = report["metrics"][metric]
+            result["pass"] = True
+            result["metricsObserved"] = True
+            result["coverageLimited"] = False
         report["canonicalBinding"] = {
             "registryRevision": 1,
             **GATES.phase1c_canonical_fingerprints(self.markhand_root, workspace_root=self.repo_root)[0],
@@ -563,8 +573,18 @@ class Phase1cBackboneEndToEndTests(unittest.TestCase):
             self.assertTrue(result.get("metricsObserved"))
             self.assertFalse(result.get("coverageLimited"))
             self.assertTrue(result["pass"])
+        registry = GATES.load_json_yaml(self.markhand_root / "gates.yaml")
+        report_errors = GATES.phase1c_gate_report_errors(
+            report,
+            registry=registry,
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertEqual(report_errors, [], msg=f"report errors: {report_errors}")
         schema = GATES.load_json_yaml(self.markhand_root / "schema/phase1c-gate-report.schema.json")
-        schema_errors = GATES.schema_errors(report, schema, "assembled-report")
+        schema_report = gate.strip_harness_extensions(report)
+        schema_errors = GATES.schema_errors(schema_report, schema, "assembled-report")
         self.assertEqual(schema_errors, [], msg=f"schema errors: {schema_errors}")
 
     def test_check_markhand_gates_rejects_pass_with_coverage_limited_evidence(self) -> None:

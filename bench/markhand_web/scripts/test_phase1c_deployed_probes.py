@@ -2461,9 +2461,11 @@ class Phase1cNoisyLivenessTests(unittest.TestCase):
         probes = load_probes()
         start = 1000.0
         end = 1060.0
-        timestamps = [start + 1, start + 30, end - 1]
+        timestamps = [start + 1 + (end - start - 2) * (index / 49) for index in range(50)]
+        timestamps[0] = start + 1
+        timestamps[-1] = end - 1
         ok, _ = probes.qualify_noisy_neighbor_workload(
-            upload_statuses=[201, 201, 201],
+            upload_statuses=[201] * 50,
             upload_timestamps=timestamps,
             window_start=start,
             window_end=end,
@@ -2475,8 +2477,8 @@ class Phase1cNoisyLivenessTests(unittest.TestCase):
         )
         self.assertTrue(ok)
         bad, reason = probes.qualify_noisy_neighbor_workload(
-            upload_statuses=[201, 201],
-            upload_timestamps=[start + 1, start + 5],
+            upload_statuses=[201] * 50,
+            upload_timestamps=[start + 1 + (index * 0.1) for index in range(50)],
             window_start=start,
             window_end=end,
             samples_ns=[50_000_000] * 100,

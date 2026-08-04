@@ -585,7 +585,7 @@ def evidence_probe_errors(repo_root: Path, *, status: str) -> list[str]:
             errors.append(f"evidence_gate_mismatch:{rel}")
         if payload.get("coverageLimited") is True:
             errors.append(f"coverage_limited:{rel}")
-        if payload.get("metricsObserved") is False:
+        if payload.get("metricsObserved") is not True:
             errors.append(f"metrics_not_observed:{rel}")
         if payload.get("status") not in (None, "pass"):
             errors.append(f"evidence_status_not_pass:{rel}")
@@ -623,7 +623,12 @@ def report_coverage_limited_errors(report: dict[str, Any], *, status: str) -> li
         return []
     errors: list[str] = []
     coverage = report.get("coverageLimited")
-    if coverage:
+    if status == "pass":
+        if coverage:
+            errors.append("report_coverage_limited")
+        elif not isinstance(coverage, list):
+            errors.append("report_coverage_limited_shape")
+    elif coverage:
         errors.append("report_coverage_limited")
     return errors
 
@@ -787,7 +792,7 @@ def build_evidence_payload(
     repo_root: Path,
     coverage_limited: bool = False,
     coverage_limited_reasons: list[str] | None = None,
-    metrics_observed: bool = True,
+    metrics_observed: bool = False,
 ) -> dict[str, Any]:
     rel = next(str(row["evidence"]) for row in GATES.G1C_GATE_ROWS if row["id"] == gate_id)
     binding, _errors = GATES.phase1c_canonical_fingerprints(markhand_root, workspace_root=repo_root)
@@ -807,13 +812,12 @@ def build_evidence_payload(
         "p1c8Items": list(GATE_TO_P1C8[gate_id]),
         "status": "pass" if qualifying else "fail",
         "coverageLimited": bool(coverage_limited),
+        "metricsObserved": bool(metrics_observed),
         "probe": sanitize_probe(probe),
         "metrics": metrics,
     }
     if coverage_limited:
         payload["coverageLimitedReasons"] = list(coverage_limited_reasons or [])
-    if not metrics_observed:
-        payload["metricsObserved"] = False
     return payload
 
 
@@ -827,7 +831,7 @@ def write_gate_evidence_staged(
     markhand_root: Path,
     coverage_limited: bool = False,
     coverage_limited_reasons: list[str] | None = None,
-    metrics_observed: bool = True,
+    metrics_observed: bool = False,
 ) -> str:
     rel = next(str(row["evidence"]) for row in GATES.G1C_GATE_ROWS if row["id"] == gate_id)
     payload = build_evidence_payload(
@@ -1008,6 +1012,7 @@ def run_live_probes(
             probe=worker_proc,
             metrics={"worker_dedicated_role_verified": 1},
             markhand_root=markhand_root,
+            metrics_observed=True,
         )
 
         trivy_image = pinned_trivy_image()
@@ -1069,6 +1074,7 @@ def run_live_probes(
             probe=combined_probe,
             metrics={"undispositioned_high_critical_count": metrics["undispositioned_high_critical_count"]},
             markhand_root=markhand_root,
+            metrics_observed=True,
         )
 
         for metric in GATES.PHASE1C_METRIC_THRESHOLDS:
@@ -1102,6 +1108,21 @@ def build_threshold_decisions() -> list[dict[str, Any]]:
     return GATES.canonical_threshold_decisions()
 
 
+def load_gate_evidence_states(repo_root: Path) -> dict[str, dict[str, Any]]:
+    states: dict[str, dict[str, Any]] = {}
+    for row in GATES.G1C_GATE_ROWS:
+        gate_id = str(row["id"])
+        rel = str(row["evidence"])
+        path = repo_root / rel
+        if not path.is_file():
+            raise RuntimeError(f"missing gate evidence for assembly: {rel}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"malformed gate evidence: {rel}")
+        states[gate_id] = payload
+    return states
+
+
 def assemble_pass_report(
     metrics: dict[str, Any],
     worker_proof: dict[str, Any],
@@ -1111,8 +1132,26 @@ def assemble_pass_report(
     markhand_root: Path,
     source_revision: dict[str, Any],
 ) -> dict[str, Any]:
+    gate_states = load_gate_evidence_states(repo_root)
+    coverage_limited: list[str] = []
+    for gate_id, payload in gate_states.items():
+        if payload.get("coverageLimited") is True or payload.get("coverageLimited"):
+            reasons = payload.get("coverageLimitedReasons")
+            if isinstance(reasons, list) and reasons:
+                coverage_limited.extend(str(item) for item in reasons)
+            else:
+                coverage_limited.append(gate_id)
+        if payload.get("metricsObserved") is not True:
+            raise RuntimeError(f"gate {gate_id} missing metricsObserved=true")
+        if payload.get("status") not in (None, "pass"):
+            raise RuntimeError(f"gate {gate_id} evidence status is not pass")
+    if coverage_limited:
+        raise RuntimeError(
+            "coverage-limited gate evidence blocks qualifying pass: "
+            + "; ".join(sorted(dict.fromkeys(coverage_limited)))
+        )
+
     report = GATES.load_json_yaml(TEMPLATE_REPORT)
-    report["status"] = "pass"
     report["targetMatch"] = True
     report["markhandPhase1cGate"] = True
     report["embeddingProfile"] = "mock"
@@ -1126,17 +1165,31 @@ def assemble_pass_report(
     for decision in report["thresholdDecisions"]:
         decision["recordedAt"] = utc_now_z()
     worker_proof["verifiedAt"] = utc_now_z()
+    all_gate_pass = True
     for result in report["gateResults"]:
-        metric = result["metric"]
+        gate_id = str(result["gateId"])
+        payload = gate_states[gate_id]
+        metric = str(result["metric"])
         result["value"] = metrics[metric]
-        result["pass"] = True
+        result["metricsObserved"] = payload.get("metricsObserved") is True
+        result["coverageLimited"] = bool(payload.get("coverageLimited"))
+        threshold = GATES.PHASE1C_METRIC_THRESHOLDS.get(metric)
+        threshold_ok = (
+            threshold is not None
+            and GATES.threshold_satisfied(result["value"], threshold[0], threshold[1])
+        )
+        result["pass"] = bool(
+            result["metricsObserved"] and not result["coverageLimited"] and threshold_ok
+        )
+        all_gate_pass = all_gate_pass and result["pass"]
+    report["coverageLimited"] = []
+    report["status"] = "pass" if all_gate_pass else "fail"
     report["canonicalBinding"] = {
         "registryRevision": 1,
         **GATES.phase1c_canonical_fingerprints(markhand_root, workspace_root=repo_root)[0],
     }
     report["git"] = source_revision
     report["denialManifestSha256"] = hashlib.sha256(DENIAL_MANIFEST.read_bytes()).hexdigest()
-    report["coverageLimited"] = []
     status, blockers = evaluate_report(
         report,
         repo_root=repo_root,

@@ -330,7 +330,7 @@ class DeployedProbeResult:
     detail: dict[str, Any] = field(default_factory=dict)
     coverage_limited: bool = False
     coverage_limited_reasons: list[str] = field(default_factory=list)
-    metrics_observed: bool = True
+    metrics_observed: bool = False
 
 
 class DeployedProbeShims:
@@ -518,7 +518,13 @@ def qualify_noisy_neighbor_workload(
     required_duration_secs: float,
     min_quiet_samples: int,
     min_successful_uploads: int = 50,
+    upload_timestamps: list[float] | None = None,
+    window_start: float | None = None,
+    window_end: float | None = None,
+    uploader_alive_at_end: bool = True,
 ) -> tuple[bool, str]:
+    if not uploader_alive_at_end:
+        return False, "noisy uploader thread died before window completed"
     if duration_secs < required_duration_secs:
         return False, f"noisy window too short: {duration_secs:.2f}s < {required_duration_secs}s"
     if len(samples_ns) < min_quiet_samples:
@@ -530,7 +536,24 @@ def qualify_noisy_neighbor_workload(
         return False, f"noisy upload success count {successful} < {min_successful_uploads}"
     if any(status // 100 != 2 for status in upload_statuses):
         return False, "noisy uploads must sustain 2xx across full window"
+    if upload_timestamps is not None and window_start is not None and window_end is not None:
+        success_times = [
+            timestamp
+            for timestamp, status in zip(upload_timestamps, upload_statuses, strict=False)
+            if status // 100 == 2
+        ]
+        if not success_times:
+            return False, "no successful noisy uploads in window"
+        span_required = (window_end - window_start) * 0.95
+        if max(success_times) - min(success_times) < span_required:
+            return False, "successful noisy uploads did not span full window"
     return True, ""
+
+
+def compose_ps_q_has_container(outcome: CommandOutcome) -> bool:
+    if outcome.exit_code != 0:
+        return False
+    return bool((outcome.stdout or "").strip())
 
 
 def scan_structured_foreign_ids(body: str, *, forbidden_ids: set[str]) -> list[str]:
@@ -1345,6 +1368,7 @@ class DeployedProbeRunner:
             detail={"report": detail},
             coverage_limited=bool(coverage_reasons),
             coverage_limited_reasons=coverage_reasons,
+            metrics_observed=True,
         )
 
     def run_revoke_probe(self) -> DeployedProbeResult:
@@ -1386,6 +1410,7 @@ class DeployedProbeRunner:
                 "membership_acl_revoke_max_ms": elapsed_ms,
                 "post_commit_stale_authorizations": stale,
             },
+            metrics_observed=True,
         )
 
     def run_acl_cache_probe(self) -> DeployedProbeResult:
@@ -1430,6 +1455,7 @@ class DeployedProbeRunner:
                 "membership_acl_revoke_max_ms": elapsed_ms,
                 "post_commit_stale_authorizations": stale,
             },
+            metrics_observed=True,
         )
 
     def run_stale_tokens_probe(self) -> DeployedProbeResult:
@@ -1492,6 +1518,7 @@ class DeployedProbeRunner:
                 "eof": True,
             },
             metrics={"post_commit_stale_authorizations": 0},
+            metrics_observed=True,
         )
 
     def run_quota_recovery_probe(self) -> DeployedProbeResult:
@@ -1634,6 +1661,7 @@ class DeployedProbeRunner:
         noisy_stop = threading.Event()
         noisy_errors: list[str] = []
         noisy_upload_statuses: list[int] = []
+        noisy_upload_timestamps: list[float] = []
 
         def noisy_uploader() -> None:
             noisy_token = self.credentials.alpha_access_token
@@ -1656,6 +1684,7 @@ class DeployedProbeRunner:
                         content_type=f"multipart/form-data; boundary={boundary}",
                     )
                     noisy_upload_statuses.append(response.status)
+                    noisy_upload_timestamps.append(time.monotonic())
                 except Exception as error:  # noqa: BLE001
                     noisy_errors.append(str(error))
                 time.sleep(0.05)
@@ -1684,14 +1713,19 @@ class DeployedProbeRunner:
         elapsed = time.monotonic() - started_at
         noisy_stop.set()
         worker.join(timeout=5)
+        uploader_alive_at_end = worker.is_alive()
         if noisy_errors:
             raise RuntimeError(f"noisy workload errors: {noisy_errors[0]}")
         qualified, qualify_reason = qualify_noisy_neighbor_workload(
             upload_statuses=noisy_upload_statuses,
+            upload_timestamps=noisy_upload_timestamps,
+            window_start=started_at,
+            window_end=started_at + self.noisy_duration_secs,
             samples_ns=samples_ns,
             duration_secs=elapsed,
             required_duration_secs=float(self.noisy_duration_secs),
             min_quiet_samples=self.quiet_search_samples,
+            uploader_alive_at_end=uploader_alive_at_end,
         )
         if not qualified:
             return DeployedProbeResult(
@@ -1709,7 +1743,7 @@ class DeployedProbeRunner:
                 metrics_observed=False,
             )
         ps = self._compose(["ps", "-q", "worker-convert"], timeout_secs=120)
-        if ps.exit_code != 0 or "worker-convert" not in ps.stdout:
+        if not compose_ps_q_has_container(ps):
             raise RuntimeError("worker-convert must remain observable during noisy-neighbor probe")
         forbidden = {self.seed.marker_alpha, self.seed.marker_beta}
         for marker in forbidden:
@@ -1723,6 +1757,7 @@ class DeployedProbeRunner:
                 "quiet_org_query_p95_ms": nearest_rank_p95_ms(samples_ns),
                 "starvation_events": starvation,
             },
+            metrics_observed=True,
         )
 
     def run_audit_probe(self) -> DeployedProbeResult:
@@ -2031,6 +2066,7 @@ class DeployedProbeRunner:
                 "eof": True,
             },
             metrics={"admin_mutation_audit_coverage_ratio": ratio},
+            metrics_observed=True,
         )
 
     def run_qdrant_fail_closed_probe(self) -> DeployedProbeResult:
@@ -2108,6 +2144,7 @@ class DeployedProbeRunner:
                 "eof": True,
             },
             metrics={"qdrant_degraded_leakage_count": leakage_count},
+            metrics_observed=True,
         )
 
     def run_gate(self, gate_id: str) -> DeployedProbeResult:
@@ -2157,4 +2194,6 @@ def deployed_probe_to_command_probe(result: DeployedProbeResult) -> dict[str, An
         probe["coverageLimited"] = False
     if not result.metrics_observed:
         probe["metricsObserved"] = False
+    else:
+        probe["metricsObserved"] = True
     return probe
