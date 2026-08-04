@@ -15,12 +15,12 @@ tự mở rộng sang UI hoặc contract của từng sản phẩm gọi core.
 
 ## Issue-level backlog
 
-Tổng: **1 issue** — **0 Ready**, **1 Backlog**, **0 In progress**, **0 Review**,
-**0 Done**.
+Tổng: **1 issue** — **0 Ready**, **1 Blocked**, **0 Backlog**, **0 In progress**,
+**0 Review**, **0 Done**.
 
 | Issue | Outcome | Status |
 |---|---|---|
-| [CORE-01](issues/README.md#core-01--giải-mã-txt-utf-16lebe-sang-markdown) | Giải mã TXT UTF-16LE/BE có BOM sang Markdown-compatible text | Backlog |
+| [CORE-01](issues/README.md#core-01--giải-mã-txt-utf-16lebe-sang-markdown) | Giải mã TXT UTF-16LE/BE có BOM sang Markdown-compatible text | Blocked — synchronizer chưa hỗ trợ catalog core |
 
 ## Dependency
 
@@ -28,5 +28,7 @@ Tổng: **1 issue** — **0 Ready**, **1 Backlog**, **0 In progress**, **0 Revie
 CORE-01
 ```
 
-Không có dependency issue. Security review vẫn bắt buộc vì thay đổi xử lý byte đầu
-vào không tin cậy trong converter.
+Không có dependency implementation. CORE-01 đang bị chặn bởi tracking infrastructure:
+repository synchronizer chỉ đọc catalog Markhand Web, chưa thể tạo milestone/issue
+cho core. Security review vẫn bắt buộc vì thay đổi xử lý byte đầu vào không tin cậy
+trong converter.

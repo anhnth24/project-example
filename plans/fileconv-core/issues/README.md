@@ -15,10 +15,12 @@ Trường `Dependencies/blocks` là authority. Catalog này chỉ sở hữu out
 
 ## CORE-01 — Giải mã TXT UTF-16LE/BE sang Markdown
 
-- **Status:** Backlog
-- **Objective:** `Converter::convert_path` giải mã chính xác file `.txt` tiếng Việt
-  UTF-16LE hoặc UTF-16BE có BOM thành Markdown-compatible Unicode text, không để BOM
-  lọt vào output và không làm đổi hành vi UTF-8 hoặc bảng mã tiếng Việt legacy.
+- **Status:** Blocked — repository synchronizer chưa hỗ trợ catalog `fileconv-core`
+- **Objective:** `Converter::convert_path` giải mã chính xác đầu vào
+  `FormatKind::Text` (trọng tâm `.txt`, cùng route với `.log`/`.md`/`.markdown`)
+  chứa tiếng Việt UTF-16LE hoặc UTF-16BE có BOM thành Markdown-compatible Unicode
+  text, không để BOM lọt vào output và không làm đổi hành vi UTF-8 hoặc bảng mã
+  tiếng Việt legacy.
 - **Implementation plan:** Trong `conv/text.rs`, nhận diện BOM UTF-16LE `FF FE` và
   UTF-16BE `FE FF` trước nhánh UTF-8/legacy hiện có; ghép từng cặp byte thành `u16`
   theo đúng endian rồi decode UTF-16 nghiêm ngặt bằng thư viện chuẩn. Trả
@@ -28,13 +30,18 @@ Trường `Dependencies/blocks` là authority. Catalog này chỉ sở hữu out
   conversion.
 - **Files/modules:** Owner `fileconv-core`, reviewer theo `CODEOWNERS`
   (`@anhnth24`); boundary `crates/core/src/conv/text.rs` và test cùng module.
-- **Dependencies/blocks:** Không có dependency code hoặc external gate. Draft chờ
-  câu duyệt canonical trước khi chuyển `Ready`.
-- **Acceptance criteria:** `.txt` UTF-16LE có BOM và `.txt` UTF-16BE có BOM chứa
-  tiếng Việt đi qua public `Converter::convert_path` cho nội dung Unicode chính xác,
-  `FormatKind::Text`, không có `U+FEFF`, và output cuối ở NFC; UTF-8 có/không BOM,
-  TCVN3, VNI và VPS giữ nguyên behavior; payload UTF-16 có số byte lẻ hoặc surrogate
-  không hợp lệ trả lỗi xác định, không panic và không trả partial/lossy text.
+- **Dependencies/blocks:** Không có dependency implementation hoặc external product
+  gate. Tracking blocker: `scripts/sync-github-issues.py` chỉ đọc catalog Markhand
+  Web, workflow không theo dõi `plans/fileconv-core/**`, và milestone `Fileconv Core`
+  chưa tồn tại; cần owner chốt/cung cấp cơ chế sync catalog core trước khi issue có
+  thể chuyển `Ready` và đồng bộ GitHub.
+- **Acceptance criteria:** UTF-16LE có BOM và UTF-16BE có BOM chứa tiếng Việt đi qua
+  public `Converter::convert_path` cho nội dung Unicode chính xác,
+  `FormatKind::Text`, không có `U+FEFF`, và output cuối ở NFC; test `.txt` cho cả hai
+  endian và ít nhất một alias dùng chung route (`.log`, `.md` hoặc `.markdown`);
+  UTF-8 có/không BOM, TCVN3, VNI và VPS giữ nguyên behavior; payload UTF-16 có số
+  byte lẻ hoặc surrogate không hợp lệ trả lỗi xác định, không panic và không trả
+  partial/lossy text.
 - **Required tests/evidence:** Unit test deterministic cho UTF-16LE, UTF-16BE,
   UTF-8 regression, legacy regression, odd byte count và unpaired surrogate trong
   `conv::text::tests`; test public route qua `Converter::convert_path`; chạy
@@ -49,6 +56,6 @@ Trường `Dependencies/blocks` là authority. Catalog này chỉ sở hữu out
   không được chứa document content; negative tests khóa malformed
   length/surrogate và no-panic behavior.
 - **Out of scope:** Suy đoán UTF-16 không BOM; UTF-32; thay đổi CSV hoặc extension
-  allowlist; behavior riêng hoặc fixture riêng cho `.log`/`.md`/`.markdown`; suy
+  allowlist; tạo behavior riêng theo từng extension trong `FormatKind::Text`; suy
   diễn heading/cấu trúc Markdown từ plain text; UI, server upload policy, dependency
   mới và refactor `viet_legacy`.
