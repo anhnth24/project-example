@@ -67,6 +67,7 @@ def complete_seed_raw(probes, **overrides: object) -> dict:
         "betaSessionIdHash": "sha256:" + "b" * 64,
         "orgAlphaSlug": "poc",
         "orgBetaSlug": "phase1c-beta",
+        "disposableOrgId": "66666666-6666-6666-6666-666666666666",
     }
     base.update(overrides)
     return base
@@ -106,6 +107,8 @@ def complete_credentials_raw(**overrides: object) -> dict:
         "betaCitationQuoteLocalStart": 0,
         "betaCitationQuoteLocalEnd": 12,
         "betaCitationQuote": "phase1c-beta",
+        "betaDenialNegativeInviteToken": "mhinv1.negative-token",
+        "betaDenialWrongDownloadCapability": "mhcap1.wrong-token",
     }
     payload.update(overrides)
     return payload
@@ -144,6 +147,9 @@ def make_seed_credentials(probes, seed, **overrides: object):
         "beta_citation_quote_local_start": 0,
         "beta_citation_quote_local_end": 12,
         "beta_citation_quote": "phase1c-beta",
+        "beta_denial_negative_invite_token": "mhinv1.negative-token",
+        "beta_denial_wrong_download_capability": "mhcap1.wrong-token",
+        "disposable_org_id": "66666666-6666-6666-6666-666666666666",
     }
     payload.update(overrides)
     return probes.SeedCredentials(**payload)
@@ -1488,6 +1494,244 @@ class Phase1cThirdReviewSliceTests(unittest.TestCase):
         sys.modules["phase1c_stateful_fake_third"] = module
         spec.loader.exec_module(module)
         return module
+
+
+class Phase1cFourthReviewSliceTests(unittest.TestCase):
+    """Commit O RED: fourth-review bounded HTTP slice contracts."""
+
+    SEED_PY = ROOT / "bench/markhand_web/scripts/phase1c_multi_org_seed.py"
+    GATE_SH = ROOT / "deploy/scripts/g1c-security-gate.sh"
+    DENIAL_PY = DENIAL_PATH
+    PROBES_PY = PROBES_PATH
+    FAKE_PY = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+
+    def _seed_fixture(self, probes):
+        return probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+
+    def _seed_creds(self, seed, probes):
+        return make_seed_credentials(probes, seed)
+
+    def test_citation_fixture_queries_document_versions_and_derived_artifacts(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("artifact_kind = 'markdown'", text)
+        self.assertIn("content_sha256", text)
+        self.assertNotIn("canonical_markdown_sha256 FROM document_versions", text)
+        self.assertNotIn("source_content_sha256 FROM document_versions", text)
+
+    def test_citation_fixture_waits_for_indexing_with_bounded_poll(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("_wait_for_citation_index", text)
+
+    def test_bootstrap_beta_as_alpha_org_editor(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("'editor'", text)
+        self.assertNotIn(
+            "VALUES ('{ALPHA_ORG_ID}', '{BETA_USER_ID}', 'viewer', 'active')",
+            text.replace(" ", ""),
+        )
+
+    def test_conflict_claim_pair_unique_per_conflict_slot(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("_claim_pair_for_conflict", text)
+        self.assertNotIn("_claim_pair_for_org(org_id", text)
+
+    def test_seed_provisions_disposable_org_without_alpha_membership(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("disposableOrgId", text)
+
+    def test_row_scenario_handlers_cover_all_secondary_rows(self) -> None:
+        denial = load_denial()
+        self.assertTrue(hasattr(denial, "ROW_SCENARIO_HANDLERS"))
+        for row_id in denial.SECONDARY_ROW_IDS:
+            handler = denial.ROW_SCENARIO_HANDLERS.get(row_id)
+            self.assertIsNotNone(handler, f"missing dedicated handler for {row_id}")
+            self.assertNotEqual(
+                handler.__name__,
+                "_build_primary_row_specs",
+                f"{row_id} must not use generic primary handler",
+            )
+
+    def test_denial_has_no_query_suffix_secondary_variants(self) -> None:
+        denial = load_denial()
+        self.assertFalse(hasattr(denial, "_variant_query_suffix"))
+
+    def test_switch_org_negative_uses_disposable_org_membership_missing(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes, disposableOrgId="66666666-6666-6666-6666-666666666666"),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = make_seed_credentials(probes, seed)
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-switchOrg")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        negative = [s for s in specs if s.scenario == "membership_missing"]
+        self.assertEqual(len(negative), 1)
+        self.assertEqual(negative[0].expected_statuses, frozenset({403}))
+        body = negative[0].body
+        assert body is not None
+        self.assertEqual(body["orgId"], seed.disposable_org_id)
+
+    def test_redeem_download_negative_uses_invalid_capability_not_foreign_bearer(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            beta_denial_wrong_download_capability="mhcap1.invalid-token",
+        )
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.operation_id == "redeemDownload")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        invalid = [s for s in specs if s.scenario == "invalid_capability"]
+        self.assertEqual(len(invalid), 1)
+        self.assertEqual(invalid[0].expected_statuses, frozenset({400}))
+        self.assertIn("invalid-token", invalid[0].path)
+        self.assertNotEqual(invalid[0].token, creds.alpha_access_token)
+
+    def test_accept_invite_negative_uses_separate_invite_token(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            beta_denial_accept_invite_token="mhinv1.owner-accept-token",
+            beta_denial_negative_invite_token="mhinv1.negative-invite-token",
+        )
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.operation_id == "acceptMemberInvite")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        owner = next(s for s in specs if s.scenario == "owner_control")
+        negative = next(s for s in specs if s.scenario == "invalid_invite_token")
+        assert owner.body is not None and negative.body is not None
+        self.assertEqual(owner.body["token"], "mhinv1.owner-accept-token")
+        self.assertEqual(negative.body["token"], "mhinv1.negative-invite-token")
+        self.assertNotEqual(owner.body["token"], negative.body["token"])
+        self.assertEqual(negative.expected_statuses, frozenset({404}))
+
+    def test_validate_fixture_credentials_requires_distinct_disposable_ids(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            beta_denial_disposable_collection_id="21212121-2121-2121-2121-212121212121",
+            beta_denial_disposable_collection_update_id="21212121-2121-2121-2121-212121212121",
+        )
+        with self.assertRaises(RuntimeError):
+            probes.validate_fixture_credentials(creds)
+
+    def test_ensure_beta_membership_verifies_editor_role_via_upload(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+
+        class MembershipShim(probes.DeployedProbeShims):
+            upload_calls = 0
+
+            def http_request(self, **kwargs):  # type: ignore[override]
+                path = str(kwargs.get("path") or "")
+                token = kwargs.get("token")
+                headers = {"x-request-id": "11111111-1111-1111-1111-111111111111"}
+                if kwargs.get("multipart_body") is not None and token == creds.beta_alpha_access_token:
+                    self.upload_calls += 1
+                    if self.upload_calls == 1:
+                        return probes.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
+                    return probes.HttpResponse(status=201, body='{"documentId":"d","versionId":"v"}', headers=headers)
+                if token == creds.alpha_access_token and kwargs.get("method") == "PATCH":
+                    return probes.HttpResponse(status=200, body="{}", headers=headers)
+                if path.endswith("/api/v1/auth/me"):
+                    return probes.HttpResponse(status=200, body='{"userId":"u","sessionId":"s"}', headers=headers)
+                return probes.HttpResponse(status=403, body="{}", headers=headers)
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(0, "", "")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(0, "abc", "")
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://fake",
+            seed=seed,
+            credentials=creds,
+            shims=MembershipShim(),
+            git_sha_full=seed.source_revision["commit"],
+        )
+        runner._ensure_beta_membership()
+        self.assertGreaterEqual(runner.shims.upload_calls, 2)  # type: ignore[attr-defined]
+
+    def test_audit_probe_executes_all_predeclared_mutation_actions(self) -> None:
+        probes = load_probes()
+        self.assertGreaterEqual(len(probes.AUDIT_MUTATION_ACTIONS), 10)
+        text = self.PROBES_PY.read_text(encoding="utf-8")
+        audit = text.split("def run_audit_probe", 1)[1].split("def run_", 1)[0]
+        for action in probes.AUDIT_MUTATION_ACTIONS:
+            self.assertIn(action, audit, f"audit probe must attempt {action}")
+
+    def test_load_seed_credentials_secure_uses_o_nofollow(self) -> None:
+        probes = load_probes()
+        self.assertTrue(hasattr(probes, "load_seed_credentials_secure"))
+
+    def test_g1c_gate_trap_before_seed_invocation(self) -> None:
+        text = self.GATE_SH.read_text(encoding="utf-8")
+        seed_idx = text.index("phase1c-multi-org-seed.sh")
+        trap_idx = text.index("trap '")
+        self.assertLess(trap_idx, seed_idx)
+
+    def test_sse_parser_validates_terminal_event(self) -> None:
+        denial = load_denial()
+        self.assertTrue(hasattr(denial, "parse_sse_stream"))
+        with self.assertRaises(RuntimeError):
+            denial.parse_sse_stream("event: partial\ndata: {}\n", required_terminal="done")
+
+    def test_stateful_fake_has_no_generic_owner_fallback(self) -> None:
+        text = self.FAKE_PY.read_text(encoding="utf-8")
+        self.assertNotIn('if method in {"POST", "PATCH", "DELETE", "GET"}:', text)
+
+    def test_denial_observation_includes_owner_transition(self) -> None:
+        denial = load_denial()
+        obs = denial.DenialObservation(
+            operation_id="deleteCollection",
+            row_id="denial-deleteCollection",
+            scenario="owner_control",
+            expected_statuses=[204],
+            actual_status=204,
+            body_sha256="abc",
+            request_id="11111111-1111-1111-1111-111111111111",
+            leaked_markers=[],
+            owner_transition="collection_deleted",
+        )
+        payload = denial.DenialExecutionReport(
+            schema_version=1,
+            git_sha_full="a" * 40,
+            manifest_sha256=denial.canonical_manifest_sha256(),
+            challenge="c1",
+            executable_http_sse_count=1,
+            observations=[obs],
+        ).as_dict()
+        self.assertEqual(
+            payload["observations"][0]["ownerTransition"],
+            "collection_deleted",
+        )
+
+    def test_build_row_denial_specs_covers_all_sixty_rows(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            disposable_org_id="66666666-6666-6666-6666-666666666666",
+            beta_denial_wrong_download_capability="mhcap1.invalid",
+            beta_denial_negative_invite_token="mhinv1.negative",
+        )
+        mapping = denial.build_http_sse_denial_mapping()
+        for entry in mapping:
+            specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+            self.assertTrue(specs, f"{entry.row_id} produced no specs")
 
 
 class DeployedCiRouteTests(unittest.TestCase):
