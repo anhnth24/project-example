@@ -134,7 +134,7 @@ Tám subcommand đăng ký ở `registered_commands()`:
 |---|---|---|
 | `one` | `<file> [--ocr-images --lang vie+eng --pages 1,2,3 --sheet NAME --max-chars N]` | convert 1 file → stdout (markdown thuần) |
 | `one-detailed` | cùng cờ như `one` (+ `--no-pdf-ocr`) | convert → JSON `{markdown,title,format,outcome,warnings}` hoặc lỗi `{message,kind}` |
-| `speed` | `<dir> [report.md]` | ms/file, ms/page, KB/s theo format (`count_pages`: pdfinfo cho PDF, `fileconv_core::probe` cho PPTX — không còn shell `python3`) |
+| `speed` | `<dir> [report.md]` | ms/file, ms/page, KB/s theo format (`count_pages`: pdfinfo cho PDF, `fileconv_core::probe` cho PPTX — đường Rust thuần, không còn nhánh shell Python riêng) |
 | `accuracy` | `<manifest.tsv> [report.md]` | CER/WER (Levenshtein, `normalize()` bỏ markdown) theo nhãn |
 | `audio` | `<models.csv> <manifest.tsv> [report.md]` | (feature `audio`) WER/RTF/load mỗi model GGML |
 | `handoff` | `<product> <output.zip> <sources...>` | đóng gói handoff pack (BRD/PRD) từ nhiều file nguồn |
