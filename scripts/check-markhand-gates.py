@@ -24,6 +24,94 @@ SECRET_PATTERNS = (
     re.compile(r"\b[A-Za-z]:\\Users\\"),
 )
 GATE_FAMILIES = {"G0-ARCH", "G0-RET", "G0-SEC", "G0-CAP", "G0-SLO", "G0-LIC"}
+PHASE1C_GATE_REPORT_SCHEMA = DEFAULT_ROOT / "schema/phase1c-gate-report.schema.json"
+PHASE1C_ENVIRONMENT_ID = "phase1c-multi-org-poc"
+PHASE1C_WORKLOAD_PROFILE_ID = "phase1c-multi-org"
+G1C_GATE_FAMILY = "G1C-SEC"
+PHASE1C_FAILURE_DISPOSITION = "block-phase-1c"
+PHASE1C_METRIC_THRESHOLDS: dict[str, tuple[str, float | int]] = {
+    "cross_tenant_leakage_count": ("==", 0),
+    "post_commit_stale_authorizations": ("==", 0),
+    "membership_acl_revoke_max_ms": ("<=", 3000),
+    "quota_drift_after_recovery": ("==", 0),
+    "quiet_org_query_p95_ms": ("<=", 500),
+    "starvation_events": ("==", 0),
+    "admin_mutation_audit_coverage_ratio": ("==", 1.0),
+    "worker_dedicated_role_verified": ("==", 1),
+    "undispositioned_high_critical_count": ("==", 0),
+}
+G1C_GATE_ROWS: tuple[dict[str, str | None], ...] = (
+    {
+        "id": "G1C-SEC-LEAKAGE",
+        "metric": "cross_tenant_leakage_count",
+        "owner": "security-owner",
+        "approver": "security-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/leakage.json",
+    },
+    {
+        "id": "G1C-SEC-REVOKE",
+        "metric": "membership_acl_revoke_max_ms",
+        "owner": "security-owner",
+        "approver": "operations-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/revoke.json",
+    },
+    {
+        "id": "G1C-SEC-ACL-CACHE",
+        "metric": "post_commit_stale_authorizations",
+        "owner": "security-owner",
+        "approver": "security-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/acl-cache.json",
+    },
+    {
+        "id": "G1C-SEC-QUOTA-RECOVERY",
+        "metric": "quota_drift_after_recovery",
+        "owner": "operations-owner",
+        "approver": "operations-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/quota-recovery.json",
+    },
+    {
+        "id": "G1C-SEC-NOISY-NEIGHBOR",
+        "metric": "quiet_org_query_p95_ms",
+        "owner": "operations-owner",
+        "approver": "operations-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/noisy-neighbor.json",
+    },
+    {
+        "id": "G1C-SEC-AUDIT-COVERAGE",
+        "metric": "admin_mutation_audit_coverage_ratio",
+        "owner": "security-owner",
+        "approver": "security-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/audit-coverage.json",
+    },
+    {
+        "id": "G1C-SEC-WORKER-ROLE",
+        "metric": "worker_dedicated_role_verified",
+        "owner": "security-owner",
+        "approver": "operations-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/worker-role.json",
+    },
+    {
+        "id": "G1C-SEC-CONTAINER-VULNS",
+        "metric": "undispositioned_high_critical_count",
+        "owner": "security-owner",
+        "approver": "security-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/container-vulns.json",
+    },
+    {
+        "id": "G1C-SEC-STALE-TOKENS",
+        "metric": "post_commit_stale_authorizations",
+        "owner": "security-owner",
+        "approver": "security-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/stale-tokens.json",
+    },
+    {
+        "id": "G1C-SEC-QDRANT-FAIL-CLOSED",
+        "metric": "cross_tenant_leakage_count",
+        "owner": "security-owner",
+        "approver": "security-owner",
+        "evidence": "bench/markhand_web/reports/phase-1c-gate/qdrant-fail-closed.json",
+    },
+)
 OPERATORS = {">=", ">", "<=", "<", "=="}
 FAILURE_DISPOSITIONS = {
     "block-phase-1b",
@@ -536,6 +624,23 @@ def phase1b_gate_report_errors(gate_dir: Path) -> list[str]:
     return errors
 
 
+def phase1c_registry_contract_errors(
+    registry: dict,
+    environments: list[dict],
+    *,
+    require_g1c_rows: bool = True,
+) -> list[str]:
+    """Validate Phase 1C G1C-SEC registry rows and qualifying environment binding."""
+    _ = registry, environments, require_g1c_rows
+    return []
+
+
+def phase1c_gate_report_errors(report: dict) -> list[str]:
+    """Fail closed on Phase 1C qualifying report invariants beyond JSON Schema."""
+    _ = report
+    return []
+
+
 class GateValidatorTests(unittest.TestCase):
     def prepare_root(self, root: Path) -> None:
         (root / "environments").mkdir()
@@ -773,6 +878,200 @@ class Phase1bGateReportConsistencyTests(unittest.TestCase):
             self.assertTrue(any("cannot read canonical o05-soak.json" in error for error in errors))
 
 
+class Phase1cGateContractTests(unittest.TestCase):
+    """RED contract tests for G1C-SEC registry rows and phase-1c gate reports."""
+
+    def _metric_value(self, metric: str) -> int | float:
+        operator, threshold = PHASE1C_METRIC_THRESHOLDS[metric]
+        if operator in {">=", ">"}:
+            return threshold
+        if metric == "admin_mutation_audit_coverage_ratio":
+            return 1.0
+        if metric == "worker_dedicated_role_verified":
+            return 1
+        return 0
+
+    def _threshold_decisions(self) -> list[dict]:
+        return [
+            {
+                "metric": metric,
+                "operator": operator,
+                "value": value,
+                "source": "docs/markhand-web-sla-targets.md",
+                "owner": "security-owner",
+                "approver": "operations-owner",
+                "approvedAt": "2026-08-04T00:00:00Z",
+            }
+            for metric, (operator, value) in PHASE1C_METRIC_THRESHOLDS.items()
+        ]
+
+    def _gate_results(self) -> list[dict]:
+        results: list[dict] = []
+        for row in G1C_GATE_ROWS:
+            metric = str(row["metric"])
+            operator, threshold = PHASE1C_METRIC_THRESHOLDS[metric]
+            results.append(
+                {
+                    "gateId": row["id"],
+                    "externalGate": G1C_GATE_FAMILY,
+                    "metric": metric,
+                    "value": self._metric_value(metric),
+                    "pass": True,
+                    "failureDisposition": PHASE1C_FAILURE_DISPOSITION,
+                    "evidence": row["evidence"],
+                }
+            )
+            _ = operator, threshold
+        return results
+
+    def _baseline_report(self) -> dict:
+        return {
+            "version": 1,
+            "reportId": "phase1c-gate-contract",
+            "generatedAt": "2026-08-04T00:00:00Z",
+            "status": "pass",
+            "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+            "environmentId": PHASE1C_ENVIRONMENT_ID,
+            "workloadProfileId": PHASE1C_WORKLOAD_PROFILE_ID,
+            "targetMatch": True,
+            "denialManifestSha256": "0" * 64,
+            "git": {"commit": "0" * 40, "dirty": False},
+            "metrics": {
+                metric: self._metric_value(metric)
+                for metric in PHASE1C_METRIC_THRESHOLDS
+            },
+            "thresholdDecisions": self._threshold_decisions(),
+            "workerProof": {
+                "runtimeRole": "markhand_worker",
+                "dedicatedDatabaseUrlVerified": True,
+                "superuser": False,
+                "bypassRls": False,
+                "verifiedAt": "2026-08-04T00:00:00Z",
+            },
+            "gateResults": self._gate_results(),
+            "redactionScan": {"passed": True},
+            "vulnerabilityScan": {
+                "scanner": "trivy",
+                "undispositionedHighCritical": 0,
+                "findings": [],
+            },
+        }
+
+    def _baseline_registry(self) -> dict:
+        gates: list[dict] = []
+        for row in G1C_GATE_ROWS:
+            metric = str(row["metric"])
+            operator, value = PHASE1C_METRIC_THRESHOLDS[metric]
+            gates.append(
+                {
+                    "id": row["id"],
+                    "externalGate": G1C_GATE_FAMILY,
+                    "metric": {
+                        "name": metric,
+                        "unit": "count" if isinstance(value, int) else "milliseconds",
+                        "statistic": "max" if operator in {"<=", "<"} else "min",
+                    },
+                    "workload": "loads.peak",
+                    "corpus": None,
+                    "threshold": {"operator": operator, "value": value},
+                    "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+                    "environmentId": PHASE1C_ENVIRONMENT_ID,
+                    "owner": row["owner"],
+                    "approver": row["approver"],
+                    "status": "approved",
+                    "failureDisposition": PHASE1C_FAILURE_DISPOSITION,
+                    "evidence": row["evidence"],
+                    "blocksIssues": ["1C-13"],
+                }
+            )
+        return {"version": 1, "registryStatus": "approved", "gates": gates}
+
+    def _baseline_environment(self) -> dict:
+        return {
+            "version": 1,
+            "environmentId": PHASE1C_ENVIRONMENT_ID,
+            "role": "benchmark-target",
+            "status": "approved",
+            "approver": "project-owner",
+            "approvedAt": "2026-08-04T00:00:00Z",
+            "orgCount": 2,
+            "embeddingProfile": "mock",
+            "requiresDedicatedWorkerRole": True,
+            "requiresWorkerDatabaseUrl": True,
+            "cpu": {"vendor": "reference", "model": "single-host-x86_64", "cores": 8, "threads": 8},
+            "ramGb": 16,
+            "disk": {"type": "ssd", "capacityGb": 60, "iopsNote": ">=5k random-read IOPS"},
+            "gpu": {"model": "none", "vramGb": 0, "count": 0},
+            "network": {"bandwidthGbps": 1, "latencyMsAssumed": 1},
+            "os": {"distro": "ubuntu-22.04", "arch": "x86_64"},
+            "fingerprintRequiredFields": [
+                "gitCommit",
+                "workloadProfileId",
+                "composeFileSha256",
+                "imageIds",
+                "indexSignature",
+                "migrationManifestSha256",
+                "hardware",
+            ],
+        }
+
+    def test_phase1c_report_schema_rejects_missing_metrics_and_worker_proof(self) -> None:
+        schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
+        report = self._baseline_report()
+        report.pop("metrics")
+        report.pop("workerProof")
+        errors = schema_errors(report, schema, "phase1c-report")
+        self.assertTrue(any("metrics" in error for error in errors))
+        self.assertTrue(any("workerProof" in error for error in errors))
+
+    def test_phase1c_registry_requires_g1c_sec_family_and_environment(self) -> None:
+        registry = self._baseline_registry()
+        environments = [self._baseline_environment()]
+        registry["gates"][0]["externalGate"] = "G0-SEC"
+        environments[0]["environmentId"] = "poc-compose"
+        errors = phase1c_registry_contract_errors(registry, environments)
+        self.assertTrue(any("G1C-SEC" in error for error in errors))
+        self.assertTrue(any(PHASE1C_ENVIRONMENT_ID in error for error in errors))
+
+    def test_phase1c_registry_requires_all_metrics_block_phase_1c_and_evidence(self) -> None:
+        registry = self._baseline_registry()
+        environments = [self._baseline_environment()]
+        registry["gates"] = registry["gates"][:-2]
+        registry["gates"][0]["failureDisposition"] = "block-phase-1b"
+        registry["gates"][1]["evidence"] = None
+        errors = phase1c_registry_contract_errors(registry, environments)
+        self.assertTrue(any("metric" in error.lower() for error in errors))
+        self.assertTrue(any("block-phase-1c" in error for error in errors))
+        self.assertTrue(any("evidence" in error for error in errors))
+
+    def test_phase1c_registry_requires_approved_owner_and_approver(self) -> None:
+        registry = self._baseline_registry()
+        environments = [self._baseline_environment()]
+        registry["gates"][0]["owner"] = ""
+        registry["gates"][1]["approver"] = ""
+        errors = phase1c_registry_contract_errors(registry, environments)
+        self.assertTrue(any("owner" in error for error in errors))
+        self.assertTrue(any("approver" in error for error in errors))
+
+    def test_phase1c_report_rejects_pass_with_target_match_false(self) -> None:
+        report = self._baseline_report()
+        report["targetMatch"] = False
+        errors = phase1c_gate_report_errors(report)
+        self.assertTrue(any("targetMatch" in error for error in errors))
+
+    def test_phase1c_report_rejects_missing_worker_proof(self) -> None:
+        report = self._baseline_report()
+        report.pop("workerProof")
+        errors = phase1c_gate_report_errors(report)
+        self.assertTrue(any("workerProof" in error for error in errors))
+
+    def test_phase1c_report_rejects_missing_threshold_decision(self) -> None:
+        report = self._baseline_report()
+        report["thresholdDecisions"] = []
+        errors = phase1c_gate_report_errors(report)
+        self.assertTrue(any("thresholdDecisions" in error for error in errors))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
@@ -783,6 +1082,7 @@ def main() -> int:
         suite = unittest.TestSuite()
         suite.addTests(loader.loadTestsFromTestCase(GateValidatorTests))
         suite.addTests(loader.loadTestsFromTestCase(Phase1bGateReportConsistencyTests))
+        suite.addTests(loader.loadTestsFromTestCase(Phase1cGateContractTests))
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     try:
         errors = validate(args.root)

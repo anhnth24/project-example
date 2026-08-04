@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": [
+    "version",
+    "reportId",
+    "generatedAt",
+    "status",
+    "git",
+    "environmentId",
+    "workloadProfileId",
+    "targetMatch",
+    "command",
+    "denialManifestSha256",
+    "metrics",
+    "thresholdDecisions",
+    "workerProof",
+    "gateResults",
+    "redactionScan",
+    "vulnerabilityScan"
+  ],
+  "properties": {
+    "version": {"const": 1},
+    "reportId": {"type": "string", "minLength": 1},
+    "generatedAt": {"type": "string", "minLength": 1},
+    "status": {"enum": ["pass", "fail", "incomplete"]},
+    "command": {"type": "string", "minLength": 1},
+    "environmentId": {"const": "phase1c-multi-org-poc"},
+    "workloadProfileId": {"const": "phase1c-multi-org"},
+    "targetMatch": {"type": "boolean"},
+    "denialManifestSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "git": {
+      "type": "object",
+      "required": ["commit", "dirty"],
+      "properties": {
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "dirty": {"type": "boolean"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": [
+        "cross_tenant_leakage_count",
+        "post_commit_stale_authorizations",
+        "membership_acl_revoke_max_ms",
+        "quota_drift_after_recovery",
+        "quiet_org_query_p95_ms",
+        "starvation_events",
+        "admin_mutation_audit_coverage_ratio",
+        "worker_dedicated_role_verified",
+        "undispositioned_high_critical_count"
+      ],
+      "properties": {
+        "cross_tenant_leakage_count": {"type": "integer", "minimum": 0},
+        "post_commit_stale_authorizations": {"type": "integer", "minimum": 0},
+        "membership_acl_revoke_max_ms": {"type": "number", "minimum": 0},
+        "quota_drift_after_recovery": {"type": "integer", "minimum": 0},
+        "quiet_org_query_p95_ms": {"type": "number", "minimum": 0},
+        "starvation_events": {"type": "integer", "minimum": 0},
+        "admin_mutation_audit_coverage_ratio": {"type": "number", "minimum": 0, "maximum": 1},
+        "worker_dedicated_role_verified": {"type": "integer", "enum": [0, 1]},
+        "undispositioned_high_critical_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "thresholdDecisions": {
+      "type": "array",
+      "minItems": 9,
+      "items": {
+        "type": "object",
+        "required": [
+          "metric",
+          "operator",
+          "value",
+          "source",
+          "owner",
+          "approver",
+          "approvedAt"
+        ],
+        "properties": {
+          "metric": {"type": "string", "minLength": 1},
+          "operator": {"enum": [">=", ">", "<=", "<", "=="]},
+          "value": {"type": "number"},
+          "source": {"type": "string", "minLength": 1},
+          "owner": {"type": "string", "minLength": 1},
+          "approver": {"type": "string", "minLength": 1},
+          "approvedAt": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "workerProof": {
+      "type": "object",
+      "required": [
+        "runtimeRole",
+        "dedicatedDatabaseUrlVerified",
+        "superuser",
+        "bypassRls",
+        "verifiedAt"
+      ],
+      "properties": {
+        "runtimeRole": {"const": "markhand_worker"},
+        "dedicatedDatabaseUrlVerified": {"type": "boolean"},
+        "superuser": {"type": "boolean"},
+        "bypassRls": {"type": "boolean"},
+        "verifiedAt": {"type": "string", "minLength": 1}
+      }
+    },
+    "gateResults": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["gateId", "externalGate", "metric", "value", "pass", "failureDisposition"],
+        "properties": {
+          "gateId": {"type": "string", "pattern": "^G1C-SEC-"},
+          "externalGate": {"const": "G1C-SEC"},
+          "metric": {"type": "string", "minLength": 1},
+          "value": {"type": "number"},
+          "pass": {"type": "boolean"},
+          "failureDisposition": {"const": "block-phase-1c"},
+          "evidence": {"type": ["string", "null"], "minLength": 1}
+        }
+      }
+    },
+    "redactionScan": {
+      "type": "object",
+      "required": ["passed"],
+      "properties": {
+        "passed": {"type": "boolean"}
+      }
+    },
+    "vulnerabilityScan": {
+      "type": "object",
+      "required": ["scanner", "undispositionedHighCritical", "findings"],
+      "properties": {
+        "scanner": {"type": "string", "minLength": 1},
+        "undispositionedHighCritical": {"type": "integer", "minimum": 0},
+        "findings": {"type": "array"}
+      }
+    }
+  }
+}
