@@ -10,10 +10,19 @@ tối ưu cho **nội dung tiếng Việt**. Code do dự án làm chủ hoàn t
 gốc thay vì bọc công cụ có sẵn. Mục tiêu cuối: đóng gói thành **desktop app (Tauri)** chạy
 offline cho Win / Mac / Ubuntu.
 
-Hai giao diện cùng dùng một lõi `fileconv-core`:
+Các mặt sản phẩm hiện có, chia theo hai nhóm ranh giới (xem
+[`system-architecture.md`](system-architecture.md)):
+
+**Offline-first, gọi thẳng `fileconv-core` trong tiến trình** (mặc định của dự án):
 - **CLI** (`fileconv`) — convert từng file + đo tốc độ / độ chính xác (CER/WER).
 - **Desktop app "Markhand"** (Tauri + React) — GUI kéo-thả, soạn thảo Markdown, xem trước nguồn.
 - **MCP server** (`fileconv-mcp`) — tool cho Claude Code: convert, rút bảng, tách chunk RAG, OCR nặng qua vision-LLM.
+
+**Markhand Web — track on-prem multi-org riêng**, không offline (cần Postgres/Qdrant/MinIO):
+- **API/workers** (`fileconv-server`, `fileconv-worker` — `crates/server`) — auth, upload,
+  job convert/index/embedding; worker gọi lại `fileconv` CLI/`fileconv-core`.
+- **Browser SPA** (`web/`) — nói HTTP/SSE với `fileconv-server`, không import trực tiếp
+  `fileconv-core`.
 
 `vendor/markitdown-rs/` **chỉ là tài liệu tham khảo (MIT)** — đã `exclude` khỏi workspace,
 không phải dependency. Đừng dùng lại hay phụ thuộc nó.
@@ -39,20 +48,23 @@ tiền xử lý ảnh trước OCR.
 | RAG | SQLite FTS5 + neural/local vectors + persistent HNSW | ✅ |
 | Bảng mã cũ | Decode TCVN3, VNI-Windows và VPS | ✅ |
 | OCR khó | Vision-LLM (cột nhiều, IN HOA, chữ viết tay, con dấu) qua MCP `ocr_hard` | ✅ (cần key LLM) |
-| Desktop GUI | PPTX preview, merged tables, live watch, intelligence | ✅ (`.deb`; Win/Mac chờ credentials ký) |
+| Desktop GUI | PPTX preview, merged tables, live watch, intelligence, theme dark LumiBase | ✅ (Linux `.deb` có build evidence; Windows/macOS còn cần xác minh artifact + credentials ký/notarization) |
 | NFC | Chuẩn hoá mọi output (tài liệu NFD từ macOS/PDF cũ) | ✅ |
 
 ### Yêu cầu phi chức năng
-- **Offline-first**: lõi + CLI + desktop chạy không cần mạng. LLM/vision chỉ là tier tuỳ chọn.
+- **Offline-first (mặc định converter/desktop)**: lõi + CLI + desktop chạy không cần mạng. LLM/vision
+  chỉ là tier tuỳ chọn. Markhand Web nằm ngoài mặc định này — track on-prem multi-org riêng, cần
+  Postgres/Qdrant/MinIO (xem [`runbooks/local-development.md`](runbooks/local-development.md)).
 - **Hiệu năng**: tài liệu văn bản < 1ms/file; PDF ~5.7ms/trang (xem số liệu ở [`bench/REPORT.md`](../bench/REPORT.md)).
 - **Đóng gói được**: chạy được trên Win/Mac/Linux chỉ với các phụ thuộc native tối thiểu.
 - **Tái kiểm chứng được**: mọi thay đổi OCR/PDF phải đo lại bằng CLI trên corpus (`accuracy` / `speed`).
 
-### Ngoài phạm vi (hiện tại)
-- Đóng gói installer distributable (`.msi`/`.dmg`/`.deb`) — chưa làm.
+### Ngoài phạm vi / giới hạn hiện tại
+- Installer Windows (`.msi`) / macOS (`.dmg`) đạt release thật: CI có bundle metadata cho cả
+  matrix, nhưng còn cần xác minh artifact trên từng platform và credentials ký/notarization.
+  Linux `.deb` đã có build evidence.
 - Nhận dạng giọng nói (ASR) streaming real-time.
 - OCR chữ viết tay độ cao (giới hạn Tesseract; tier vision-LLM mới giải quyết từng phần).
-- Hỗ trợ dark mode desktop (hiện ép light — xem [`system-architecture.md`](system-architecture.md#theme)).
 
 ## Động lực & vị thế thị trường
 
