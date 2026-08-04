@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -350,6 +352,303 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         self.assertEqual(blockers, [])
 
 
+class Phase1cReviewFixContractTests(unittest.TestCase):
+    """Review-fix RED tests (Commit C): must fail until harness implementation lands."""
+
+    def test_run_live_probes_accepts_injectable_command_runner(self) -> None:
+        params = inspect.signature(gate.run_live_probes).parameters
+        self.assertIn(
+            "command_runner",
+            params,
+            "run_live_probes must accept injectable command_runner for behavioral tests",
+        )
+
+    def test_staging_workspace_class_exists(self) -> None:
+        self.assertTrue(
+            hasattr(gate, "StagingWorkspace"),
+            "harness must stage evidence in a private temp workspace",
+        )
+
+    def test_parse_denial_report_requires_leakage_count(self) -> None:
+        self.assertTrue(hasattr(gate, "parse_denial_report"))
+        with self.assertRaises((RuntimeError, ValueError, KeyError, TypeError)):
+            gate.parse_denial_report({"schemaVersion": 1, "summary": {}})
+
+    def test_parse_denial_report_binds_leakage_count_not_summary_field(self) -> None:
+        metrics = gate.parse_denial_report(
+            {
+                "schemaVersion": 1,
+                "leakageCount": 0,
+                "failures": [],
+                "manifestSha256": "a" * 64,
+                "gitShaFull": "b" * 40,
+                "redactionScan": {"passed": True, "findings": []},
+            }
+        )
+        self.assertEqual(metrics["cross_tenant_leakage_count"], 0)
+
+    def test_parse_probe_result_requires_eof_and_rejects_trailing_output(self) -> None:
+        self.assertTrue(hasattr(gate, "parse_probe_stdout"))
+        payload = json.dumps(
+            {"schemaVersion": 1, "probeId": "revoke", "metrics": {"membership_acl_revoke_max_ms": 12}}
+        )
+        stdout = f"PHASE1C_PROBE_RESULT\t{payload}\nPHASE1C_PROBE_EOF\ttrue\nextra\n"
+        with self.assertRaises(RuntimeError):
+            gate.parse_probe_stdout(stdout, probe_id="revoke")
+
+    def test_parse_probe_result_rejects_missing_or_duplicate_markers(self) -> None:
+        payload = json.dumps(
+            {"schemaVersion": 1, "probeId": "revoke", "metrics": {"membership_acl_revoke_max_ms": 12}}
+        )
+        with self.assertRaises(RuntimeError):
+            gate.parse_probe_stdout("noise\n", probe_id="revoke")
+        dup = f"PHASE1C_PROBE_RESULT\t{payload}\nPHASE1C_PROBE_RESULT\t{payload}\nPHASE1C_PROBE_EOF\ttrue\n"
+        with self.assertRaises(RuntimeError):
+            gate.parse_probe_stdout(dup, probe_id="revoke")
+
+    def test_parse_worker_role_probe_strict_json_contract(self) -> None:
+        nonce = "phase1c-worker-nonce-001"
+        line = json.dumps(
+            {
+                "schemaVersion": 1,
+                "currentUser": "markhand_worker",
+                "superuser": False,
+                "bypassRls": False,
+                "dedicatedDatabaseUrlVerified": True,
+                "databaseUrlRolePath": "markhand_worker",
+                "nonce": nonce,
+            },
+            sort_keys=True,
+        )
+        stdout = f"PHASE1C_WORKER_ROLE_PROBE\t{line}\nPHASE1C_WORKER_ROLE_PROBE_EOF\ttrue\n"
+        parsed = gate.parse_worker_role_probe(stdout)
+        self.assertEqual(parsed["currentUser"], "markhand_worker")
+        self.assertIs(parsed["superuser"], False)
+        self.assertIs(parsed["bypassRls"], False)
+        self.assertEqual(parsed["nonce"], nonce)
+
+    def test_parse_worker_role_probe_rejects_string_booleans(self) -> None:
+        line = json.dumps(
+            {
+                "schemaVersion": 1,
+                "currentUser": "markhand_worker",
+                "superuser": "false",
+                "bypassRls": "false",
+                "dedicatedDatabaseUrlVerified": True,
+                "databaseUrlRolePath": "markhand_worker",
+                "nonce": "n1",
+            }
+        )
+        stdout = f"PHASE1C_WORKER_ROLE_PROBE\t{line}\nPHASE1C_WORKER_ROLE_PROBE_EOF\ttrue\n"
+        with self.assertRaises(RuntimeError):
+            gate.parse_worker_role_probe(stdout)
+
+    def test_parse_trivy_reports_combines_both_images(self) -> None:
+        self.assertTrue(hasattr(gate, "parse_combined_trivy_scan"))
+        api_report = {
+            "SchemaVersion": 2,
+            "Results": [
+                {
+                    "Target": "markhand-api:poc",
+                    "Vulnerabilities": [
+                        {"VulnerabilityID": "CVE-2026-0001", "Severity": "HIGH"}
+                    ],
+                }
+            ],
+        }
+        worker_report = {
+            "SchemaVersion": 2,
+            "Results": [{"Target": "markhand-worker:poc", "Vulnerabilities": []}],
+        }
+        outcome = gate.parse_combined_trivy_scan(
+            api_report=api_report,
+            worker_report=worker_report,
+            api_ref="markhand-api:poc@sha256:" + "a" * 64,
+            worker_ref="markhand-worker:poc@sha256:" + "b" * 64,
+            trivyignore_text="# empty\n",
+        )
+        self.assertEqual(outcome["undispositionedHighCritical"], 1)
+        self.assertEqual(len(outcome["images"]), 2)
+
+    def test_parse_trivy_rejects_malformed_partial_reports(self) -> None:
+        with self.assertRaises(RuntimeError):
+            gate.parse_combined_trivy_scan(
+                api_report={"Results": "bad"},
+                worker_report={"SchemaVersion": 2, "Results": []},
+                api_ref="markhand-api:poc@sha256:" + "a" * 64,
+                worker_ref="markhand-worker:poc@sha256:" + "b" * 64,
+                trivyignore_text="",
+            )
+
+    def test_run_live_probes_fails_on_noop_command_runner(self) -> None:
+        def noop_runner(command, **kwargs):
+            return {
+                "command": command,
+                "commandExitCode": 0,
+                "timedOut": False,
+                "outputTruncated": False,
+                "eof": True,
+                "durationMs": 1,
+                "stdout": "",
+                "stderr": "",
+                "stdoutSha256": "0" * 64,
+                "stderrSha256": "0" * 64,
+                "residualSecrets": False,
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            markhand, repo = GATES.prepare_phase1c_fixture(repo)
+            init_git_repo(repo)
+            env = {
+                **os.environ,
+                "MARKHAND_TEST_REQUIRED": "1",
+                "COMPOSE_PROFILES": "mock",
+                "MARKHAND_PHASE1C_GATE": "1",
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                with self.assertRaises(RuntimeError):
+                    gate.run_live_probes(
+                        repo,
+                        markhand,
+                        command_runner=noop_runner,
+                    )
+
+    def test_evidence_payload_includes_binding_fields(self) -> None:
+        self.assertTrue(hasattr(gate, "build_evidence_payload"))
+        probe = {
+            "commandExitCode": 0,
+            "timedOut": False,
+            "outputTruncated": False,
+            "eof": True,
+            "durationMs": 1,
+        }
+        payload = gate.build_evidence_payload(
+            gate_id="G1C-SEC-LEAKAGE",
+            scenario="multi_org_denial_replay",
+            probe=probe,
+            metrics={"cross_tenant_leakage_count": 0},
+            source_revision={"commit": "c" * 40, "dirty": False},
+            markhand_root=gate.MARKHAND_ROOT,
+            repo_root=gate.ROOT,
+        )
+        for field in (
+            "schemaVersion",
+            "evidencePath",
+            "environmentId",
+            "workloadProfileId",
+            "embeddingProfile",
+            "sourceRevision",
+            "canonicalBinding",
+            "thresholdDecisions",
+            "targetMatch",
+        ):
+            self.assertIn(field, payload, f"missing evidence binding field {field}")
+
+    def test_failure_message_redaction_helper_exists(self) -> None:
+        self.assertTrue(hasattr(gate, "sanitize_failure_message"))
+        raw = "probe failed: postgres://user:secret@127.0.0.1/db /workspace/leak"
+        cleaned = gate.sanitize_failure_message(raw)
+        self.assertNotIn("secret", cleaned)
+        self.assertNotIn("/workspace/", cleaned)
+
+    def test_staging_purges_allowlisted_final_artifacts_on_failure(self) -> None:
+        self.assertTrue(hasattr(gate, "StagingWorkspace"))
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            markhand, repo = GATES.prepare_phase1c_fixture(repo)
+            init_git_repo(repo)
+            final_dir = repo / "out"
+            final_dir.mkdir()
+            decoy = final_dir / "leakage.json"
+            decoy.write_text('{"status":"pass"}\n', encoding="utf-8")
+            rel = sorted(GATES.PHASE1C_EVIDENCE_ALLOWLIST)[0]
+            staging = gate.StagingWorkspace(repo_root=repo, final_dir=final_dir)
+            staging.purge_final_allowlisted_artifacts()
+            self.assertFalse((final_dir / Path(rel).name).exists())
+
+    def test_staging_rejects_symlink_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            markhand, repo = GATES.prepare_phase1c_fixture(repo)
+            init_git_repo(repo)
+            final_dir = repo / "out"
+            final_dir.mkdir()
+            outside = repo / "outside-secret.json"
+            outside.write_text('{"leak":true}\n', encoding="utf-8")
+            staging_root = repo / ".staging"
+            staging_root.mkdir()
+            evil = staging_root / "evil.json"
+            evil.symlink_to(outside)
+            staging = gate.StagingWorkspace(repo_root=repo, final_dir=final_dir)
+            with self.assertRaises((RuntimeError, gate.HarnessWriteError, OSError)):
+                staging.commit_file(evil, relative_path=sorted(GATES.PHASE1C_EVIDENCE_ALLOWLIST)[0])
+
+
+class Phase1cShellEntrypointTests(unittest.TestCase):
+    SHELL = gate.ROOT / "deploy/scripts/g1c-security-gate.sh"
+
+    def test_output_dir_flag_before_self_test(self) -> None:
+        proc = subprocess.run(
+            ["bash", str(self.SHELL), "--output-dir", "/tmp/phase1c-shell-test", "--self-test"],
+            cwd=gate.ROOT,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(
+            proc.returncode,
+            0,
+            msg=textwrap.shorten(proc.stderr or proc.stdout, 500),
+        )
+
+    def test_rejects_unknown_option(self) -> None:
+        proc = subprocess.run(
+            ["bash", str(self.SHELL), "--unknown-flag"],
+            cwd=gate.ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_rejects_duplicate_output_dir(self) -> None:
+        proc = subprocess.run(
+            [
+                "bash",
+                str(self.SHELL),
+                "--output-dir",
+                "/tmp/a",
+                "--output-dir",
+                "/tmp/b",
+            ],
+            cwd=gate.ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+
+    def test_rejects_unsafe_output_dir_traversal(self) -> None:
+        proc = subprocess.run(
+            ["bash", str(self.SHELL), "--output-dir", "../../etc/passwd"],
+            cwd=gate.ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+
+
+class Phase1cSeedScriptContractTests(unittest.TestCase):
+    SEED = gate.ROOT / "deploy/scripts/phase1c-multi-org-seed.sh"
+
+    def test_seed_script_has_schema_validation_helper(self) -> None:
+        text = self.SEED.read_text(encoding="utf-8")
+        self.assertIn("schemaVersion", text)
+        self.assertNotIn("accessToken", text.split("seed =")[1] if "seed = {" in text else text)
+
+
 class Phase1cHarnessCiRoutingTests(unittest.TestCase):
     def test_rust_test_registered_as_ignored_e2e_phase1c_gate(self) -> None:
         listing = subprocess.check_output(
@@ -374,6 +673,21 @@ class Phase1cHarnessCiRoutingTests(unittest.TestCase):
         ci = (gate.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("--skip e2e_phase1c_gate", ci)
         self.assertIn("MARKHAND_PHASE1C_GATE=1", ci)
+
+    def test_ci_enforces_gate_before_artifact_upload(self) -> None:
+        ci = (gate.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        upload_idx = ci.index("Upload Phase 1C gate evidence")
+        enforce_idx = ci.index("Enforce G1C gate")
+        self.assertLess(
+            enforce_idx,
+            upload_idx,
+            "validation/enforcement must precede artifact upload",
+        )
+
+    def test_ci_upload_not_unconditional_on_always(self) -> None:
+        ci = (gate.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        block = ci.split("Upload Phase 1C gate evidence", 1)[1].split("Enforce G1C gate", 1)[0]
+        self.assertNotIn("if: always()", block)
 
 
 if __name__ == "__main__":

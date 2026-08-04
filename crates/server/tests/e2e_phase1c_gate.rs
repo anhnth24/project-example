@@ -171,7 +171,39 @@ fn e2e_phase1c_gate() {
 }
 
 #[test]
-fn phase1c_python_validator_rejects_non_pass_fixtures() {
+fn e2e_phase1c_gate_missing_opt_in_fails_not_skips() {
+    let output = Command::new("cargo")
+        .args([
+            "test",
+            "-p",
+            "fileconv-server",
+            "--test",
+            "e2e_phase1c_gate",
+            "--",
+            "--ignored",
+            "e2e_phase1c_gate",
+            "--exact",
+            "--nocapture",
+        ])
+        .current_dir(workspace_root())
+        .env_remove("MARKHAND_PHASE1C_GATE")
+        .env_remove("MARKHAND_PHASE1C_REPORT_PATH")
+        .env_remove("GITHUB_SHA")
+        .output()
+        .expect("spawn cargo test for opt-in contract");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "e2e_phase1c_gate must fail when MARKHAND_PHASE1C_GATE!=1 (stdout={stdout}, stderr={stderr})"
+    );
+    assert!(
+        !stdout.contains("template mode") && !stderr.contains("template mode"),
+        "ignored gate must not treat missing opt-in as a skip"
+    );
+}
+
+#[test]
     let tmp = tempfile::tempdir().expect("tmpdir");
     let not_run = serde_json::json!({
         "version": 1,
