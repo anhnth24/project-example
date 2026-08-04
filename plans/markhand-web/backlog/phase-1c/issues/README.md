@@ -52,7 +52,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   re-verify, fail-closed OrgContext, RLS, `GET /orgs` / `GET /orgs/{id}` /
   `POST /orgs/switch` / `POST /orgs` with owner provision + audit.
 
-- **Plan file:** [1C-01 detailed implementation plan](../../../../reports/plan-260804-1617-1c-01-organization-lifecycle-va-validated-context.md)
+- **Plan file:** [1C-01 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-01-organization-lifecycle-va-validated-context.md)
 - **Plan/files:** Org create/list/detail/switch, service/repo/middleware; issue new
   context/session after verified membership.
 - **Depends:** Phase 1B auth/schema. **Acceptance/tests:** Chỉ thấy org của mình;
@@ -78,7 +78,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   suspend/reactivate, session family revoke, audit allowlist. Membership ACL
   `version` remains deferred to 1C-05; automated email delivery remains out of scope.
 
-- **Plan file:** [1C-02 detailed implementation plan](../../../../reports/plan-260804-1617-1c-02-membership-invites-va-last-owner-invariant.md)
+- **Plan file:** [1C-02 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-02-membership-invites-va-last-owner-invariant.md)
 - **Plan/files:** Hashed single-use invite; membership state; transactional last-owner;
   membership version (deferred to 1C-05); session revoke. MVP chưa có mail dùng invite
   URL/token hiển thị đúng một lần cho admin copy qua kênh được tổ chức phê duyệt;
@@ -110,7 +110,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   migration `0030` catalog + per-org provision unchanged. P1C.2 disposition: matrix
   follows the fixture. Guard inventory for active operations remains 1C-04 / later PRs.
 
-- **Plan file:** [1C-03 detailed implementation plan](../../../../reports/plan-260804-1617-1c-03-canonical-rbac-seed.md)
+- **Plan file:** [1C-03 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-03-canonical-rbac-seed.md)
 - **Plan/files:** Permission constants + DB seed owner/admin/editor/viewer; immutable
   system roles; OpenAPI/web fixture consumers.
 - **Depends:** Phase 1B role schema. **Acceptance/tests:** Matrix đúng/idempotent,
@@ -140,8 +140,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   inventory) plus worker config fail-closed tests. Dual-layer route+service
   authorize and least-privilege worker identities landed in PR 3.
 
-
-- **Plan file:** [1C-04 detailed implementation plan](../../../../reports/plan-260804-1617-1c-04-route-service-guards-va-service-identities.md)
+- **Plan file:** [1C-04 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-04-route-service-guards-va-service-identities.md)
 - **Plan/files:** Deny-by-default `authorize`; apply route+service+worker/reconcile;
   least-privilege identities.
 - **Depends:** 1C-01/03. **Acceptance/tests:** Allow/deny mỗi permission cả hai layer;
@@ -172,7 +171,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   invalidation (migrations `0031`/`0033`); `auth::context_cache` freshness check on
   extractor hits.
 
-- **Plan file:** [1C-05 detailed implementation plan](../../../../reports/plan-260804-1617-1c-05-collection-acl-resolver-cache.md)
+- **Plan file:** [1C-05 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-05-collection-acl-resolver-cache.md)
 - **Plan/files:** Private/org/groups grants (**done**); ACL/version
   snapshot (**done**: `orgs.acl_version`, migration `0031`); cache key org/user/membership/
   ACL version (**done**: `auth::context_cache::OrgContextCache`, key `(org_id, user_id)` +
@@ -216,7 +215,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   (`doc.upload` / `doc.quarantine.review` at `AccessLevel::Write`, no read-projection
   inference).
 
-- **Plan file:** [1C-06 detailed implementation plan](../../../../reports/plan-260804-1617-1c-06-postgresql-acl-enforcement.md)
+- **Plan file:** [1C-06 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-06-postgresql-acl-enforcement.md)
 - **Plan/files:** Tenant+ACL predicates cho FTS/hydration/conflict (**done**); upload write
   gate (**done**). Autocomplete không xây (out of scope — xem điểm 4 legacy note bên dưới).
 - **Depends:** 1C-05. **Acceptance/tests:** Không path thiếu context; no existence/count
@@ -258,8 +257,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   `storage::qdrant::tests::*` and retrieval forged-candidate deny. Signed-URL N/A
   (capability tokens). Connected cross-org denial suite remains **1C-12**.
 
-
-- **Plan file:** [1C-07 detailed implementation plan](../../../../reports/plan-260804-1617-1c-07-qdrant-storage-jobs-fail-closed-enforcement.md)
+- **Plan file:** [1C-07 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-07-qdrant-storage-jobs-fail-closed-enforcement.md)
 - **Plan/files:** Mandatory org+non-empty collection filter; PG payload validation;
   authorize preview/download/export/job/SSE; abort in-flight on ACL change.
 - **Depends:** 1C-05/06. **Acceptance/tests:** Missing/malformed/timeout/mismatch deny;
@@ -311,8 +309,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   `upload_two_resource_settlement_is_atomic`, and idempotency/expiry/overflow
   paths. Embedding-provider token metering remains backlog (out of issue scope).
 
-
-- **Plan file:** [1C-09 detailed implementation plan](../../../../reports/plan-260804-1617-1c-09-atomic-quota-lifecycle.md)
+- **Plan file:** [1C-09 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-09-atomic-quota-lifecycle.md)
 - **Plan/files:** Reserve/finalize/refund, idempotency/expiry/sweeper/reconcile cho
   storage/token/jobs.
 - **Depends:** Phase 1B jobs + 1C-01. **Acceptance/tests:** 100 concurrent reservations
@@ -335,8 +332,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   `workers::fairness::OrgRotation` green in `rust` job. Fairness SLO wall-clock
   remains **1C-13**; GPU semaphore remains N/A-until-GPU.
 
-
-- **Plan file:** [1C-10 detailed implementation plan](../../../../reports/plan-260804-1617-1c-10-rate-limit-va-per-org-fairness.md)
+- **Plan file:** [1C-10 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-10-rate-limit-va-per-org-fairness.md)
 - **Plan/files:** User/IP/auth limits (**done từ trước**); per-org API bucket (**done**:
   `middleware/rate_limit.rs::check_org` + `routes/rate_limit_guard.rs`); per-org worker
   fairness (**done**: `workers/fairness.rs::OrgRotation` + `bin/worker.rs` multi-org
@@ -369,8 +365,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   redaction. Direct-service `audit_view_permission_required_at_direct_list_page`
   green in `tests/direct_service_authz.rs`.
 
-
-- **Plan file:** [1C-11 detailed implementation plan](../../../../reports/plan-260804-1617-1c-11-audit-admin-apis.md)
+- **Plan file:** [1C-11 detailed implementation plan](../../../../reports/plan-2026-08-01-1c-11-audit-admin-apis.md)
 - **Plan/files:** Member/role/ACL/config/quota/data/cloud events (**out of scope của
   đợt này — chỉ audit READ**); read-only pagination/filter (**done**: `routes/audit.rs`,
   `db/audit.rs::list_page`)/retention (**out**); owner-only controls (**out — không
