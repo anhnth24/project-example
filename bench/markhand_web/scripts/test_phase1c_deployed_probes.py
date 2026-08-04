@@ -1939,6 +1939,209 @@ class Phase1cFifthReviewSliceTests(unittest.TestCase):
         denial.validate_http_contract_schema_table()
 
 
+class Phase1cSixthReviewSliceTests(unittest.TestCase):
+    """Commit S RED: sixth-review bounded HTTP slice contracts."""
+
+    SEED_PY = ROOT / "bench/markhand_web/scripts/phase1c_multi_org_seed.py"
+    DENIAL_PY = DENIAL_PATH
+    PROBES_PY = PROBES_PATH
+    FAKE_PY = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+
+    def _seed_fixture(self, probes):
+        return probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+
+    def _seed_creds(self, seed, probes):
+        return make_seed_credentials(probes, seed)
+
+    def test_get_chat_session_schema_is_session_and_turns(self) -> None:
+        denial = load_denial()
+        self.assertEqual(
+            denial.HTTP_OWNER_SUCCESS_SCHEMA["getChatSession"],
+            frozenset({"session", "turns"}),
+        )
+        self.assertTrue(hasattr(denial, "validate_owner_read_response"))
+
+    def test_owner_transition_uses_list_members_not_get_member_by_id(self) -> None:
+        fn = self.DENIAL_PY.read_text(encoding="utf-8").split("def _validate_owner_transition", 1)[1].split(
+            "\ndef ", 1
+        )[0]
+        self.assertIn("/api/v1/members", fn)
+        self.assertNotIn("/api/v1/members/{member_id}", fn)
+        self.assertNotIn('f"{API_PREFIX}/members/{member_id}"', fn)
+        self.assertNotIn('f"{API_PREFIX}/members/{delete_member_id}"', fn)
+        self.assertNotIn('f"{API_PREFIX}/members/{disposable_member}"', fn)
+
+    def test_negative_invite_token_is_synthetic_not_created_invite(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        negative = text.split("beta_denial_negative_invite_token", 1)[1].split("\n", 8)[0:8]
+        joined = "\n".join(negative)
+        self.assertIn("mhinv1.", joined)
+        self.assertNotIn("phase1c-negative-", joined)
+
+    def test_seed_provisions_three_independent_invite_controls(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("REVOKE_CONTROL_EMAIL", text)
+        self.assertIn("beta_denial_accept_invite_token", text)
+        self.assertIn("beta_denial_disposable_invite_id", text)
+        self.assertIn("beta_denial_negative_invite_token", text)
+        accept_block = text.split("beta_denial_accept_invite_token =", 1)[1].split("\n\n", 1)[0]
+        self.assertNotIn("invites/accept", accept_block)
+        revoke_block = text.split("beta_denial_disposable_invite_id =", 1)[1].split("\n\n", 1)[0]
+        self.assertNotIn("invites/accept", revoke_block)
+
+    def test_duplicate_names_secondary_proves_owner_ids_and_foreign_denial(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-task13-duplicate-names")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        scenarios = {spec.scenario for spec in specs}
+        self.assertIn("duplicate_name_owner_lookup", scenarios)
+        self.assertIn("duplicate_name_foreign_oracle", scenarios)
+
+    def test_citation_secondary_has_replay_expired_and_mismatch_scenarios(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-resolveCitation-citation")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        scenarios = {spec.scenario for spec in specs}
+        self.assertIn("citation_replay", scenarios)
+        self.assertIn("citation_expired", scenarios)
+        self.assertIn("citation_mismatch", scenarios)
+
+    def test_preview_download_sse_secondary_executes_endpoint_sequence(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        entry = next(
+            e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-task13-preview-download-sse"
+        )
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        ops = {spec.operation_id for spec in specs if spec.scenario.startswith("preview_download_")}
+        for required in ("previewDocument", "issueDownloadCapability", "redeemDownload", "getJob", "jobEvents"):
+            self.assertIn(required, ops)
+
+    def test_in_flight_secondary_has_dedicated_evidence_transitions(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        entry = next(
+            e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-task13-in-flight-ask-revoke"
+        )
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        transitions = {spec.owner_transition for spec in specs if spec.owner_transition}
+        self.assertIn("ask_stream_started", transitions)
+        self.assertIn("ask_stream_revoked", transitions)
+
+    def test_audit_invite_accept_target_is_invite_id(self) -> None:
+        audit = self.PROBES_PY.read_text(encoding="utf-8").split("def run_audit_probe", 1)[1].split("\n    def run_", 1)[0]
+        self.assertIn('"targetId": invite_id', audit)
+        self.assertNotIn('"targetId": accept_user_id', audit)
+
+    def test_audit_refresh_reuse_outcome_is_deny(self) -> None:
+        audit = self.PROBES_PY.read_text(encoding="utf-8").split("def run_audit_probe", 1)[1].split("\n    def run_", 1)[0]
+        self.assertIn('"outcome": "deny"', audit)
+        self.assertNotIn('"outcome": "failure" if reuse.status == 401 else "success"', audit)
+
+    def test_patch_member_owner_toggles_editor_to_viewer(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        body = denial._owner_body(
+            "patchMember",
+            seed,
+            credentials=creds,
+            params={"userId": creds.beta_denial_disposable_member_user_id},
+        )
+        assert body is not None
+        self.assertEqual(body["role"], "viewer")
+
+    def test_reconcile_identity_scoped_to_fixture_org_ids(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        reconcile = text.split("def _reconcile_identity_fixtures", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("org_id IN", reconcile)
+        self.assertIn("ALPHA_ORG_ID", reconcile)
+        self.assertIn("org_beta_id", reconcile)
+
+    def test_purge_credentials_uses_dir_fd_unlink(self) -> None:
+        fn = self.PROBES_PY.read_text(encoding="utf-8").split("def purge_phase1c_credentials", 1)[1].split("\ndef ", 1)[0]
+        self.assertIn("dir_fd", fn)
+        self.assertIn("os.unlink", fn)
+        self.assertNotIn(".write(b\"\\x00\"", fn)
+        self.assertNotIn("path.stat()", fn)
+
+    def test_sse_parser_validates_production_envelope(self) -> None:
+        denial = load_denial()
+        self.assertTrue(hasattr(denial, "validate_sse_envelope"))
+        sample = (
+            "id: 1\n"
+            "event: ask.token\n"
+            'data: {"version":1,"sequence":1,"event":"ask.token","requestId":"11111111-1111-1111-1111-111111111111","data":{}}\n\n'
+            "id: 2\n"
+            "event: stream.closed\n"
+            'data: {"version":1,"sequence":2,"event":"stream.closed","requestId":"11111111-1111-1111-1111-111111111111","data":{"reason":"done"}}\n\n'
+        )
+        denial.validate_sse_envelope(sample, operation_id="askStream", headers={"content-type": "text/event-stream"})
+
+    def test_stateful_fake_raises_for_unknown_http_method(self) -> None:
+        fake = self._load_stateful_fake()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        deployment = fake.StatefulFakeDeployment(seed=seed, credentials=creds)
+        with self.assertRaises(RuntimeError):
+            deployment._http_request(
+                method="OPTIONS",
+                path="/api/v1/collections",
+                token=creds.alpha_beta_access_token,
+            )
+
+    def test_stateful_fake_has_no_generic_post_patch_delete_fallback(self) -> None:
+        text = self.FAKE_PY.read_text(encoding="utf-8")
+        self.assertNotIn("if method in {\"POST\", \"PATCH\", \"DELETE\"}:", text)
+        self.assertNotIn('payload[key] = self.seed.beta_collection_id if key.endswith("Id") else "ok"', text)
+
+    def test_validate_owner_read_response_per_operation(self) -> None:
+        denial = load_denial()
+        self.assertTrue(callable(getattr(denial, "validate_owner_read_response", None)))
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        body = json.dumps(
+            {
+                "id": seed.beta_chat_session_id,
+                "title": "phase1c-owner-chat",
+                "createdAt": "2026-08-04T00:00:00Z",
+                "updatedAt": "2026-08-04T00:00:00Z",
+                "turns": [],
+            }
+        )
+        denial.validate_owner_read_response(
+            "getChatSession",
+            body,
+            seed=seed,
+            credentials=creds,
+            path=f"/api/v1/chat-sessions/{seed.beta_chat_session_id}",
+        )
+
+    def _load_stateful_fake(self):
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake_sixth", self.FAKE_PY)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["phase1c_stateful_fake_sixth"] = module
+        spec.loader.exec_module(module)
+        return module
+
+
 class DeployedCiRouteTests(unittest.TestCase):
     def test_ci_failure_uploads_safe_diagnostic_not_raw_logs(self) -> None:
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
