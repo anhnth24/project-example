@@ -353,10 +353,12 @@ def parse_worker_role_probe(output: str, *, expected_nonce: str | None = None) -
     eof_seen = False
     after_eof = False
     probe_lines = 0
+    before_probe = True
     for line in output.splitlines():
         if after_eof and line.strip():
             raise RuntimeError("worker probe trailing output")
         if line.startswith("PHASE1C_WORKER_ROLE_PROBE\t"):
+            before_probe = False
             probe_lines += 1
             if probe_lines > 1:
                 raise RuntimeError("worker probe requires exactly one payload")
@@ -377,6 +379,9 @@ def parse_worker_role_probe(output: str, *, expected_nonce: str | None = None) -
                 raise RuntimeError("worker probe EOF invalid")
             eof_seen = True
             after_eof = True
+            continue
+        if before_probe and line.strip():
+            raise RuntimeError("worker probe unexpected preamble")
     if payload is None or not eof_seen:
         raise RuntimeError("worker probe incomplete")
     if expected_nonce is not None and payload.get("nonce") != expected_nonce:
@@ -390,6 +395,7 @@ def parse_worker_role_probe(output: str, *, expected_nonce: str | None = None) -
 
 def load_trivyignore_ids(text: str) -> set[str]:
     ids: set[str] = set()
+    today = datetime.now(timezone.utc).date()
     for line_no, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -398,17 +404,33 @@ def load_trivyignore_ids(text: str) -> set[str]:
         if not parts:
             continue
         token = parts[0]
-        if token.startswith("CVE-") or token.startswith("GHSA-"):
-            comment = ""
-            if "#" in stripped:
-                comment = stripped.split("#", 1)[1].strip()
-            if "owner:" not in comment or "exp:" not in comment.replace("expiry:", "exp:"):
-                raise RuntimeError(f".trivyignore line {line_no} missing owner/expiry disposition")
-            if " exp:" in f" {comment}" or "exp:" in comment:
-                pass
-            else:
-                raise RuntimeError(f".trivyignore line {line_no} missing expiry disposition")
-            ids.add(token)
+        if not (token.startswith("CVE-") or token.startswith("GHSA-")):
+            continue
+        inline_exp: str | None = None
+        for part in parts[1:]:
+            if part.startswith("exp:"):
+                inline_exp = part.split(":", 1)[1]
+                break
+        comment = stripped.split("#", 1)[1].strip() if "#" in stripped else ""
+        if "owner:" not in comment:
+            raise RuntimeError(f".trivyignore line {line_no} missing owner disposition")
+        expiry_raw = inline_exp
+        if not expiry_raw:
+            for segment in comment.replace("expiry:", "exp:").split():
+                if segment.startswith("exp:"):
+                    expiry_raw = segment.split(":", 1)[1]
+                    break
+        if not expiry_raw:
+            raise RuntimeError(f".trivyignore line {line_no} missing exp:YYYY-MM-DD disposition")
+        if "rationale" not in comment.lower() and "—" not in comment and "-" not in comment:
+            raise RuntimeError(f".trivyignore line {line_no} missing rationale disposition")
+        try:
+            expiry_date = datetime.strptime(expiry_raw.strip(), "%Y-%m-%d").date()
+        except ValueError as error:
+            raise RuntimeError(f".trivyignore line {line_no} invalid exp date") from error
+        if expiry_date < today:
+            raise RuntimeError(f".trivyignore line {line_no} expired disposition {expiry_raw}")
+        ids.add(token)
     return ids
 
 
@@ -472,20 +494,13 @@ def parse_combined_trivy_scan(
 
 
 def docker_image_digest(tag: str, runner: CommandRunner) -> str:
-    outcome = runner(["docker", "inspect", "--format", "{{json .RepoDigests}}", tag], timeout_secs=120)
-    if outcome["commandExitCode"] == 0:
-        digests = json.loads(outcome["stdout"].strip() or "[]")
-        if isinstance(digests, list) and digests:
-            digest = str(digests[0])
-            if "@sha256:" in digest:
-                return digest
     id_outcome = runner(["docker", "inspect", "--format", "{{.Id}}", tag], timeout_secs=120)
     if id_outcome["commandExitCode"] != 0:
-        raise RuntimeError(f"docker inspect failed for image digest: {tag}")
+        raise RuntimeError(f"docker inspect failed for image id: {tag}")
     image_id = str(id_outcome["stdout"]).strip()
     if not image_id.startswith("sha256:"):
         raise RuntimeError(f"image id unpinned for {tag}")
-    return f"{tag}@{image_id}"
+    return image_id
 
 
 def scanner_pin_errors(scanner: object) -> list[str]:
@@ -894,7 +909,9 @@ def run_live_probes(
             probe = _DEPLOYED.deployed_probe_to_command_probe(result)
             gate_metrics = dict(result.metrics)
             if gate_id == "G1C-SEC-QDRANT-FAIL-CLOSED":
-                qdrant_leakage = gate_metrics.pop("qdrant_fail_closed_leakage_count", None)
+                qdrant_leakage = gate_metrics.pop("qdrant_degraded_leakage_count", None)
+                if qdrant_leakage is None:
+                    qdrant_leakage = gate_metrics.pop("qdrant_fail_closed_leakage_count", None)
                 if qdrant_leakage is not None:
                     gate_metrics["cross_tenant_leakage_count"] = qdrant_leakage
             for key, value in gate_metrics.items():

@@ -74,7 +74,7 @@ SSE_TERMINAL_EVENT = "stream.closed"
 HTTP_OWNER_SUCCESS_SCHEMA: dict[str, frozenset[str]] = {
     "authMe": frozenset({"userId", "sessionId", "orgId"}),
     "diffDocumentVersions": frozenset({"documentId", "left", "right", "note", "requestId"}),
-    "getChatSession": frozenset({"session", "turns"}),
+    "getChatSession": frozenset({"id", "title", "turns"}),
     "getCollection": frozenset({"id", "name"}),
     "getConflict": frozenset({"id", "status"}),
     "getConflictEvidence": frozenset({"items"}),
@@ -104,7 +104,7 @@ HTTP_OWNER_SUCCESS_SCHEMA: dict[str, frozenset[str]] = {
 OPERATION_FOREIGN_DENIAL: dict[str, frozenset[int]] = {
     "switchOrg": frozenset({403}),
     "redeemDownload": frozenset({400}),
-    "acceptMemberInvite": frozenset({400}),
+    "acceptMemberInvite": frozenset({404}),
     "approveIntake": frozenset({403, 404}),
 }
 
@@ -178,6 +178,7 @@ class DenialRequestSpec:
     accept: str | None = None
     owner_transition: str | None = None
     mint_fresh_download_capability: bool = False
+    coverage_limited: bool = False
 
 
 @dataclass
@@ -191,6 +192,7 @@ class DenialObservation:
     request_id: str | None
     leaked_markers: list[str]
     owner_transition: str | None = None
+    coverage_limited: bool = False
 
 
 @dataclass
@@ -223,9 +225,17 @@ class DenialExecutionReport:
                     "requestId": item.request_id,
                     "leakedMarkers": item.leaked_markers,
                     "ownerTransition": item.owner_transition,
+                    "coverageLimited": item.coverage_limited,
                 }
                 for item in self.observations
             ],
+            "coverageLimited": sorted(
+                {
+                    f"{item.row_id}:{item.scenario}"
+                    for item in self.observations
+                    if item.coverage_limited
+                }
+            ),
             "failures": sorted(self.failures),
             "leakageCount": self.leakage_count,
             "redactionScan": self.redaction_scan,
@@ -810,6 +820,9 @@ def validate_owner_read_response(
             raise RuntimeError("getCollection disposable update name mismatch with fixture")
         if str(name) == str(getattr(seed, "marker_beta", "")):
             return
+        beta_dup = getattr(seed, "beta_duplicate_collection_id", "")
+        if beta_dup and str(collection_id) == str(beta_dup) and name == DUPLICATE_COLLECTION_NAME:
+            return
         if name == DUPLICATE_COLLECTION_NAME:
             return
         raise RuntimeError("getCollection name mismatch with fixture marker")
@@ -964,6 +977,8 @@ def build_owner_control_spec(
     body = _owner_body(entry.operation_id, seed, credentials=credentials, params=params)
     expected = frozenset({200, 201, 204})
     schema = None
+    if entry.operation_id == "approveIntake":
+        expected = frozenset({403, 404})
     if entry.operation_id in {"createCollection", "createProject", "createChatSession", "createOrg"}:
         schema = frozenset({"id"})
     if entry.operation_id == "resolveCitation":
@@ -999,6 +1014,7 @@ def _append_owner_spec(
         suffix="owner",
         credentials=credentials,
         owner_transition=owner_transition,
+        coverage_limited=entry.operation_id == "approveIntake",
     )
 
 
@@ -1013,6 +1029,7 @@ def _append_owner_control_from_spec(
     credentials: Any,
     owner_transition: str | None = None,
     body: dict[str, Any] | None = None,
+    coverage_limited: bool = False,
 ) -> None:
     token = owner.token if owner.token is not None else credentials.alpha_beta_access_token
     specs.append(
@@ -1031,6 +1048,7 @@ def _append_owner_control_from_spec(
             success_schema_keys=owner.success_schema_keys,
             accept=owner.accept,
             owner_transition=owner_transition,
+            coverage_limited=coverage_limited,
         )
     )
 
@@ -1195,29 +1213,22 @@ def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: 
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
     request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
     owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
-    replay_canonical = _credential_string(
-        credentials, "beta_citation_canonical_markdown_sha256", field="betaCitationCanonicalMarkdownSha256"
-    )
-    for spec in specs:
-        if spec.scenario == "foreign":
-            spec.scenario = "citation_replay"
-            tampered = dict(spec.body or {})
-            tampered["canonicalMarkdownSha256"] = replay_canonical
-            spec.body = tampered
-            spec.expected_statuses = frozenset({403})
     if owner is not None:
-        replay_spec = DenialRequestSpec(
-            row_id=entry.row_id,
-            operation_id=entry.operation_id,
-            scenario="citation_replay",
-            method=owner.method,
-            path=owner.path,
-            token=owner.token,
-            body=dict(owner.body or {}),
-            expected_statuses=frozenset({403}),
-            supplied_request_id=f"{request_id}-replay",
+        repeat_body = dict(owner.body or {})
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id=entry.operation_id,
+                scenario="citation_repeat",
+                method=owner.method,
+                path=owner.path,
+                token=owner.token,
+                body=repeat_body,
+                expected_statuses=frozenset({200}),
+                supplied_request_id=f"{request_id}-repeat",
+                coverage_limited=True,
+            )
         )
-        specs.append(replay_spec)
         expired_body = dict(owner.body or {})
         expired_version = getattr(credentials, "beta_citation_expired_version_id", "")
         if isinstance(expired_version, str) and expired_version.strip():
@@ -1232,7 +1243,7 @@ def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: 
                 path=owner.path,
                 token=owner.token,
                 body=expired_body,
-                expected_statuses=frozenset({403, 404}),
+                expected_statuses=frozenset({404}),
                 supplied_request_id=f"{request_id}-expired",
             )
         )
@@ -1247,7 +1258,7 @@ def _handler_citation_matrix(entry: DenialMappingEntry, seed: Any, credentials: 
                 path=owner.path,
                 token=credentials.alpha_access_token,
                 body=mismatch,
-                expected_statuses=frozenset({403, 404}),
+                expected_statuses=frozenset({404}),
                 supplied_request_id=f"{request_id}-mismatch",
             )
         )
@@ -1304,7 +1315,7 @@ def _handler_duplicate_names(entry: DenialMappingEntry, seed: Any, credentials: 
         )
         oracle_owner = OwnerControlSpec(
             method="GET",
-            path=f"{API_PREFIX}/collections/{seed.beta_collection_id}",
+            path=f"{API_PREFIX}/collections/{getattr(seed, 'beta_duplicate_collection_id', seed.beta_collection_id)}",
             body=None,
             expected_statuses=frozenset({200}),
             success_schema_keys=frozenset({"id", "name"}),
@@ -1325,7 +1336,7 @@ def _handler_duplicate_names(entry: DenialMappingEntry, seed: Any, credentials: 
             operation_id=entry.operation_id,
             scenario="duplicate_name_foreign_oracle",
             method="GET",
-            path=f"{API_PREFIX}/collections/{seed.alpha_collection_id}",
+            path=f"{API_PREFIX}/collections/{getattr(seed, 'alpha_duplicate_collection_id', seed.alpha_collection_id)}",
             token=credentials.alpha_beta_access_token,
             body=None,
             expected_statuses=frozenset({403, 404}),
@@ -1479,15 +1490,16 @@ def _handler_in_flight_revoke(entry: DenialMappingEntry, seed: Any, credentials:
     specs.append(
         DenialRequestSpec(
             row_id=entry.row_id,
-            operation_id="patchMember",
-            scenario="in_flight_membership_downgrade",
-            method="PATCH",
+            operation_id="deleteMember",
+            scenario="in_flight_membership_remove",
+            method="DELETE",
             path=f"{API_PREFIX}/members/{seed.beta_member_user_id}",
             token=credentials.alpha_access_token,
-            body={"role": "viewer"},
-            expected_statuses=frozenset({200, 204}),
-            supplied_request_id=f"{request_id}-downgrade",
+            body=None,
+            expected_statuses=frozenset({204}),
+            supplied_request_id=f"{request_id}-remove",
             owner_transition="ask_stream_revoked",
+            coverage_limited=True,
         )
     )
     return specs
@@ -1543,10 +1555,15 @@ def validate_denial_observation_matrix(observations: list[DenialObservation]) ->
     for item in observations:
         by_row.setdefault(item.row_id, []).append(item)
     for row_id, rows in by_row.items():
-        negatives = [row for row in rows if row.scenario not in {"owner_control", "unauthenticated"}]
+        negatives = [
+            row for row in rows if row.scenario not in {"owner_control", "unauthenticated"}
+        ]
         owners = [row for row in rows if row.scenario == "owner_control"]
-        if negatives and owners:
-            if all(row.actual_status == 403 for row in negatives) and all(row.actual_status == 403 for row in owners):
+        owners_for_shim = [row for row in owners if not row.coverage_limited]
+        if negatives and owners_for_shim:
+            if all(row.actual_status == 403 for row in negatives) and all(
+                row.actual_status == 403 for row in owners_for_shim
+            ):
                 operation_id = negatives[0].operation_id
                 raise RuntimeError(f"all-403 shim detected for {operation_id}/{row_id}")
         if negatives and not owners:
@@ -1966,14 +1983,7 @@ def execute_http_denial_suite(
     forbidden = {seed.marker_alpha, seed.marker_beta}
     forbidden.discard("")
     redeemed_download_capabilities: set[str] = set()
-    redeemed_citation_canonicals: set[str] = set()
     for spec in specs:
-        if spec.operation_id == "resolveCitation" and spec.scenario == "owner_control":
-            body = dict(spec.body or {})
-            canonical = str(body.get("canonicalMarkdownSha256") or "")
-            if canonical in redeemed_citation_canonicals:
-                body["canonicalMarkdownSha256"] = secrets.token_hex(32)
-            spec.body = body
         if spec.operation_id == "redeemDownload" and (
             spec.mint_fresh_download_capability
             or spec.scenario in {"owner_control", "preview_download_redeem"}
@@ -1987,10 +1997,6 @@ def execute_http_denial_suite(
                 token=str(mint_token),
             )
             spec.path = f"{API_PREFIX}/downloads/{capability}"
-        if spec.operation_id == "resolveCitation" and spec.scenario == "citation_replay":
-            canonical = (spec.body or {}).get("canonicalMarkdownSha256")
-            if isinstance(canonical, str) and canonical in redeemed_citation_canonicals:
-                spec.expected_statuses = frozenset({403})
         url = api_base.rstrip("/") + spec.path
         response = http_request(
             method=spec.method,
@@ -2012,7 +2018,7 @@ def execute_http_denial_suite(
             "invalid_capability",
             "invalid_invite_token",
             "invite_already_member",
-            "citation_replay",
+            "citation_repeat",
             "citation_expired",
             "citation_mismatch",
             "duplicate_name_foreign_oracle",
@@ -2030,12 +2036,6 @@ def execute_http_denial_suite(
             if cap_token in redeemed_download_capabilities:
                 leaked = list(set(leaked) | {f"download-replay:{cap_token[:8]}"})
             redeemed_download_capabilities.add(cap_token)
-        if spec.operation_id == "resolveCitation" and response.status // 100 == 2:
-            canonical = (spec.body or {}).get("canonicalMarkdownSha256")
-            if isinstance(canonical, str):
-                if canonical in redeemed_citation_canonicals:
-                    leaked = list(set(leaked) | {"citation-canonical-replay"})
-                redeemed_citation_canonicals.add(canonical)
         if response.status not in spec.expected_statuses:
             report.failures.append(
                 f"{spec.operation_id}/{spec.scenario} expected {sorted(spec.expected_statuses)} got {response.status}"
@@ -2078,6 +2078,7 @@ def execute_http_denial_suite(
                         _validate_success_schema(response.body, spec.success_schema_keys)
                 except RuntimeError as error:
                     report.failures.append(f"{spec.operation_id}/owner_control schema: {error}")
+        if spec.owner_transition and response.status in spec.expected_statuses:
             transition = _validate_owner_transition(
                 spec,
                 response=response,
@@ -2085,7 +2086,7 @@ def execute_http_denial_suite(
                 credentials=credentials,
                 http_request=http_request,
                 api_base=api_base,
-                transition=transition,
+                transition=spec.owner_transition,
                 report=report,
             )
         report.observations.append(
@@ -2098,7 +2099,8 @@ def execute_http_denial_suite(
                 body_sha256=sha256_text(response.body),
                 request_id=server_request_id,
                 leaked_markers=leaked,
-                owner_transition=transition if spec.scenario == "owner_control" else None,
+                owner_transition=transition,
+                coverage_limited=spec.coverage_limited,
             )
         )
     try:

@@ -44,7 +44,7 @@ Qualifying PASS metrics come **only** from deployed probes in
 | Revoke / ACL cache / stale tokens | Production auth + member PATCH/DELETE/refresh APIs |
 | Quota recovery | Real upload + authoritative POC jobs SQL + worker lifecycle + `quota.reconcile` audit |
 | Noisy neighbor | 60s concurrent uploads + 100 quiet-org search samples (canonical duration enforced) |
-| Qdrant fail-closed | Compose stop/start single-node Qdrant; search/ask must fail closed with zero foreign markers |
+| Qdrant degraded isolation | Compose stop/start single-node Qdrant; search/ask must return 200 with vector-degradation warnings and zero foreign markers/cross-tenant results |
 | Audit coverage | Real admin mutations + `/audit` correlation (ratio computed, never hard-coded) |
 | Worker role | Harness-supplied `MARKHAND_PHASE1C_WORKER_NONCE`; worker echoes exact nonce |
 | Container vulns | Digest-pinned Trivy (no `--ignore-unfixed`); both API and worker reports validated |
@@ -82,6 +82,21 @@ aquasec/trivy:0.73.0@sha256:4bbf3824d974b70f27631005e2e6194d4d8fbd6e72c4a9e04cf5
 ```
 
 Never use `:latest`, unpinned actions, or `curl | bash` for scanner install.
+
+## Coverage-limited rows (live-run required for full property proof)
+
+Some denial rows assert the **actual production contract** hermetically but mark
+properties that cannot be exercised black-box as `coverageLimited` in evidence:
+
+| Row / property | Production reality | Hermetic assertion |
+|----------------|-------------------|-------------------|
+| `approveIntake` quarantine approval | `doc.quarantine.review` has no built-in grants; fixture not genuinely quarantined | Owner control expects 403/404; `coverageLimited: true` |
+| Citation single-use replay | Repeated valid resolves succeed (`services/citation.rs`) | Repeat resolve expects 200; replay property `coverageLimited` |
+| In-flight ask stream revoke | Requires suspend/remove (not viewer downgrade) + real concurrency | DELETE member transition; stream revoke property `coverageLimited` |
+
+Qualifying PASS for these properties requires a live deployed run with the
+documented fixtures; hermetic runs must not emit PASS metrics that depend on
+fabricated behavior.
 
 ## Validation commands
 

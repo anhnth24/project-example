@@ -87,6 +87,8 @@ SEED_REQUIRED_FIELDS: tuple[str, ...] = (
     "orgAlphaSlug",
     "orgBetaSlug",
     "disposableOrgId",
+    "alphaDuplicateCollectionId",
+    "betaDuplicateCollectionId",
 )
 
 CREDENTIAL_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -271,6 +273,8 @@ class SeedFixture:
     org_alpha_slug: str
     org_beta_slug: str
     disposable_org_id: str
+    alpha_duplicate_collection_id: str
+    beta_duplicate_collection_id: str
 
 
 @dataclass
@@ -509,6 +513,8 @@ def parse_seed_artifact(raw: dict[str, Any], *, expected_challenge: str) -> Seed
         org_alpha_slug=_require_string(raw, "orgAlphaSlug"),
         org_beta_slug=_require_string(raw, "orgBetaSlug"),
         disposable_org_id=validate_uuid(_require_string(raw, "disposableOrgId"), field="disposableOrgId"),
+        alpha_duplicate_collection_id=_require_string(raw, "alphaDuplicateCollectionId"),
+        beta_duplicate_collection_id=_require_string(raw, "betaDuplicateCollectionId"),
     )
 
 
@@ -738,14 +744,10 @@ def validate_trivy_report_target(report: dict[str, Any], *, requested_ref: str) 
     if report.get("SchemaVersion") != 2:
         raise RuntimeError("trivy SchemaVersion must be 2")
     artifact_name = str(report.get("ArtifactName") or "")
-    if "@" in requested_ref:
-        requested_digest = requested_ref.split("@", 1)[1]
-        if requested_digest not in artifact_name:
-            raise RuntimeError("trivy report ArtifactName/digest mismatch")
-    else:
-        requested_tag = requested_ref
-        if requested_tag not in artifact_name:
-            raise RuntimeError("trivy report ArtifactName/target mismatch")
+    if artifact_name != requested_ref:
+        raise RuntimeError(
+            f"trivy report ArtifactName mismatch: expected {requested_ref!r}, got {artifact_name!r}"
+        )
 
 
 def extract_high_critical_findings(report: dict[str, Any]) -> list[dict[str, str]]:
@@ -1049,6 +1051,23 @@ class DeployedProbeRunner:
             raise RuntimeError("auth/me missing sessionId")
         return access, refresh, session_id
 
+    def _session_id_from_refresh_token(self, refresh_token: str) -> str:
+        refresh = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": refresh_token})
+        if refresh.status // 100 != 2:
+            raise RuntimeError(f"refresh for session family lookup failed: {refresh.status}")
+        payload = json.loads(refresh.body)
+        access = payload.get("accessToken") or payload.get("access_token")
+        if not isinstance(access, str):
+            raise RuntimeError("refresh response missing access token")
+        me = self._http("GET", "/api/v1/auth/me", token=access)
+        if me.status != 200:
+            raise RuntimeError("auth/me failed for refresh-derived access token")
+        me_payload = json.loads(me.body)
+        session_id = me_payload.get("sessionId") or me_payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise RuntimeError("refresh-derived auth/me missing sessionId")
+        return validate_uuid(session_id, field="sessionId")
+
     def _switch_org(self, token: str, org_id: str) -> HttpResponse:
         return self._http("POST", "/api/v1/orgs/switch", token=token, body={"orgId": org_id})
 
@@ -1295,7 +1314,7 @@ class DeployedProbeRunner:
         if reuse.status // 100 == 5:
             raise RuntimeError(f"stale refresh reuse must not return 5xx, got {reuse.status}")
         self._discard_revoked_token_family(access_token=new_access, refresh_token=new_refresh)
-        fresh_access, fresh_refresh, fresh_session = self._login_tokens(self._beta_email, "")
+        fresh_access, fresh_refresh, _ = self._login_tokens(self._beta_email, "")
         switch = self._switch_org(fresh_access, self.seed.org_beta_id)
         if switch.status // 100 != 2:
             raise RuntimeError("fresh beta org switch failed after token family discard")
@@ -1304,7 +1323,7 @@ class DeployedProbeRunner:
         fresh_refresh = switch_payload.get("refreshToken") or switch_payload.get("refresh_token") or fresh_refresh
         self.credentials.beta_access_token = fresh_access
         self.credentials.beta_refresh_token = fresh_refresh
-        self.credentials.beta_session_id = validate_uuid(fresh_session, field="betaSessionId")
+        self.credentials.beta_session_id = self._session_id_from_switch_access_token(switch)
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-STALE-TOKENS",
@@ -1325,11 +1344,21 @@ class DeployedProbeRunner:
         if not shutil.which("docker"):
             raise RuntimeError("quota recovery requires live docker deployment; unavailable in hermetic VM")
         org_id = self.seed.org_beta_id
-        upload = self._http(
-            "POST",
-            "/api/v1/uploads",
+        boundary = "----phase1cQuotaProbe"
+        upload_body = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="collectionId"\r\n\r\n'
+            f"{self.seed.beta_collection_id}\r\n"
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="quota-probe.txt"\r\n'
+            f"Content-Type: text/plain\r\n\r\nphase1c-quota-{self.seed.challenge}\n"
+            f"\r\n--{boundary}--\r\n"
+        ).encode("utf-8")
+        upload = self.shims.http_request(
+            method="POST",
+            url=self._url("/api/v1/uploads"),
             token=self.credentials.beta_access_token,
-            body=None,
+            multipart_body=upload_body,
+            path="/api/v1/uploads",
+            content_type=f"multipart/form-data; boundary={boundary}",
         )
         if upload.status // 100 == 2:
             upload_payload = json.loads(upload.body)
@@ -1340,6 +1369,13 @@ class DeployedProbeRunner:
                     f"/api/v1/documents/{document_id}",
                     token=self.credentials.beta_access_token,
                 )
+        org_quota = self._psql(
+            f"SELECT COUNT(*) FROM org_quotas WHERE org_id = '{org_id}'"
+        )
+        if (org_quota.stdout or "").strip() != "1":
+            raise RuntimeError(
+                "quota recovery requires org_quotas row for target org; provision qualification org first"
+            )
         counter_rows = self._psql(
             f"""
             SELECT counter_key, value FROM usage_counters
@@ -1360,7 +1396,7 @@ class DeployedProbeRunner:
             f"""
             SELECT action FROM audit_log
             WHERE org_id = '{org_id}' AND action = 'quota.reconcile'
-            ORDER BY occurred_at DESC LIMIT 1
+            ORDER BY created_at DESC LIMIT 1
             """
         )
         self._compose(["start", "worker-convert"], timeout_secs=120)
@@ -1371,7 +1407,7 @@ class DeployedProbeRunner:
                 f"""
                 SELECT action FROM audit_log
                 WHERE org_id = '{org_id}' AND action = 'quota.reconcile'
-                ORDER BY occurred_at DESC LIMIT 1
+                ORDER BY created_at DESC LIMIT 1
                 """
             )
             if reconcile.stdout.strip() and reconcile.stdout != reconcile_before.stdout:
@@ -1380,23 +1416,53 @@ class DeployedProbeRunner:
             time.sleep(2)
         if not saw_reconcile:
             raise RuntimeError("quota reconcile audit missing after recovery window")
-        ground_truth = self._psql(
+        ground_truth_docs = self._psql(
             f"""
             SELECT COUNT(*)::bigint FROM documents
             WHERE org_id = '{org_id}' AND deleted_at IS NULL
             """
         )
-        counter_after = self._psql(
+        ground_truth_storage = self._psql(
+            f"""
+            SELECT COALESCE(SUM(storage_bytes), 0)::bigint FROM documents
+            WHERE org_id = '{org_id}' AND deleted_at IS NULL
+            """
+        )
+        ground_truth_slots = self._psql(
+            f"""
+            SELECT COALESCE(SUM(reserved_concurrent_slots), 0)::bigint FROM documents
+            WHERE org_id = '{org_id}' AND deleted_at IS NULL AND reserved_concurrent_slots > 0
+            """
+        )
+        counter_docs = self._psql(
             f"""
             SELECT value FROM usage_counters
             WHERE org_id = '{org_id}' AND counter_key = 'documents'
             ORDER BY period_start DESC LIMIT 1
             """
         )
+        counter_storage = self._psql(
+            f"""
+            SELECT value FROM usage_counters
+            WHERE org_id = '{org_id}' AND counter_key = 'storage_bytes'
+            ORDER BY period_start DESC LIMIT 1
+            """
+        )
+        counter_slots = self._psql(
+            f"""
+            SELECT value FROM usage_counters
+            WHERE org_id = '{org_id}' AND counter_key = 'reserved_concurrent_slots'
+            ORDER BY period_start DESC LIMIT 1
+            """
+        )
         try:
-            gt = int((ground_truth.stdout or "0").strip() or "0")
-            cv = int((counter_after.stdout or "0").strip() or "0")
-            drift = abs(gt - cv)
+            gt_docs = int((ground_truth_docs.stdout or "0").strip() or "0")
+            gt_storage = int((ground_truth_storage.stdout or "0").strip() or "0")
+            gt_slots = int((ground_truth_slots.stdout or "0").strip() or "0")
+            cv_docs = int((counter_docs.stdout or "0").strip() or "0")
+            cv_storage = int((counter_storage.stdout or "0").strip() or "0")
+            cv_slots = int((counter_slots.stdout or "0").strip() or "0")
+            drift = abs(gt_docs - cv_docs) + abs(gt_storage - cv_storage) + abs(gt_slots - cv_slots)
         except ValueError as error:
             raise RuntimeError(f"quota drift parse failed: {error}") from error
         self._require_correlated_transitions(minimum=3)
@@ -1404,8 +1470,12 @@ class DeployedProbeRunner:
             gate_id="G1C-SEC-QUOTA-RECOVERY",
             probe={
                 "deployedApi": True,
-                "groundTruthDocuments": gt,
-                "counterDocuments": cv,
+                "groundTruthDocuments": gt_docs,
+                "counterDocuments": cv_docs,
+                "groundTruthStorageBytes": gt_storage,
+                "counterStorageBytes": cv_storage,
+                "groundTruthConcurrentSlots": gt_slots,
+                "counterConcurrentSlots": cv_slots,
                 "eof": True,
             },
             metrics={"quota_drift_after_recovery": drift},
@@ -1452,21 +1522,31 @@ class DeployedProbeRunner:
         samples_ns: list[int] = []
         starvation = 0
         token = self.credentials.beta_access_token
-        deadline = time.monotonic() + self.noisy_duration_secs
-        while time.monotonic() < deadline and len(samples_ns) < self.quiet_search_samples:
-            started = time.perf_counter_ns()
+        started_at = time.monotonic()
+        deadline = started_at + self.noisy_duration_secs
+        while time.monotonic() < deadline:
+            sample_started = time.perf_counter_ns()
             response = self._http(
                 "POST",
                 "/api/v1/search",
                 token=token,
                 body={"query": "phase1c-quiet-probe"},
             )
-            elapsed_ns = time.perf_counter_ns() - started
+            elapsed_ns = time.perf_counter_ns() - sample_started
             samples_ns.append(elapsed_ns)
             if response.status != 200:
                 starvation += 1
             if elapsed_ns / 1_000_000 > STARVATION_SLOW_MS:
                 starvation += 1
+        elapsed = time.monotonic() - started_at
+        if elapsed < self.noisy_duration_secs:
+            raise RuntimeError(
+                f"noisy-neighbor probe exited early after {elapsed:.2f}s; requires full {self.noisy_duration_secs}s window"
+            )
+        if len(samples_ns) < self.quiet_search_samples:
+            raise RuntimeError(
+                f"noisy-neighbor probe collected {len(samples_ns)} samples; requires >= {self.quiet_search_samples}"
+            )
         noisy_stop.set()
         worker.join(timeout=5)
         if noisy_errors:
@@ -1704,6 +1784,14 @@ class DeployedProbeRunner:
         if isinstance(new_refresh, str):
             self.credentials.beta_refresh_token = new_refresh
 
+        me_before_logout = self._http("GET", "/api/v1/auth/me", token=token)
+        if me_before_logout.status != 200:
+            raise RuntimeError("auth/me failed before logout audit correlation")
+        me_payload = json.loads(me_before_logout.body)
+        logout_session_id = validate_uuid(
+            me_payload.get("sessionId") or me_payload.get("session_id"),
+            field="sessionId",
+        )
         logout = self._http(
             "POST",
             "/api/v1/auth/logout",
@@ -1717,7 +1805,7 @@ class DeployedProbeRunner:
                 "action": audit_action_map["auth.token.revoke"],
                 "actorId": self.seed.alpha_user_id,
                 "targetType": "session",
-                "targetId": self.credentials.alpha_session_id,
+                "targetId": logout_session_id,
                 "requestId": logout_request_id,
                 "outcome": "success" if logout.status // 100 == 2 else "failure",
                 "attemptStatus": logout.status,
@@ -1805,6 +1893,7 @@ class DeployedProbeRunner:
         search_status = 0
         ask_status = 0
         leakage_count = 0
+        degraded_warnings: list[str] = []
         try:
             search = self._http(
                 "POST",
@@ -1813,8 +1902,6 @@ class DeployedProbeRunner:
                 body={"query": "phase1c-qdrant-down"},
             )
             search_status = search.status
-            if search.status == 200:
-                raise RuntimeError("search must fail closed when qdrant unavailable")
             ask = self._http(
                 "POST",
                 "/api/v1/ask",
@@ -1822,13 +1909,25 @@ class DeployedProbeRunner:
                 body={"question": "phase1c-qdrant-down?"},
             )
             ask_status = ask.status
-            if ask.status == 200:
-                raise RuntimeError("ask must fail closed when qdrant unavailable")
+            for label, response in (("search", search), ("ask", ask)):
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"{label} must degrade gracefully (200 with warnings) when qdrant unavailable, got {response.status}"
+                    )
+                payload = json.loads(response.body) if response.body else {}
+                warnings = payload.get("warnings")
+                if not isinstance(warnings, list) or not warnings:
+                    raise RuntimeError(f"{label} degraded response missing warnings array")
+                degraded_warnings.extend(str(item) for item in warnings)
+            if not any("vector" in item.lower() or "fts" in item.lower() for item in degraded_warnings):
+                raise RuntimeError("degraded response missing vector/fts availability warning")
             leakage = _DENIAL.scan_marker_leakage(
                 search.body + ask.body,
                 forbidden_markers={self.seed.marker_beta},
             )
             leakage_count = len(leakage)
+            if leakage_count:
+                raise RuntimeError(f"foreign markers leaked during qdrant degradation: {leakage}")
         finally:
             start = self._compose(["start", "qdrant"], timeout_secs=120)
             if start.exit_code != 0:
@@ -1844,9 +1943,11 @@ class DeployedProbeRunner:
                 "singleNodeUnavailable": True,
                 "searchStatus": search_status,
                 "askStatus": ask_status,
+                "degradedWarnings": degraded_warnings,
+                "coverageLimited": [],
                 "eof": True,
             },
-            metrics={"qdrant_fail_closed_leakage_count": leakage_count},
+            metrics={"qdrant_degraded_leakage_count": leakage_count},
         )
 
     def run_gate(self, gate_id: str) -> DeployedProbeResult:

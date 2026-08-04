@@ -936,7 +936,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
 
     def test_seed_never_synthesizes_session_ids(self) -> None:
         text = self.SEED_PY.read_text(encoding="utf-8")
-        self.assertNotIn("secrets.token_hex(16)", text)
+        self.assertNotIn('secrets.token_hex(16)', text.split("session_id", 1)[0])
         self.assertIn("/api/v1/auth/me", text)
 
     def test_seed_stores_invite_token_in_credentials_not_public_evidence(self) -> None:
@@ -1674,7 +1674,7 @@ class Phase1cFourthReviewSliceTests(unittest.TestCase):
         self.assertEqual(owner.body["token"], "mhinv1.owner-accept-token")
         self.assertEqual(negative.body["token"], "mhinv1.negative-invite-token")
         self.assertNotEqual(owner.body["token"], negative.body["token"])
-        self.assertEqual(negative.expected_statuses, frozenset({400}))
+        self.assertEqual(negative.expected_statuses, frozenset({404}))
 
     def test_validate_fixture_credentials_requires_distinct_disposable_ids(self) -> None:
         probes = load_probes()

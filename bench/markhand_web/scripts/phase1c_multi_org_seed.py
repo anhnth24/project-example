@@ -607,7 +607,6 @@ def run_seed() -> int:
         raise RuntimeError("password hash generation failed")
     password_hash = hash_proc.stdout.strip().replace("'", "''")
     _reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID], challenge=challenge)
-    disposable_email = _bootstrap_identity_users(password_hash, challenge=challenge)
 
     alpha_login = _login(api_base, alpha_email, password)
     alpha_access = alpha_login.get("accessToken") or alpha_login.get("access_token")
@@ -632,8 +631,9 @@ def run_seed() -> int:
         raise RuntimeError("beta org response missing id/slug")
     org_beta_id = validate_uuid(org_beta_id, field="orgBetaId")
     _reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID, org_beta_id], challenge=challenge)
+    disposable_email = _bootstrap_identity_users(password_hash, challenge=challenge)
 
-    alpha_beta_access, alpha_beta_refresh, alpha_session_id = _switch_org(api_base, alpha_access, org_beta_id)
+    alpha_beta_access, alpha_beta_refresh, _alpha_beta_session_id = _switch_org(api_base, alpha_access, org_beta_id)
 
     beta_org_invite_body = {"email": BETA_EMAIL, "role": "editor"}
     beta_org_invite_status, _, beta_org_invite_raw = _http(
@@ -671,7 +671,7 @@ def run_seed() -> int:
 
     beta_org_access, beta_org_refresh, beta_session_id = _switch_org(api_base, beta_alpha_access, org_beta_id)
 
-    alpha_access, alpha_refresh, _alpha_org_session_id = _switch_org(api_base, alpha_access, ALPHA_ORG_ID)
+    alpha_access, alpha_refresh, alpha_session_id = _switch_org(api_base, alpha_access, ALPHA_ORG_ID)
 
     alpha_collection_id = _create_collection(
         api_base=api_base,
@@ -992,7 +992,7 @@ def run_seed() -> int:
     if not isinstance(beta_denial_already_member_invite_token, str):
         raise RuntimeError("already-member invite response missing token")
 
-    beta_denial_negative_invite_token = f"mhinv1.{secrets.token_hex(32)}"
+    beta_denial_negative_invite_token = f"mhinv1.{org_beta_id}.{secrets.token_hex(16)}"
 
     seed_raw: dict[str, Any] = {
         "schemaVersion": 1,

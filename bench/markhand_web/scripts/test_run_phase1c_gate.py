@@ -510,7 +510,7 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
         digest_b = "sha256:" + "b" * 64
         api_report = {
             "SchemaVersion": 2,
-            "ArtifactName": f"markhand-api:poc@{digest_a}",
+            "ArtifactName": digest_a,
             "Results": [
                 {
                     "Target": f"markhand-api:poc ({digest_a})",
@@ -522,14 +522,14 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
         }
         worker_report = {
             "SchemaVersion": 2,
-            "ArtifactName": f"markhand-worker:poc@{digest_b}",
+            "ArtifactName": digest_b,
             "Results": [{"Target": f"markhand-worker:poc ({digest_b})", "Vulnerabilities": []}],
         }
         outcome = gate.parse_combined_trivy_scan(
             api_report=api_report,
             worker_report=worker_report,
-            api_ref="markhand-api:poc@" + digest_a,
-            worker_ref="markhand-worker:poc@" + digest_b,
+            api_ref=digest_a,
+            worker_ref=digest_b,
             trivyignore_text="# empty\n",
         )
         self.assertEqual(outcome["undispositionedHighCritical"], 1)
