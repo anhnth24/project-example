@@ -77,6 +77,45 @@ def complete_seed_raw(probes, **overrides: object) -> dict:
     return base
 
 
+def complete_credentials_raw(**overrides: object) -> dict:
+    payload = {
+        "schemaVersion": 1,
+        "challenge": "phase1c-challenge-abc",
+        "alphaAccessToken": "alpha-token",
+        "alphaRefreshToken": "alpha-refresh",
+        "betaAccessToken": "beta-token",
+        "betaRefreshToken": "beta-refresh",
+        "betaAlphaAccessToken": "beta-alpha-token",
+        "betaAlphaRefreshToken": "beta-alpha-refresh",
+        "alphaBetaAccessToken": "alpha-beta-token",
+        "alphaBetaRefreshToken": "alpha-beta-refresh",
+        "alphaSessionId": "11111111-1111-1111-1111-111111111101",
+        "betaSessionId": "22222222-2222-2222-2222-222222222201",
+        "betaInviteToken": "mhinv1.test-token",
+        "alphaDownloadCapability": "cap-alpha-token",
+        "betaDownloadCapability": "cap-beta-token",
+        "betaDenialDisposableCollectionId": "21212121-2121-2121-2121-212121212121",
+        "betaDenialDisposableCollectionUpdateId": "21212121-2121-2121-2121-212121212122",
+        "betaDenialDisposableDocumentId": "23232323-2323-2323-2323-232323232323",
+        "betaDenialDisposableChatSessionId": "24242424-2424-2424-2424-242424242424",
+        "betaDenialDisposableInviteId": "25252525-2525-2525-2525-252525252525",
+        "betaDenialDisposableMemberUserId": "44444444-4444-4444-4444-444444444401",
+        "betaDenialDisposableConflictId": "26262626-2626-2626-2626-262626262626",
+        "betaDenialAcceptInviteToken": "mhinv1.accept-disposable-token",
+        "betaDenialAcceptAccessToken": "disposable-accept-token",
+        "betaCitationChunkId": "27272727-2727-2727-2727-272727272727",
+        "betaCitationSourceContentSha256": "a" * 64,
+        "betaCitationCanonicalMarkdownSha256": "b" * 64,
+        "betaCitationSourceSpanStart": 0,
+        "betaCitationSourceSpanEnd": 12,
+        "betaCitationQuoteLocalStart": 0,
+        "betaCitationQuoteLocalEnd": 12,
+        "betaCitationQuote": "phase1c-beta",
+    }
+    payload.update(overrides)
+    return payload
+
+
 def make_seed_credentials(probes, seed, **overrides: object):
     payload = {
         "challenge": seed.challenge,
@@ -1138,6 +1177,262 @@ class Phase1cSecondReviewSliceTests(unittest.TestCase):
         probes = load_probes()
         with self.assertRaises(RuntimeError):
             probes.validate_uuid("not-a-uuid", field="collectionId")
+
+
+class Phase1cThirdReviewSliceTests(unittest.TestCase):
+    """Commit M RED: third-review bounded HTTP slice contracts."""
+
+    GATE_SH = ROOT / "deploy/scripts/g1c-security-gate.sh"
+    SEED_PY = ROOT / "bench/markhand_web/scripts/phase1c_multi_org_seed.py"
+
+    def _seed_fixture(self, probes):
+        return probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+
+    def _seed_creds(self, seed, probes):
+        return make_seed_credentials(probes, seed)
+
+    def test_manifest_includes_all_60_executable_http_sse_rows(self) -> None:
+        denial = load_denial()
+        mapping = denial.build_http_sse_denial_mapping()
+        self.assertEqual(len(mapping), 60)
+        row_ids = {entry.row_id for entry in mapping}
+        self.assertEqual(len(row_ids), 60)
+
+    def test_manifest_includes_secondary_rows_without_evidence_role_filter(self) -> None:
+        denial = load_denial()
+        mapping = denial.build_http_sse_denial_mapping()
+        secondary = {entry.row_id for entry in mapping if entry.row_id.endswith("-citation") or "task13" in entry.row_id}
+        self.assertGreaterEqual(len(secondary), 7)
+
+    def test_conflict_fixture_claim_uuids_unique_per_org(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        self.assertIn("_claim_pair_for_org", text)
+        self.assertNotIn("aaaaaaaa-0001-4000-8000-000000000001", text)
+
+    def test_acl_probe_warms_multipart_upload_not_collection_get(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        runner = probes.DeployedProbeRunner(
+            api_base="http://fake",
+            seed=seed,
+            credentials=creds,
+            shims=probes.DeployedProbeShims(),
+            git_sha_full=seed.source_revision["commit"],
+        )
+        calls: list[tuple[str, str, str | None]] = []
+
+        class AclShims(probes.DeployedProbeShims):
+            def http_request(self, **kwargs):  # type: ignore[override]
+                calls.append((str(kwargs.get("method")), str(kwargs.get("path")), kwargs.get("token")))
+                headers = {"x-request-id": "11111111-1111-1111-1111-111111111111"}
+                token = kwargs.get("token")
+                if kwargs.get("multipart_body") is not None and token == creds.beta_alpha_access_token:
+                    return probes.HttpResponse(status=201, body='{"documentId":"d","versionId":"v"}', headers=headers)
+                if token == creds.beta_alpha_access_token:
+                    return probes.HttpResponse(status=200, body='{"userId":"u","sessionId":"s"}', headers=headers)
+                if token == creds.alpha_access_token:
+                    return probes.HttpResponse(status=200, body="{}", headers=headers)
+                return probes.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(0, "", "")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(0, "abc", "")
+
+        runner.shims = AclShims()
+        runner.run_acl_cache_probe()
+        warm_uploads = [
+            c for c in calls if c[0] == "POST" and "/uploads" in c[1] and c[2] == creds.beta_alpha_access_token
+        ]
+        self.assertTrue(warm_uploads, "ACL probe must warm multipart upload with beta_alpha_access_token")
+        poll_uploads = warm_uploads[1:]
+        self.assertTrue(poll_uploads, "ACL probe must poll upload denial after role downgrade")
+
+    def test_revoke_probe_uses_beta_alpha_token_on_alpha_resource(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        calls: list[tuple[str, str | None]] = []
+
+        class RevokeShims(probes.DeployedProbeShims):
+            def http_request(self, **kwargs):  # type: ignore[override]
+                calls.append((str(kwargs.get("path")), kwargs.get("token")))
+                headers = {"x-request-id": "11111111-1111-1111-1111-111111111111"}
+                token = kwargs.get("token")
+                path = str(kwargs.get("path") or "")
+                if token == creds.beta_alpha_access_token and seed.alpha_collection_id in path:
+                    if len([c for c in calls if c[1] == creds.beta_alpha_access_token]) > 2:
+                        return probes.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
+                    return probes.HttpResponse(status=200, body='{"id":"ok"}', headers=headers)
+                if token == creds.alpha_access_token and "/members/" in path:
+                    return probes.HttpResponse(status=204, body="", headers=headers)
+                return probes.HttpResponse(status=200, body='{"id":"ok"}', headers=headers)
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(0, "", "")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(0, "abc", "")
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://fake",
+            seed=seed,
+            credentials=creds,
+            shims=RevokeShims(),
+            git_sha_full=seed.source_revision["commit"],
+        )
+        runner.run_revoke_probe()
+        warm = [c for c in calls if c[1] == creds.beta_alpha_access_token and seed.alpha_collection_id in c[0]]
+        self.assertGreaterEqual(len(warm), 2)
+
+    def test_owner_control_beta_org_uses_alpha_beta_token(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            alpha_beta_access_token="alpha-beta-owner-token",
+        )
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.operation_id == "getCollection")
+        spec = denial.build_owner_control_spec(entry, seed=seed, credentials=creds)
+        assert spec is not None
+        self.assertEqual(spec.token, "alpha-beta-owner-token")
+
+    def test_triage_conflict_body_uses_status_enum(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        body = denial._owner_body("triageConflict", seed, credentials=creds, params={})
+        assert body is not None
+        self.assertIn("status", body)
+        self.assertNotIn("resolution", body)
+        self.assertIn(body["status"], {"resolved", "accepted_exception", "false_positive"})
+
+    def test_resolve_citation_owner_body_includes_required_hashes(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            beta_citation_chunk_id="27272727-2727-2727-2727-272727272727",
+            beta_citation_source_content_sha256="a" * 64,
+            beta_citation_canonical_markdown_sha256="b" * 64,
+            beta_citation_source_span_start=0,
+            beta_citation_source_span_end=12,
+            beta_citation_quote_local_start=0,
+            beta_citation_quote_local_end=12,
+            beta_citation_quote="phase1c-beta",
+        )
+        body = denial._owner_body("resolveCitation", seed, credentials=creds, params={})
+        assert body is not None
+        for key in (
+            "logicalDocumentId",
+            "versionId",
+            "sourceContentSha256",
+            "canonicalMarkdownSha256",
+            "chunkId",
+            "sourceSpanStart",
+            "sourceSpanEnd",
+            "quoteLocalStart",
+            "quoteLocalEnd",
+            "quote",
+        ):
+            self.assertIn(key, body, f"resolveCitation missing {key}")
+
+    def test_accept_invite_owner_uses_disposable_accept_token(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            beta_denial_accept_invite_token="mhinv1.fresh-accept-token",
+            beta_denial_accept_access_token="disposable-user-token",
+        )
+        body = denial._owner_body("acceptMemberInvite", seed, credentials=creds, params={})
+        assert body is not None
+        self.assertEqual(body["token"], "mhinv1.fresh-accept-token")
+
+    def test_load_credentials_requires_all_disposable_fixture_ids(self) -> None:
+        probes = load_probes()
+        path = Path(tempfile.mkdtemp()) / "creds.json"
+        payload = complete_credentials_raw()
+        del payload["betaDenialDisposableConflictId"]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.chmod(0o600)
+        with self.assertRaises(RuntimeError):
+            probes.load_seed_credentials(path, expected_challenge="phase1c-challenge-abc", purge_after_load=False)
+
+    def test_unauth_foreign_scan_both_org_markers(self) -> None:
+        denial = load_denial()
+        leaks = denial.scan_marker_leakage(
+            "leaked phase1c-marker-alpha-aaa111 and phase1c-marker-beta-bbb222",
+            forbidden_markers={"phase1c-marker-alpha-aaa111", "phase1c-marker-beta-bbb222"},
+        )
+        self.assertEqual(len(leaks), 2)
+        text = Path(DENIAL_PATH).read_text(encoding="utf-8")
+        execute = text.split("def execute_http_denial_suite", 1)[1].split("def parse_denial_execution_report", 1)[0]
+        self.assertIn("marker_alpha", execute)
+        self.assertIn("marker_beta", execute)
+
+    def test_stale_token_probe_revokes_successor_family(self) -> None:
+        text = (ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py").read_text(encoding="utf-8")
+        stale = text.split("def run_stale_tokens_probe", 1)[1].split("def run_", 1)[0]
+        self.assertIn("new_access", stale)
+        self.assertIn("new_refresh", stale)
+        self.assertIn("_discard_revoked_token_family", stale)
+
+    def test_g1c_gate_shell_owns_cleanup_trap_before_challenge(self) -> None:
+        text = self.GATE_SH.read_text(encoding="utf-8")
+        seed_idx = text.index("phase1c-multi-org-seed.sh")
+        trap_idx = text.index("trap")
+        challenge_idx = text.index("MARKHAND_PHASE1C_CHALLENGE")
+        self.assertLess(seed_idx, trap_idx)
+        self.assertLess(trap_idx, challenge_idx)
+        self.assertIn("purge_phase1c_credentials", text)
+
+    def test_audit_denominator_covers_predeclared_admin_mutations(self) -> None:
+        probes = load_probes()
+        self.assertTrue(hasattr(probes, "AUDIT_MUTATION_ACTIONS"))
+        self.assertGreaterEqual(len(probes.AUDIT_MUTATION_ACTIONS), 6)
+
+    def test_stateful_fake_executes_all_60_manifest_rows(self) -> None:
+        fake = self._load_stateful_fake()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        deployment = fake.StatefulFakeDeployment(seed=seed, credentials=creds)
+        report = deployment.run_denial_suite()
+        self.assertEqual(report["executableHttpSseCount"], 60)
+
+    def test_validate_uuid_normalizes_to_lowercase(self) -> None:
+        probes = load_probes()
+        normalized = probes.validate_uuid("ABCDEF12-3456-7890-ABCD-EF1234567890", field="id")
+        self.assertEqual(normalized, "abcdef12-3456-7890-abcd-ef1234567890")
+
+    def test_parse_seed_rejects_missing_disposable_ids_in_credentials(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = make_seed_credentials(probes, seed)
+        with self.assertRaises(RuntimeError):
+            probes.validate_fixture_credentials(creds)
+
+    def _load_stateful_fake(self):
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake_third", fake_path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["phase1c_stateful_fake_third"] = module
+        spec.loader.exec_module(module)
+        return module
 
 
 class DeployedCiRouteTests(unittest.TestCase):
