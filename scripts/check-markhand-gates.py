@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -170,6 +171,7 @@ G1C_GATE_ROWS: tuple[dict[str, object], ...] = (
 PHASE1C_EVIDENCE_ALLOWLIST: frozenset[str] = frozenset(
     str(row["evidence"]) for row in G1C_GATE_ROWS
 )
+G1C_EXPECTED_IDS: frozenset[str] = frozenset(str(row["id"]) for row in G1C_GATE_ROWS)
 OPERATORS = {">=", ">", "<=", "<", "=="}
 FAILURE_DISPOSITIONS = {
     "block-phase-1b",
@@ -297,15 +299,20 @@ def canonical_threshold_decisions_sha256() -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def phase1c_canonical_fingerprints(root: Path) -> tuple[dict[str, str], list[str]]:
+def phase1c_canonical_fingerprints(
+    root: Path,
+    *,
+    workspace_root: Path | None = None,
+) -> tuple[dict[str, str], list[str]]:
     """Collect canonical Phase 1C file digests; never skip missing/unreadable files."""
+    workspace = workspace_root or ROOT
     errors: list[str] = []
     fingerprints: dict[str, str] = {}
     files = {
         "environmentSha256": root / "environments/phase1c-multi-org-poc.yaml",
         "workloadSha256": root / "workloads/phase1c-multi-org.yaml",
         "gatesSha256": root / "gates.yaml",
-        "slaSha256": ROOT / PHASE1C_SLA_SOURCE,
+        "slaSha256": workspace / PHASE1C_SLA_SOURCE,
     }
     for field, path in files.items():
         digest, error = canonical_file_sha256(path)
@@ -354,14 +361,22 @@ def phase1c_evidence_path_errors(
         errors.append(f"{context}: evidence path not in canonical allowlist")
         return errors
     repo_resolved = repo_root.resolve()
-    candidate = (repo_root / evidence_path).resolve()
+    lexical = repo_root
+    for part in Path(evidence_path).parts:
+        lexical = lexical / part
+        try:
+            stat_result = lexical.lstat()
+        except OSError as error:
+            errors.append(f"{context}: evidence path component missing ({part}): {error}")
+            return errors
+        if stat.S_ISLNK(stat_result.st_mode):
+            errors.append(f"{context}: evidence path must not contain a symlink component ({part})")
+            return errors
+    candidate = lexical.resolve()
     try:
         candidate.relative_to(repo_resolved)
     except ValueError:
         errors.append(f"{context}: evidence path escapes repository root")
-        return errors
-    if candidate.is_symlink():
-        errors.append(f"{context}: evidence path must not be a symlink")
         return errors
     if not candidate.is_file():
         errors.append(f"{context}: evidence file missing at {evidence_path}")
@@ -517,8 +532,16 @@ def schema_errors(value: object, schema: dict, path: str) -> list[str]:
     if numeric(value):
         if "minimum" in schema and value < schema["minimum"]:
             errors.append(f"{path}: number is below schema minimum")
+        if "maximum" in schema and value > schema["maximum"]:
+            errors.append(f"{path}: number is above schema maximum")
         if "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]:
             errors.append(f"{path}: number is below schema exclusiveMinimum")
+        if "exclusiveMaximum" in schema and value >= schema["exclusiveMaximum"]:
+            errors.append(f"{path}: number is at or above schema exclusiveMaximum")
+    elif isinstance(value, bool) and (
+        "minimum" in schema or "maximum" in schema or "exclusiveMinimum" in schema or "exclusiveMaximum" in schema
+    ):
+        errors.append(f"{path}: boolean is not a schema number")
     if isinstance(value, dict):
         if len(value) < schema.get("minProperties", 0):
             errors.append(f"{path}: object has too few properties")
@@ -974,9 +997,11 @@ def phase1c_registry_contract_errors(
     environments: list[dict],
     *,
     root: Path | None = None,
+    workspace_root: Path | None = None,
     require_g1c_rows: bool = True,
 ) -> list[str]:
     """Validate Phase 1C G1C-SEC registry rows and qualifying environment binding."""
+    workspace = workspace_root or ROOT
     errors: list[str] = []
     if not require_g1c_rows:
         return errors
@@ -1019,7 +1044,7 @@ def phase1c_registry_contract_errors(
             _digest, file_error = canonical_file_sha256(root / rel)
             if file_error:
                 errors.append(file_error)
-        sla_digest, sla_error = canonical_file_sha256(ROOT / PHASE1C_SLA_SOURCE)
+        sla_digest, sla_error = canonical_file_sha256(workspace / PHASE1C_SLA_SOURCE)
         if sla_error:
             errors.append(sla_error)
 
@@ -1064,10 +1089,23 @@ def phase1c_registry_contract_errors(
     g1c_gates = [
         gate
         for gate in gates
-        if isinstance(gate, dict) and str(gate.get("id", "")).startswith("G1C-SEC-")
+        if isinstance(gate, dict) and gate.get("id") in G1C_EXPECTED_IDS
     ]
-    expected_ids = {str(row["id"]) for row in G1C_GATE_ROWS}
+    expected_ids = set(G1C_EXPECTED_IDS)
     found_ids = {gate.get("id") for gate in g1c_gates}
+    for gate in gates:
+        if not isinstance(gate, dict):
+            continue
+        gate_id = str(gate.get("id", ""))
+        family = gate.get("externalGate")
+        if family == G1C_GATE_FAMILY and gate_id not in G1C_EXPECTED_IDS:
+            errors.append(
+                f"gate {gate_id}: externalGate {G1C_GATE_FAMILY} requires canonical G1C id"
+            )
+        if gate_id in G1C_EXPECTED_IDS and family != G1C_GATE_FAMILY:
+            errors.append(
+                f"gate {gate_id}: canonical G1C id requires externalGate {G1C_GATE_FAMILY}"
+            )
     missing_ids = sorted(expected_ids - found_ids)
     extra_ids = sorted(found_ids - expected_ids)
     if missing_ids:
@@ -1194,9 +1232,13 @@ def phase1c_gate_report_errors(
     *,
     registry: dict | None = None,
     root: Path | None = None,
+    repo_root: Path | None = None,
+    workspace_root: Path | None = None,
     template_mode: bool = False,
 ) -> list[str]:
     """Fail closed on Phase 1C qualifying report invariants beyond JSON Schema."""
+    workspace = workspace_root or repo_root or ROOT
+    evidence_root = repo_root or ROOT
     errors: list[str] = []
     if not isinstance(report, dict):
         return ["phase1c-report: report must be an object"]
@@ -1260,7 +1302,7 @@ def phase1c_gate_report_errors(
         if binding.get("registryRevision") != 1:
             errors.append("phase1c-report: canonicalBinding.registryRevision must be 1")
         if root is not None:
-            live, live_errors = phase1c_canonical_fingerprints(root)
+            live, live_errors = phase1c_canonical_fingerprints(root, workspace_root=workspace)
             errors.extend(live_errors)
             for field, live_value in live.items():
                 if binding.get(field) != live_value:
@@ -1392,7 +1434,7 @@ def phase1c_gate_report_errors(
                 errors.append(f"{path}: evidence must match registry evidence path")
             elif status == "pass" and not template_mode:
                 errors += phase1c_evidence_path_errors(
-                    ROOT,
+                    evidence_root,
                     result.get("evidence"),
                     context=path,
                 )
@@ -1697,16 +1739,45 @@ class Phase1bGateReportConsistencyTests(unittest.TestCase):
             self.assertTrue(any("cannot read canonical o05-soak.json" in error for error in errors))
 
 
+def prepare_phase1c_fixture(temp_dir: Path) -> tuple[Path, Path]:
+    """Copy Markhand Web + SLA doc into an isolated workspace for hermetic tests."""
+    repo_root = temp_dir
+    markhand_root = repo_root / "bench/markhand_web"
+    shutil.copytree(DEFAULT_ROOT, markhand_root, dirs_exist_ok=True)
+    sla_source = ROOT / PHASE1C_SLA_SOURCE
+    sla_dest = repo_root / PHASE1C_SLA_SOURCE
+    sla_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sla_source, sla_dest)
+    return markhand_root, repo_root
+
+
 class Phase1cGateContractTests(unittest.TestCase):
     """Contract tests for G1C-SEC registry rows and phase-1c gate reports."""
 
-    def _load_template(self) -> dict:
-        return load_json_yaml(DEFAULT_ROOT / "reports/phase-1c-gate/phase-1c-gate.template.json")
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.markhand_root, self.repo_root = prepare_phase1c_fixture(Path(self._temp.name))
 
-    def _load_registry(self) -> dict:
-        return load_json_yaml(DEFAULT_ROOT / "gates.yaml")
+    def tearDown(self) -> None:
+        self._temp.cleanup()
 
-    def _passing_report(self) -> dict:
+    def _load_template(self, markhand_root: Path | None = None) -> dict:
+        root = markhand_root or self.markhand_root
+        return load_json_yaml(root / "reports/phase-1c-gate/phase-1c-gate.template.json")
+
+    def _load_registry(self, markhand_root: Path | None = None) -> dict:
+        root = markhand_root or self.markhand_root
+        return load_json_yaml(root / "gates.yaml")
+
+    def _passing_report(
+        self,
+        *,
+        markhand_root: Path | None = None,
+        repo_root: Path | None = None,
+    ) -> dict:
+        markhand = markhand_root or self.markhand_root
+        repo = repo_root or self.repo_root
+
         def metric_value(metric: str) -> int | float:
             if metric == "admin_mutation_audit_coverage_ratio":
                 return 1.0
@@ -1716,7 +1787,7 @@ class Phase1cGateContractTests(unittest.TestCase):
                 return 100
             return 0
 
-        report = self._load_template()
+        report = self._load_template(markhand)
         report["status"] = "pass"
         report["targetMatch"] = True
         report["metrics"] = {metric: metric_value(metric) for metric in PHASE1C_METRIC_THRESHOLDS}
@@ -1736,7 +1807,7 @@ class Phase1cGateContractTests(unittest.TestCase):
             result["pass"] = True
         report["canonicalBinding"] = {
             "registryRevision": 1,
-            **phase1c_canonical_fingerprints(DEFAULT_ROOT)[0],
+            **phase1c_canonical_fingerprints(markhand, workspace_root=repo)[0],
         }
         report["git"] = {
             "commit": subprocess.check_output(
@@ -1748,30 +1819,35 @@ class Phase1cGateContractTests(unittest.TestCase):
         }
         return report
 
-    def _create_evidence_files(self) -> None:
+    def _create_evidence_files(self, repo_root: Path | None = None) -> None:
+        root = repo_root or self.repo_root
         for evidence_path in PHASE1C_EVIDENCE_ALLOWLIST:
-            path = ROOT / evidence_path
+            path = root / evidence_path
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('{"status":"pass","note":"test fixture"}\n', encoding="utf-8")
 
-    def _remove_evidence_files(self) -> None:
+    def _remove_evidence_files(self, repo_root: Path | None = None) -> None:
+        root = repo_root or self.repo_root
         for evidence_path in PHASE1C_EVIDENCE_ALLOWLIST:
-            path = ROOT / evidence_path
-            if path.is_file():
+            path = root / evidence_path
+            if path.is_file() and not path.is_symlink():
                 path.unlink()
 
     def test_repository_template_and_registry_validate(self) -> None:
         registry = self._load_registry()
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertEqual(errors, [])
         template_errors = phase1c_gate_report_errors(
             self._load_template(),
             registry=registry,
-            root=DEFAULT_ROOT,
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
             template_mode=True,
         )
         self.assertEqual(template_errors, [])
@@ -1784,15 +1860,17 @@ class Phase1cGateContractTests(unittest.TestCase):
         self.assertIn("starvation_events", names)
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertEqual(errors, [])
         noisy["metricContracts"] = [c for c in contracts if c.get("name") != "starvation_events"]
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("starvation_events" in error for error in errors))
 
@@ -1802,8 +1880,9 @@ class Phase1cGateContractTests(unittest.TestCase):
         gate["workload"] = "loads.peak"
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("workload must be" in error for error in errors))
 
@@ -1812,8 +1891,9 @@ class Phase1cGateContractTests(unittest.TestCase):
         registry["registryStatus"] = "proposed"
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("registryStatus approved" in error for error in errors))
 
@@ -1837,10 +1917,11 @@ class Phase1cGateContractTests(unittest.TestCase):
         )
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
-        self.assertTrue(any("unexpected G1C-SEC rows" in error for error in errors))
+        self.assertTrue(any("requires canonical G1C id" in error for error in errors))
 
     def test_report_schema_rejects_unknown_keys_and_all_zero_hashes(self) -> None:
         schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
@@ -1853,13 +1934,25 @@ class Phase1cGateContractTests(unittest.TestCase):
     def test_report_rejects_pass_with_target_match_false(self) -> None:
         report = self._passing_report()
         report["targetMatch"] = False
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("targetMatch" in error for error in errors))
 
     def test_report_rejects_metric_threshold_violation_on_pass(self) -> None:
         report = self._passing_report()
         report["metrics"]["cross_tenant_leakage_count"] = 1
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("violates canonical threshold" in error for error in errors))
 
     def test_report_rejects_duplicate_and_unknown_threshold_decisions(self) -> None:
@@ -1868,30 +1961,60 @@ class Phase1cGateContractTests(unittest.TestCase):
         decisions.append(dict(decisions[0]))
         decisions[1]["metric"] = "unknown_metric"
         report["thresholdDecisions"] = decisions
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("duplicate metric" in error for error in errors))
         self.assertTrue(any("unknown metric" in error for error in errors))
 
     def test_report_rejects_wrong_threshold_decision_owner_and_provenance(self) -> None:
         report = self._passing_report()
         report["thresholdDecisions"][0]["provenanceKind"] = "external-sign-off"
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("provenanceKind diverges" in error for error in errors))
 
     def test_report_rejects_missing_gate_result_and_false_child_pass(self) -> None:
         report = self._passing_report()
         report["gateResults"] = report["gateResults"][:-1]
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("gateResults missing rows" in error for error in errors))
         report = self._passing_report()
         report["gateResults"][0]["pass"] = False
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("pass must be true" in error for error in errors))
 
     def test_report_rejects_evidence_and_registry_mismatch(self) -> None:
         report = self._passing_report()
         report["gateResults"][0]["evidence"] = "wrong/path.json"
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("evidence must match registry" in error for error in errors))
 
     def test_report_rejects_failed_redaction_and_vulnerability_scan_on_pass(self) -> None:
@@ -1899,26 +2022,47 @@ class Phase1cGateContractTests(unittest.TestCase):
         report["redactionScan"]["passed"] = False
         report["vulnerabilityScan"]["passed"] = False
         report["vulnerabilityScan"]["undispositionedHighCritical"] = 2
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("redactionScan.passed" in error for error in errors))
         self.assertTrue(any("undispositionedHighCritical" in error for error in errors))
 
     def test_report_rejects_wrong_canonical_binding_hash(self) -> None:
         report = self._passing_report()
         report["canonicalBinding"]["gatesSha256"] = ALL_ZERO_SHA256
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("gatesSha256" in error for error in errors))
 
     def test_report_rejects_malformed_types_without_crashing(self) -> None:
         report = self._passing_report()
         report["gateResults"] = "not-an-array"
         report["thresholdDecisions"] = "bad"
-        errors = phase1c_gate_report_errors(report, registry=self._load_registry(), root=DEFAULT_ROOT)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
         self.assertTrue(any("gateResults must be an array" in error for error in errors))
         self.assertTrue(any("thresholdDecisions must be non-empty" in error for error in errors))
 
     def test_main_validation_includes_phase1c_template(self) -> None:
-        self.assertEqual(run_markhand_gate_validation(DEFAULT_ROOT), [])
+        self.assertEqual(
+            run_markhand_gate_validation(self.markhand_root),
+            [],
+        )
 
     def test_schema_max_items_enforced(self) -> None:
         schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
@@ -1939,8 +2083,9 @@ class Phase1cGateContractTests(unittest.TestCase):
         noisy.pop("metricContracts", None)
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("metricContracts required" in error for error in errors))
 
@@ -1950,8 +2095,9 @@ class Phase1cGateContractTests(unittest.TestCase):
         noisy["metricContracts"] = []
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("metricContracts required" in error for error in errors))
 
@@ -1961,8 +2107,9 @@ class Phase1cGateContractTests(unittest.TestCase):
         noisy["metricContracts"] = "bad"
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("metricContracts required" in error for error in errors))
 
@@ -1974,8 +2121,9 @@ class Phase1cGateContractTests(unittest.TestCase):
         noisy["metricContracts"] = contracts
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("duplicate metricContracts" in error for error in errors))
 
@@ -1985,8 +2133,9 @@ class Phase1cGateContractTests(unittest.TestCase):
         noisy["metricContracts"][0]["owner"] = "wrong-owner"
         errors = phase1c_registry_contract_errors(
             registry,
-            [load_json_yaml(DEFAULT_ROOT / "environments/phase1c-multi-org-poc.yaml")],
-            root=DEFAULT_ROOT,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("metricContracts.quiet_org_query_p95_ms.owner" in error for error in errors))
 
@@ -2030,57 +2179,74 @@ class Phase1cGateContractTests(unittest.TestCase):
 
     def test_report_pass_requires_evidence_files_exist(self) -> None:
         self._create_evidence_files()
-        try:
-            report = self._passing_report()
-            errors = phase1c_gate_report_errors(
-                report, registry=self._load_registry(), root=DEFAULT_ROOT
-            )
-            self.assertEqual(errors, [])
-            self._remove_evidence_files()
-            errors = phase1c_gate_report_errors(
-                report, registry=self._load_registry(), root=DEFAULT_ROOT
-            )
-            self.assertTrue(any("evidence file missing" in error for error in errors))
-        finally:
-            self._remove_evidence_files()
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertEqual(errors, [])
+        self._remove_evidence_files()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(
+            any("evidence file missing" in error or "evidence path component missing" in error for error in errors)
+        )
 
     def test_report_pass_rejects_unsafe_evidence_paths(self) -> None:
         report = self._passing_report()
         report["gateResults"][0]["evidence"] = "/etc/passwd"
         errors = phase1c_gate_report_errors(
-            report, registry=self._load_registry(), root=DEFAULT_ROOT
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("evidence must match registry" in error for error in errors))
 
     def test_report_pass_rejects_dirty_git(self) -> None:
         self._create_evidence_files()
-        try:
-            report = self._passing_report()
-            report["git"]["dirty"] = True
-            errors = phase1c_gate_report_errors(
-                report, registry=self._load_registry(), root=DEFAULT_ROOT
-            )
-            self.assertTrue(any("git.dirty must be false" in error for error in errors))
-        finally:
-            self._remove_evidence_files()
+        report = self._passing_report()
+        report["git"]["dirty"] = True
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("git.dirty must be false" in error for error in errors))
 
     def test_report_pass_rejects_nonexistent_git_commit(self) -> None:
         self._create_evidence_files()
-        try:
-            report = self._passing_report()
-            report["git"]["commit"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
-            errors = phase1c_gate_report_errors(
-                report, registry=self._load_registry(), root=DEFAULT_ROOT
-            )
-            self.assertTrue(any("does not resolve to a commit object" in error for error in errors))
-        finally:
-            self._remove_evidence_files()
+        report = self._passing_report()
+        report["git"]["commit"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("does not resolve to a commit object" in error for error in errors))
 
     def test_report_pass_rejects_zero_git_commit(self) -> None:
         report = self._passing_report()
         report["git"]["commit"] = ALL_ZERO_GIT_SHA
         errors = phase1c_gate_report_errors(
-            report, registry=self._load_registry(), root=DEFAULT_ROOT
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
         )
         self.assertTrue(any("git.commit must be a non-zero" in error for error in errors))
 
@@ -2095,30 +2261,156 @@ class Phase1cGateContractTests(unittest.TestCase):
 
         with mock.patch(__name__ + ".canonical_file_sha256", side_effect=fake_sha256):
             errors = phase1c_gate_report_errors(
-                report, registry=self._load_registry(), root=DEFAULT_ROOT
+                report,
+                registry=self._load_registry(),
+                root=self.markhand_root,
+                repo_root=self.repo_root,
+                workspace_root=self.repo_root,
             )
         self.assertTrue(any("missing canonical file" in error for error in errors))
 
+    def test_report_pass_rejects_leaf_symlink_evidence(self) -> None:
+        self._create_evidence_files()
+        evidence = sorted(PHASE1C_EVIDENCE_ALLOWLIST)[0]
+        target = self.repo_root / "real-evidence-leaf.json"
+        target.write_text('{"status":"pass","note":"real target"}\n', encoding="utf-8")
+        link = self.repo_root / evidence
+        link.unlink()
+        link.symlink_to(target)
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("symlink component" in error for error in errors))
+
+    def test_report_pass_rejects_parent_symlink_in_evidence_path(self) -> None:
+        report = self._passing_report()
+        evidence = sorted(PHASE1C_EVIDENCE_ALLOWLIST)[0]
+        real_dir = self.repo_root / "bench/markhand_web/reports/phase-1c-real-gate"
+        real_dir.mkdir(parents=True, exist_ok=True)
+        real_file = real_dir / Path(evidence).name
+        real_file.write_text('{"status":"pass","note":"real target"}\n', encoding="utf-8")
+        gate_dir = self.repo_root / "bench/markhand_web/reports/phase-1c-gate"
+        if gate_dir.exists() or gate_dir.is_symlink():
+            if gate_dir.is_symlink():
+                gate_dir.unlink()
+            else:
+                shutil.rmtree(gate_dir)
+        gate_dir.symlink_to(real_dir)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("symlink component" in error for error in errors))
+
+    def test_registry_rejects_g1c_family_on_noncanonical_id(self) -> None:
+        registry = self._load_registry()
+        registry["gates"].append(
+            {
+                "id": "G1C-SEC-ROGUE",
+                "externalGate": G1C_GATE_FAMILY,
+                "metric": {"name": "cross_tenant_leakage_count", "unit": "count", "statistic": "max"},
+                "workload": PHASE1C_WORKLOAD_REF,
+                "threshold": {"operator": "==", "value": 0},
+                "command": G1C_COMMAND,
+                "environmentId": PHASE1C_ENVIRONMENT_ID,
+                "owner": "security-owner",
+                "approver": "security-owner",
+                "status": "approved",
+                "failureDisposition": PHASE1C_FAILURE_DISPOSITION,
+                "evidence": "bench/markhand_web/reports/phase-1c-gate/leakage.json",
+            }
+        )
+        errors = phase1c_registry_contract_errors(
+            registry,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("requires canonical G1C id" in error for error in errors))
+
+    def test_registry_rejects_canonical_g1c_id_with_wrong_family(self) -> None:
+        registry = self._load_registry()
+        gate = next(g for g in registry["gates"] if g["id"] == "G1C-SEC-LEAKAGE")
+        gate["externalGate"] = "G0-SEC"
+        errors = phase1c_registry_contract_errors(
+            registry,
+            [load_json_yaml(self.markhand_root / "environments/phase1c-multi-org-poc.yaml")],
+            root=self.markhand_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("requires externalGate G1C-SEC" in error for error in errors))
+
+    def test_report_schema_rejects_audit_ratio_above_maximum(self) -> None:
+        schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
+        report = self._passing_report()
+        report["metrics"]["admin_mutation_audit_coverage_ratio"] = 1.1
+        errors = schema_errors(report, schema, "phase1c-report")
+        self.assertTrue(any("above schema maximum" in error for error in errors))
+
+    def test_report_schema_rejects_audit_ratio_below_minimum(self) -> None:
+        schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
+        report = self._load_template()
+        report["metrics"]["admin_mutation_audit_coverage_ratio"] = -0.1
+        errors = schema_errors(report, schema, "phase1c-report")
+        self.assertTrue(any("below schema minimum" in error for error in errors))
+
+    def test_report_schema_rejects_boolean_metric_as_number(self) -> None:
+        schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
+        report = self._load_template()
+        report["metrics"]["starvation_events"] = True
+        errors = schema_errors(report, schema, "phase1c-report")
+        self.assertTrue(
+            any("boolean is not a schema number" in error or "schema type must be integer" in error for error in errors)
+        )
+
     def test_main_entrypoint_includes_phase1c_report_validation(self) -> None:
-        template_path = PHASE1C_REPORT_TEMPLATE
-        original = template_path.read_text(encoding="utf-8")
+        template_path = self.markhand_root / "reports/phase-1c-gate/phase-1c-gate.template.json"
+        original = template_path.read_bytes()
         try:
             broken = load_json_yaml(template_path)
             broken["status"] = "pass"
             broken["targetMatch"] = True
             template_path.write_text(json.dumps(broken), encoding="utf-8")
-            self.assertEqual(validate(DEFAULT_ROOT), [])
-            full_errors = run_markhand_gate_validation(DEFAULT_ROOT)
+            self.assertEqual(validate(self.markhand_root), [])
+            full_errors = run_markhand_gate_validation(self.markhand_root)
             self.assertTrue(
                 any("template/report must not claim status pass" in error for error in full_errors)
             )
             with mock.patch(__name__ + ".phase1c_report_dir_errors", return_value=[]):
-                bypassed = run_markhand_gate_validation(DEFAULT_ROOT)
+                bypassed = run_markhand_gate_validation(self.markhand_root)
             self.assertFalse(
                 any("template/report must not claim status pass" in error for error in bypassed)
             )
         finally:
-            template_path.write_text(original, encoding="utf-8")
+            template_path.write_bytes(original)
+
+
+class Phase1cHermeticRegressionTests(unittest.TestCase):
+    def test_self_tests_leave_tracked_template_and_evidence_unmodified(self) -> None:
+        template_path = PHASE1C_REPORT_TEMPLATE
+        template_before = template_path.read_bytes()
+        sentinel = ROOT / sorted(PHASE1C_EVIDENCE_ALLOWLIST)[0]
+        sentinel_existed = sentinel.exists()
+        sentinel_before = sentinel.read_bytes() if sentinel_existed else b""
+
+        loader = unittest.defaultTestLoader
+        suite = loader.loadTestsFromTestCase(Phase1cGateContractTests)
+        result = unittest.TextTestRunner(verbosity=0).run(suite)
+        self.assertTrue(result.wasSuccessful())
+
+        self.assertEqual(template_path.read_bytes(), template_before)
+        if sentinel_existed:
+            self.assertEqual(sentinel.read_bytes(), sentinel_before)
+        else:
+            self.assertFalse(sentinel.exists())
 
 
 def run_markhand_gate_validation(root: Path) -> list[str]:
@@ -2145,6 +2437,7 @@ def main() -> int:
         suite.addTests(loader.loadTestsFromTestCase(GateValidatorTests))
         suite.addTests(loader.loadTestsFromTestCase(Phase1bGateReportConsistencyTests))
         suite.addTests(loader.loadTestsFromTestCase(Phase1cGateContractTests))
+        suite.addTests(loader.loadTestsFromTestCase(Phase1cHermeticRegressionTests))
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
     try:
         errors = run_markhand_gate_validation(args.root)
