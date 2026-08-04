@@ -217,6 +217,41 @@ pub fn embedded_openapi_yaml() -> &'static str {
     include_str!("../../openapi/openapi.yaml")
 }
 
+/// `(method, path, operationId)` for every [`ROUTE_INVENTORY`] entry present in `yaml`.
+///
+/// Used by the guard-inventory completeness check so every OpenAPI operation and
+/// every inventory route must map to exactly one guard row.
+pub fn openapi_operation_inventory(yaml: &str) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for &(method, path, _) in ROUTE_INVENTORY {
+        let Some(path_block) = extract_path_block(yaml, path) else {
+            continue;
+        };
+        let Some(op_block) = extract_method_block(path_block, method) else {
+            continue;
+        };
+        let Some(operation_id) = extract_operation_id(op_block) else {
+            continue;
+        };
+        out.push((method.to_string(), path.to_string(), operation_id));
+    }
+    out
+}
+
+fn extract_operation_id(op_block: &str) -> Option<String> {
+    for line in op_block.lines() {
+        let trimmed = line.trim();
+        let Some(rest) = trimmed.strip_prefix("operationId:") else {
+            continue;
+        };
+        let id = rest.trim();
+        if !id.is_empty() {
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
 pub fn openapi_path_count() -> usize {
     embedded_openapi_yaml()
         .lines()
@@ -477,6 +512,14 @@ mod tests {
     }
 
     #[test]
+    fn openapi_operation_inventory_exposes_every_route_operation_id() {
+        let ops = openapi_operation_inventory(embedded_openapi_yaml());
+        assert_eq!(ops.len(), ROUTE_INVENTORY.len());
+        assert!(ops.iter().any(|(_, _, id)| id == "publishDocumentVersion"));
+        assert!(ops.iter().any(|(_, _, id)| id == "authLogin"));
+    }
+
+    #[test]
     fn openapi_inventory_is_newline_independent() {
         let lf = embedded_openapi_yaml().replace("\r\n", "\n");
         let crlf = lf.replace('\n', "\r\n");
@@ -595,5 +638,69 @@ mod tests {
         assert!(get.contains("\"200\":"));
         assert!(!get.contains("\"201\":"));
         assert!(post.contains("\"201\":"));
+    }
+
+    #[test]
+    fn openapi_role_enums_match_builtin_catalog_roles() {
+        let catalog = crate::auth::rbac_catalog::load_builtin_role_catalog();
+        let yaml = embedded_openapi_yaml();
+        let expected = format!("enum: [{}]", catalog.roles.join(", "));
+        let role_enum_lines: Vec<&str> = yaml
+            .lines()
+            .map(str::trim)
+            .filter(|line| {
+                line.starts_with("enum: [")
+                    && line.contains("owner")
+                    && line.contains("admin")
+                    && line.contains("editor")
+                    && line.contains("viewer")
+            })
+            .collect();
+        assert!(
+            !role_enum_lines.is_empty(),
+            "OpenAPI must declare MembershipRole-style enums"
+        );
+        for line in &role_enum_lines {
+            assert_eq!(
+                *line,
+                expected.as_str(),
+                "role enum must match builtin catalog roles in order"
+            );
+        }
+        // Roles are authoritative via the catalog extension, not a second matrix.
+        assert!(
+            yaml.lines().any(|line| {
+                line.trim() == "x-markhand-builtin-role-catalog: ./builtin-role-catalog.json"
+            }),
+            "OpenAPI must reference the canonical builtin-role-catalog fixture"
+        );
+    }
+
+    #[test]
+    fn openapi_references_builtin_catalog_without_embedding_grants() {
+        let yaml = embedded_openapi_yaml();
+        assert!(
+            yaml.lines().any(|line| {
+                line.trim() == "x-markhand-builtin-role-catalog: ./builtin-role-catalog.json"
+            }),
+            "OpenAPI must expose only a reference to builtin-role-catalog.json"
+        );
+        // Fail closed: never embed a second grant matrix in the YAML document.
+        for line in yaml.lines() {
+            let trimmed = line.trim();
+            assert!(
+                !trimmed.starts_with("grants:") && trimmed != "grants",
+                "OpenAPI must not embed a grants matrix; found: {trimmed}"
+            );
+        }
+        let catalog = crate::auth::rbac_catalog::load_builtin_role_catalog();
+        for (role, keys) in &catalog.grants {
+            // A copied matrix would list grant keys beside a role label.
+            let role_grant_block = format!("{role}: [{keys}]", keys = keys.join(", "));
+            assert!(
+                !yaml.contains(&role_grant_block),
+                "OpenAPI must not embed catalog grants for {role}"
+            );
+        }
     }
 }

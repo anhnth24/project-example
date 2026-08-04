@@ -58,6 +58,7 @@ use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
+use crate::auth::permissions::require_permission;
 use crate::config::SecretString;
 use crate::db::error::DbError;
 use crate::db::members::{self, NewInvite, OwnerRow};
@@ -69,6 +70,12 @@ use crate::db::pool::with_org_txn_typed;
 use crate::db::quota;
 use crate::services::audit::{self, AuditAction, AuditRecord};
 
+const PERMISSION_MEMBER_MANAGE: &str = "member.manage";
+
+fn require_member_manage(ctx: &OrgContext) -> Result<(), MemberError> {
+    require_permission(ctx, PERMISSION_MEMBER_MANAGE).map_err(|_| MemberError::PermissionDenied)
+}
+
 const INVITE_TOKEN_PREFIX: &str = "mhinv1";
 const INVITE_TOKEN_SECRET_BYTES: usize = 32;
 
@@ -79,6 +86,8 @@ pub const DEFAULT_INVITE_TTL_SECS: i64 = 7 * 24 * 3600;
 /// `LastOwner` -> 409 (plan section 4, E6/E7).
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MemberError {
+    #[error("permission denied")]
+    PermissionDenied,
     #[error("membership not found")]
     NotFound,
     #[error("invite not found")]
@@ -261,6 +270,7 @@ pub async fn list_members(
     pool: &Pool,
     ctx: &OrgContext,
 ) -> Result<Vec<OrgMembership>, MemberError> {
+    require_member_manage(ctx)?;
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| Box::pin(async move { Ok(members::list(txn, &ctx).await?) })
@@ -271,6 +281,7 @@ pub async fn list_members(
 /// Lists every invite in the tenant, open and terminal (E2). Callers must
 /// never surface `token_hash` to a client.
 pub async fn list_invites(pool: &Pool, ctx: &OrgContext) -> Result<Vec<OrgInvite>, MemberError> {
+    require_member_manage(ctx)?;
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         move |txn| Box::pin(async move { Ok(members::list_invites(txn, &ctx).await?) })
@@ -305,6 +316,7 @@ pub async fn create_invite(
     role: MembershipRole,
     ttl_secs: i64,
 ) -> Result<CreatedInvite, MemberError> {
+    require_member_manage(ctx)?;
     let email = email.trim().to_ascii_lowercase();
     let expires_at = Utc::now() + Duration::seconds(ttl_secs.max(60));
     let invite_id = Uuid::new_v4();
@@ -427,6 +439,7 @@ pub async fn revoke_invite(
     request_id: &str,
     invite_id: Uuid,
 ) -> Result<OrgInvite, MemberError> {
+    require_member_manage(ctx)?;
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         let request_id = request_id.to_string();
@@ -481,6 +494,7 @@ pub async fn change_role(
     target_user_id: Uuid,
     new_role: MembershipRole,
 ) -> Result<OrgMembership, MemberError> {
+    require_member_manage(ctx)?;
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         let request_id = request_id.to_string();
@@ -547,6 +561,7 @@ pub async fn remove_member(
     request_id: &str,
     target_user_id: Uuid,
 ) -> Result<(), MemberError> {
+    require_member_manage(ctx)?;
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         let request_id = request_id.to_string();
@@ -633,6 +648,7 @@ async fn set_member_state(
     target_user_id: Uuid,
     new_state: MembershipState,
 ) -> Result<OrgMembership, MemberError> {
+    require_member_manage(ctx)?;
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();
         let request_id = request_id.to_string();
@@ -704,6 +720,7 @@ pub async fn usage_overview(
     pool: &Pool,
     ctx: &OrgContext,
 ) -> Result<Vec<ResourceUsage>, MemberError> {
+    require_member_manage(ctx)?;
     let observed_at = Utc::now();
     with_org_txn_typed(pool, ctx, {
         let ctx = ctx.clone();

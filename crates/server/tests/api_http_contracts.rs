@@ -21,8 +21,8 @@ use uuid::Uuid;
 
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_router,
-    login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, take_live,
-    test_minio_client, trusted_key, MinioCleanupGuard,
+    login_access_token, put_bytes, seed_user_with_permissions, sha256_hex, test_minio_client,
+    trusted_key, MinioCleanupGuard,
 };
 
 const BOUNDARY: &str = "----markhandHttpContractBoundary";
@@ -305,7 +305,8 @@ async fn seed_published_doc(
 async fn seed_foreign_collection_document(
     pool: &deadpool_postgres::Pool,
     marker: &str,
-) -> (Uuid, Uuid, Uuid, Uuid, Uuid) {
+    store: Option<&fileconv_server::storage::minio::MinioClient>,
+) -> (Uuid, Uuid, Uuid, Uuid, Uuid, Uuid, Uuid) {
     let org = Uuid::new_v4();
     let user = Uuid::new_v4();
     let collection_id = Uuid::new_v4();
@@ -341,10 +342,30 @@ async fn seed_foreign_collection_document(
     let document_title = format!("Foreign document {marker}");
     let content_sha = sha256_hex(marker.as_bytes());
     let content_length = marker.len() as i64;
-    let object_key = trusted_key(org, version_id, Uuid::new_v4(), None)
-        .expect("foreign trusted key")
-        .as_str()
-        .to_string();
+    let foreign_object_key =
+        trusted_key(org, version_id, Uuid::new_v4(), None).expect("foreign trusted key");
+    let object_key = foreign_object_key.as_str().to_string();
+    if let Some(store) = store {
+        put_bytes(
+            store,
+            org,
+            &foreign_object_key,
+            marker.as_bytes(),
+            "text/plain",
+            ObjectIdentityMeta {
+                org_id: org,
+                collection_id: Some(collection_id),
+                document_id: Some(document_id),
+                version_id: Some(version_id),
+                original_filename: None,
+                canonical_format: Some("txt".into()),
+                content_sha256: Some(content_sha.clone()),
+                content_length: Some(content_length as u64),
+                disposition: Some("trusted".into()),
+            },
+        )
+        .await;
+    }
     with_org_txn(pool, &ctx, {
         let ctx = ctx.clone();
         move |txn| {
@@ -376,7 +397,7 @@ async fn seed_foreign_collection_document(
                         id, org_id, document_id, version_number, publication_state,
                         is_current, content_sha256, original_object_key, markdown_object_key,
                         source_content_type, byte_size, created_by_user_id
-                     ) VALUES ($1,$2,$3,1,'published',true,$4,$5,$5,'text/plain',$6,$7)",
+                     ) VALUES ($1,$2,$3,1,'published',true,$4,$5,NULL,'text/plain',$6,$7)",
                     &[
                         &version_id,
                         &ctx.org_id(),
@@ -452,7 +473,15 @@ async fn seed_foreign_collection_document(
     })
     .await
     .expect("seed foreign collection/document");
-    (collection_id, document_id, version_id, job_id, conflict_id)
+    (
+        collection_id,
+        document_id,
+        version_id,
+        job_id,
+        conflict_id,
+        org,
+        user,
+    )
 }
 
 #[tokio::test]
@@ -1724,21 +1753,32 @@ async fn live_write_gate_advisory_lock_concurrency_contract() {
 }
 
 #[tokio::test]
-#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP"]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_MINIO_*"]
 async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
-    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+    let Some(admin) = admin_database_url() else {
         return;
     };
-    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
+    let Some(app_url) = app_database_url() else {
         return;
     };
+    let Some(store) = test_minio_client() else {
+        return;
+    };
+    let cleanup = MinioCleanupGuard::new(store.clone());
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
     assert_markhand_app_role(&pool).await;
     let (_org, _user, token) = seed_http_principal(&pool).await;
     let foreign_marker = format!("foreign-marker-{}", Uuid::new_v4().simple());
-    let (foreign_collection, foreign_document, foreign_version, foreign_job, foreign_conflict) =
-        seed_foreign_collection_document(&pool, &foreign_marker).await;
-    let app = build_router(pool, &ephemeral.app_url, None);
+    let (
+        foreign_collection,
+        foreign_document,
+        foreign_version,
+        foreign_job,
+        foreign_conflict,
+        foreign_org,
+        foreign_user,
+    ) = seed_foreign_collection_document(&pool, &foreign_marker, Some(&store)).await;
+    let app = build_router(pool.clone(), &ephemeral.app_url, Some(store.clone()));
 
     let (status, err, _) =
         json_request(app.clone(), "GET", "/api/v1/collections", None, None, &[]).await;
@@ -1978,7 +2018,7 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     .await;
     let foreign_sha = sha256_hex(foreign_marker.as_bytes());
     assert_foreign_not_found(
-        app,
+        app.clone(),
         "POST",
         "/api/v1/citations/resolve".to_string(),
         &token,
@@ -1999,6 +2039,89 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
     )
     .await;
 
+    // Conflict list is org-scoped: tenant A must not see tenant B's open conflict.
+    let (status, conflicts, _) = json_request(
+        app.clone(),
+        "GET",
+        "/api/v1/conflicts",
+        Some(&token),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{conflicts}");
+    assert!(
+        conflicts["requestId"].as_str().is_some(),
+        "conflict list must return stable error envelope fields on success: {conflicts}"
+    );
+    assert!(
+        !conflicts["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == foreign_conflict.to_string()),
+        "foreign conflict must not appear in tenant A list: {conflicts}"
+    );
+    assert!(
+        !conflicts.to_string().contains(&foreign_marker),
+        "conflict list leaked foreign marker: {conflicts}"
+    );
+
+    // Foreign capability minted by the foreign tenant must not redeem under tenant A.
+    let foreign_token = login_access_token(
+        &pool,
+        &format!("{foreign_user}@foreign-http.test"),
+        "correct-password-1",
+    )
+    .await;
+    let _ = foreign_org;
+    let (status, issued, _) = json_request(
+        app.clone(),
+        "POST",
+        &format!(
+            "/api/v1/documents/{foreign_document}/versions/{foreign_version}/download-capability"
+        ),
+        Some(&foreign_token),
+        Some(serde_json::json!({ "purpose": "original" })),
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "foreign tenant must mint capability via production route: {issued}"
+    );
+    let foreign_capability = issued["capability"]
+        .as_str()
+        .expect("foreign capability token")
+        .to_string();
+    let (status, error, body) = json_request(
+        app.clone(),
+        "GET",
+        &format!("/api/v1/downloads/{foreign_capability}"),
+        Some(&token),
+        None,
+        &[],
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "GET /downloads/{{foreign}} must hide foreign capability: {error}"
+    );
+    assert_eq!(error["code"], "not_found", "GET /downloads: {error}");
+    assert!(
+        error["requestId"].as_str().is_some(),
+        "download denial must include requestId: {error}"
+    );
+    assert!(
+        !error.to_string().contains(&foreign_marker)
+            && !String::from_utf8_lossy(&body).contains(&foreign_marker),
+        "download denial leaked foreign marker: {error}"
+    );
+
+    cleanup.cleanup().await.expect("clean cross-tenant bucket");
+
     ephemeral.drop().await;
 }
 
@@ -2015,18 +2138,13 @@ async fn live_http_unauthenticated_and_cross_tenant_are_consistent() {
 #[tokio::test]
 #[ignore = "requires MARKHAND_TEST_DATABASE_URL/APP + MARKHAND_TEST_QDRANT_URL"]
 async fn live_http_retrieval_refuses_foreign_collection_scope() {
-    let Some(admin) = take_live(admin_database_url(), "MARKHAND_TEST_DATABASE_URL") else {
+    let Some(admin) = admin_database_url() else {
         return;
     };
-    let Some(app_url) = take_live(app_database_url(), "MARKHAND_TEST_APP_DATABASE_URL") else {
+    let Some(app_url) = app_database_url() else {
         return;
     };
-    let Some(qdrant_url) = take_live(
-        std::env::var("MARKHAND_TEST_QDRANT_URL")
-            .ok()
-            .filter(|url| !url.trim().is_empty()),
-        "MARKHAND_TEST_QDRANT_URL",
-    ) else {
+    let Some(qdrant_url) = common::test_qdrant_url() else {
         return;
     };
     let (ephemeral, pool) = boot_app_pool(&admin, &app_url).await;
@@ -2034,7 +2152,8 @@ async fn live_http_retrieval_refuses_foreign_collection_scope() {
 
     let (_org, _user, token) = seed_http_principal(&pool).await;
     let foreign_marker = format!("foreign-scope-{}", Uuid::new_v4());
-    let (foreign_collection, ..) = seed_foreign_collection_document(&pool, &foreign_marker).await;
+    let (foreign_collection, _, _, _, _, _, _) =
+        seed_foreign_collection_document(&pool, &foreign_marker, None).await;
 
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let state = common::build_app_state(pool.clone(), &ephemeral.app_url, None)
@@ -2056,8 +2175,15 @@ async fn live_http_retrieval_refuses_foreign_collection_scope() {
                 "collectionIds": [foreign_collection],
             }),
         ),
+        (
+            "/api/v1/ask/stream",
+            serde_json::json!({
+                "question": "kinh phí được phê duyệt là bao nhiêu?",
+                "collectionIds": [foreign_collection],
+            }),
+        ),
     ] {
-        let (status, error, _) =
+        let (status, error, body) =
             json_request(app.clone(), "POST", uri, Some(&token), Some(body), &[]).await;
         assert_eq!(
             status,
@@ -2068,6 +2194,10 @@ async fn live_http_retrieval_refuses_foreign_collection_scope() {
         assert!(
             !error.to_string().contains(&foreign_marker),
             "POST {uri} leaked foreign marker: {error}"
+        );
+        assert!(
+            !String::from_utf8_lossy(&body).contains("event:"),
+            "POST {uri} must not emit SSE for foreign scope: {error}"
         );
     }
 
@@ -2363,4 +2493,126 @@ async fn live_reindex_audit_failure_rolls_back_enqueue() {
     );
 
     ephemeral.drop().await;
+}
+
+/// Strict prerequisite mode contract for integration CI (`MARKHAND_TEST_REQUIRED=1`).
+mod required_mode {
+    use super::common::{
+        admin_database_url, app_database_url, markhand_e2e_required, markhand_test_required,
+        minio_test_credentials, take_live, test_env_lock, test_qdrant_url, MinioTestCredentials,
+        SavedEnvVars,
+    };
+
+    const STRICT_FLAG_VARS: &[&str] = &["MARKHAND_TEST_REQUIRED", "MARKHAND_E2E"];
+
+    const _: fn() -> Option<String> = admin_database_url;
+    const _: fn() -> Option<String> = app_database_url;
+    const _: fn() -> Option<String> = test_qdrant_url;
+    const _: fn() -> Option<MinioTestCredentials> = minio_test_credentials;
+
+    fn panic_payload_message(payload: Box<dyn std::any::Any + Send>) -> String {
+        if let Some(message) = payload.downcast_ref::<&str>() {
+            message.to_string()
+        } else if let Some(message) = payload.downcast_ref::<String>() {
+            message.clone()
+        } else {
+            String::new()
+        }
+    }
+
+    #[test]
+    fn markhand_test_required_honors_markhand_test_required_env() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(STRICT_FLAG_VARS);
+        std::env::remove_var("MARKHAND_E2E");
+        std::env::set_var("MARKHAND_TEST_REQUIRED", "1");
+
+        assert!(
+            markhand_test_required(),
+            "MARKHAND_TEST_REQUIRED=1 must enable required mode without MARKHAND_E2E"
+        );
+        assert!(
+            !markhand_e2e_required(),
+            "test must not conflate required mode with MARKHAND_E2E"
+        );
+    }
+
+    #[test]
+    fn take_live_panics_when_markhand_test_required_without_prerequisite() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(STRICT_FLAG_VARS);
+        std::env::set_var("MARKHAND_TEST_REQUIRED", "1");
+        std::env::remove_var("MARKHAND_E2E");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(None::<String>, "MARKHAND_TEST_DATABASE_URL");
+        });
+        assert!(
+            outcome.is_err(),
+            "take_live must panic when MARKHAND_TEST_REQUIRED=1 and prerequisite is absent"
+        );
+    }
+
+    #[test]
+    fn take_live_panic_message_names_markhand_test_required() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(STRICT_FLAG_VARS);
+        std::env::set_var("MARKHAND_TEST_REQUIRED", "1");
+        std::env::remove_var("MARKHAND_E2E");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(None::<String>, "MARKHAND_TEST_DATABASE_URL");
+        });
+        let message = panic_payload_message(outcome.expect_err("expected prerequisite panic"));
+        assert!(
+            message.contains("MARKHAND_TEST_REQUIRED=1 requires MARKHAND_TEST_DATABASE_URL"),
+            "panic must name the missing prerequisite in required mode, got: {message}"
+        );
+    }
+
+    #[test]
+    fn take_live_soft_skips_without_required_flags() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(STRICT_FLAG_VARS);
+        std::env::remove_var("MARKHAND_TEST_REQUIRED");
+        std::env::remove_var("MARKHAND_E2E");
+
+        assert!(
+            take_live(None::<String>, "MARKHAND_TEST_DATABASE_URL").is_none(),
+            "local runs without required mode must remain explicitly skippable"
+        );
+    }
+
+    #[test]
+    fn take_live_still_panics_under_markhand_e2e() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(STRICT_FLAG_VARS);
+        std::env::remove_var("MARKHAND_TEST_REQUIRED");
+        std::env::set_var("MARKHAND_E2E", "1");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(None::<String>, "MARKHAND_TEST_DATABASE_URL");
+        });
+        assert!(
+            outcome.is_err(),
+            "existing MARKHAND_E2E=1 strict path must keep panicking on missing prerequisites"
+        );
+    }
+
+    #[test]
+    fn take_live_panic_message_names_markhand_e2e_when_e2e_alone() {
+        let _lock = test_env_lock();
+        let _saved = SavedEnvVars::save(STRICT_FLAG_VARS);
+        std::env::remove_var("MARKHAND_TEST_REQUIRED");
+        std::env::set_var("MARKHAND_E2E", "1");
+
+        let outcome = std::panic::catch_unwind(|| {
+            let _ = take_live(None::<String>, "MARKHAND_TEST_DATABASE_URL");
+        });
+        let message = panic_payload_message(outcome.expect_err("expected E2E prerequisite panic"));
+        assert!(
+            message.contains("MARKHAND_E2E=1 requires MARKHAND_TEST_DATABASE_URL"),
+            "E2E-only strict path must preserve legacy panic wording, got: {message}"
+        );
+    }
 }

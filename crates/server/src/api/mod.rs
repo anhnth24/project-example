@@ -10,9 +10,9 @@ mod types;
 pub use error::ApiError;
 pub use last_event_id::{parse_last_event_id_token, resolve_last_event_id, LastEventIdError};
 pub use openapi::{
-    embedded_openapi_yaml, openapi_inventory_gaps, openapi_path_count, openapi_request_body_gaps,
-    openapi_response_content_gaps, openapi_schema_completeness_gaps, openapi_yaml_gaps,
-    router_openapi_parity_gaps, BODY_TAKING_OPERATIONS, ROUTE_INVENTORY,
+    embedded_openapi_yaml, openapi_inventory_gaps, openapi_operation_inventory, openapi_path_count,
+    openapi_request_body_gaps, openapi_response_content_gaps, openapi_schema_completeness_gaps,
+    openapi_yaml_gaps, router_openapi_parity_gaps, BODY_TAKING_OPERATIONS, ROUTE_INVENTORY,
 };
 pub use pagination::{decode_cursor, encode_cursor, PageInfo, Pagination};
 pub use sse::SseEnvelope;

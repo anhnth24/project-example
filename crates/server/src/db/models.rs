@@ -261,6 +261,28 @@ pub enum AccessLevel {
     Admin,
 }
 
+impl AccessLevel {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Admin => "admin",
+        }
+    }
+
+    pub const fn rank(self) -> u8 {
+        match self {
+            Self::Read => 1,
+            Self::Write => 2,
+            Self::Admin => 3,
+        }
+    }
+
+    pub const fn satisfies(self, required: Self) -> bool {
+        self.rank() >= required.rank()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CollectionUserAccess {
     pub id: Uuid,

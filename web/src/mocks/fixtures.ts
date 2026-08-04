@@ -613,7 +613,11 @@ function seedQaCompareDocument(
       sourceContentSha256: 'd'.repeat(64),
       effectiveFrom: mockTimestamp(50),
       effectiveTo: mockTimestamp(95),
-      changeSummary: 'Ngân sách vận hành được phê duyệt ban đầu.',
+      // P2-10 conflict-warning demo: BA's original claim (10 triệu/quý) —
+      // superseded by v2's design-driven figure below. Kept as the concrete
+      // "BA 10m vs design 15m" conflict `mocks/handlers/qa.ts`'s
+      // as-of/compare/history warnings demonstrate.
+      changeSummary: 'BA đề xuất ngân sách vận hành 10 triệu đồng mỗi quý.',
       createdAt: mockTimestamp(50),
     },
     {
@@ -624,7 +628,11 @@ function seedQaCompareDocument(
       sourceContentSha256: 'e'.repeat(64),
       effectiveFrom: mockTimestamp(95),
       effectiveTo: null,
-      changeSummary: 'Điều chỉnh ngân sách vận hành theo thiết kế mới.',
+      // The resolution side of the same conflict — design overrides BA's
+      // figure, and this is the version `currentModeWarnings`/the new
+      // as-of/compare/history warnings point callers back to as "resolved".
+      changeSummary:
+        'Bộ phận thiết kế điều chỉnh ngân sách vận hành lên 15 triệu đồng mỗi quý, giải quyết xung đột với đề xuất ban đầu của BA.',
       createdAt: mockTimestamp(95),
     },
   ]);
@@ -708,7 +716,7 @@ function seedChatSessions(): Map<string, ChatSessionRecord[]> {
     QA_COMPARE_VERSION_B_ID,
     mockUuid(11),
     'Chính sách ngân sách vận hành.pdf',
-    'Ngân sách vận hành được điều chỉnh thành 15 triệu đồng mỗi quý theo thiết kế mới.',
+    'Ngân sách vận hành được thiết kế điều chỉnh thành 15 triệu đồng mỗi quý, giải quyết xung đột với đề xuất ban đầu của BA.',
   );
 
   const roadmapSession: ChatSessionRecord = {
@@ -759,7 +767,7 @@ function seedChatSessions(): Map<string, ChatSessionRecord[]> {
         seq: 2,
         question: 'Còn ngân sách vận hành thì sao?',
         answer:
-          'Dựa trên tài liệu đã lập chỉ mục: Nhân viên mới cần hoàn thành khóa đào tạo hội nhập trong 30 ngày đầu tiên. [CITE-0001] Ngân sách vận hành được điều chỉnh thành 15 triệu đồng mỗi quý theo thiết kế mới. [CITE-0002]',
+          'Dựa trên tài liệu đã lập chỉ mục: Nhân viên mới cần hoàn thành khóa đào tạo hội nhập trong 30 ngày đầu tiên. [CITE-0001] Ngân sách vận hành được thiết kế điều chỉnh thành 15 triệu đồng mỗi quý, giải quyết xung đột với đề xuất ban đầu của BA. [CITE-0002]',
         answerMode: 'offline_extractive',
         citations: [onboardingCitation, budgetCitation],
         warnings: [],

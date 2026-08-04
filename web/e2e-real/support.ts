@@ -7,14 +7,14 @@
 //     SPA static serving" section and `crates/server/src/spa.rs`). There is
 //     no fetch mock here: every request is a real HTTP round-trip.
 //   - Only `deploy/scripts/web-e2e-real.sh` is meant to run this suite: it
-//     brings the stack up, migrates, seeds, builds the SPA, starts the
-//     server, and only then runs `playwright test --project=real`. Running
-//     this suite any other way requires reproducing all of that by hand.
+//     brings the stack up, migrates, seeds, builds the SPA, starts
+//     fileconv-server plus convert/index/embedding workers, and only then runs
+//     `playwright test --project=real`. Running this suite any other way
+//     requires reproducing all of that by hand.
 //   - Smoke scope only, deliberately small: login against a seeded real
-//     account, then confirm the library shell renders with its seeded
-//     collection. Broader flows (upload → indexed, actions, org switch)
-//     belong to a later pass once this harness is proven — see P2-15's
-//     status note.
+//     account, library shell on the seeded collection, and upload → indexed
+//     against the real conversion/indexing pipeline. Broader flows (actions,
+//     org switch) belong to a later pass — see P2-15's status note.
 //
 // FIXTURE GROUND TRUTH: the admin account and its password come from the
 // same seed the dev stack always uses — `crates/server/migrations/
@@ -44,4 +44,21 @@ export async function login(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Đăng nhập' }).click();
   await expect(page.getByRole('link', { name: 'Thư viện' })).toBeVisible();
   await expect(page).not.toHaveURL(/\/login/);
+}
+
+/**
+ * Opens the seeded "POC Library" collection from the library's collection
+ * nav (mirrors `e2e/support.ts`'s `openEmployeeHandbook`, against the real
+ * seeded collection instead of the mock fixture one — see this file's own
+ * module doc for where `SEEDED_COLLECTION_NAME` comes from).
+ */
+export async function openPocLibrary(page: Page): Promise<void> {
+  await page.getByRole('link', { name: 'Thư viện' }).click();
+  await page
+    .getByRole('navigation', { name: 'Điều hướng bộ sưu tập' })
+    .getByRole('link', { name: SEEDED_COLLECTION_NAME })
+    .click();
+  // The upload panel only renders once a collection is open — a reliable
+  // "collection is loaded" signal (same rationale as `openEmployeeHandbook`).
+  await expect(page.getByLabel('Chọn tệp để tải lên')).toBeVisible();
 }

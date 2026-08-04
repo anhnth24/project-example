@@ -3,6 +3,8 @@
 //! Skips cleanly when `MARKHAND_TEST_DATABASE_URL` is unset. These tests use the
 //! non-superuser app role and production org-scoped transaction helper.
 
+mod common;
+
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
@@ -28,13 +30,7 @@ use tokio_postgres::{NoTls, Row};
 use uuid::Uuid;
 
 fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_DATABASE_URL unset");
-            None
-        }
-    }
+    common::admin_database_url()
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {

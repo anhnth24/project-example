@@ -63,15 +63,7 @@ const POC_USER: &str = "22222222-2222-2222-2222-222222222201";
 const POC_COLLECTION: &str = "55555555-5555-5555-5555-555555555501";
 
 fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_DATABASE_URL unset — schema migration integration tests require PostgreSQL"
-            );
-            None
-        }
-    }
+    common::admin_database_url()
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
@@ -524,6 +516,13 @@ async fn acl_cascade_and_lineage_fks() {
     tx.execute(
         "INSERT INTO groups (id, org_id, name) VALUES ($1,$2,'Editors')",
         &[&group_id, &org],
+    )
+    .await
+    .unwrap();
+    tx.execute(
+        "UPDATE collections SET visibility = 'groups'
+         WHERE org_id = $1 AND id = $2",
+        &[&org, &collection],
     )
     .await
     .unwrap();

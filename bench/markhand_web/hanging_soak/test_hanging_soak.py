@@ -34,7 +34,7 @@ sys.path.insert(0, str(SELF_DIR))
 
 import failpoint  # noqa: E402
 import gate_report  # noqa: E402
-from run_hanging_soak import sample_endpoint  # noqa: E402
+from run_hanging_soak import sample_endpoint, wait_for_hung_ready  # noqa: E402
 
 
 def _ready_sample(*, code: str, status: int = 503, elapsed: float = 1.0) -> dict:
@@ -83,6 +83,72 @@ class EvaluateDependencyPassTests(unittest.TestCase):
             evaluation["gates"],
         )
         self.assertEqual(evaluation["blockers"], [])
+
+
+class WaitForHungReadyTests(unittest.TestCase):
+    def test_succeeds_after_transient_200(self) -> None:
+        calls: list[dict] = []
+
+        def fake_sample(_url: str, *, timeout_seconds: float) -> dict:
+            if len(calls) == 0:
+                sample = {
+                    "httpStatus": 200,
+                    "probeCode": None,
+                    "elapsedSeconds": 0.004,
+                    "error": None,
+                }
+            else:
+                sample = {
+                    "httpStatus": 503,
+                    "probeCode": "ready_database",
+                    "elapsedSeconds": 1.0,
+                    "error": None,
+                }
+            calls.append(sample)
+            return sample
+
+        original = sys.modules["run_hanging_soak"].sample_endpoint
+        sys.modules["run_hanging_soak"].sample_endpoint = fake_sample
+        try:
+            ok, attempts = wait_for_hung_ready(
+                "http://127.0.0.1:8788/api/v1/health/ready",
+                expected_code="ready_database",
+                timeout_seconds=7.0,
+                deadline_seconds=5.0,
+                poll_interval_seconds=0.01,
+            )
+        finally:
+            sys.modules["run_hanging_soak"].sample_endpoint = original
+
+        self.assertTrue(ok)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0]["httpStatus"], 200)
+        self.assertEqual(attempts[1]["probeCode"], "ready_database")
+
+    def test_fails_when_hang_never_surfaces(self) -> None:
+        def always_200(_url: str, *, timeout_seconds: float) -> dict:
+            return {
+                "httpStatus": 200,
+                "probeCode": None,
+                "elapsedSeconds": 0.004,
+                "error": None,
+            }
+
+        original = sys.modules["run_hanging_soak"].sample_endpoint
+        sys.modules["run_hanging_soak"].sample_endpoint = always_200
+        try:
+            ok, attempts = wait_for_hung_ready(
+                "http://127.0.0.1:8788/api/v1/health/ready",
+                expected_code="ready_database",
+                timeout_seconds=7.0,
+                deadline_seconds=0.05,
+                poll_interval_seconds=0.01,
+            )
+        finally:
+            sys.modules["run_hanging_soak"].sample_endpoint = original
+
+        self.assertFalse(ok)
+        self.assertGreaterEqual(len(attempts), 1)
 
 
 class HangNotDetectedTests(unittest.TestCase):

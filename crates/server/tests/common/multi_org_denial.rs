@@ -1,0 +1,1555 @@
+//! Phase 1C unified multi-org denial manifest, fixture, and shared-world helpers.
+//!
+//! RED: validator + schema types compile; [`validate_denial_manifest`] enumerates
+//! missing business operations/routes/test joins. GREEN fills the fixture/manifest
+//! and implements [`MultiOrgDenialWorld::boot`].
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+
+use fileconv_server::api::ROUTE_INVENTORY;
+use fileconv_server::auth::guard_inventory::{
+    load_guard_inventory, AuthzKind, GuardInventory, GuardOperation,
+};
+
+pub const DENIAL_FIXTURE_REL_PATH: &str = "tests/fixtures/multi-org-denial.fixture.json";
+pub const DENIAL_MANIFEST_REL_PATH: &str = "tests/fixtures/multi-org-denial.manifest.json";
+pub const DENIAL_NA_EVIDENCE_REL_PATH: &str = "tests/fixtures/multi-org-denial.na-evidence.json";
+
+/// Stable N/A category ids — exactly the five Phase 1C dispositions.
+pub const NA_CATEGORY_EXPORT_ROUTE_ABSENT: &str = "export_route_absent";
+pub const NA_CATEGORY_AUTOCOMPLETE_ROUTE_ABSENT: &str = "autocomplete_route_absent";
+pub const NA_CATEGORY_SIGNED_URL_CAPABILITY_SUBSTITUTION: &str =
+    "signed_url_capability_substitution";
+pub const NA_CATEGORY_RESERVED_PERMISSION_NO_RUNTIME: &str = "reserved_permission_no_runtime";
+pub const NA_CATEGORY_EMBEDDING_TOKEN_METERING_LOCAL_MOCK: &str =
+    "embedding_token_metering_local_mock";
+
+pub const REQUIRED_NA_CATEGORIES: &[&str] = &[
+    NA_CATEGORY_EXPORT_ROUTE_ABSENT,
+    NA_CATEGORY_AUTOCOMPLETE_ROUTE_ABSENT,
+    NA_CATEGORY_SIGNED_URL_CAPABILITY_SUBSTITUTION,
+    NA_CATEGORY_RESERVED_PERMISSION_NO_RUNTIME,
+    NA_CATEGORY_EMBEDDING_TOKEN_METERING_LOCAL_MOCK,
+];
+
+/// Former Task 13 scaffold names — now full executable denial contracts.
+pub const TASK13_EXECUTABLE_TEST_NAMES: &[&str] = &[
+    "indexed_fts_and_ask_never_return_foreign_marker",
+    "duplicate_names_across_orgs_do_not_create_an_oracle",
+    "org_switch_never_reuses_previous_org_cache_scope",
+    "pre_revoke_tokens_fail_after_downgrade_suspend_and_remove",
+    "preview_download_job_and_sse_hide_foreign_ids",
+    "in_flight_ask_emits_no_content_after_acl_revoke",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DenialFixture {
+    pub version: u32,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub orgs: Vec<DenialFixtureOrg>,
+    pub users_per_org: u32,
+    #[serde(default)]
+    pub role_topology: Vec<String>,
+    pub collection_visibilities: Vec<String>,
+    pub duplicate_names: DenialDuplicateNames,
+    #[serde(default)]
+    pub indexed_markers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub object_key_template: String,
+    pub pre_revoke_tokens: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DenialFixtureOrg {
+    pub key: String,
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DenialDuplicateNames {
+    /// Cross-org oracle name for the primary (`org`) visibility collection.
+    pub collection: String,
+    pub document: String,
+    /// Display names per visibility label — unique within an org, equal across orgs.
+    #[serde(default)]
+    pub collections_by_visibility: BTreeMap<String, String>,
+}
+
+/// Visibility labels seeded in every org world.
+pub const COLLECTION_VISIBILITY_LABELS: &[&str] = &["private", "org", "groups"];
+
+/// Resolve the collection display name for a visibility label from the fixture.
+pub fn collection_name_for_visibility<'a>(
+    duplicate_names: &'a DenialDuplicateNames,
+    visibility: &str,
+) -> &'a str {
+    duplicate_names
+        .collections_by_visibility
+        .get(visibility)
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            if visibility == "org" {
+                duplicate_names.collection.as_str()
+            } else {
+                panic!("missing collectionsByVisibility.{visibility} in denial fixture")
+            }
+        })
+}
+
+/// Hermetic guard: names are distinct within an org and the org oracle matches `collection`.
+pub fn validate_duplicate_collection_topology(
+    duplicate_names: &DenialDuplicateNames,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    for label in COLLECTION_VISIBILITY_LABELS {
+        if !duplicate_names
+            .collections_by_visibility
+            .contains_key(*label)
+        {
+            errors.push(format!(
+                "denial fixture duplicateNames.collectionsByVisibility missing {label}"
+            ));
+        }
+    }
+    let names: Vec<&str> = COLLECTION_VISIBILITY_LABELS
+        .iter()
+        .map(|label| collection_name_for_visibility(duplicate_names, label))
+        .collect();
+    let unique: BTreeSet<&str> = names.iter().copied().collect();
+    if unique.len() != names.len() {
+        errors.push(
+            "denial fixture collection names must be unique within each org (private/org/groups)"
+                .into(),
+        );
+    }
+    if collection_name_for_visibility(duplicate_names, "org") != duplicate_names.collection.as_str()
+    {
+        errors.push(
+            "denial fixture duplicateNames.collection must match collectionsByVisibility.org"
+                .into(),
+        );
+    }
+    errors
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DenialManifest {
+    pub version: u32,
+    pub rows: Vec<DenialManifestRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DenialManifestRow {
+    pub id: String,
+    #[serde(default)]
+    pub binary: Option<String>,
+    #[serde(default)]
+    pub test_name: Option<String>,
+    #[serde(default)]
+    pub operation_id: Option<String>,
+    pub guard_inventory_ref: String,
+    pub layer: DenialLayer,
+    pub status: DenialRowStatus,
+    #[serde(default)]
+    pub na_category: Option<String>,
+    #[serde(default)]
+    pub coverage_state: Option<DenialCoverageState>,
+    #[serde(default)]
+    pub coverage_note: Option<String>,
+    #[serde(default)]
+    pub deferred_task: Option<String>,
+    #[serde(default)]
+    pub evidence_role: Option<DenialEvidenceRole>,
+    #[serde(default)]
+    pub related_operation_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialCoverageState {
+    Complete,
+    Deferred,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialEvidenceRole {
+    Primary,
+    Secondary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialLayer {
+    Http,
+    Service,
+    Repository,
+    Storage,
+    Cache,
+    Worker,
+    Sse,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DenialRowStatus {
+    Executable,
+    Na,
+    Deferred,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DenialNaEvidence {
+    pub version: u32,
+    pub categories: Vec<DenialNaCategory>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DenialNaCategory {
+    pub id: String,
+    pub description: String,
+    pub proof_kind: NaProofKind,
+    #[serde(default)]
+    pub permission_keys: Vec<String>,
+    #[serde(default)]
+    pub operation_ids: Vec<String>,
+    #[serde(default)]
+    pub scan: Option<NaSourceScanProof>,
+    #[serde(default)]
+    pub substitution: Option<NaCapabilitySubstitutionProof>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NaProofKind {
+    SourceScan,
+    CapabilitySubstitution,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NaSourceScanProof {
+    #[serde(default)]
+    pub absent_route_path_patterns: Vec<String>,
+    #[serde(default)]
+    pub absent_operation_id_patterns: Vec<String>,
+    #[serde(default)]
+    pub catalog_permission_status: Option<String>,
+    #[serde(default)]
+    pub environment_profile: Option<String>,
+    #[serde(default)]
+    pub embedding_profile: Option<String>,
+    #[serde(default)]
+    pub present_source_path_patterns: Vec<String>,
+    #[serde(default)]
+    pub present_source_substrings: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NaCapabilitySubstitutionProof {
+    pub binary: String,
+    pub test_names: Vec<String>,
+    #[serde(default)]
+    pub absent_route_path_patterns: Vec<String>,
+}
+
+/// Foreign org markers scanned by [`assert_denial_no_leak`].
+#[derive(Debug, Clone, Default)]
+pub struct ForeignMarkers {
+    pub org_ids: Vec<String>,
+    pub user_ids: Vec<String>,
+    pub collection_ids: Vec<String>,
+    pub document_ids: Vec<String>,
+    pub version_ids: Vec<String>,
+    pub chunk_ids: Vec<String>,
+    pub job_ids: Vec<String>,
+    pub conflict_ids: Vec<String>,
+    pub object_keys: Vec<String>,
+    pub names: Vec<String>,
+    pub marker_strings: Vec<String>,
+}
+
+/// HTTP denial semantics expected from production routes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DenialExpectation {
+    /// Successful or non-denial response must not leak foreign markers.
+    AllowSuccess,
+    /// Foreign id in request body scope → 403 without foreign markers.
+    BodyScopeForbidden,
+    /// Addressed foreign resource → 404 without existence oracle.
+    PathIdorNotFound,
+    /// Missing/invalid session → 401.
+    Unauthorized,
+}
+
+/// Minimal HTTP response view for leakage assertions.
+#[derive(Debug, Clone)]
+pub struct DenialResponse<'a> {
+    pub status: u16,
+    pub body: &'a [u8],
+    pub headers: Vec<(&'a str, &'a str)>,
+}
+
+use crate::common::{DualRoleEphemeralDb, MinioCleanupGuard};
+
+/// Best-effort cleanup of ephemeral DB and MinIO when a test panics before explicit cleanup.
+pub(crate) struct PanicSafeWorldResources {
+    pub ephemeral: Option<DualRoleEphemeralDb>,
+    pub minio_guard: Option<MinioCleanupGuard>,
+}
+
+impl PanicSafeWorldResources {
+    pub fn new(ephemeral: DualRoleEphemeralDb, minio_guard: Option<MinioCleanupGuard>) -> Self {
+        Self {
+            ephemeral: Some(ephemeral),
+            minio_guard,
+        }
+    }
+
+    pub(crate) fn empty() -> Self {
+        Self {
+            ephemeral: None,
+            minio_guard: None,
+        }
+    }
+
+    pub async fn cleanup(mut self) -> Result<(), String> {
+        if let Some(guard) = self.minio_guard.take() {
+            guard
+                .cleanup()
+                .await
+                .map_err(|err| format!("minio cleanup: {err:?}"))?;
+        }
+        if let Some(ephemeral) = self.ephemeral.take() {
+            ephemeral.drop().await;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PanicSafeWorldResources {
+    fn drop(&mut self) {
+        drop(self.minio_guard.take());
+        if let Some(ephemeral) = self.ephemeral.take() {
+            best_effort_ephemeral_drop(ephemeral);
+        }
+    }
+}
+
+fn best_effort_ephemeral_drop(ephemeral: DualRoleEphemeralDb) {
+    let _ = std::thread::spawn(move || {
+        if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            runtime.block_on(ephemeral.drop());
+        }
+    })
+    .join();
+}
+
+/// Shared multi-org world for executable denial tests.
+///
+/// Field order is intentional: `resources` is declared last so [`Drop`] can release
+/// pool/app/store handles before [`PanicSafeWorldResources`] auto-drop runs.
+pub struct MultiOrgDenialWorld {
+    pub fixture: DenialFixture,
+    pub orgs: BTreeMap<String, crate::common::multi_org_denial_world::BootedOrg>,
+    pub(crate) store: Option<fileconv_server::storage::minio::MinioClient>,
+    pub(crate) app: Option<axum::Router>,
+    pub(crate) pool: Option<deadpool_postgres::Pool>,
+    pub(crate) app_database_url: String,
+    pub(crate) resources: PanicSafeWorldResources,
+}
+
+impl Drop for MultiOrgDenialWorld {
+    fn drop(&mut self) {
+        self.release_runtime_handles();
+    }
+}
+
+impl MultiOrgDenialWorld {
+    pub fn pool(&self) -> &deadpool_postgres::Pool {
+        self.pool
+            .as_ref()
+            .expect("MultiOrgDenialWorld pool already released")
+    }
+
+    pub fn app(&self) -> &axum::Router {
+        self.app
+            .as_ref()
+            .expect("MultiOrgDenialWorld app already released")
+    }
+
+    pub(crate) fn release_runtime_handles(&mut self) {
+        self.app.take();
+        self.pool.take();
+        self.store.take();
+    }
+
+    pub(crate) fn take_runtime_handles(&mut self) {
+        self.release_runtime_handles();
+    }
+    pub async fn boot() -> Self {
+        crate::common::multi_org_denial_world::boot_world().await
+    }
+
+    pub fn foreign_markers_for(&self, actor_org_key: &str) -> ForeignMarkers {
+        crate::common::multi_org_denial_world::foreign_markers_for(self, actor_org_key)
+    }
+
+    pub async fn cleanup(self) -> Result<(), String> {
+        crate::common::multi_org_denial_world::cleanup_world(self).await
+    }
+
+    pub fn assert_base_topology(&self) {
+        crate::common::multi_org_denial_world::assert_base_topology(self);
+    }
+
+    pub fn org_key_for_id(&self, org_id: uuid::Uuid) -> &str {
+        self.orgs
+            .iter()
+            .find(|(_, org)| org.org_id == org_id)
+            .map(|(key, _)| key.as_str())
+            .unwrap_or_else(|| panic!("unknown org id {org_id}"))
+    }
+}
+
+/// Assert denial responses contain no foreign IDs, names, keys, or marker strings.
+pub fn assert_denial_no_leak(
+    response: &DenialResponse<'_>,
+    foreign_markers: &ForeignMarkers,
+    expectation: DenialExpectation,
+) {
+    let body = String::from_utf8_lossy(response.body);
+    let body_lower = body.to_lowercase();
+    let mut leaks = Vec::new();
+
+    match expectation {
+        DenialExpectation::AllowSuccess => {
+            if !(200..300).contains(&response.status) {
+                leaks.push(format!(
+                    "expected success response (2xx), got {}",
+                    response.status
+                ));
+            }
+        }
+        DenialExpectation::BodyScopeForbidden => {
+            if response.status != 403 {
+                leaks.push(format!(
+                    "body-scope denial expected 403, got {}",
+                    response.status
+                ));
+            }
+        }
+        DenialExpectation::PathIdorNotFound => {
+            if response.status != 404 {
+                leaks.push(format!(
+                    "path-IDOR denial expected 404, got {}",
+                    response.status
+                ));
+            }
+        }
+        DenialExpectation::Unauthorized => {
+            if response.status != 401 {
+                leaks.push(format!(
+                    "unauthorized denial expected 401, got {}",
+                    response.status
+                ));
+            }
+        }
+    }
+
+    if (200..300).contains(&response.status)
+        && !matches!(expectation, DenialExpectation::AllowSuccess)
+    {
+        leaks.push(format!(
+            "denial must not return success status {}",
+            response.status
+        ));
+    }
+    if response.status >= 500 {
+        leaks.push(format!(
+            "denial must not surface as server error: status {}",
+            response.status
+        ));
+    }
+
+    for needle in foreign_markers.all_needles() {
+        if body_lower.contains(&needle.to_lowercase()) {
+            leaks.push(format!("body contains foreign marker: {needle}"));
+        }
+        for (name, value) in &response.headers {
+            if value.to_lowercase().contains(&needle.to_lowercase()) {
+                leaks.push(format!("header {name} contains foreign marker: {needle}"));
+            }
+        }
+    }
+
+    if !leaks.is_empty() {
+        leaks.sort();
+        panic!(
+            "assert_denial_no_leak failed (status {}):\n{}",
+            response.status,
+            leaks.join("\n")
+        );
+    }
+}
+
+impl ForeignMarkers {
+    pub fn all_strings(&self) -> Vec<&str> {
+        let mut out = Vec::new();
+        for slice in [
+            &self.org_ids,
+            &self.user_ids,
+            &self.collection_ids,
+            &self.document_ids,
+            &self.version_ids,
+            &self.chunk_ids,
+            &self.job_ids,
+            &self.conflict_ids,
+            &self.object_keys,
+            &self.names,
+            &self.marker_strings,
+        ] {
+            for item in slice {
+                out.push(item.as_str());
+            }
+        }
+        out
+    }
+
+    /// Canonical and normalized variants for case/substring-resistant scanning.
+    pub fn all_needles(&self) -> Vec<String> {
+        let mut needles = BTreeSet::new();
+        for value in self.all_strings() {
+            needles.insert(value.to_string());
+            needles.insert(value.to_lowercase());
+            needles.insert(value.to_uppercase());
+            if let Ok(uuid) = uuid::Uuid::parse_str(value) {
+                needles.insert(uuid.simple().to_string());
+                needles.insert(uuid.to_string());
+            }
+        }
+        needles.into_iter().collect()
+    }
+}
+
+pub fn denial_fixture_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(DENIAL_FIXTURE_REL_PATH)
+}
+
+pub fn denial_manifest_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(DENIAL_MANIFEST_REL_PATH)
+}
+
+pub fn denial_na_evidence_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(DENIAL_NA_EVIDENCE_REL_PATH)
+}
+
+pub fn tests_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests")
+}
+
+pub fn load_denial_fixture() -> Result<DenialFixture, String> {
+    let path = denial_fixture_path();
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|err| format!("missing denial fixture at {}: {err}", path.display()))?;
+    serde_json::from_str(&raw).map_err(|err| format!("denial fixture JSON invalid: {err}"))
+}
+
+pub fn load_denial_manifest() -> Result<DenialManifest, String> {
+    let path = denial_manifest_path();
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|err| format!("missing denial manifest at {}: {err}", path.display()))?;
+    serde_json::from_str(&raw).map_err(|err| format!("denial manifest JSON invalid: {err}"))
+}
+
+pub fn load_denial_na_evidence() -> Result<DenialNaEvidence, String> {
+    let path = denial_na_evidence_path();
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|err| format!("missing denial N/A evidence at {}: {err}", path.display()))?;
+    serde_json::from_str(&raw).map_err(|err| format!("denial N/A evidence JSON invalid: {err}"))
+}
+
+/// Business operations require denial evidence; public probes and unauthenticated auth
+/// entrypoints are excluded consistently with guard-inventory `authzKind`.
+pub fn is_business_guard_operation(op: &GuardOperation) -> bool {
+    !matches!(op.authz_kind, AuthzKind::Public)
+}
+
+pub fn business_guard_operations(inventory: &GuardInventory) -> Vec<&GuardOperation> {
+    inventory
+        .operations
+        .iter()
+        .filter(|op| is_business_guard_operation(op))
+        .collect()
+}
+
+/// Join ROUTE_INVENTORY routes to guard rows; only business-classified routes need denial rows.
+pub fn business_route_inventory(inventory: &GuardInventory) -> Vec<(&str, &str, &GuardOperation)> {
+    let by_route: BTreeMap<(String, String), &GuardOperation> = inventory
+        .operations
+        .iter()
+        .map(|op| {
+            (
+                (op.route.method.to_ascii_lowercase(), op.route.path.clone()),
+                op,
+            )
+        })
+        .collect();
+
+    ROUTE_INVENTORY
+        .iter()
+        .filter_map(|&(method, path, _)| {
+            let key = (method.to_string(), path.to_string());
+            let guard = by_route.get(&key)?;
+            if is_business_guard_operation(guard) {
+                Some((method, path, *guard))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Scan `tests/{binary}.rs` for `fn {name}` / `async fn {name}` registrations.
+pub fn registered_test_functions(binary: &str) -> Result<BTreeSet<String>, String> {
+    let path = tests_root().join(format!("{binary}.rs"));
+    let raw = std::fs::read_to_string(&path).map_err(|err| {
+        format!(
+            "integration test source missing for binary {binary} at {}: {err}",
+            path.display()
+        )
+    })?;
+    Ok(extract_rust_test_function_names(&raw))
+}
+
+pub fn load_test_source(binary: &str) -> Result<String, String> {
+    let path = tests_root().join(format!("{binary}.rs"));
+    std::fs::read_to_string(&path).map_err(|err| {
+        format!(
+            "integration test source missing for binary {binary} at {}: {err}",
+            path.display()
+        )
+    })
+}
+
+pub fn extract_test_function_body(source: &str, test_name: &str) -> Option<String> {
+    let signatures = [format!("async fn {test_name}"), format!("fn {test_name}")];
+    let start = signatures.iter().find_map(|sig| source.find(sig))?;
+    let after_sig = &source[start..];
+    let brace_start = after_sig.find('{')?;
+    let mut depth = 0usize;
+    let mut end = None;
+    for (idx, ch) in after_sig[brace_start..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    end = Some(brace_start + idx + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end?;
+    Some(after_sig[brace_start..end].to_string())
+}
+
+pub fn is_trivial_or_scaffold_test_body(body: &str) -> bool {
+    let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+    if compact.len() < 80 {
+        return true;
+    }
+    compact.contains("assert_world_boots_for_task13_scaffold")
+}
+
+pub fn has_denial_evidence_heuristic(body: &str) -> bool {
+    const CONCRETE_NEEDLES: &[&str] = &[
+        "assert_denial_no_leak",
+        "cross_tenant",
+        "cross_org",
+        "foreign",
+        "403",
+        "404",
+        "401",
+        "forbidden",
+        "not_found",
+        "unauthorized",
+        "PathIdor",
+        "BodyScope",
+        "Unauthorized",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "NOT_FOUND",
+        "never_leaks",
+        "cannot_see",
+        "not_a_member",
+        "refuses_foreign",
+        "org_b",
+        "assert_permission_denied",
+        "LeaseLost",
+    ];
+    CONCRETE_NEEDLES.iter().any(|needle| body.contains(needle))
+}
+
+pub fn validate_executable_test_evidence(
+    binary: &str,
+    test_name: &str,
+    layer: DenialLayer,
+) -> Result<(), String> {
+    let source = load_test_source(binary)?;
+    let body = extract_test_function_body(&source, test_name)
+        .ok_or_else(|| format!("unable to extract body for test {binary}::{test_name}"))?;
+    if is_trivial_or_scaffold_test_body(&body) {
+        return Err(format!(
+            "test {binary}::{test_name} body is trivial or scaffold-only"
+        ));
+    }
+    match layer {
+        DenialLayer::Http | DenialLayer::Sse => {
+            if !has_denial_evidence_heuristic(&body) {
+                return Err(format!(
+                    "test {binary}::{test_name} body lacks cross-org denial evidence heuristics"
+                ));
+            }
+        }
+        _ => {
+            let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            if compact.len() < 80 {
+                return Err(format!(
+                    "test {binary}::{test_name} supplemental layer body is too small to be meaningful evidence"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Runtime object key must be the trusted key persisted for the version, not the fixture template.
+pub fn assert_object_key_identity(org: &crate::common::multi_org_denial_world::BootedOrg) {
+    assert!(
+        !org.object_key.is_empty(),
+        "booted org must record a runtime object key"
+    );
+    // Deliberately do NOT echo the offending value: the guard unit test
+    // `object_key_identity_rejects_fixture_template` triggers this panic on
+    // purpose under catch_unwind, and with --nocapture the default panic hook
+    // would print the fixture objectKeyTemplate to stderr — which the Phase 1C
+    // denial runner scans as a foreign-marker needle (false leak finding).
+    assert!(
+        !org.object_key.contains('{') && !org.object_key.contains('}'),
+        "runtime object key must not be an unresolved fixture template"
+    );
+    assert!(
+        org.object_key.starts_with("trusted/"),
+        "runtime object key must be a trusted storage path: {}",
+        org.object_key
+    );
+}
+
+fn extract_rust_test_function_names(source: &str) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    for line in source.lines() {
+        let trimmed = line.trim();
+        let rest = trimmed
+            .strip_prefix("async fn ")
+            .or_else(|| trimmed.strip_prefix("fn "))
+            .or_else(|| trimmed.strip_prefix("pub async fn "))
+            .or_else(|| trimmed.strip_prefix("pub fn "));
+        if let Some(rest) = rest {
+            if let Some(name) = rest
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .next()
+            {
+                if !name.is_empty() {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Validate denial manifest joins guard inventory, business routes, test sources, and N/A proof.
+pub fn validate_denial_manifest(
+    inventory: &GuardInventory,
+    manifest: &DenialManifest,
+    na_evidence: &DenialNaEvidence,
+    fixture: &DenialFixture,
+) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+
+    validate_fixture_shape(fixture, &mut errors);
+    validate_na_evidence_shape(na_evidence, inventory, &mut errors);
+
+    let business_ops: BTreeMap<&str, &GuardOperation> = business_guard_operations(inventory)
+        .into_iter()
+        .map(|op| (op.operation_id.as_str(), op))
+        .collect();
+    let business_routes = business_route_inventory(inventory);
+
+    let mut rows_by_id: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut covered_operation_ids: BTreeSet<String> = BTreeSet::new();
+    let mut covered_routes: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut test_cache: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+
+    let mut na_categories_manifest: BTreeSet<String> = BTreeSet::new();
+    let mut primary_route_by_operation: BTreeMap<String, String> = BTreeMap::new();
+    let mut evidence_validated: BTreeSet<(String, String)> = BTreeSet::new();
+
+    for row in &manifest.rows {
+        *rows_by_id.entry(row.id.as_str()).or_insert(0) += 1;
+
+        if let Some(operation_id) = row.operation_id.as_deref() {
+            if !business_ops.contains_key(operation_id) {
+                errors.push(format!(
+                    "manifest row {} references non-business or unknown operationId: {operation_id}",
+                    row.id
+                ));
+            }
+        }
+
+        if row.guard_inventory_ref.is_empty() {
+            errors.push(format!(
+                "manifest row {} is missing guardInventoryRef",
+                row.id
+            ));
+        } else if matches!(row.status, DenialRowStatus::Executable)
+            && !inventory
+                .operations
+                .iter()
+                .any(|op| op.operation_id == row.guard_inventory_ref)
+        {
+            errors.push(format!(
+                "manifest row {} references unknown guardInventoryRef: {}",
+                row.id, row.guard_inventory_ref
+            ));
+        }
+
+        match row.status {
+            DenialRowStatus::Executable => {
+                if matches!(row.coverage_state, Some(DenialCoverageState::Deferred)) {
+                    errors.push(format!(
+                        "executable manifest row {} cannot declare coverageState=deferred",
+                        row.id
+                    ));
+                }
+                if let Some(operation_id) = &row.operation_id {
+                    if row.guard_inventory_ref != *operation_id {
+                        errors.push(format!(
+                            "executable manifest row {} guardInventoryRef {} must equal operationId {operation_id}",
+                            row.id, row.guard_inventory_ref
+                        ));
+                    }
+                } else {
+                    errors.push(format!(
+                        "executable manifest row {} must declare operationId",
+                        row.id
+                    ));
+                }
+
+                let (binary, test_name) = match (&row.binary, &row.test_name) {
+                    (Some(binary), Some(test_name))
+                        if !binary.trim().is_empty() && !test_name.trim().is_empty() =>
+                    {
+                        (binary.as_str(), test_name.as_str())
+                    }
+                    _ => {
+                        errors.push(format!(
+                            "executable manifest row {} must declare binary and testName",
+                            row.id
+                        ));
+                        continue;
+                    }
+                };
+
+                let registered = test_cache.entry(binary.to_string()).or_insert_with(|| {
+                    registered_test_functions(binary).unwrap_or_else(|err| {
+                        errors.push(err);
+                        BTreeSet::new()
+                    })
+                });
+                if !registered.contains(test_name) {
+                    errors.push(format!(
+                        "executable manifest row {} references unknown test source: {binary}::{test_name}",
+                        row.id
+                    ));
+                }
+
+                let evidence_key = (binary.to_string(), test_name.to_string());
+                if evidence_validated.insert(evidence_key.clone()) {
+                    if let Err(err) =
+                        validate_executable_test_evidence(binary, test_name, row.layer)
+                    {
+                        errors.push(format!(
+                            "executable manifest row {} invalid test evidence: {err}",
+                            row.id
+                        ));
+                    }
+                }
+
+                if matches!(row.layer, DenialLayer::Http | DenialLayer::Sse)
+                    && !matches!(row.evidence_role, Some(DenialEvidenceRole::Secondary))
+                {
+                    if let Some(operation_id) = &row.operation_id {
+                        if let Some(existing) = primary_route_by_operation.get(operation_id) {
+                            errors.push(format!(
+                                "multiple primary HTTP/SSE manifest rows for operationId {operation_id}: {existing} and {}",
+                                row.id
+                            ));
+                        } else {
+                            primary_route_by_operation.insert(operation_id.clone(), row.id.clone());
+                        }
+                    }
+                }
+
+                if let Some(operation_id) = &row.operation_id {
+                    covered_operation_ids.insert(operation_id.clone());
+                    if let Some(guard) = business_ops.get(operation_id.as_str()) {
+                        covered_routes.insert((
+                            guard.route.method.to_ascii_lowercase(),
+                            guard.route.path.clone(),
+                        ));
+                    }
+                }
+            }
+            DenialRowStatus::Deferred => {
+                errors.push(format!(
+                    "deferred manifest row {} is no longer allowed after Task 13 GREEN; promote to executable or remove",
+                    row.id
+                ));
+            }
+            DenialRowStatus::Na => {
+                let category = match row.na_category.as_deref() {
+                    Some(category) if !category.trim().is_empty() => category.to_string(),
+                    _ => {
+                        errors.push(format!(
+                            "N/A manifest row {} must declare naCategory",
+                            row.id
+                        ));
+                        continue;
+                    }
+                };
+                na_categories_manifest.insert(category.clone());
+                if row.guard_inventory_ref != category {
+                    errors.push(format!(
+                        "N/A manifest row {} guardInventoryRef must equal naCategory {category}",
+                        row.id
+                    ));
+                }
+                if row.binary.is_some() || row.test_name.is_some() || row.operation_id.is_some() {
+                    errors.push(format!(
+                        "N/A manifest row {} must not declare binary/testName/operationId",
+                        row.id
+                    ));
+                }
+                if !na_evidence
+                    .categories
+                    .iter()
+                    .any(|entry| entry.id == category)
+                {
+                    errors.push(format!(
+                        "N/A manifest row {} references unknown naCategory: {category}",
+                        row.id
+                    ));
+                }
+            }
+        }
+    }
+
+    for required in REQUIRED_NA_CATEGORIES {
+        if !na_categories_manifest.contains(*required) {
+            errors.push(format!("missing N/A manifest row for category: {required}"));
+        }
+    }
+    if na_categories_manifest.len() != REQUIRED_NA_CATEGORIES.len() {
+        errors.push(format!(
+            "manifest must contain exactly {} N/A rows, found {}",
+            REQUIRED_NA_CATEGORIES.len(),
+            na_categories_manifest.len()
+        ));
+    }
+
+    for (id, count) in &rows_by_id {
+        if *count > 1 {
+            errors.push(format!("duplicate manifest row id: {id} ({count} rows)"));
+        }
+    }
+
+    for operation_id in business_ops.keys() {
+        if !covered_operation_ids.contains(*operation_id) {
+            errors.push(format!(
+                "missing denial manifest row for business operationId: {operation_id}"
+            ));
+        }
+    }
+
+    for (method, path, guard) in &business_routes {
+        let key = (method.to_string(), path.to_string());
+        if !covered_routes.contains(&key) {
+            errors.push(format!(
+                "missing denial manifest row for business route: {method} {path} (operationId {})",
+                guard.operation_id
+            ));
+        }
+    }
+
+    errors.sort();
+    errors.dedup();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+fn validate_fixture_shape(fixture: &DenialFixture, errors: &mut Vec<String>) {
+    if fixture.version == 0 {
+        errors.push("denial fixture version must be >= 1".into());
+    }
+    if fixture.users_per_org < 3 {
+        errors.push(format!(
+            "denial fixture usersPerOrg must be >= 3; found {}",
+            fixture.users_per_org
+        ));
+    }
+    if fixture.orgs.len() < 2 {
+        errors.push(format!(
+            "denial fixture must declare at least two orgs; found {}",
+            fixture.orgs.len()
+        ));
+    }
+    let expected = ["private", "org", "groups"];
+    for visibility in expected {
+        if !fixture
+            .collection_visibilities
+            .iter()
+            .any(|v| v == visibility)
+        {
+            errors.push(format!(
+                "denial fixture collectionVisibilities missing {visibility}"
+            ));
+        }
+    }
+    if fixture.duplicate_names.collection.trim().is_empty()
+        || fixture.duplicate_names.document.trim().is_empty()
+    {
+        errors.push("denial fixture duplicateNames must be non-empty".into());
+    }
+    errors.extend(validate_duplicate_collection_topology(
+        &fixture.duplicate_names,
+    ));
+    if fixture.role_topology.len() < 3 {
+        errors.push(format!(
+            "denial fixture roleTopology must include owner/admin/member; found {}",
+            fixture.role_topology.len()
+        ));
+    }
+    for org in &fixture.orgs {
+        if !fixture.indexed_markers.contains_key(&org.key) {
+            errors.push(format!(
+                "denial fixture indexedMarkers missing entry for org {}",
+                org.key
+            ));
+        }
+    }
+    if fixture.object_key_template.trim().is_empty() {
+        errors.push("denial fixture objectKeyTemplate must be non-empty".into());
+    } else if !fixture.object_key_template.contains("{orgKey}")
+        || !fixture.object_key_template.contains("{marker}")
+    {
+        errors.push(
+            "denial fixture objectKeyTemplate is a naming hint only and must include {orgKey} and {marker} placeholders".into(),
+        );
+    }
+    if !fixture.pre_revoke_tokens {
+        errors.push("denial fixture preRevokeTokens must be true".into());
+    }
+}
+
+fn validate_na_evidence_shape(
+    na_evidence: &DenialNaEvidence,
+    inventory: &GuardInventory,
+    errors: &mut Vec<String>,
+) {
+    let present: BTreeSet<&str> = na_evidence
+        .categories
+        .iter()
+        .map(|c| c.id.as_str())
+        .collect();
+    for required in REQUIRED_NA_CATEGORIES {
+        if !present.contains(required) {
+            errors.push(format!("missing N/A evidence category: {required}"));
+        }
+    }
+
+    let inventory_operation_ids: BTreeSet<&str> = inventory
+        .operations
+        .iter()
+        .map(|op| op.operation_id.as_str())
+        .collect();
+    let route_paths: Vec<&str> = ROUTE_INVENTORY.iter().map(|(_, path, _)| *path).collect();
+    let openapi_yaml =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("openapi/openapi.yaml"))
+            .unwrap_or_default();
+
+    for category in &na_evidence.categories {
+        match category.proof_kind {
+            NaProofKind::SourceScan => {
+                let scan = match &category.scan {
+                    Some(scan) => scan,
+                    None => {
+                        errors.push(format!(
+                            "N/A category {} with proofKind=source_scan must declare scan proof",
+                            category.id
+                        ));
+                        continue;
+                    }
+                };
+                for pattern in &scan.absent_route_path_patterns {
+                    if route_paths.iter().any(|path| path.contains(pattern))
+                        || openapi_yaml.contains(pattern)
+                    {
+                        errors.push(format!(
+                            "N/A category {} source_scan proof stale: route pattern {pattern} now present",
+                            category.id
+                        ));
+                    }
+                }
+                for pattern in &scan.absent_operation_id_patterns {
+                    if inventory_operation_ids
+                        .iter()
+                        .any(|op| op.contains(pattern.as_str()))
+                    {
+                        errors.push(format!(
+                            "N/A category {} source_scan proof stale: operationId pattern {pattern} now present",
+                            category.id
+                        ));
+                    }
+                }
+                if category.id == NA_CATEGORY_EMBEDDING_TOKEN_METERING_LOCAL_MOCK {
+                    if scan.present_source_path_patterns.is_empty()
+                        || scan.present_source_substrings.is_empty()
+                    {
+                        errors.push(format!(
+                            "N/A category {} must declare presentSourcePathPatterns and presentSourceSubstrings for qualifying workflow proof",
+                            category.id
+                        ));
+                    }
+                    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+                    for path_pattern in &scan.present_source_path_patterns {
+                        let path = manifest_dir.join(path_pattern);
+                        if !path.is_file() {
+                            errors.push(format!(
+                                "N/A category {} present source missing: {}",
+                                category.id,
+                                path.display()
+                            ));
+                        }
+                    }
+                    for substring in &scan.present_source_substrings {
+                        let mut found = false;
+                        for path_pattern in &scan.present_source_path_patterns {
+                            let path = manifest_dir.join(path_pattern);
+                            if let Ok(raw) = std::fs::read_to_string(&path) {
+                                if raw.contains(substring) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if !found {
+                            errors.push(format!(
+                                "N/A category {} present source proof missing substring: {substring}",
+                                category.id
+                            ));
+                        }
+                    }
+                }
+            }
+            NaProofKind::CapabilitySubstitution => {
+                let substitution = match &category.substitution {
+                    Some(sub) => sub,
+                    None => {
+                        errors.push(format!(
+                            "N/A category {} with proofKind=capability_substitution must declare substitution proof",
+                            category.id
+                        ));
+                        continue;
+                    }
+                };
+                for pattern in &substitution.absent_route_path_patterns {
+                    if route_paths.iter().any(|path| path.contains(pattern)) {
+                        errors.push(format!(
+                            "N/A category {} substitution proof stale: signed-url pattern {pattern} now present",
+                            category.id
+                        ));
+                    }
+                }
+                let registered =
+                    registered_test_functions(&substitution.binary).unwrap_or_default();
+                for test_name in &substitution.test_names {
+                    if !registered.contains(test_name) {
+                        errors.push(format!(
+                            "N/A category {} substitution references unknown test: {}::{}",
+                            category.id, substitution.binary, test_name
+                        ));
+                    }
+                }
+            }
+        }
+
+        for operation_id in &category.operation_ids {
+            if category.id == NA_CATEGORY_SIGNED_URL_CAPABILITY_SUBSTITUTION {
+                continue;
+            }
+            if !inventory_operation_ids.contains(operation_id.as_str()) {
+                errors.push(format!(
+                    "N/A category {} references unknown operationId: {operation_id}",
+                    category.id
+                ));
+            }
+        }
+    }
+
+    // N/A rows become invalid when a previously-absent runtime operation appears.
+    for category in &na_evidence.categories {
+        if category.id == NA_CATEGORY_EXPORT_ROUTE_ABSENT
+            && inventory_operation_ids
+                .iter()
+                .any(|op| op.contains("export"))
+        {
+            errors.push(
+                "N/A evidence stale: export runtime operation now exists in guard inventory".into(),
+            );
+        }
+        if category.id == NA_CATEGORY_AUTOCOMPLETE_ROUTE_ABSENT
+            && inventory_operation_ids
+                .iter()
+                .any(|op| op.contains("autocomplete"))
+        {
+            errors.push(
+                "N/A evidence stale: autocomplete runtime operation now exists in guard inventory"
+                    .into(),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod unit_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn extract_rust_test_function_names_finds_sync_and_async() {
+        let source = r#"
+            #[tokio::test]
+            async fn live_http_cross_tenant() {}
+            #[test]
+            fn required_mode_panics_without_db() {}
+        "#;
+        let names = extract_rust_test_function_names(source);
+        assert!(names.contains("live_http_cross_tenant"));
+        assert!(names.contains("required_mode_panics_without_db"));
+    }
+
+    #[test]
+    fn business_guard_operations_exclude_public_probes() {
+        let inventory = load_guard_inventory().expect("guard inventory");
+        let business: BTreeSet<String> = business_guard_operations(&inventory)
+            .into_iter()
+            .map(|op| op.operation_id.clone())
+            .collect();
+        assert!(!business.contains("healthLive"));
+        assert!(!business.contains("authLogin"));
+        assert!(business.contains("getCollection"));
+        assert!(business.contains("redeemDownload"));
+    }
+
+    #[test]
+    fn duplicate_collection_topology_requires_unique_per_org_and_cross_org_oracle() {
+        let fixture = load_denial_fixture().expect("fixture");
+        let errors = validate_duplicate_collection_topology(&fixture.duplicate_names);
+        assert!(
+            errors.is_empty(),
+            "fixture topology invalid: {}",
+            errors.join("; ")
+        );
+    }
+
+    #[test]
+    fn foreign_markers_exclude_shared_display_names_but_keep_foreign_ids() {
+        use crate::common::multi_org_denial_world::{
+            foreign_markers_between_orgs, BootedCollection, BootedDocument, BootedOrg, BootedUser,
+        };
+
+        let fixture = load_denial_fixture().expect("fixture");
+        let shared_private =
+            collection_name_for_visibility(&fixture.duplicate_names, "private").to_string();
+        let shared_org =
+            collection_name_for_visibility(&fixture.duplicate_names, "org").to_string();
+        let shared_doc = fixture.duplicate_names.document.clone();
+        let alpha_org_id = Uuid::new_v4();
+        let beta_org_id = Uuid::new_v4();
+        let alpha_collection_id = Uuid::new_v4();
+        let beta_collection_id = Uuid::new_v4();
+        let beta_user_id = Uuid::new_v4();
+        let beta_email = format!("owner-{beta_user_id}@beta.denial.test");
+
+        let actor = BootedOrg {
+            org_id: alpha_org_id,
+            slug: "alpha".into(),
+            marker: "alpha-marker-unique".into(),
+            object_key: "denial/orgAlpha/alpha-marker-unique.txt".into(),
+            users: BTreeMap::from([(
+                "owner".into(),
+                BootedUser {
+                    user_id: Uuid::new_v4(),
+                    email: "owner@alpha.denial.test".into(),
+                    role: "owner".into(),
+                    access_token: String::new(),
+                    refresh_token: String::new(),
+                },
+            )]),
+            collections: BTreeMap::from([
+                (
+                    "private".into(),
+                    BootedCollection {
+                        collection_id: Uuid::new_v4(),
+                        visibility: "private".into(),
+                        name: shared_private.clone(),
+                    },
+                ),
+                (
+                    "org".into(),
+                    BootedCollection {
+                        collection_id: alpha_collection_id,
+                        visibility: "org".into(),
+                        name: shared_org.clone(),
+                    },
+                ),
+            ]),
+            indexed_document: None,
+            document: BootedDocument {
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+                title: shared_doc.clone(),
+            },
+            job_id: Uuid::new_v4(),
+            conflict_id: Uuid::new_v4(),
+        };
+        let foreign = BootedOrg {
+            org_id: beta_org_id,
+            slug: "beta".into(),
+            marker: "beta-marker-unique".into(),
+            object_key: "denial/orgBeta/beta-marker-unique.txt".into(),
+            users: BTreeMap::from([(
+                "owner".into(),
+                BootedUser {
+                    user_id: beta_user_id,
+                    email: beta_email.clone(),
+                    role: "owner".into(),
+                    access_token: String::new(),
+                    refresh_token: String::new(),
+                },
+            )]),
+            collections: BTreeMap::from([
+                (
+                    "private".into(),
+                    BootedCollection {
+                        collection_id: Uuid::new_v4(),
+                        visibility: "private".into(),
+                        name: shared_private.clone(),
+                    },
+                ),
+                (
+                    "org".into(),
+                    BootedCollection {
+                        collection_id: beta_collection_id,
+                        visibility: "org".into(),
+                        name: shared_org.clone(),
+                    },
+                ),
+            ]),
+            indexed_document: None,
+            document: BootedDocument {
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+                title: shared_doc.clone(),
+            },
+            job_id: Uuid::new_v4(),
+            conflict_id: Uuid::new_v4(),
+        };
+
+        let markers = foreign_markers_between_orgs(&actor, &foreign, &fixture);
+        let name_needles: BTreeSet<String> =
+            markers.names.iter().map(|n| n.to_lowercase()).collect();
+
+        assert!(!name_needles.contains(&shared_org.to_lowercase()));
+        assert!(!name_needles.contains(&shared_private.to_lowercase()));
+        assert!(!name_needles.contains(&shared_doc.to_lowercase()));
+        assert!(name_needles.contains(&beta_email.to_lowercase()));
+
+        assert!(markers.org_ids.contains(&beta_org_id.to_string()));
+        assert!(markers
+            .collection_ids
+            .contains(&beta_collection_id.to_string()));
+        assert!(markers.object_keys.contains(&foreign.object_key));
+        assert!(markers.marker_strings.contains(&foreign.marker));
+    }
+
+    #[test]
+    fn allow_success_rejects_401_but_accepts_2xx() {
+        let foreign = ForeignMarkers::default();
+        let body = b"ok";
+        let headers = Vec::new();
+        assert_denial_no_leak(
+            &DenialResponse {
+                status: 200,
+                body,
+                headers,
+            },
+            &foreign,
+            DenialExpectation::AllowSuccess,
+        );
+        let err = std::panic::catch_unwind(|| {
+            assert_denial_no_leak(
+                &DenialResponse {
+                    status: 401,
+                    body,
+                    headers: Vec::new(),
+                },
+                &foreign,
+                DenialExpectation::AllowSuccess,
+            );
+        });
+        assert!(err.is_err(), "AllowSuccess must not accept 401");
+    }
+
+    #[test]
+    fn task13_executable_tests_certify_manifest_rows() {
+        for test_name in TASK13_EXECUTABLE_TEST_NAMES {
+            let layer = if *test_name == "in_flight_ask_emits_no_content_after_acl_revoke" {
+                DenialLayer::Sse
+            } else if *test_name == "org_switch_never_reuses_previous_org_cache_scope" {
+                DenialLayer::Cache
+            } else {
+                DenialLayer::Http
+            };
+            validate_executable_test_evidence("multi_org_denial", test_name, layer)
+                .unwrap_or_else(|err| panic!("{test_name}: {err}"));
+        }
+    }
+
+    #[test]
+    fn empty_test_body_cannot_self_certify_executable_manifest() {
+        let source = r#"
+            #[test]
+            fn hollow_denial_probe() {}
+        "#;
+        let body = extract_test_function_body(source, "hollow_denial_probe").expect("body");
+        assert!(is_trivial_or_scaffold_test_body(&body));
+        assert!(!has_denial_evidence_heuristic(&body));
+    }
+
+    #[test]
+    fn object_key_identity_rejects_fixture_template() {
+        use crate::common::multi_org_denial_world::BootedOrg;
+
+        let org = BootedOrg {
+            org_id: Uuid::new_v4(),
+            slug: "alpha".into(),
+            marker: "marker".into(),
+            object_key: "denial/{orgKey}/{marker}.txt".into(),
+            users: BTreeMap::new(),
+            collections: BTreeMap::new(),
+            indexed_document: None,
+            document: crate::common::multi_org_denial_world::BootedDocument {
+                document_id: Uuid::new_v4(),
+                version_id: Uuid::new_v4(),
+                title: "doc".into(),
+            },
+            job_id: Uuid::new_v4(),
+            conflict_id: Uuid::new_v4(),
+        };
+        let err = std::panic::catch_unwind(|| assert_object_key_identity(&org));
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn best_effort_ephemeral_drop_never_uses_current_runtime_handle() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/multi_org_denial.rs");
+        let source = std::fs::read_to_string(path).expect("multi_org_denial source");
+        let start = source
+            .find("fn best_effort_ephemeral_drop")
+            .expect("best_effort_ephemeral_drop");
+        let end = source[start..]
+            .find("\nfn ")
+            .map(|idx| start + idx)
+            .unwrap_or(source.len());
+        let body = &source[start..end];
+        assert!(!body.contains("Handle::try_current"));
+        assert!(!body.contains("handle.block_on"));
+        assert!(body.contains("thread::spawn"));
+    }
+
+    #[test]
+    fn multi_org_denial_world_declares_resources_last_for_drop_order() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/common/multi_org_denial.rs");
+        let source = std::fs::read_to_string(path).expect("multi_org_denial source");
+        let start = source
+            .find("pub struct MultiOrgDenialWorld")
+            .expect("MultiOrgDenialWorld struct");
+        let end = source[start..]
+            .find("\n}\n\nimpl Drop for MultiOrgDenialWorld")
+            .map(|idx| start + idx)
+            .expect("struct end");
+        let struct_body = &source[start..end];
+        assert!(
+            struct_body
+                .trim_end()
+                .ends_with("pub(crate) resources: PanicSafeWorldResources,"),
+            "resources must be the last field for panic-safe teardown ordering"
+        );
+    }
+
+    #[test]
+    fn happy_path_create_org_body_is_not_denial_evidence() {
+        let err = validate_executable_test_evidence(
+            "orgs",
+            "create_org_succeeds_and_caller_becomes_owner",
+            DenialLayer::Http,
+        )
+        .expect_err("happy-path create must not certify denial evidence");
+        assert!(err.contains("lacks cross-org denial evidence heuristics"));
+    }
+
+    #[test]
+    fn create_org_bearer_token_denial_is_valid_http_evidence() {
+        validate_executable_test_evidence(
+            "orgs",
+            "create_org_requires_a_bearer_token",
+            DenialLayer::Http,
+        )
+        .expect("bearer-token denial must qualify as HTTP evidence");
+    }
+}

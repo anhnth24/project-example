@@ -27,7 +27,7 @@ use fileconv_knowledge::identity::{
     chunk_identity, IndexSignature, BODY_TEXT_VERSION, RUNTIME_VLLM_LOCAL,
 };
 use fileconv_server::auth::context::OrgContext;
-use fileconv_server::config::{Profile, SecretString};
+use fileconv_server::config::Profile;
 use fileconv_server::db::ask_streams::{self, NewAskStreamSession};
 use fileconv_server::db::collections::{self, NewCollection};
 use fileconv_server::db::documents::{self, NewDocument};
@@ -39,7 +39,7 @@ use fileconv_server::services::embedding::ApprovedEmbeddingRuntime;
 use fileconv_server::services::graph::{build_org_graph, SimilarityDeps};
 use fileconv_server::services::index_signature::CollectionName;
 use fileconv_server::storage::qdrant::{
-    ChunkPointPayload, QdrantAdminApiKey, QdrantAdminClient, QdrantClient, UpsertPoint, VectorScope,
+    ChunkPointPayload, QdrantAdminClient, QdrantClient, UpsertPoint, VectorScope,
 };
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -273,6 +273,7 @@ async fn graph_requires_qa_query_permission() {
     let user = Uuid::new_v4();
     common::seed_user_with_permissions(&pool, org, user, "graph-noperm@example.com", PASSWORD, &[])
         .await;
+    // Intentionally no `qa.query`: asserts graph route returns 403 without base permission.
     let token = common::login_access_token(&pool, "graph-noperm@example.com", PASSWORD).await;
     let app = build_router(pool.clone(), &app_database_url().unwrap(), None);
 
@@ -442,6 +443,7 @@ async fn graph_acl_hides_documents_in_a_private_collection_the_caller_cannot_acc
     let viewer = Uuid::new_v4();
     common::seed_user_with_permissions(&pool, org, owner, "graph-owner@example.com", PASSWORD, &[])
         .await;
+    // Owner fixture only seeds a private collection; the graph actor is `viewer` (has `qa.query`).
     common::seed_user_with_permissions(
         &pool,
         org,
@@ -548,25 +550,12 @@ async fn graph_caps_nodes_at_the_documented_bound() {
 // ---------------------------------------------------------------------
 
 fn test_qdrant_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_QDRANT_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_QDRANT_URL unset — graph similarity integration test requires a live Qdrant instance"
-            );
-            None
-        }
-    }
+    common::test_qdrant_url()
 }
 
-fn test_qdrant_admin_client(url: &str) -> QdrantAdminClient {
-    // Local Qdrant ignores api-key when auth is disabled; construction still
-    // requires a distinct non-empty operator credential (same convention as
-    // `tests/storage.rs::test_admin_client`).
-    let key = std::env::var("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
-        .unwrap_or_else(|_| "test-operator-admin-key".into());
-    QdrantAdminClient::new(url, QdrantAdminApiKey::new(SecretString::new(key)).unwrap())
-        .expect("admin client")
+fn test_qdrant_admin_client(_url: &str) -> QdrantAdminClient {
+    common::test_qdrant_admin_client()
+        .expect("admin client configured with MARKHAND_TEST_QDRANT_URL")
 }
 
 /// Seeds an active index generation for `collection_id` matching `signature`

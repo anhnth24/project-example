@@ -34,7 +34,8 @@ use uuid::Uuid;
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool, build_app_state,
     build_router, login_access_token, login_tokens, put_bytes, seed_user_with_permissions,
-    sha256_hex, test_auth_config, test_minio_client, trusted_key, MinioCleanupGuard,
+    sha256_hex, test_auth_config, test_minio_client, test_qdrant_url, trusted_key,
+    MinioCleanupGuard,
 };
 
 #[test]
@@ -491,8 +492,9 @@ async fn live_ask_stream_reconnect_order_and_auth_barriers() {
     let (collection_id, _document_id, _version_id, _ctx) =
         seed_indexed_doc(&pool, &store, org, user).await;
 
-    let qdrant_url = std::env::var("MARKHAND_TEST_QDRANT_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:6333".into());
+    let Some(qdrant_url) = test_qdrant_url() else {
+        return;
+    };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let provider = ChatProvider::StreamingStatic(StreamingStaticProvider::new(
         vec!["Kinh ".into(), "phí ".into(), "15 triệu.".into()],
@@ -690,8 +692,9 @@ async fn live_ask_stream_jwt_exp_membership_and_delete_barriers() {
     .await;
     let (collection_id, document_id, _version_id, ctx) =
         seed_indexed_doc(&pool, &store, org, user).await;
-    let qdrant_url = std::env::var("MARKHAND_TEST_QDRANT_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:6333".into());
+    let Some(qdrant_url) = test_qdrant_url() else {
+        return;
+    };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let keys = JwtKeys::from_auth(&test_auth_config()).unwrap();
     let claims = keys.verify_access_token(&token).unwrap();
@@ -1023,8 +1026,9 @@ async fn live_ask_stream_last_event_id_purge_and_delayed_reconnect() {
     .await;
     let (collection_id, _document_id, _version_id, ctx) =
         seed_indexed_doc(&pool, &store, org, user).await;
-    let qdrant_url = std::env::var("MARKHAND_TEST_QDRANT_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:6333".into());
+    let Some(qdrant_url) = test_qdrant_url() else {
+        return;
+    };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let provider = ChatProvider::StreamingStatic(StreamingStaticProvider::new(
         vec![
@@ -1990,8 +1994,9 @@ async fn live_ask_stream_slow_trickle_logout_releases_locks() {
         login_tokens(&pool, &format!("{user}@trickle.test"), "correct-password-1").await;
     let (collection_id, _document_id, _version_id, _ctx) =
         seed_indexed_doc(&pool, &store, org, user).await;
-    let qdrant_url = std::env::var("MARKHAND_TEST_QDRANT_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:6333".into());
+    let Some(qdrant_url) = test_qdrant_url() else {
+        return;
+    };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let provider = ChatProvider::StreamingStatic(StreamingStaticProvider::new(
         (0..40).map(|i| format!("t{i} ")).collect(),
@@ -2122,8 +2127,9 @@ async fn live_ask_stream_slow_trickle_concurrent_delete_releases_locks() {
     .await;
     let (collection_id, document_id, version_id, ctx) =
         seed_indexed_doc(&pool, &store, org, user).await;
-    let qdrant_url = std::env::var("MARKHAND_TEST_QDRANT_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:6333".into());
+    let Some(qdrant_url) = test_qdrant_url() else {
+        return;
+    };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant");
     let keys = JwtKeys::from_auth(&test_auth_config()).unwrap();
     let claims = keys.verify_access_token(&token).unwrap();
@@ -2247,8 +2253,15 @@ async fn live_ask_stream_slow_trickle_concurrent_delete_releases_locks() {
             _ => break,
         }
     }
+    // The invariant is "delete must not flush the buffered content batch",
+    // not "zero in-flight tokens": on a loaded runner the pre-delete read can
+    // miss a token the trickle producer had already emitted, so one straggler
+    // `ask.token` racing the delete is legitimate. A lock/flush bug shows up
+    // as a run of several content events before the close, which the count
+    // below still rejects.
+    let post_content_events = buf.matches("event: ask.token").count();
     assert!(
-        post_seqs.len() <= 1,
+        post_content_events <= 1,
         "delete during trickle must not flush buffered content batch: {post_seqs:?} buf={buf}"
     );
     assert!(

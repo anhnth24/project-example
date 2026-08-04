@@ -5,6 +5,7 @@
 // (never render a control that would just 403). Kept side-effect-free and
 // framework-free so each piece is trivial to unit test on its own.
 import { HttpApiError, NetworkError } from '../../api/errors';
+import { ROLE_ORDER } from '../../rbac/builtinRoleCatalog';
 import type {
   Invite,
   InviteStatus,
@@ -19,8 +20,8 @@ export interface TagMeta {
   tagClass: 'tag-neutral' | 'tag-accent' | 'tag-accent-2' | 'tag-outline';
 }
 
-/** Every role the `Membership`/`Invite`/`PatchMemberRequest` schemas declare, in privilege order (most privileged first) — the order the role `<select>` presents them in. */
-export const ROLE_ORDER: readonly MembershipRole[] = ['owner', 'admin', 'editor', 'viewer'];
+/** Privilege order from the canonical builtin-role-catalog fixture (most privileged first) — the order the role `<select>` presents them in. */
+export { ROLE_ORDER };
 
 export const ROLE_META: Record<MembershipRole, TagMeta> = {
   owner: { label: 'Chủ sở hữu', tagClass: 'tag-accent' },

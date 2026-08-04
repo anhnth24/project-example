@@ -239,6 +239,7 @@ async fn authorize_version_access(
         .await
         .map_err(|error| match error {
             AccessError::NotFound => DownloadError::NotFound,
+            AccessError::PermissionDenied => DownloadError::PermissionDenied,
             AccessError::HistoryRequired => DownloadError::HistoryRequired,
             AccessError::NotPublished => DownloadError::NotPublished,
             AccessError::Database => DownloadError::Database,
@@ -407,7 +408,7 @@ pub async fn redeem_capability(
     }
     let claims = decode_capability(keys, token)?;
     if claims.org_id != ctx.org_id() || claims.user_id != ctx.user_id() {
-        return Err(DownloadError::PermissionDenied);
+        return Err(DownloadError::NotFound);
     }
     let purpose =
         DownloadPurpose::parse(&claims.purpose).ok_or(DownloadError::InvalidCapability)?;

@@ -181,6 +181,35 @@ def run_concurrency_batch(
     return {"n": n, "spanSeconds": round(span, 3), "results": results}
 
 
+def wait_for_hung_ready(
+    ready_url: str,
+    *,
+    expected_code: str,
+    timeout_seconds: float,
+    deadline_seconds: float = gate_report.POST_PAUSE_HANG_DEADLINE_SECONDS,
+    poll_interval_seconds: float = gate_report.POST_PAUSE_HANG_POLL_INTERVAL_SECONDS,
+) -> tuple[bool, list[dict[str, Any]]]:
+    """Poll until /ready reports the paused dependency or the deadline expires.
+
+    Transition samples (still-200 while pools drain) are returned for the raw
+    report but must not be counted in the sustain window.
+    """
+    attempts: list[dict[str, Any]] = []
+    deadline = time.monotonic() + deadline_seconds
+    while time.monotonic() < deadline:
+        sample = sample_endpoint(ready_url, timeout_seconds=timeout_seconds)
+        attempts.append(sample)
+        if (
+            sample.get("httpStatus") == 503
+            and sample.get("probeCode") == expected_code
+        ):
+            return True, attempts
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(poll_interval_seconds, remaining))
+    return False, attempts
+
+
 # --- Live per-dependency run ------------------------------------------------
 
 
@@ -204,6 +233,7 @@ def run_dependency(
         "service": None,
         "pauseConfirmed": False,
         "baseline": {},
+        "postPauseWarmup": {"hangObserved": False, "ready": []},
         "samples": {"ready": [], "live": [], "openapi": []},
         "concurrencyBatches": [],
         "restore": None,
@@ -256,6 +286,15 @@ def run_dependency(
     try:
         guard.arm_and_pause()
         result["pauseConfirmed"] = guard.pause_confirmed
+        hung_ok, warmup = wait_for_hung_ready(
+            ready_url,
+            expected_code=expected_code,
+            timeout_seconds=ready_timeout,
+        )
+        result["postPauseWarmup"] = {"hangObserved": hung_ok, "ready": warmup}
+        if not hung_ok:
+            result["blockers"].append(f"hang_not_observable:{label}")
+            return result
         deadline = time.monotonic() + sustain_seconds
         batch_every_ticks = max(1, round(10.0 / max(poll_interval_seconds, 0.5)))
         tick = 0

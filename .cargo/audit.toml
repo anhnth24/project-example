@@ -1,0 +1,40 @@
+# cargo-audit configuration for the `security-deps` CI gate.
+#
+# Exception discipline (same as .trivyignore / docs/adr/TEMPLATE.md): every
+# ignore needs the advisory id, the dependency chain that makes it
+# unfixable today, and the condition that retires it. Remove entries as soon
+# as the parent dependency ships a fix — do not let this list grow silently.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — rsa 0.9 (Marvin timing sidechannel).
+    # Chain: jsonwebtoken 10.4 -> rsa. No patched release exists upstream
+    # (unfixed since 2023). Server signs JWTs with HS256/EdDSA config, and the
+    # attack needs a network-observable RSA decryption oracle.
+    # Retire: when rsa publishes a fixed version and jsonwebtoken adopts it.
+    "RUSTSEC-2023-0071",
+
+    # RUSTSEC-2026-0187 — lopdf unbounded recursion on malicious PDFs (DoS).
+    # Chains: pdf-extract =0.8.2 -> lopdf 0.34 (pdf-extract deliberately
+    # pinned: 0.12 panics, see CLAUDE.md) and pdf-inspector 0.1.3 -> lopdf
+    # 0.41. No semver-compatible lopdf fix reachable through either parent.
+    # PDF parsing runs in the conversion job path, not the request path.
+    # Retire: when pdf-inspector bumps lopdf past the patched version.
+    "RUSTSEC-2026-0187",
+
+    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195 — quick-xml DoS (quadratic
+    # attribute parsing / unbounded namespace allocations), fixed in 0.41.
+    # Chains: fileconv-core direct "0.37" (pptx slide XML), rust-s3 0.37 ->
+    # aws-creds -> 0.38, plist -> tauri-utils -> 0.39. The direct bump to
+    # 0.41 is a breaking API change scoped as its own task; the transitive
+    # copies can't be forced from this workspace.
+    # Retire: bump fileconv-core to quick-xml 0.41 and re-check transitives.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+
+    # RUSTSEC-2026-0189 — rmcp DNS-rebinding when an MCP server binds
+    # 0.0.0.0 (CVE-2026-42559). fileconv-mcp serves stdio/localhost tooling
+    # and does not bind 0.0.0.0; no semver-compatible rmcp fix available.
+    # Retire: when rmcp ships the Host-validation fix and we adopt it.
+    "RUSTSEC-2026-0189",
+]

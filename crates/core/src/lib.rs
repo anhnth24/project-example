@@ -523,6 +523,49 @@ mod tests {
     }
 
     #[test]
+    fn title_from_markdown_edge_cases() {
+        assert_eq!(
+            title_from_markdown("## Mục phụ\n\nNội dung."),
+            Some("Mục phụ".into())
+        );
+        assert_eq!(title_from_markdown("#\n\nbody"), None);
+        assert_eq!(title_from_markdown("##   \n\nbody"), None);
+
+        let ok240 = format!("# {}", "a".repeat(240));
+        assert_eq!(title_from_markdown(&ok240), Some("a".repeat(240)));
+        let over241 = format!("# {}", "a".repeat(241));
+        assert_eq!(title_from_markdown(&over241), None);
+    }
+
+    #[test]
+    fn convert_path_title_heading_and_stem_fallback() {
+        let dir = std::env::temp_dir().join(format!(
+            "fileconv_title_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let no_heading = dir.join("báo_cáo.txt");
+        std::fs::write(&no_heading, "Chỉ có nội dung, không heading.\n").unwrap();
+        let conv = Converter::new();
+        let legacy = conv.convert_path(&no_heading).unwrap();
+        assert_eq!(legacy.title.as_deref(), Some("báo_cáo"));
+        let detailed = conv.convert_path_detailed(&no_heading).unwrap();
+        assert_eq!(detailed.result.title.as_deref(), Some("báo_cáo"));
+
+        let with_heading = dir.join("ten_file.txt");
+        std::fs::write(&with_heading, "# Tiêu đề thật\n\nNội dung.\n").unwrap();
+        let legacy = conv.convert_path(&with_heading).unwrap();
+        assert_eq!(legacy.title.as_deref(), Some("Tiêu đề thật"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn legacy_convert_error_remains_exhaustive() {
         fn classify(error: &ConvertError) -> &'static str {
             match error {
@@ -597,6 +640,62 @@ mod tests {
         assert_eq!(value["kind"], "dependency_missing");
         assert!(value["message"].as_str().unwrap().contains("tesseract"));
         assert!(value.get("message").is_some() && value.get("kind").is_some());
+    }
+
+    #[test]
+    fn convert_path_rejects_unknown_extension_without_io() {
+        let conv = Converter::new();
+
+        for path in [Path::new("file.xyz"), Path::new("Makefile")] {
+            let legacy = conv.convert_path(path).unwrap_err();
+            assert!(
+                matches!(legacy, ConvertError::Unsupported("không rõ đuôi file")),
+                "path {path:?}"
+            );
+
+            let detailed = conv.convert_path_detailed(path).unwrap_err();
+            assert_eq!(
+                detailed.kind,
+                ConvertErrorKind::Unsupported,
+                "path {path:?}"
+            );
+            assert!(
+                matches!(
+                    detailed.error,
+                    ConvertError::Unsupported("không rõ đuôi file")
+                ),
+                "path {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn convert_path_missing_known_extension_returns_failed() {
+        use std::panic;
+
+        let missing = std::env::temp_dir().join(format!(
+            "fileconv_missing_{}_{}.txt",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!missing.exists());
+
+        let conv = Converter::new();
+        let legacy = conv.convert_path(&missing).unwrap_err();
+        match legacy {
+            ConvertError::Failed(ref msg) => assert!(!msg.trim().is_empty()),
+            other => panic!("expected Failed for missing file, got {other:?}"),
+        }
+
+        let detailed = conv.convert_path_detailed(&missing).unwrap_err();
+        assert_eq!(detailed.kind, ConvertErrorKind::Failed);
+        assert!(matches!(detailed.error, ConvertError::Failed(_)));
+
+        let no_panic = panic::catch_unwind(panic::AssertUnwindSafe(|| conv.convert_path(&missing)));
+        assert!(matches!(no_panic, Ok(Err(_))));
     }
 
     #[test]

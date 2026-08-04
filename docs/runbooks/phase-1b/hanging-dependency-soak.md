@@ -26,6 +26,11 @@ late; a paused container is the kernel holding the socket open.
 MARKHAND_HANGING_SOAK=1 deploy/scripts/r06-hanging-soak.sh
 ```
 
+The harness waits for the expected hung `/ready` code after `docker pause`
+before starting the 60s sustain window, so warm pool connections that still
+return 200 briefly are recorded under `postPauseWarmup` rather than counted
+against `readyCodeCorrect`.
+
 Self-test only (no stack, runs anywhere, also wired into `make check-markhand-gates`):
 
 ```bash

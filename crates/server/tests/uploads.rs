@@ -4,9 +4,12 @@
 //! gated on `MARKHAND_TEST_MINIO_*` and skip cleanly when unset. Auth-backed
 //! HTTP tests also need `MARKHAND_TEST_DATABASE_URL`.
 
+mod common;
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use axum::body::Body;
@@ -18,8 +21,7 @@ use fileconv_server::auth::jwt::JwtKeys;
 use fileconv_server::auth::provider::{AuthProvider, AuthRequestMeta, PasswordAuthProvider};
 use fileconv_server::auth::session;
 use fileconv_server::config::{
-    Argon2Config, AuthConfig, JwtAlgorithm, MinioConfig, RuntimeEndpoints, SecretString,
-    ServerConfig,
+    Argon2Config, AuthConfig, JwtAlgorithm, RuntimeEndpoints, SecretString, ServerConfig,
 };
 use fileconv_server::database::apply_migrations;
 use fileconv_server::db::orgs;
@@ -110,6 +112,82 @@ fn record_peak(current: usize) {
     }
 }
 
+/// Test-only recursion guard: child re-invocation runs the measurement body in-process.
+const ALLOC_MEASURE_CHILD_ENV: &str = "MARKHAND_UPLOADS_ALLOC_MEASURE_CHILD";
+
+fn alloc_measure_guard_matches(exact_test_name: &str, guard: Option<&std::ffi::OsStr>) -> bool {
+    guard.is_some_and(|value| value == exact_test_name)
+}
+
+fn is_alloc_measure_child(exact_test_name: &str) -> bool {
+    alloc_measure_guard_matches(
+        exact_test_name,
+        std::env::var_os(ALLOC_MEASURE_CHILD_ENV).as_deref(),
+    )
+}
+
+fn spawn_isolated_alloc_measure_child(exact_test_name: &str) {
+    let exe = std::env::current_exe().expect("current test executable");
+    let output = Command::new(&exe)
+        .args([
+            "--exact",
+            exact_test_name,
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env(ALLOC_MEASURE_CHILD_ENV, exact_test_name)
+        .output()
+        .expect("spawn isolated alloc measure child");
+    assert!(
+        output.status.success(),
+        "isolated alloc measure child failed status={:?}\nstdout={}\nstderr={}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_alloc_measure_in_isolated_child(exact_test_name: &str) -> bool {
+    if is_alloc_measure_child(exact_test_name) {
+        true
+    } else {
+        spawn_isolated_alloc_measure_child(exact_test_name);
+        false
+    }
+}
+
+#[test]
+fn alloc_measure_child_env_is_test_scoped() {
+    assert!(ALLOC_MEASURE_CHILD_ENV.starts_with("MARKHAND_UPLOADS_"));
+}
+
+#[test]
+fn alloc_measure_child_guard_matches_both_exact_test_names() {
+    const LARGE: &str = "large_lazy_stream_keeps_memory_bounded";
+    const DECLARED: &str = "declared_entry_count_rejects_before_name_allocation";
+
+    assert!(alloc_measure_guard_matches(
+        LARGE,
+        Some(std::ffi::OsStr::new(LARGE))
+    ));
+    assert!(alloc_measure_guard_matches(
+        DECLARED,
+        Some(std::ffi::OsStr::new(DECLARED))
+    ));
+}
+
+#[test]
+fn alloc_measure_child_guard_rejects_mismatched_or_missing_name() {
+    const LARGE: &str = "large_lazy_stream_keeps_memory_bounded";
+    const DECLARED: &str = "declared_entry_count_rejects_before_name_allocation";
+
+    assert!(
+        !alloc_measure_guard_matches(LARGE, Some(std::ffi::OsStr::new(DECLARED))),
+        "a different selected test must not activate this measured body"
+    );
+    assert!(!alloc_measure_guard_matches(DECLARED, None));
+}
+
 const DOCX_CONTENT_TYPES_XML: &[u8] = br#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
 
 fn adversarial_dir() -> PathBuf {
@@ -121,43 +199,13 @@ fn golden_dir() -> PathBuf {
 }
 
 fn test_minio_client() -> Option<(MinioClient, String)> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT") {
-        Ok(url) if !url.trim().is_empty() => url,
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_MINIO_ENDPOINT unset");
-            return None;
-        }
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY").ok()?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY").ok()?;
-    if access_key.is_empty() || secret_key.is_empty() {
-        eprintln!("skipped: MinIO test credentials empty");
-        return None;
-    }
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION").unwrap_or_else(|_| "us-east-1".into());
-    let bucket = format!("markhand-upload-{}", Uuid::new_v4().simple());
-    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
-    let config = MinioConfig::new(
-        endpoint,
-        SecretString::new(access_key),
-        SecretString::new(secret_key),
-        bucket.clone(),
-        region,
-        true,
-    )
-    .expect("minio config");
-    let client = MinioClient::from_config(&config).expect("client");
+    let client = common::test_minio_client_with_bucket_prefix("markhand-upload")?;
+    let bucket = client.bucket_name().to_string();
     Some((client, bucket))
 }
 
 fn test_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!("skipped: MARKHAND_TEST_DATABASE_URL unset");
-            None
-        }
-    }
+    common::admin_database_url()
 }
 
 fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
@@ -540,6 +588,13 @@ async fn zip_bomb_rejects_without_unbounded_decompress() {
 
 #[tokio::test]
 async fn large_lazy_stream_keeps_memory_bounded() {
+    if !run_alloc_measure_in_isolated_child("large_lazy_stream_keeps_memory_bounded") {
+        return;
+    }
+    large_lazy_stream_keeps_memory_bounded_body().await;
+}
+
+async fn large_lazy_stream_keeps_memory_bounded_body() {
     let limits = LimitsConfig::policy_defaults();
     let base = CURRENT_ALLOCATED.load(Ordering::Relaxed);
     PEAK_ALLOCATED.store(base, Ordering::Relaxed);
@@ -725,6 +780,13 @@ async fn unparseable_compressed_span_rejects_closed() {
 
 #[tokio::test]
 async fn declared_entry_count_rejects_before_name_allocation() {
+    if !run_alloc_measure_in_isolated_child("declared_entry_count_rejects_before_name_allocation") {
+        return;
+    }
+    declared_entry_count_rejects_before_name_allocation_body().await;
+}
+
+async fn declared_entry_count_rejects_before_name_allocation_body() {
     let limits = LimitsConfig {
         max_archive_entries: 4,
         ..LimitsConfig::policy_defaults()

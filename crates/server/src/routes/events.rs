@@ -87,7 +87,9 @@ async fn job_events(
     let _job = access::resolve_job_access(state.pool(), &auth.context, job_id)
         .await
         .map_err(|error| match error {
-            AccessError::NotFound => RouteError::NotFound(auth.request_id.clone()),
+            AccessError::NotFound | AccessError::PermissionDenied => {
+                RouteError::NotFound(auth.request_id.clone())
+            }
             _ => RouteError::Database(auth.request_id.clone()),
         })?;
 

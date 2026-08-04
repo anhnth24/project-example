@@ -7,6 +7,7 @@ servers:
   - url: /api/v1
 security:
   - bearerAuth: []
+x-markhand-builtin-role-catalog: ./builtin-role-catalog.json
 paths:
   /health/live:
     get:
@@ -1204,6 +1205,14 @@ paths:
           $ref: "#/components/responses/ApiError"
         "404":
           $ref: "#/components/responses/ApiError"
+        "409":
+          description: >
+            Project name already used in this org (`uq_projects__org_name`).
+            Same `name_taken` mapping precedent as POST /orgs's `slug_taken`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
         "429":
           $ref: "#/components/responses/RateLimited"
   /members:

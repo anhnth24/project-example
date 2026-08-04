@@ -1,0 +1,578 @@
+{
+  "dependencyLabel": "object_store",
+  "expectedProbeCode": "ready_object_store",
+  "service": "minio",
+  "pauseConfirmed": true,
+  "baseline": {
+    "ready": {
+      "httpStatus": 200,
+      "elapsedSeconds": 0.003,
+      "probeCode": null,
+      "error": null
+    },
+    "live": {
+      "httpStatus": 200,
+      "elapsedSeconds": 0.002,
+      "probeCode": null,
+      "error": null
+    },
+    "openapi": {
+      "httpStatus": 200,
+      "elapsedSeconds": 0.002,
+      "probeCode": null,
+      "error": null
+    }
+  },
+  "postPauseWarmup": {
+    "hangObserved": true,
+    "ready": [
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.005,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.005,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.038,
+        "probeCode": "ready_object_store",
+        "error": null
+      }
+    ]
+  },
+  "samples": {
+    "ready": [
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 0.002,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 1.56,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.055,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.043,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.036,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.029,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.042,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.031,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.052,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.038,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.044,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.033,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.038,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.014,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.028,
+        "probeCode": "ready_object_store",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.046,
+        "probeCode": "ready_object_store",
+        "error": null
+      }
+    ],
+    "live": [
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.033,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      }
+    ],
+    "openapi": [
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.034,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      }
+    ]
+  },
+  "concurrencyBatches": [
+    {
+      "n": 8,
+      "spanSeconds": 0.028,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.011,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.008,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.007,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.008,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.006,
+          "probeCode": "ready_object_store",
+          "error": null
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "spanSeconds": 0.018,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.014,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.012,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.004,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.004,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.004,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.006,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_object_store",
+          "error": null
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "spanSeconds": 0.049,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.042,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.041,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.011,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.04,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.034,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.037,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.036,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.033,
+          "probeCode": "ready_object_store",
+          "error": null
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "spanSeconds": 0.021,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.006,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.007,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.009,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.011,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.007,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_object_store",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.004,
+          "probeCode": "ready_object_store",
+          "error": null
+        }
+      ]
+    }
+  ],
+  "restore": {
+    "restoreSkipped": false,
+    "unpauseExitCode": 0,
+    "running": true,
+    "paused": false,
+    "restoredConfirmed": true
+  },
+  "recovery": null,
+  "blockers": []
+}

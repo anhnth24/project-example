@@ -5,7 +5,13 @@
 //! - `MARKHAND_TEST_APP_DATABASE_URL` — non-superuser `markhand_app` for FORCE RLS
 #![allow(dead_code)] // not every integration binary uses every helper
 
+pub mod acl_fixture;
 pub mod fixtures;
+pub mod fts_visibility_diagnostic;
+pub mod multi_org_denial;
+pub mod multi_org_denial_world;
+pub mod multi_org_fixture;
+pub mod worker_pipeline;
 
 use bytes::Bytes;
 use deadpool_postgres::Pool;
@@ -24,45 +30,215 @@ use fileconv_server::http::{router, AppState};
 use fileconv_server::services::download::CapabilityKeys;
 use fileconv_server::state::RuntimeState;
 use fileconv_server::storage::minio::{MinioClient, ObjectIdentityMeta};
+use fileconv_server::storage::qdrant::{QdrantAdminApiKey, QdrantAdminClient, QdrantClient};
+use std::path::PathBuf;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
+
+/// Serialize env-mutating tests within one integration-test binary so parallel
+/// `#[test]` functions cannot interleave `set_var`/`remove_var` windows.
+pub fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Restores prior process env values on drop; pair with [`test_env_lock`].
+pub struct SavedEnvVars {
+    vars: Vec<(String, Option<String>)>,
+}
+
+impl SavedEnvVars {
+    pub fn save(names: &[&str]) -> Self {
+        let vars = names
+            .iter()
+            .map(|name| ((*name).to_string(), std::env::var(name).ok()))
+            .collect();
+        Self { vars }
+    }
+}
+
+impl Drop for SavedEnvVars {
+    fn drop(&mut self) {
+        for (name, value) in &self.vars {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
 
 /// When `MARKHAND_E2E=1`, soft-skips are forbidden — missing live deps must panic.
 pub fn markhand_e2e_required() -> bool {
     std::env::var("MARKHAND_E2E").ok().as_deref() == Some("1")
 }
 
-/// Pass through `Some`, panic under `MARKHAND_E2E=1` when missing, else `None` (soft-skip).
+/// Whether integration prerequisites must be live (CI gate or explicit E2E opt-in).
+pub fn markhand_test_required() -> bool {
+    std::env::var("MARKHAND_TEST_REQUIRED").ok().as_deref() == Some("1") || markhand_e2e_required()
+}
+
+/// Pass through `Some`, panic in required mode when missing, else soft-skip with stderr.
 pub fn take_live<T>(value: Option<T>, name: &str) -> Option<T> {
     match value {
         Some(value) => Some(value),
+        None if std::env::var("MARKHAND_TEST_REQUIRED").ok().as_deref() == Some("1") => {
+            panic!("MARKHAND_TEST_REQUIRED=1 requires {name}");
+        }
         None if markhand_e2e_required() => panic!("MARKHAND_E2E=1 requires {name}"),
-        None => None,
+        None => {
+            eprintln!("skipped: {name} unset — integration test requires live dependency");
+            None
+        }
     }
+}
+
+fn non_empty_env(var: &str) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn non_empty_env_first(vars: &[&str]) -> Option<String> {
+    vars.iter().find_map(|var| non_empty_env(var))
+}
+
+/// MinIO connection fields read from `MARKHAND_TEST_MINIO_*` (with object-store aliases).
+#[derive(Clone, Debug)]
+pub struct MinioTestCredentials {
+    pub endpoint: String,
+    pub access_key: String,
+    pub secret_key: String,
+    pub region: String,
+}
+
+fn minio_test_credentials_raw() -> Option<MinioTestCredentials> {
+    let endpoint = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_ENDPOINT",
+        "MARKHAND_TEST_OBJECT_STORE_ENDPOINT",
+    ])?;
+    let access_key = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_ACCESS_KEY",
+        "MARKHAND_TEST_OBJECT_STORE_ACCESS_KEY",
+    ])?;
+    let secret_key = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_SECRET_KEY",
+        "MARKHAND_TEST_OBJECT_STORE_SECRET_KEY",
+    ])?;
+    if access_key.is_empty() || secret_key.is_empty() {
+        return None;
+    }
+    let region = non_empty_env_first(&[
+        "MARKHAND_TEST_MINIO_REGION",
+        "MARKHAND_TEST_OBJECT_STORE_REGION",
+    ])
+    .unwrap_or_else(|| "us-east-1".into());
+    Some(MinioTestCredentials {
+        endpoint,
+        access_key,
+        secret_key,
+        region,
+    })
+}
+
+/// Strict MinIO credentials for integration tests (`MARKHAND_TEST_MINIO_*`).
+pub fn minio_test_credentials() -> Option<MinioTestCredentials> {
+    take_live(minio_test_credentials_raw(), "MARKHAND_TEST_MINIO_*")
+}
+
+fn build_minio_client(creds: MinioTestCredentials, bucket: String) -> MinioClient {
+    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
+    let config = MinioConfig::new(
+        creds.endpoint,
+        SecretString::new(creds.access_key),
+        SecretString::new(creds.secret_key),
+        bucket,
+        creds.region,
+        true,
+    )
+    .expect("minio config");
+    MinioClient::from_config(&config).expect("minio client")
+}
+
+/// Live MinIO client with an ephemeral bucket (`markhand-it-*` prefix).
+pub fn test_minio_client() -> Option<MinioClient> {
+    test_minio_client_with_bucket_prefix("markhand-it")
+}
+
+/// Live MinIO client with an ephemeral bucket using the given prefix.
+pub fn test_minio_client_with_bucket_prefix(prefix: &str) -> Option<MinioClient> {
+    let creds = minio_test_credentials()?;
+    let bucket = format!("{prefix}-{}", Uuid::new_v4().simple());
+    Some(build_minio_client(creds, bucket))
 }
 
 pub fn admin_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_DATABASE_URL unset — integration tests require PostgreSQL"
-            );
-            None
-        }
-    }
+    take_live(
+        non_empty_env("MARKHAND_TEST_DATABASE_URL"),
+        "MARKHAND_TEST_DATABASE_URL",
+    )
 }
 
 pub fn app_database_url() -> Option<String> {
-    match std::env::var("MARKHAND_TEST_APP_DATABASE_URL") {
-        Ok(url) if !url.trim().is_empty() => Some(url),
-        _ => {
-            eprintln!(
-                "skipped: MARKHAND_TEST_APP_DATABASE_URL unset — FORCE RLS assertions require markhand_app"
-            );
-            None
-        }
-    }
+    take_live(
+        non_empty_env("MARKHAND_TEST_APP_DATABASE_URL"),
+        "MARKHAND_TEST_APP_DATABASE_URL",
+    )
+}
+
+pub fn test_qdrant_url() -> Option<String> {
+    take_live(
+        non_empty_env("MARKHAND_TEST_QDRANT_URL"),
+        "MARKHAND_TEST_QDRANT_URL",
+    )
+}
+
+/// Live Qdrant client when `MARKHAND_TEST_QDRANT_URL` is configured.
+pub fn test_qdrant_client() -> Option<QdrantClient> {
+    let url = test_qdrant_url()?;
+    let api_key = non_empty_env("MARKHAND_TEST_QDRANT_API_KEY").map(SecretString::new);
+    Some(QdrantClient::with_api_key(url, api_key).expect("qdrant client"))
+}
+
+/// Qdrant admin client for collection cleanup in integration tests.
+pub fn test_qdrant_admin_client() -> Option<QdrantAdminClient> {
+    let url = test_qdrant_url()?;
+    let key = non_empty_env("MARKHAND_TEST_QDRANT_ADMIN_API_KEY")
+        .unwrap_or_else(|| "test-operator-admin-key".into());
+    Some(
+        QdrantAdminClient::new(
+            url,
+            QdrantAdminApiKey::new(SecretString::new(key)).expect("admin key"),
+        )
+        .expect("qdrant admin client"),
+    )
+}
+
+/// `fileconv` binary used by ConvertWorker sandboxes.
+pub fn fileconv_binary() -> Option<PathBuf> {
+    let path = if let Ok(path) = std::env::var("MARKHAND_TEST_FILECONV_BIN") {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/fileconv")
+    };
+    take_live(path.exists().then_some(path), "target/debug/fileconv")
+}
+
+/// `/usr/bin/python3` for sandbox integration tests.
+pub fn python3_binary() -> Option<PathBuf> {
+    let path = PathBuf::from("/usr/bin/python3");
+    take_live(path.exists().then_some(path), "/usr/bin/python3")
+}
+
+/// Sandbox isolation available on the host (bubblewrap/firejail).
+pub fn sandbox_isolation_available() -> Option<()> {
+    take_live(
+        match fileconv_server::workers::sandbox::preflight() {
+            Ok(()) => Some(()),
+            Err(_) => None,
+        },
+        "sandbox isolation (bubblewrap/firejail)",
+    )
 }
 
 pub fn rewrite_database_url(base_url: &str, database_name: &str) -> String {
@@ -235,48 +411,6 @@ pub fn test_auth_config() -> AuthConfig {
     }
 }
 
-pub fn test_minio_client() -> Option<MinioClient> {
-    let endpoint = match std::env::var("MARKHAND_TEST_MINIO_ENDPOINT")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            std::env::var("MARKHAND_TEST_OBJECT_STORE_ENDPOINT")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-        }) {
-        Some(url) => url,
-        None => {
-            eprintln!("skipped: MARKHAND_TEST_MINIO_ENDPOINT unset");
-            return None;
-        }
-    };
-    let access_key = std::env::var("MARKHAND_TEST_MINIO_ACCESS_KEY")
-        .ok()
-        .or_else(|| std::env::var("MARKHAND_TEST_OBJECT_STORE_ACCESS_KEY").ok())?;
-    let secret_key = std::env::var("MARKHAND_TEST_MINIO_SECRET_KEY")
-        .ok()
-        .or_else(|| std::env::var("MARKHAND_TEST_OBJECT_STORE_SECRET_KEY").ok())?;
-    if access_key.is_empty() || secret_key.is_empty() {
-        eprintln!("skipped: MinIO test credentials empty");
-        return None;
-    }
-    let region = std::env::var("MARKHAND_TEST_MINIO_REGION")
-        .or_else(|_| std::env::var("MARKHAND_TEST_OBJECT_STORE_REGION"))
-        .unwrap_or_else(|_| "us-east-1".into());
-    let bucket = format!("markhand-it-{}", Uuid::new_v4().simple());
-    std::env::set_var("RUST_S3_SKIP_LOCATION_CONSTRAINT", "true");
-    let config = MinioConfig::new(
-        endpoint,
-        SecretString::new(access_key),
-        SecretString::new(secret_key),
-        bucket,
-        region,
-        true,
-    )
-    .expect("minio config");
-    Some(MinioClient::from_config(&config).expect("minio client"))
-}
-
 /// Deletes objects/bucket even if the owning test panics.
 ///
 /// Prefer [`MinioCleanupGuard::cleanup`].await in the success path so errors
@@ -327,7 +461,189 @@ impl Drop for MinioCleanupGuard {
     }
 }
 
+/// Bounded soak dimensions for [`minio_cleanup_soak_lane`].
+pub const MINIO_CLEANUP_GUARD_SOAK_ROUNDS: usize = 3;
+pub const MINIO_CLEANUP_GUARD_SOAK_CONCURRENCY: usize = 4;
+pub const MINIO_CLEANUP_GUARD_SOAK_OBJECTS_PER_BUCKET: usize = 3;
+
+/// Hermetic guardrail: soak must stay bounded and stress multi-object buckets.
+pub fn assert_minio_cleanup_soak_params(rounds: usize, concurrency: usize, objects: usize) {
+    assert!(
+        (1..=8).contains(&rounds),
+        "soak rounds must stay bounded, got {rounds}"
+    );
+    assert!(
+        (2..=16).contains(&concurrency),
+        "soak concurrency must expose cleanup races, got {concurrency}"
+    );
+    assert!(
+        objects >= 2,
+        "each bucket must hold multiple objects, got {objects}"
+    );
+}
+
+/// Lane failure with round/slot/bucket identity for residual-bucket diagnosis.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinioCleanupSoakLaneFailure {
+    pub round: usize,
+    pub slot: usize,
+    pub bucket_name: String,
+    pub error: fileconv_server::storage::StorageError,
+}
+
+impl std::fmt::Display for MinioCleanupSoakLaneFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "round {} slot {} bucket {} cleanup failed: {:?}",
+            self.round, self.slot, self.bucket_name, self.error
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MinioCleanupSoakLaneSuccess {
+    pub round: usize,
+    pub slot: usize,
+    pub bucket_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MinioCleanupSoakLaneOutcome {
+    Success(MinioCleanupSoakLaneSuccess),
+    LaneFailed(MinioCleanupSoakLaneFailure),
+    JoinFailed {
+        round: usize,
+        slot: usize,
+        error: String,
+    },
+}
+
+/// Await every spawned lane in a soak round before returning outcomes.
+pub async fn collect_minio_cleanup_soak_round(
+    round: usize,
+    handles: Vec<(
+        usize,
+        tokio::task::JoinHandle<Result<String, MinioCleanupSoakLaneFailure>>,
+    )>,
+) -> Vec<MinioCleanupSoakLaneOutcome> {
+    let mut outcomes = Vec::with_capacity(handles.len());
+    for (slot, handle) in handles {
+        outcomes.push(match handle.await {
+            Ok(Ok(bucket_name)) => {
+                MinioCleanupSoakLaneOutcome::Success(MinioCleanupSoakLaneSuccess {
+                    round,
+                    slot,
+                    bucket_name,
+                })
+            }
+            Ok(Err(failure)) => MinioCleanupSoakLaneOutcome::LaneFailed(failure),
+            Err(join_error) => MinioCleanupSoakLaneOutcome::JoinFailed {
+                round,
+                slot,
+                error: join_error.to_string(),
+            },
+        });
+    }
+    outcomes
+}
+
+/// Assert a fully drained soak round; reports every failing lane together.
+pub fn assert_minio_cleanup_soak_round_succeeded(outcomes: &[MinioCleanupSoakLaneOutcome]) {
+    let failures: Vec<String> = outcomes
+        .iter()
+        .filter_map(|outcome| match outcome {
+            MinioCleanupSoakLaneOutcome::Success(success) => {
+                if success.bucket_name.starts_with("markhand-it-") {
+                    None
+                } else {
+                    Some(format!(
+                        "round {} slot {} unexpected bucket name: {}",
+                        success.round, success.slot, success.bucket_name
+                    ))
+                }
+            }
+            MinioCleanupSoakLaneOutcome::LaneFailed(failure) => Some(failure.to_string()),
+            MinioCleanupSoakLaneOutcome::JoinFailed { round, slot, error } => {
+                Some(format!("round {round} slot {slot} join failed: {error}"))
+            }
+        })
+        .collect();
+    if !failures.is_empty() {
+        panic!(
+            "MinIO cleanup soak round had {} failing lane(s):\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+}
+
+fn minio_cleanup_soak_lane_failure(
+    round: usize,
+    slot: usize,
+    bucket_name: &str,
+    error: fileconv_server::storage::StorageError,
+) -> MinioCleanupSoakLaneFailure {
+    MinioCleanupSoakLaneFailure {
+        round,
+        slot,
+        bucket_name: bucket_name.to_string(),
+        error,
+    }
+}
+
+/// One soak lane: unique bucket, multiple objects, explicit guard cleanup.
+pub async fn minio_cleanup_soak_lane(
+    objects_per_bucket: usize,
+    round: usize,
+    slot: usize,
+) -> Result<String, MinioCleanupSoakLaneFailure> {
+    assert_minio_cleanup_soak_params(1, 2, objects_per_bucket);
+    let store = test_minio_client().expect("live soak lane requires MinIO env");
+    let bucket_name = store.bucket_name().to_string();
+    let guard = MinioCleanupGuard::new(store.clone());
+    let org = Uuid::new_v4();
+    store
+        .ensure_bucket()
+        .await
+        .map_err(|error| minio_cleanup_soak_lane_failure(round, slot, &bucket_name, error))?;
+    for object_index in 0..objects_per_bucket {
+        let version_id = Uuid::new_v4();
+        let key = trusted_key(org, version_id, Uuid::new_v4(), None).expect("trusted key");
+        let payload = format!("soak-r{round}-s{slot}-o{object_index}");
+        put_bytes(
+            &store,
+            org,
+            &key,
+            payload.as_bytes(),
+            "text/plain",
+            ObjectIdentityMeta {
+                org_id: org,
+                collection_id: None,
+                document_id: None,
+                version_id: Some(version_id),
+                original_filename: Some(format!("soak-{object_index}.txt")),
+                canonical_format: Some("txt".into()),
+                content_sha256: Some(sha256_hex(payload.as_bytes())),
+                content_length: Some(payload.len() as u64),
+                disposition: Some("trusted".into()),
+            },
+        )
+        .await;
+    }
+    guard
+        .cleanup()
+        .await
+        .map_err(|error| minio_cleanup_soak_lane_failure(round, slot, &bucket_name, error))?;
+    Ok(bucket_name)
+}
+
 /// Seed an org user with the given permission codes (owner role) + password.
+///
+/// Callers that need non-empty `allowed_collection_ids` under the 1C
+/// `(qa.query, read)` projection must include `qa.query` in `permissions`.
+/// Omit it only for fixtures that intentionally prove missing-query denial or
+/// that never assert collection scope (member/org/auth-only tests).
 pub async fn seed_user_with_permissions(
     pool: &Pool,
     org: Uuid,

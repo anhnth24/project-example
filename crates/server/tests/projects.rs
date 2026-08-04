@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{admin_database_url, app_database_url, boot_app_pool, build_router};
+use common::{admin_database_url, app_database_url, boot_app_pool, build_router, test_qdrant_url};
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
 use fileconv_server::db::collections::{self, NewCollection};
@@ -89,6 +89,9 @@ async fn seed_caller(pool: &Pool, org: Uuid, user: Uuid, email: &str) -> (OrgCon
 /// (permitted) caller already granted that same role/org, same "seed a plain
 /// member in some other org" convention `tests/members.rs`'s
 /// `seed_plain_member` documents for the identical reason.
+///
+/// Intentionally omits `qa.query`: these tests assert permission-denied HTTP
+/// responses, not non-empty collection scope under the 1C `(qa.query, read)` projection.
 async fn seed_caller_without_permissions(
     pool: &Pool,
     org: Uuid,
@@ -685,12 +688,7 @@ async fn search_project_filter_returns_exactly_that_projects_documents() {
     // this against the projectId 404 check). The 404-only project-filter
     // tests above/below need no Qdrant precisely because they never get
     // past that check; a real positive search result does.
-    let Some(qdrant_url) = common::take_live(
-        std::env::var("MARKHAND_TEST_QDRANT_URL")
-            .ok()
-            .filter(|url| !url.trim().is_empty()),
-        "MARKHAND_TEST_QDRANT_URL",
-    ) else {
+    let Some(qdrant_url) = test_qdrant_url() else {
         return;
     };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");
@@ -847,12 +845,7 @@ async fn ask_project_filter_narrows_grounded_answer_scope() {
     // See `search_project_filter_returns_exactly_that_projects_documents`'s
     // comment: a real Qdrant is required for /ask to get past its
     // `vector_index()` availability check at all.
-    let Some(qdrant_url) = common::take_live(
-        std::env::var("MARKHAND_TEST_QDRANT_URL")
-            .ok()
-            .filter(|url| !url.trim().is_empty()),
-        "MARKHAND_TEST_QDRANT_URL",
-    ) else {
+    let Some(qdrant_url) = test_qdrant_url() else {
         return;
     };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");
@@ -939,12 +932,7 @@ async fn search_project_ids_filter_unions_multiple_projects() {
     // See `search_project_filter_returns_exactly_that_projects_documents`'s
     // comment: a real Qdrant is required for /search to get past its
     // `vector_index()` availability check at all.
-    let Some(qdrant_url) = common::take_live(
-        std::env::var("MARKHAND_TEST_QDRANT_URL")
-            .ok()
-            .filter(|url| !url.trim().is_empty()),
-        "MARKHAND_TEST_QDRANT_URL",
-    ) else {
+    let Some(qdrant_url) = test_qdrant_url() else {
         return;
     };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");
@@ -1066,12 +1054,7 @@ async fn search_project_id_and_project_ids_given_together_union() {
     let Some((ephemeral, pool)) = boot_pool().await else {
         return;
     };
-    let Some(qdrant_url) = common::take_live(
-        std::env::var("MARKHAND_TEST_QDRANT_URL")
-            .ok()
-            .filter(|url| !url.trim().is_empty()),
-        "MARKHAND_TEST_QDRANT_URL",
-    ) else {
+    let Some(qdrant_url) = test_qdrant_url() else {
         return;
     };
     let qdrant = fileconv_server::storage::QdrantClient::new(&qdrant_url).expect("qdrant client");

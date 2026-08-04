@@ -1,0 +1,32 @@
+{
+  "binariesRun": [
+    "acl_cache",
+    "api_http_contracts",
+    "audit_read",
+    "chat_history",
+    "citation_authz_matrix",
+    "direct_service_authz",
+    "graph",
+    "jobs",
+    "members",
+    "multi_org_denial",
+    "orgs",
+    "projects",
+    "repositories",
+    "sse_stream_readiness",
+    "storage"
+  ],
+  "deferredCount": 0,
+  "executableCount": 74,
+  "failures": [],
+  "findings": [],
+  "gitShaFull": "67d27b7ced3c04f25c62f299ed9a50be95009b47",
+  "leakageCount": 0,
+  "manifestSha256": "99a5af67d78f6712daa40b7f582f76ee0d53d334e13156daabeacd21978d9630",
+  "naCount": 5,
+  "redactionScan": {
+    "findings": [],
+    "passed": true
+  },
+  "schemaVersion": 1
+}

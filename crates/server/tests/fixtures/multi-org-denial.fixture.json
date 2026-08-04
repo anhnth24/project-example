@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "description": "Phase 1C shared multi-org denial world — symbolic topology; boot materializes fresh UUIDs",
+  "orgs": [
+    { "key": "orgAlpha", "slug": "denial-org-alpha" },
+    { "key": "orgBeta", "slug": "denial-org-beta" }
+  ],
+  "usersPerOrg": 3,
+  "roleTopology": ["owner", "admin", "member"],
+  "roleTopologyNotes": {
+    "member": "Fixture label `member` seeds DB membership role `viewer` (read-only member)."
+  },
+  "collectionVisibilities": ["private", "org", "groups"],
+  "duplicateNames": {
+    "collection": "Shared Contract Collection",
+    "document": "Shared Contract Document",
+    "collectionsByVisibility": {
+      "private": "Shared Private Collection",
+      "org": "Shared Contract Collection",
+      "groups": "Shared Groups Collection"
+    }
+  },
+  "indexedMarkers": {
+    "orgAlpha": "phase1c-marker-alpha",
+    "orgBeta": "phase1c-marker-beta"
+  },
+  "objectKeyTemplate": "denial/{orgKey}/{marker}.txt",
+  "preRevokeTokens": true
+}

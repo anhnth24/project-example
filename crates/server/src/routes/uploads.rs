@@ -18,11 +18,13 @@ use sha2::{Digest, Sha256};
 
 use crate::api::ApiError;
 use crate::auth::middleware::AuthenticatedOrg;
-use crate::auth::permissions::require_permission;
+use crate::auth::permissions::{
+    require_operation_collection_access_on_txn, require_permission, ResolveError,
+};
 use crate::db::documents;
 use crate::db::error::DbError;
-use crate::db::models::DocumentState;
-use crate::db::pool::with_org_txn;
+use crate::db::models::{AccessLevel, DocumentState};
+use crate::db::pool::{with_org_txn, with_org_txn_typed};
 use crate::http::AppState;
 use crate::services::quota::{self, QuotaError, QuotaSnapshot};
 use uuid::Uuid;
@@ -125,23 +127,32 @@ async fn create_upload(
     let collection_id = pending.collection_id.ok_or_else(|| {
         UploadRouteError::Validation("collectionId is required".into(), request_id.clone())
     })?;
-    if !auth.context.allows_collection(collection_id) {
-        let resource_id = collection_id.to_string();
-        crate::services::audit::record_deny(
-            state.pool(),
-            &auth.context,
-            &request_id,
-            "document.upload",
-            "collection",
-            Some(&resource_id),
-            "collection_denied",
-        )
-        .await
-        .map_err(|_| UploadRouteError::Upload(UploadError::Internal, request_id.clone()))?;
-        return Err(UploadRouteError::Upload(
-            UploadError::PermissionDenied,
-            request_id.clone(),
-        ));
+    match ensure_upload_collection_write_access(state.pool(), &auth.context, collection_id).await {
+        UploadCollectionAccessCheck::Allowed => {}
+        UploadCollectionAccessCheck::AuthorizationDenied => {
+            let resource_id = collection_id.to_string();
+            crate::services::audit::record_deny(
+                state.pool(),
+                &auth.context,
+                &request_id,
+                "document.upload",
+                "collection",
+                Some(&resource_id),
+                "collection_denied",
+            )
+            .await
+            .map_err(|_| UploadRouteError::Upload(UploadError::Internal, request_id.clone()))?;
+            return Err(UploadRouteError::Upload(
+                UploadError::PermissionDenied,
+                request_id.clone(),
+            ));
+        }
+        UploadCollectionAccessCheck::Internal => {
+            return Err(UploadRouteError::Upload(
+                UploadError::Internal,
+                request_id.clone(),
+            ));
+        }
     }
 
     let document_id = if let Some(document_id) = pending.document_id {
@@ -440,6 +451,75 @@ fn success_response(
     response
 }
 
+/// Outcome of the HTTP upload collection write ACL gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UploadCollectionAccessCheck {
+    Allowed,
+    AuthorizationDenied,
+    Internal,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum UploadCollectionAccessTxnError {
+    AuthorizationDenied,
+    Internal,
+}
+
+impl From<DbError> for UploadCollectionAccessTxnError {
+    fn from(_: DbError) -> Self {
+        Self::Internal
+    }
+}
+
+fn map_collection_access_resolve_error(error: ResolveError) -> UploadCollectionAccessTxnError {
+    match error {
+        ResolveError::PermissionDenied | ResolveError::CollectionDenied => {
+            UploadCollectionAccessTxnError::AuthorizationDenied
+        }
+        ResolveError::UserDisabled
+        | ResolveError::MembershipMissing
+        | ResolveError::InvalidContext
+        | ResolveError::Database => UploadCollectionAccessTxnError::Internal,
+    }
+}
+
+impl From<UploadCollectionAccessTxnError> for UploadCollectionAccessCheck {
+    fn from(error: UploadCollectionAccessTxnError) -> Self {
+        match error {
+            UploadCollectionAccessTxnError::AuthorizationDenied => Self::AuthorizationDenied,
+            UploadCollectionAccessTxnError::Internal => Self::Internal,
+        }
+    }
+}
+
+async fn ensure_upload_collection_write_access(
+    pool: &deadpool_postgres::Pool,
+    ctx: &crate::auth::context::OrgContext,
+    collection_id: Uuid,
+) -> UploadCollectionAccessCheck {
+    let gate_ctx = ctx.clone();
+    let txn_scope = ctx.clone();
+    match with_org_txn_typed(pool, &txn_scope, move |txn| {
+        let gate_ctx = gate_ctx;
+        Box::pin(async move {
+            require_operation_collection_access_on_txn(
+                txn,
+                &gate_ctx,
+                collection_id,
+                "doc.upload",
+                AccessLevel::Write,
+            )
+            .await
+            .map_err(map_collection_access_resolve_error)
+        })
+    })
+    .await
+    {
+        Ok(()) => UploadCollectionAccessCheck::Allowed,
+        Err(error) => error.into(),
+    }
+}
+
 enum UploadRouteError {
     Upload(UploadError, String),
     Quota(QuotaError, String),
@@ -557,4 +637,49 @@ fn validate_idempotency_key(value: &str) -> Result<(), String> {
         return Err("Idempotency-Key contains unsupported characters".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn map_collection_access_resolve_error_classifies_acl_vs_infrastructure() {
+        assert_eq!(
+            map_collection_access_resolve_error(ResolveError::PermissionDenied),
+            UploadCollectionAccessTxnError::AuthorizationDenied
+        );
+        assert_eq!(
+            map_collection_access_resolve_error(ResolveError::CollectionDenied),
+            UploadCollectionAccessTxnError::AuthorizationDenied
+        );
+        for (label, error) in [
+            ("database", ResolveError::Database),
+            ("invalid_context", ResolveError::InvalidContext),
+            ("membership_missing", ResolveError::MembershipMissing),
+            ("user_disabled", ResolveError::UserDisabled),
+        ] {
+            assert_eq!(
+                map_collection_access_resolve_error(error),
+                UploadCollectionAccessTxnError::Internal,
+                "infrastructure fault must not be classified as authorization deny: {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_upload_collection_gate_pins_deny_audit_to_authorization_denied_arm() {
+        let src = include_str!("uploads.rs");
+        let production = src.split("#[cfg(test)]").next().unwrap();
+        assert!(
+            production.contains("UploadCollectionAccessCheck::AuthorizationDenied =>")
+                && production.contains("record_deny("),
+            "deny audit must live only on the AuthorizationDenied arm"
+        );
+        assert!(
+            production.contains("UploadCollectionAccessCheck::Internal =>")
+                && production.matches("UploadError::Internal").count() >= 2,
+            "internal faults must return UploadError::Internal without deny audit"
+        );
+    }
 }

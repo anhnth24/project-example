@@ -57,19 +57,41 @@ pub async fn revoke_collection_access_for_principal(
     new_owner_user_id: Uuid,
 ) -> Result<(), DbError> {
     authz_lock::lock_principal_authz(txn, org_id, user_id).await?;
+    txn.query_one(
+        "SELECT 1 FROM collections
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL
+             FOR NO KEY UPDATE",
+        &[&org_id, &collection_id],
+    )
+    .await
+    .map_err(DbError::from)?;
+    txn.execute(
+        "DELETE FROM collection_group_access
+             WHERE org_id = $1 AND collection_id = $2",
+        &[&org_id, &collection_id],
+    )
+    .await
+    .map_err(DbError::from)?;
+    txn.execute(
+        "DELETE FROM collection_role_access
+             WHERE org_id = $1 AND collection_id = $2",
+        &[&org_id, &collection_id],
+    )
+    .await
+    .map_err(DbError::from)?;
     txn.execute(
         "UPDATE collections
-         SET visibility = 'private',
-             owner_user_id = $3,
-             updated_at = now()
-         WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
+             SET visibility = 'private',
+                 owner_user_id = $3,
+                 updated_at = now()
+             WHERE org_id = $1 AND id = $2 AND deleted_at IS NULL",
         &[&org_id, &collection_id, &new_owner_user_id],
     )
     .await
     .map_err(DbError::from)?;
     txn.execute(
         "DELETE FROM collection_user_access
-         WHERE org_id = $1 AND collection_id = $2 AND user_id = $3",
+             WHERE org_id = $1 AND collection_id = $2 AND user_id = $3",
         &[&org_id, &collection_id, &user_id],
     )
     .await
@@ -78,4 +100,34 @@ pub async fn revoke_collection_access_for_principal(
     // `user_id`), so the cache invalidation is org-wide too.
     orgs::bump_acl_version(txn, org_id).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn revoke_collection_access_follows_parent_lock_and_grant_delete_order() {
+        let source = include_str!("acl_mutate.rs");
+        let lock = source
+            .find("FOR NO KEY UPDATE")
+            .expect("collection parent lock");
+        let delete_group = source
+            .find("DELETE FROM collection_group_access")
+            .expect("delete group grants");
+        let delete_role = source
+            .find("DELETE FROM collection_role_access")
+            .expect("delete role grants");
+        let visibility = source
+            .find("SET visibility = 'private'")
+            .expect("visibility update");
+        let delete_user = source
+            .find("DELETE FROM collection_user_access")
+            .expect("delete target user grant");
+        assert!(
+            lock < delete_group
+                && delete_group < delete_role
+                && delete_role < visibility
+                && visibility < delete_user,
+            "revoke_collection_access_for_principal must lock parent, delete group/role grants, update visibility, then delete only the target user grant"
+        );
+    }
 }
