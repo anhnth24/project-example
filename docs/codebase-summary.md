@@ -66,7 +66,7 @@ Tám subcommand đăng ký ở `registered_commands()` (`crates/cli/src/main.rs`
 | `accuracy` | CER/WER (Levenshtein, `normalize()` bỏ markdown) theo manifest |
 | `audio` | (feature `audio`) WER/RTF/load mỗi model GGML |
 | `handoff` | đóng gói handoff (BRD/PRD) từ nhiều file nguồn → ZIP |
-| `pptx-preview` | JSON preview meta/slides/shapes; metadata PPTX lấy qua `fileconv_core::pptx_preview`/`probe` (đường Rust thuần, không còn nhánh shell Python riêng) |
+| `pptx-preview` | JSON preview meta/slides/shapes qua `fileconv_core::pptx_preview::preview_meta`/`preview_slide` |
 | `info` | danh sách định dạng hỗ trợ + trạng thái PDFium/tessdata/model whisper |
 
 ## `crates/mcp/` — binary `fileconv-mcp`

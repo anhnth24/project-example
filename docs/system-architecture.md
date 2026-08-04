@@ -30,7 +30,7 @@ Hai luồng độc lập, không đi qua nhau:
   `fileconv-knowledge`; các job nặng (convert/index/embedding) chạy trong
   **worker** riêng, worker gọi lại `fileconv` CLI/`fileconv-core` để convert.
   Luồng Markhand Web này **cần Compose** (`deploy/dev/compose.yml`, xem
-  [`../runbooks/local-development.md`](../runbooks/local-development.md)) để
+  [`runbooks/local-development.md`](runbooks/local-development.md)) để
   dựng PostgreSQL/Qdrant/MinIO cho phát triển local; phát triển CLI/desktop
   độc lập không cần Compose.
 
@@ -138,7 +138,7 @@ Tám subcommand đăng ký ở `registered_commands()`:
 | `accuracy` | `<manifest.tsv> [report.md]` | CER/WER (Levenshtein, `normalize()` bỏ markdown) theo nhãn |
 | `audio` | `<models.csv> <manifest.tsv> [report.md]` | (feature `audio`) WER/RTF/load mỗi model GGML |
 | `handoff` | `<product> <output.zip> <sources...>` | đóng gói handoff pack (BRD/PRD) từ nhiều file nguồn |
-| `pptx-preview` | `<file.pptx>` | JSON preview meta/slides/shapes; metadata lấy qua `fileconv_core::pptx_preview`/`probe` |
+| `pptx-preview` | `<file.pptx>` | JSON preview meta/slides/shapes qua `fileconv_core::pptx_preview::preview_meta`/`preview_slide` |
 | `info` | (không đối số) | danh sách định dạng hỗ trợ + trạng thái PDFium/tessdata/model whisper |
 
 Panic hook in `file:line`. Manifest: mỗi dòng `<file>\t<ground_truth.txt>\t<nhãn>`, `#` = comment.
