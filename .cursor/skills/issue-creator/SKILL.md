@@ -1,9 +1,9 @@
 ---
-name: issue-creation
+name: issue-creator
 description: Create or revise a Markhand roadmap issue in the authoritative catalog, validate Definition of Ready, and safely synchronize the canonical format to GitHub.
 ---
 
-# Issue creation
+# Issue creator
 
 Use this workflow when decomposing a phase into issues or adding one roadmap issue. The
 Markdown phase catalog is authoritative; GitHub issues are synchronized representations.

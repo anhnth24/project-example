@@ -13,7 +13,7 @@ documents and the issue itself as authoritative; do not infer missing approval o
    dependencies/external-gate evidence, data/API/tenant impact (or reasoned `N/A`), named
    test commands or fixtures, and a security-trigger assessment. If a material item is
    missing, report the exact gap and keep the issue `Blocked`/`Backlog`; do not invent it.
-   Use `issue-creation` to repair an incomplete catalog issue before delivery.
+   Use `issue-creator` to repair an incomplete catalog issue before delivery.
 2. **Create or reuse the persisted plan before editing code.** Search the issue catalog's
    `Plan file` field and `plans/reports/`; update one existing plan instead of duplicating
    it. For an open issue, use the plan creation date:
