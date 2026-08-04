@@ -2050,6 +2050,57 @@ class Phase1cGateContractTests(unittest.TestCase):
         )
         self.assertEqual(template_errors, [])
 
+    def test_rejects_pass_when_evidence_coverage_limited_content(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["coverageLimited"] = True
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("coverageLimited" in err for err in errors))
+
+    def test_rejects_pass_when_evidence_lacks_metrics_observed(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/quota-recovery.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("metricsObserved", None)
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metricsObserved" in err for err in errors))
+
+    def _create_qualifying_evidence_files(self) -> None:
+        for row in G1C_GATE_ROWS:
+            path = self.repo_root / str(row["evidence"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            metrics = {metric: 0 for metric in row["metrics"]}  # type: ignore[index]
+            path.write_text(
+                json.dumps(
+                    {
+                        "gateId": row["id"],
+                        "status": "pass",
+                        "metricsObserved": True,
+                        "coverageLimited": False,
+                        "metrics": metrics,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
     def test_registry_requires_starvation_events_in_noisy_neighbor_contracts(self) -> None:
         registry = self._load_registry()
         noisy = next(g for g in registry["gates"] if g["id"] == "G1C-SEC-NOISY-NEIGHBOR")

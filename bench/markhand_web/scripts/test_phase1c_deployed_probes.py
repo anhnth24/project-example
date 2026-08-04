@@ -2443,6 +2443,70 @@ class Phase1cBackboneSemanticsTests(unittest.TestCase):
         self.assertNotIn("principal_denied", stream_block)
 
 
+class Phase1cNoisyLivenessTests(unittest.TestCase):
+    """Noisy-neighbor compose ps -q and upload window liveness."""
+
+    def test_compose_ps_q_container_id_counts_as_present(self) -> None:
+        probes = load_probes()
+        outcome = probes.CommandOutcome(
+            exit_code=0,
+            stdout="a1b2c3d4e5f6789012345678901234567890abcd\n",
+            stderr="",
+        )
+        self.assertTrue(probes.compose_ps_q_has_container(outcome))
+        self.assertFalse(probes.compose_ps_q_has_container(probes.CommandOutcome(0, "", "")))
+        self.assertFalse(probes.compose_ps_q_has_container(probes.CommandOutcome(1, "id\n", "")))
+
+    def test_noisy_uploads_must_span_full_window(self) -> None:
+        probes = load_probes()
+        start = 1000.0
+        end = 1060.0
+        timestamps = [start + 1, start + 30, end - 1]
+        ok, _ = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201, 201, 201],
+            upload_timestamps=timestamps,
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+            uploader_alive_at_end=True,
+        )
+        self.assertTrue(ok)
+        bad, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201, 201],
+            upload_timestamps=[start + 1, start + 5],
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+            uploader_alive_at_end=True,
+        )
+        self.assertFalse(bad)
+        self.assertIn("span", reason.lower())
+
+    def test_noisy_uploader_dead_thread_fails_closed(self) -> None:
+        probes = load_probes()
+        start = 1000.0
+        end = 1060.0
+        bad, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 50,
+            upload_timestamps=[start + i for i in range(50)],
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+            uploader_alive_at_end=False,
+        )
+        self.assertFalse(bad)
+        self.assertIn("uploader", reason.lower())
+
+
 class DeployedCiRouteTests(unittest.TestCase):
     def test_ci_failure_uploads_safe_diagnostic_not_raw_logs(self) -> None:
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
