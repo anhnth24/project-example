@@ -67,11 +67,6 @@ def complete_seed_raw(probes, **overrides: object) -> dict:
         "betaSessionIdHash": "sha256:" + "b" * 64,
         "orgAlphaSlug": "poc",
         "orgBetaSlug": "phase1c-beta",
-        "betaDenialDisposableCollectionId": "21212121-2121-2121-2121-212121212121",
-        "betaDenialDisposableDocumentId": "23232323-2323-2323-2323-232323232323",
-        "betaDenialDisposableChatSessionId": "24242424-2424-2424-2424-242424242424",
-        "betaDenialDisposableInviteId": "25252525-2525-2525-2525-252525252525",
-        "betaDenialDisposableMemberUserId": "44444444-4444-4444-4444-444444444401",
     }
     base.update(overrides)
     return base
@@ -125,11 +120,30 @@ def make_seed_credentials(probes, seed, **overrides: object):
         "beta_refresh_token": "beta-refresh",
         "beta_alpha_access_token": "beta-alpha-token",
         "beta_alpha_refresh_token": "beta-alpha-refresh",
+        "alpha_beta_access_token": "alpha-beta-token",
+        "alpha_beta_refresh_token": "alpha-beta-refresh",
         "alpha_session_id": "11111111-1111-1111-1111-111111111101",
         "beta_session_id": "22222222-2222-2222-2222-222222222201",
         "beta_invite_token": "mhinv1.test-token",
         "alpha_download_capability": "cap-alpha-token",
         "beta_download_capability": "cap-beta-token",
+        "beta_denial_disposable_collection_id": "21212121-2121-2121-2121-212121212121",
+        "beta_denial_disposable_collection_update_id": "21212121-2121-2121-2121-212121212122",
+        "beta_denial_disposable_document_id": "23232323-2323-2323-2323-232323232323",
+        "beta_denial_disposable_chat_session_id": "24242424-2424-2424-2424-242424242424",
+        "beta_denial_disposable_invite_id": "25252525-2525-2525-2525-252525252525",
+        "beta_denial_disposable_member_user_id": "44444444-4444-4444-4444-444444444401",
+        "beta_denial_disposable_conflict_id": "26262626-2626-2626-2626-262626262626",
+        "beta_denial_accept_invite_token": "mhinv1.accept-disposable-token",
+        "beta_denial_accept_access_token": "disposable-accept-token",
+        "beta_citation_chunk_id": "27272727-2727-2727-2727-272727272727",
+        "beta_citation_source_content_sha256": "a" * 64,
+        "beta_citation_canonical_markdown_sha256": "b" * 64,
+        "beta_citation_source_span_start": 0,
+        "beta_citation_source_span_end": 12,
+        "beta_citation_quote_local_start": 0,
+        "beta_citation_quote_local_end": 12,
+        "beta_citation_quote": "phase1c-beta",
     }
     payload.update(overrides)
     return probes.SeedCredentials(**payload)
@@ -258,7 +272,13 @@ class DeployedArchitectureContractTests(unittest.TestCase):
             complete_seed_raw(probes),
             expected_challenge="phase1c-challenge-abc",
         )
-        creds = make_seed_credentials(probes, seed, alpha_access_token="tok-alpha", beta_access_token="tok-beta")
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            alpha_access_token="tok-alpha",
+            beta_access_token="tok-beta",
+            alpha_beta_access_token="tok-beta-owner",
+        )
         runner = probes.DeployedProbeRunner(
             api_base="http://127.0.0.1:8788",
             seed=seed,
@@ -284,7 +304,11 @@ class DeployedArchitectureContractTests(unittest.TestCase):
                 headers = {"x-request-id": server_request_id}
                 if token is None:
                     return probes.HttpResponse(status=401, body='{"code":"unauthorized"}', headers=headers)
-                if token == creds.beta_access_token:
+                owner_tokens = {
+                    creds.alpha_beta_access_token,
+                    creds.beta_denial_accept_access_token,
+                }
+                if token in owner_tokens:
                     if path.endswith("/api/v1/auth/me"):
                         body = json.dumps(
                             {
@@ -328,6 +352,36 @@ class DeployedArchitectureContractTests(unittest.TestCase):
                         body = json.dumps(
                             {"documentId": seed.beta_document_id, "requestId": server_request_id}
                         )
+                    elif path.endswith("/api/v1/citations/resolve"):
+                        body = json.dumps(
+                            {
+                                "citation": {
+                                    "citeId": "cite-1",
+                                    "logicalDocumentId": seed.beta_document_id,
+                                    "versionId": seed.beta_version_id,
+                                    "versionNumber": 1,
+                                    "sourceContentSha256": "a" * 64,
+                                    "canonicalMarkdownSha256": "b" * 64,
+                                    "quoteSha256": "c" * 64,
+                                    "chunkId": creds.beta_citation_chunk_id,
+                                    "chunkIdentitySha256": "d" * 64,
+                                    "page": None,
+                                    "slide": None,
+                                    "sheet": None,
+                                    "sourceSpanStart": 0,
+                                    "sourceSpanEnd": 1,
+                                    "quoteLocalStart": 0,
+                                    "quoteLocalEnd": 1,
+                                    "quote": creds.beta_citation_quote,
+                                    "isCurrent": True,
+                                    "anchor": "mhcite1.test",
+                                },
+                                "requestId": server_request_id,
+                            }
+                        )
+                    elif path.endswith("/api/v1/members/invites/accept"):
+                        body = json.dumps({"userId": seed.beta_user_id, "role": "viewer", "requestId": server_request_id})
+                        return probes.HttpResponse(status=201, body=body, headers=headers)
                     elif path.endswith("/documents") and "/collections/" in path:
                         body = json.dumps({"items": [], "requestId": server_request_id})
                     elif path.endswith("/versions") and "/documents/" in path:
@@ -350,10 +404,10 @@ class DeployedArchitectureContractTests(unittest.TestCase):
                         )
                     elif path.endswith(f"/api/v1/downloads/{creds.beta_download_capability}"):
                         return probes.HttpResponse(status=200, body=seed.marker_beta, headers=headers)
-                    elif path.endswith(f"/api/v1/collections/{seed.beta_denial_disposable_collection_id}"):
+                    elif path.endswith(f"/api/v1/collections/{creds.beta_denial_disposable_collection_id}"):
                         if kwargs.get("method") == "DELETE":
                             return probes.HttpResponse(status=204, body="", headers=headers)
-                        body = json.dumps({"id": seed.beta_denial_disposable_collection_id, "requestId": server_request_id})
+                        body = json.dumps({"id": creds.beta_denial_disposable_collection_id, "requestId": server_request_id})
                     else:
                         body = json.dumps(
                             {
@@ -377,7 +431,13 @@ class DeployedArchitectureContractTests(unittest.TestCase):
             complete_seed_raw(probes),
             expected_challenge="phase1c-challenge-abc",
         )
-        creds = make_seed_credentials(probes, seed, alpha_access_token="tok-alpha", beta_access_token="tok-beta")
+        creds = make_seed_credentials(
+            probes,
+            seed,
+            alpha_access_token="tok-alpha",
+            beta_access_token="tok-beta",
+            alpha_beta_access_token="tok-beta-owner",
+        )
         runner = probes.DeployedProbeRunner(
             api_base="http://127.0.0.1:8788",
             seed=seed,
@@ -850,13 +910,12 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
             seed=seed,
             credentials=creds,
         )
-        foreign_ops = {spec.operation_id for spec in specs if spec.scenario == "foreign"}
-        owner_ops = {spec.operation_id for spec in specs if spec.scenario == "owner_control"}
-        self.assertTrue(owner_ops, "owner_control scenarios required")
-        self.assertTrue(foreign_ops.issubset(owner_ops | foreign_ops))
+        foreign_rows = {spec.row_id for spec in specs if spec.scenario == "foreign"}
+        owner_rows = {spec.row_id for spec in specs if spec.scenario == "owner_control"}
+        self.assertTrue(owner_rows, "owner_control scenarios required")
         self.assertEqual(
-            foreign_ops,
-            owner_ops,
+            foreign_rows,
+            owner_rows,
             "every foreign denial row must have a matching owner_control warm-up",
         )
 
@@ -939,21 +998,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
     def test_load_credentials_purges_after_read(self) -> None:
         probes = load_probes()
         path = Path(tempfile.mkdtemp()) / "creds.json"
-        payload = {
-            "schemaVersion": 1,
-            "challenge": "phase1c-challenge-abc",
-            "alphaAccessToken": "a",
-            "alphaRefreshToken": "ar",
-            "betaAccessToken": "b",
-            "betaRefreshToken": "br",
-            "betaAlphaAccessToken": "bar",
-            "betaAlphaRefreshToken": "brr",
-            "alphaSessionId": "11111111-1111-1111-1111-111111111101",
-            "betaSessionId": "22222222-2222-2222-2222-222222222201",
-            "betaInviteToken": "invite-token",
-            "alphaDownloadCapability": "cap-alpha",
-            "betaDownloadCapability": "cap-beta",
-        }
+        payload = complete_credentials_raw()
         path.write_text(json.dumps(payload), encoding="utf-8")
         path.chmod(0o600)
         probes.load_seed_credentials(path, expected_challenge="phase1c-challenge-abc", purge_after_load=True)
@@ -981,6 +1026,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
         report = deployment.run_denial_suite()
         self.assertEqual(report["ownerControlCount"], report["foreignCount"])
         self.assertGreater(report["ownerControlCount"], 0)
+        self.assertEqual(report["executableHttpSseCount"], 60)
 
     def test_stateful_fake_negative_missing_owner_control_fails(self) -> None:
         fake = self._load_stateful_fake()
@@ -1226,16 +1272,25 @@ class Phase1cThirdReviewSliceTests(unittest.TestCase):
         calls: list[tuple[str, str, str | None]] = []
 
         class AclShims(probes.DeployedProbeShims):
+            _editor: bool = True
+
             def http_request(self, **kwargs):  # type: ignore[override]
                 calls.append((str(kwargs.get("method")), str(kwargs.get("path")), kwargs.get("token")))
                 headers = {"x-request-id": "11111111-1111-1111-1111-111111111111"}
                 token = kwargs.get("token")
                 if kwargs.get("multipart_body") is not None and token == creds.beta_alpha_access_token:
+                    if not self._editor:
+                        return probes.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
                     return probes.HttpResponse(status=201, body='{"documentId":"d","versionId":"v"}', headers=headers)
+                if token == creds.alpha_access_token and kwargs.get("method") == "PATCH":
+                    role = (kwargs.get("body") or {}).get("role")
+                    if role == "viewer":
+                        self._editor = False
+                    elif role == "editor":
+                        self._editor = True
+                    return probes.HttpResponse(status=200, body="{}", headers=headers)
                 if token == creds.beta_alpha_access_token:
                     return probes.HttpResponse(status=200, body='{"userId":"u","sessionId":"s"}', headers=headers)
-                if token == creds.alpha_access_token:
-                    return probes.HttpResponse(status=200, body="{}", headers=headers)
                 return probes.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
 
             def compose(self, args, **kwargs):  # type: ignore[override]
@@ -1421,7 +1476,7 @@ class Phase1cThirdReviewSliceTests(unittest.TestCase):
     def test_parse_seed_rejects_missing_disposable_ids_in_credentials(self) -> None:
         probes = load_probes()
         seed = self._seed_fixture(probes)
-        creds = make_seed_credentials(probes, seed)
+        creds = make_seed_credentials(probes, seed, beta_denial_disposable_conflict_id="")
         with self.assertRaises(RuntimeError):
             probes.validate_fixture_credentials(creds)
 

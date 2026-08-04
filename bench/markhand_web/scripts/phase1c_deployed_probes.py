@@ -84,7 +84,52 @@ SEED_REQUIRED_FIELDS: tuple[str, ...] = (
     "betaSessionIdHash",
     "orgAlphaSlug",
     "orgBetaSlug",
+)
+
+CREDENTIAL_REQUIRED_FIELDS: tuple[str, ...] = (
+    "alphaAccessToken",
+    "alphaRefreshToken",
+    "betaAccessToken",
+    "betaRefreshToken",
+    "betaAlphaAccessToken",
+    "betaAlphaRefreshToken",
+    "alphaBetaAccessToken",
+    "alphaBetaRefreshToken",
+    "alphaSessionId",
+    "betaSessionId",
+    "betaInviteToken",
+    "alphaDownloadCapability",
+    "betaDownloadCapability",
     "betaDenialDisposableCollectionId",
+    "betaDenialDisposableCollectionUpdateId",
+    "betaDenialDisposableDocumentId",
+    "betaDenialDisposableChatSessionId",
+    "betaDenialDisposableInviteId",
+    "betaDenialDisposableMemberUserId",
+    "betaDenialDisposableConflictId",
+    "betaDenialAcceptInviteToken",
+    "betaDenialAcceptAccessToken",
+    "betaCitationChunkId",
+    "betaCitationSourceContentSha256",
+    "betaCitationCanonicalMarkdownSha256",
+    "betaCitationSourceSpanStart",
+    "betaCitationSourceSpanEnd",
+    "betaCitationQuoteLocalStart",
+    "betaCitationQuoteLocalEnd",
+    "betaCitationQuote",
+)
+
+AUDIT_MUTATION_ACTIONS: tuple[str, ...] = (
+    "org.switch",
+    "collection.create",
+    "member.invite.create",
+    "member.invite.accept",
+    "member.invite.revoke",
+    "member.role.update",
+    "member.delete",
+    "auth.refresh.reuse",
+    "auth.token.revoke",
+    "conflict.triage",
 )
 
 SECRET_RESIDUAL_RE = re.compile(
@@ -218,11 +263,6 @@ class SeedFixture:
     beta_session_id_hash: str
     org_alpha_slug: str
     org_beta_slug: str
-    beta_denial_disposable_collection_id: str
-    beta_denial_disposable_document_id: str = ""
-    beta_denial_disposable_chat_session_id: str = ""
-    beta_denial_disposable_invite_id: str = ""
-    beta_denial_disposable_member_user_id: str = ""
 
 
 @dataclass
@@ -234,11 +274,30 @@ class SeedCredentials:
     beta_refresh_token: str
     beta_alpha_access_token: str
     beta_alpha_refresh_token: str
+    alpha_beta_access_token: str
+    alpha_beta_refresh_token: str
     alpha_session_id: str
     beta_session_id: str
     beta_invite_token: str
     alpha_download_capability: str
     beta_download_capability: str
+    beta_denial_disposable_collection_id: str
+    beta_denial_disposable_collection_update_id: str
+    beta_denial_disposable_document_id: str
+    beta_denial_disposable_chat_session_id: str
+    beta_denial_disposable_invite_id: str
+    beta_denial_disposable_member_user_id: str
+    beta_denial_disposable_conflict_id: str
+    beta_denial_accept_invite_token: str
+    beta_denial_accept_access_token: str
+    beta_citation_chunk_id: str
+    beta_citation_source_content_sha256: str
+    beta_citation_canonical_markdown_sha256: str
+    beta_citation_source_span_start: int
+    beta_citation_source_span_end: int
+    beta_citation_quote_local_start: int
+    beta_citation_quote_local_end: int
+    beta_citation_quote: str
 
 
 @dataclass
@@ -431,11 +490,6 @@ def parse_seed_artifact(raw: dict[str, Any], *, expected_challenge: str) -> Seed
         beta_session_id_hash=_require_string(raw, "betaSessionIdHash"),
         org_alpha_slug=_require_string(raw, "orgAlphaSlug"),
         org_beta_slug=_require_string(raw, "orgBetaSlug"),
-        beta_denial_disposable_collection_id=_require_string(raw, "betaDenialDisposableCollectionId"),
-        beta_denial_disposable_document_id=str(raw.get("betaDenialDisposableDocumentId") or "").strip(),
-        beta_denial_disposable_chat_session_id=str(raw.get("betaDenialDisposableChatSessionId") or "").strip(),
-        beta_denial_disposable_invite_id=str(raw.get("betaDenialDisposableInviteId") or "").strip(),
-        beta_denial_disposable_member_user_id=str(raw.get("betaDenialDisposableMemberUserId") or "").strip(),
     )
 
 
@@ -472,6 +526,33 @@ def purge_phase1c_credentials(path: Path) -> None:
         raise RuntimeError("credential purge failed") from error
 
 
+def validate_fixture_credentials(credentials: SeedCredentials) -> None:
+    for field_name in (
+        "beta_denial_disposable_collection_id",
+        "beta_denial_disposable_collection_update_id",
+        "beta_denial_disposable_document_id",
+        "beta_denial_disposable_chat_session_id",
+        "beta_denial_disposable_invite_id",
+        "beta_denial_disposable_member_user_id",
+        "beta_denial_disposable_conflict_id",
+        "beta_denial_accept_invite_token",
+        "beta_denial_accept_access_token",
+        "beta_citation_chunk_id",
+        "beta_citation_source_content_sha256",
+        "beta_citation_canonical_markdown_sha256",
+        "beta_citation_quote",
+        "alpha_beta_access_token",
+    ):
+        value = getattr(credentials, field_name, None)
+        if isinstance(value, str):
+            if not value.strip():
+                raise RuntimeError(f"credentials missing {field_name}")
+            if field_name.endswith("_id") or field_name.endswith("chunk_id"):
+                validate_uuid(value, field=field_name)
+        elif value is None:
+            raise RuntimeError(f"credentials missing {field_name}")
+
+
 def load_seed_credentials(
     path: Path,
     *,
@@ -484,7 +565,18 @@ def load_seed_credentials(
             raise RuntimeError("credential schemaVersion mismatch")
         if raw.get("challenge") != expected_challenge:
             raise RuntimeError("credential challenge mismatch")
-        return SeedCredentials(
+        for key in CREDENTIAL_REQUIRED_FIELDS:
+            if key in {
+                "betaCitationSourceSpanStart",
+                "betaCitationSourceSpanEnd",
+                "betaCitationQuoteLocalStart",
+                "betaCitationQuoteLocalEnd",
+            }:
+                if key not in raw:
+                    raise RuntimeError(f"credentials missing {key}")
+                continue
+            _require_string(raw, key)
+        credentials = SeedCredentials(
             challenge=expected_challenge,
             alpha_access_token=_require_string(raw, "alphaAccessToken"),
             alpha_refresh_token=_require_string(raw, "alphaRefreshToken"),
@@ -492,12 +584,48 @@ def load_seed_credentials(
             beta_refresh_token=_require_string(raw, "betaRefreshToken"),
             beta_alpha_access_token=_require_string(raw, "betaAlphaAccessToken"),
             beta_alpha_refresh_token=_require_string(raw, "betaAlphaRefreshToken"),
-            alpha_session_id=_require_string(raw, "alphaSessionId"),
-            beta_session_id=_require_string(raw, "betaSessionId"),
+            alpha_beta_access_token=_require_string(raw, "alphaBetaAccessToken"),
+            alpha_beta_refresh_token=_require_string(raw, "alphaBetaRefreshToken"),
+            alpha_session_id=validate_uuid(_require_string(raw, "alphaSessionId"), field="alphaSessionId"),
+            beta_session_id=validate_uuid(_require_string(raw, "betaSessionId"), field="betaSessionId"),
             beta_invite_token=_require_string(raw, "betaInviteToken"),
             alpha_download_capability=_require_string(raw, "alphaDownloadCapability"),
             beta_download_capability=_require_string(raw, "betaDownloadCapability"),
+            beta_denial_disposable_collection_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableCollectionId"), field="betaDenialDisposableCollectionId"
+            ),
+            beta_denial_disposable_collection_update_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableCollectionUpdateId"),
+                field="betaDenialDisposableCollectionUpdateId",
+            ),
+            beta_denial_disposable_document_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableDocumentId"), field="betaDenialDisposableDocumentId"
+            ),
+            beta_denial_disposable_chat_session_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableChatSessionId"), field="betaDenialDisposableChatSessionId"
+            ),
+            beta_denial_disposable_invite_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableInviteId"), field="betaDenialDisposableInviteId"
+            ),
+            beta_denial_disposable_member_user_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableMemberUserId"), field="betaDenialDisposableMemberUserId"
+            ),
+            beta_denial_disposable_conflict_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableConflictId"), field="betaDenialDisposableConflictId"
+            ),
+            beta_denial_accept_invite_token=_require_string(raw, "betaDenialAcceptInviteToken"),
+            beta_denial_accept_access_token=_require_string(raw, "betaDenialAcceptAccessToken"),
+            beta_citation_chunk_id=validate_uuid(_require_string(raw, "betaCitationChunkId"), field="betaCitationChunkId"),
+            beta_citation_source_content_sha256=_require_string(raw, "betaCitationSourceContentSha256"),
+            beta_citation_canonical_markdown_sha256=_require_string(raw, "betaCitationCanonicalMarkdownSha256"),
+            beta_citation_source_span_start=int(raw["betaCitationSourceSpanStart"]),
+            beta_citation_source_span_end=int(raw["betaCitationSourceSpanEnd"]),
+            beta_citation_quote_local_start=int(raw["betaCitationQuoteLocalStart"]),
+            beta_citation_quote_local_end=int(raw["betaCitationQuoteLocalEnd"]),
+            beta_citation_quote=_require_string(raw, "betaCitationQuote"),
         )
+        validate_fixture_credentials(credentials)
+        return credentials
     finally:
         if purge_after_load:
             purge_phase1c_credentials(path)
@@ -703,6 +831,74 @@ class DeployedProbeRunner:
     def _protected_resource_path(self) -> str:
         return f"/api/v1/collections/{self.seed.alpha_collection_id}"
 
+    def _acl_probe_upload(
+        self,
+        *,
+        token: str,
+        collection_id: str | None = None,
+    ) -> HttpResponse:
+        collection = collection_id or self.seed.alpha_collection_id
+        boundary = "----markhandPhase1cAclProbe"
+        content = f"phase1c-acl-{self.seed.challenge}\n".encode("utf-8")
+        body = bytearray()
+        body.extend(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="collectionId"\r\n\r\n{collection}\r\n'.encode(
+                "utf-8"
+            )
+        )
+        body.extend(
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="acl-probe.txt"\r\n'
+                f"Content-Type: text/plain\r\n\r\n"
+            ).encode("utf-8")
+        )
+        body.extend(content)
+        body.extend(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+        return self.shims.http_request(
+            method="POST",
+            url=self._url("/api/v1/uploads"),
+            token=token,
+            body=None,
+            path="/api/v1/uploads",
+            content_type=f"multipart/form-data; boundary={boundary}",
+            multipart_body=bytes(body),
+        )
+
+    def _poll_upload_until_denied(
+        self,
+        *,
+        token: str,
+        collection_id: str,
+        timeout_ms: int,
+    ) -> tuple[int, int]:
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        commit_started = time.monotonic()
+        max_stale = 0
+        elapsed_ms = 0
+        while time.monotonic() <= deadline:
+            response = self._acl_probe_upload(token=token, collection_id=collection_id)
+            elapsed_ms = int((time.monotonic() - commit_started) * 1000)
+            if response.status in {401, 403, 404}:
+                return elapsed_ms, max_stale
+            if response.status // 100 == 2:
+                max_stale += 1
+            time.sleep(REVOKE_POLL_INTERVAL_MS / 1000.0)
+        raise RuntimeError(f"upload still authorized after {timeout_ms}ms")
+
+    def _discard_revoked_token_family(self, *, access_token: str, refresh_token: str) -> None:
+        access_denied = self._http("GET", "/api/v1/auth/me", token=access_token)
+        refresh_denied = self._http(
+            "POST",
+            "/api/v1/auth/refresh",
+            body={"refreshToken": refresh_token},
+        )
+        if access_denied.status // 100 == 2:
+            raise RuntimeError("revoked successor access token still authorizes")
+        if refresh_denied.status in {200, 201, 204}:
+            raise RuntimeError("revoked successor refresh token still rotates")
+        if refresh_denied.status != 401:
+            raise RuntimeError(f"revoked successor refresh must be exact 401, got {refresh_denied.status}")
+
     def _poll_until_denied(
         self,
         *,
@@ -827,7 +1023,10 @@ class DeployedProbeRunner:
         if self._membership_revoked:
             self._restore_beta_alpha_membership()
             return
-        warm = self._http("GET", self._protected_resource_path(), token=self.credentials.beta_access_token)
+        warm = self._acl_probe_upload(
+            token=self.credentials.beta_alpha_access_token,
+            collection_id=self.seed.alpha_collection_id,
+        )
         if warm.status // 100 == 2:
             return
         beta_warm = self._http("GET", "/api/v1/auth/me", token=self.credentials.beta_alpha_access_token)
@@ -837,6 +1036,7 @@ class DeployedProbeRunner:
 
     def run_http_denial_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
+        validate_fixture_credentials(self.credentials)
 
         def http_wrapper(**kwargs: Any) -> HttpResponse:
             self._record_transition("http")
@@ -870,9 +1070,13 @@ class DeployedProbeRunner:
     def run_revoke_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
         self._ensure_beta_membership()
-        warm = self._http("GET", self._protected_resource_path(), token=self.credentials.beta_access_token)
+        warm = self._http(
+            "GET",
+            self._protected_resource_path(),
+            token=self.credentials.beta_alpha_access_token,
+        )
         if warm.status != 200:
-            raise RuntimeError("beta warm collection read failed before revoke")
+            raise RuntimeError("beta_alpha warm collection read failed before revoke")
         delete = self._http(
             "DELETE",
             f"/api/v1/members/{self.seed.beta_member_user_id}",
@@ -881,7 +1085,7 @@ class DeployedProbeRunner:
         if delete.status // 100 != 2:
             raise RuntimeError(f"member delete must succeed with 2xx, got {delete.status}")
         elapsed_ms, stale = self._poll_until_denied(
-            token=self.credentials.beta_access_token,
+            token=self.credentials.beta_alpha_access_token,
             path=self._protected_resource_path(),
             timeout_ms=REVOKE_POLL_TIMEOUT_MS,
         )
@@ -907,9 +1111,12 @@ class DeployedProbeRunner:
     def run_acl_cache_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
         self._ensure_beta_membership()
-        warm = self._http("GET", self._protected_resource_path(), token=self.credentials.beta_access_token)
-        if warm.status != 200:
-            raise RuntimeError("beta warm collection read failed before acl cache probe")
+        warm = self._acl_probe_upload(
+            token=self.credentials.beta_alpha_access_token,
+            collection_id=self.seed.alpha_collection_id,
+        )
+        if warm.status not in {200, 201}:
+            raise RuntimeError("beta_alpha warm upload failed before acl cache probe")
         patch = self._http(
             "PATCH",
             f"/api/v1/members/{self.seed.beta_member_user_id}",
@@ -918,19 +1125,25 @@ class DeployedProbeRunner:
         )
         if patch.status // 100 != 2:
             raise RuntimeError(f"member patch must succeed with 2xx, got {patch.status}")
-        elapsed_ms, stale = self._poll_until_denied(
-            token=self.credentials.beta_access_token,
-            path=self._protected_resource_path(),
+        elapsed_ms, stale = self._poll_upload_until_denied(
+            token=self.credentials.beta_alpha_access_token,
+            collection_id=self.seed.alpha_collection_id,
             timeout_ms=ACL_CACHE_POLL_TIMEOUT_MS,
         )
         self._restore_beta_alpha_membership_role(role="editor")
+        restore_warm = self._acl_probe_upload(
+            token=self.credentials.beta_alpha_access_token,
+            collection_id=self.seed.alpha_collection_id,
+        )
+        if restore_warm.status not in {200, 201}:
+            raise RuntimeError("editor role restore must re-authorize upload")
         self._require_correlated_transitions(minimum=2)
         return DeployedProbeResult(
             gate_id="G1C-SEC-ACL-CACHE",
             probe={
                 "deployedApi": True,
                 "patchStatus": patch.status,
-                "observationPath": self._protected_resource_path(),
+                "observationPath": "/api/v1/uploads",
                 "eof": True,
             },
             metrics={
@@ -975,8 +1188,17 @@ class DeployedProbeRunner:
             raise RuntimeError(f"stale refresh reuse must be exact 401, got {reuse.status}")
         if reuse.status // 100 == 5:
             raise RuntimeError(f"stale refresh reuse must not return 5xx, got {reuse.status}")
-        self.credentials.beta_access_token = new_access
-        self.credentials.beta_refresh_token = new_refresh
+        self._discard_revoked_token_family(access_token=new_access, refresh_token=new_refresh)
+        fresh_access, fresh_refresh, fresh_session = self._login_tokens(self._beta_email, "")
+        switch = self._switch_org(fresh_access, self.seed.org_beta_id)
+        if switch.status // 100 != 2:
+            raise RuntimeError("fresh beta org switch failed after token family discard")
+        switch_payload = json.loads(switch.body)
+        fresh_access = switch_payload.get("accessToken") or switch_payload.get("access_token") or fresh_access
+        fresh_refresh = switch_payload.get("refreshToken") or switch_payload.get("refresh_token") or fresh_refresh
+        self.credentials.beta_access_token = fresh_access
+        self.credentials.beta_refresh_token = fresh_refresh
+        self.credentials.beta_session_id = validate_uuid(fresh_session, field="betaSessionId")
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-STALE-TOKENS",

@@ -131,12 +131,34 @@ bash deploy/scripts/phase1c-multi-org-seed.sh
 SEED_JSON="${MARKHAND_PHASE1C_SEED_JSON:-$ROOT/.artifacts/phase1c-multi-org-seed.json}"
 export MARKHAND_PHASE1C_SEED_JSON="$SEED_JSON"
 export MARKHAND_PHASE1C_CREDENTIALS_JSON="${MARKHAND_PHASE1C_CREDENTIALS_JSON:-$ROOT/.artifacts/phase1c-multi-org-seed.credentials.json}"
+
+GATE_CRED_OK=0
+purge_phase1c_credentials() {
+  python3 - <<'PY'
+import os
+import sys
+from pathlib import Path
+
+root = Path(os.environ["ROOT"])
+sys.path.insert(0, str(root / "bench/markhand_web/scripts"))
+from phase1c_deployed_probes import purge_phase1c_credentials
+
+cred_path = Path(os.environ.get("MARKHAND_PHASE1C_CREDENTIALS_JSON", ""))
+if cred_path:
+    purge_phase1c_credentials(cred_path)
+PY
+}
+trap '[[ "$GATE_CRED_OK" == "1" ]] || purge_phase1c_credentials' EXIT HUP INT TERM
+
 export MARKHAND_PHASE1C_CHALLENGE="$(
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["challenge"])' "$SEED_JSON"
-)"
+)" || { echo "seed challenge parse failed" >&2; exit 1; }
+
 cargo build -p fileconv-cli --no-default-features
 
 python3 bench/markhand_web/scripts/run_phase1c_gate.py --output-dir "$OUTPUT_DIR"
+
+GATE_CRED_OK=1
 
 exec env \
   MARKHAND_PHASE1C_GATE=1 \

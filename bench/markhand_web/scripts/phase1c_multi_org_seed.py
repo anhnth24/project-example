@@ -35,6 +35,8 @@ BETA_USER_ID = "33333333-3333-3333-3333-333333333301"
 BETA_EMAIL = "phase1c-beta@poc.example"
 DISPOSABLE_USER_ID = "44444444-4444-4444-4444-444444444401"
 DISPOSABLE_EMAIL = "phase1c-disposable@poc.example"
+ACCEPT_USER_ID = "55555555-5555-5555-5555-555555555501"
+ACCEPT_EMAIL = "phase1c-accept@poc.example"
 ALPHA_ORG_ID = "11111111-1111-1111-1111-111111111111"
 ALPHA_USER_ID = "22222222-2222-2222-2222-222222222201"
 
@@ -119,6 +121,9 @@ def _bootstrap_identity_users(password_hash_sql: str) -> None:
         INSERT INTO users (id, email, display_name, password_hash)
         VALUES ('{DISPOSABLE_USER_ID}', '{DISPOSABLE_EMAIL}', 'Phase 1C Disposable', '{password_hash_sql}')
         ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
+        INSERT INTO users (id, email, display_name, password_hash)
+        VALUES ('{ACCEPT_USER_ID}', '{ACCEPT_EMAIL}', 'Phase 1C Accept', '{password_hash_sql}')
+        ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
         COMMIT;
         """
     )
@@ -127,8 +132,19 @@ def _bootstrap_identity_users(password_hash_sql: str) -> None:
         f"SELECT COUNT(*) FROM org_memberships WHERE org_id = '{ALPHA_ORG_ID}' AND user_id = '{BETA_USER_ID}' AND state = 'active'"
     )
     disposable_ok = _psql(f"SELECT COUNT(*) FROM users WHERE id = '{DISPOSABLE_USER_ID}' AND email = '{DISPOSABLE_EMAIL}'")
-    if user_ok != "1" or membership_ok != "1" or disposable_ok != "1":
+    accept_ok = _psql(f"SELECT COUNT(*) FROM users WHERE id = '{ACCEPT_USER_ID}' AND email = '{ACCEPT_EMAIL}'")
+    if user_ok != "1" or membership_ok != "1" or disposable_ok != "1" or accept_ok != "1":
         raise RuntimeError("identity fixture bootstrap validation failed")
+
+
+def _claim_pair_for_org(org_id: str) -> tuple[str, str]:
+    claim_low = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{org_id}:claim-a"))
+    claim_high = str(uuid.uuid5(uuid.NAMESPACE_OID, f"{org_id}:claim-b"))
+    if claim_low > claim_high:
+        claim_low, claim_high = claim_high, claim_low
+    if claim_low == claim_high:
+        raise RuntimeError("claim pair generation produced identical ids")
+    return claim_low, claim_high
 
 
 def _bootstrap_conflict_fixture(
@@ -137,14 +153,13 @@ def _bootstrap_conflict_fixture(
     document_id: str,
     version_id: str,
     conflict_id: str,
-) -> None:
+) -> tuple[str, str]:
     # RESOURCE_FIXTURE_BOUNDARY: conflicts have no production create HTTP route.
-    # Migration 0007 ck_conflicts__canonical_pair requires claim_a_id < claim_b_id ordering.
+    # Migration 0006 claims columns + 0007 ck_conflicts__canonical_pair (claim_a_id < claim_b_id).
+    claim_low, claim_high = _claim_pair_for_org(org_id)
     claim_pair_order = "claim_a_id < claim_b_id"
-    claim_low = "aaaaaaaa-0001-4000-8000-000000000001"
-    claim_high = "bbbbbbbb-0002-4000-8000-000000000002"
-    if claim_low > claim_high:
-        claim_low, claim_high = claim_high, claim_low
+    if not (claim_low < claim_high):
+        raise RuntimeError(f"conflict fixture violates {claim_pair_order}")
     effective_from = "2026-08-04T00:00:00Z"
     _psql(
         f"""
@@ -179,6 +194,7 @@ def _bootstrap_conflict_fixture(
     ok = _psql(f"SELECT COUNT(*) FROM conflicts WHERE id = '{conflict_id}' AND org_id = '{org_id}'")
     if ok != "1":
         raise RuntimeError("conflict fixture bootstrap validation failed")
+    return claim_low, claim_high
 
 
 def _login(api_base: str, email: str, password: str) -> dict[str, Any]:
@@ -377,6 +393,57 @@ def _verify_conflict(api_base: str, token: str, conflict_id: str) -> None:
         raise RuntimeError("conflict get verification failed")
 
 
+def _load_citation_fixture(
+    *,
+    api_base: str,
+    token: str,
+    org_id: str,
+    document_id: str,
+    version_id: str,
+    marker: str,
+) -> dict[str, Any]:
+    preview_status, _, _ = _http(
+        api_base=api_base,
+        method="GET",
+        path=f"/api/v1/documents/{document_id}/preview?versionId={version_id}",
+        token=token,
+    )
+    if preview_status != 200:
+        raise RuntimeError("citation fixture preview failed")
+    chunk_row = _psql(
+        f"""
+        SELECT c.id::text || '|' || coalesce(c.span_start, 0)::text || '|' || coalesce(c.span_end, {len(marker)})::text || '|' || c.body
+        FROM chunks c
+        WHERE c.org_id = '{org_id}' AND c.document_id = '{document_id}' AND c.version_id = '{version_id}'
+        ORDER BY c.ordinal ASC
+        LIMIT 1
+        """
+    )
+    if not chunk_row.strip():
+        raise RuntimeError("citation fixture missing chunk row")
+    chunk_id, span_start, span_end, body = chunk_row.split("|", 3)
+    source_sha = _psql(
+        f"SELECT source_content_sha256 FROM document_versions WHERE org_id = '{org_id}' AND document_id = '{document_id}' AND id = '{version_id}'"
+    )
+    markdown_sha = _psql(
+        f"SELECT canonical_markdown_sha256 FROM document_versions WHERE org_id = '{org_id}' AND document_id = '{document_id}' AND id = '{version_id}'"
+    )
+    if not source_sha.strip() or not markdown_sha.strip():
+        raise RuntimeError("citation fixture missing version hashes")
+    quote = body.strip() or marker
+    quote_len = len(quote)
+    return {
+        "betaCitationChunkId": validate_uuid(chunk_id, field="betaCitationChunkId"),
+        "betaCitationSourceContentSha256": source_sha.strip(),
+        "betaCitationCanonicalMarkdownSha256": markdown_sha.strip(),
+        "betaCitationSourceSpanStart": int(span_start),
+        "betaCitationSourceSpanEnd": int(span_end),
+        "betaCitationQuoteLocalStart": 0,
+        "betaCitationQuoteLocalEnd": quote_len,
+        "betaCitationQuote": quote,
+    }
+
+
 def _atomic_write(path: Path, payload: dict[str, Any], *, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -504,9 +571,33 @@ def run_seed() -> int:
     beta_denial_disposable_collection_id = _create_collection(
         api_base=api_base,
         token=beta_org_access,
-        marker=f"{marker_beta}-disposable",
-        slug_prefix="phase1c-beta-denial",
+        marker=f"{marker_beta}-disposable-delete",
+        slug_prefix="phase1c-beta-denial-del",
     )
+    beta_denial_disposable_collection_update_id = _create_collection(
+        api_base=api_base,
+        token=beta_org_access,
+        marker=f"{marker_beta}-disposable-update",
+        slug_prefix="phase1c-beta-denial-upd",
+    )
+
+    accept_invite_status, _, accept_invite_raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites",
+        token=beta_org_access,
+        body={"email": ACCEPT_EMAIL, "role": "viewer"},
+    )
+    if accept_invite_status not in {200, 201}:
+        raise RuntimeError("accept member invite failed")
+    accept_invite_payload = json.loads(accept_invite_raw)
+    beta_denial_accept_invite_token = accept_invite_payload.get("token")
+    if not isinstance(beta_denial_accept_invite_token, str):
+        raise RuntimeError("accept invite response missing token")
+    accept_login = _login(api_base, ACCEPT_EMAIL, password)
+    beta_denial_accept_access_token = accept_login.get("accessToken") or accept_login.get("access_token")
+    if not isinstance(beta_denial_accept_access_token, str):
+        raise RuntimeError("accept identity login missing access token")
 
     disposable_invite_status, _, disposable_invite_raw = _http(
         api_base=api_base,
@@ -626,6 +717,7 @@ def run_seed() -> int:
 
     alpha_conflict_id = str(uuid.uuid4())
     beta_conflict_id = str(uuid.uuid4())
+    beta_denial_disposable_conflict_id = str(uuid.uuid4())
     _bootstrap_conflict_fixture(
         org_id=ALPHA_ORG_ID,
         document_id=alpha_document_id,
@@ -638,8 +730,24 @@ def run_seed() -> int:
         version_id=beta_version_id,
         conflict_id=beta_conflict_id,
     )
+    _bootstrap_conflict_fixture(
+        org_id=org_beta_id,
+        document_id=beta_denial_disposable_document_id,
+        version_id=validate_uuid(disposable_upload["versionId"], field="betaDenialDisposableVersionId"),
+        conflict_id=beta_denial_disposable_conflict_id,
+    )
     _verify_conflict(api_base, alpha_access, alpha_conflict_id)
     _verify_conflict(api_base, beta_org_access, beta_conflict_id)
+    _verify_conflict(api_base, beta_org_access, beta_denial_disposable_conflict_id)
+
+    citation_fixture = _load_citation_fixture(
+        api_base=api_base,
+        token=beta_org_access,
+        org_id=org_beta_id,
+        document_id=beta_document_id,
+        version_id=beta_version_id,
+        marker=marker_beta,
+    )
 
     seed_raw: dict[str, Any] = {
         "schemaVersion": 1,
@@ -678,11 +786,6 @@ def run_seed() -> int:
         "betaSessionIdHash": _sha256_text(beta_session_id),
         "orgAlphaSlug": "poc",
         "orgBetaSlug": org_beta_slug,
-        "betaDenialDisposableCollectionId": beta_denial_disposable_collection_id,
-        "betaDenialDisposableDocumentId": beta_denial_disposable_document_id,
-        "betaDenialDisposableChatSessionId": beta_denial_disposable_chat_session_id,
-        "betaDenialDisposableInviteId": beta_denial_disposable_invite_id,
-        "betaDenialDisposableMemberUserId": beta_denial_disposable_member_user_id,
     }
     evidence = build_public_seed_evidence(seed_raw)
     credentials = {
@@ -694,11 +797,23 @@ def run_seed() -> int:
         "betaRefreshToken": beta_org_refresh,
         "betaAlphaAccessToken": beta_alpha_access,
         "betaAlphaRefreshToken": beta_alpha_refresh,
+        "alphaBetaAccessToken": alpha_beta_access,
+        "alphaBetaRefreshToken": alpha_beta_refresh,
         "alphaSessionId": alpha_session_id,
         "betaSessionId": beta_session_id,
         "betaInviteToken": beta_invite_token,
         "alphaDownloadCapability": alpha_download_capability,
         "betaDownloadCapability": beta_download_capability,
+        "betaDenialDisposableCollectionId": beta_denial_disposable_collection_id,
+        "betaDenialDisposableCollectionUpdateId": beta_denial_disposable_collection_update_id,
+        "betaDenialDisposableDocumentId": beta_denial_disposable_document_id,
+        "betaDenialDisposableChatSessionId": beta_denial_disposable_chat_session_id,
+        "betaDenialDisposableInviteId": beta_denial_disposable_invite_id,
+        "betaDenialDisposableMemberUserId": beta_denial_disposable_member_user_id,
+        "betaDenialDisposableConflictId": beta_denial_disposable_conflict_id,
+        "betaDenialAcceptInviteToken": beta_denial_accept_invite_token,
+        "betaDenialAcceptAccessToken": beta_denial_accept_access_token,
+        **citation_fixture,
     }
     _atomic_write(out, evidence, mode=0o644)
     _atomic_write(creds_out, credentials, mode=0o600)

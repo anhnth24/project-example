@@ -17,6 +17,7 @@ DEFAULT_MANIFEST = ROOT / "crates/server/tests/fixtures/multi-org-denial.manifes
 DEFAULT_GUARD_INVENTORY = ROOT / "crates/server/openapi/guard-inventory.json"
 API_PREFIX = "/api/v1"
 MULTIPART_BOUNDARY = "----markhandPhase1cDenialBoundary"
+CANONICAL_EXECUTABLE_HTTP_SSE_COUNT = 60
 
 HttpRequestFn = Callable[..., Any]
 
@@ -25,11 +26,23 @@ UUID_RE = re.compile(
     re.IGNORECASE,
 )
 
-DISPOSABLE_COLLECTION_OPS = frozenset({"deleteCollection", "updateCollection"})
+DISPOSABLE_COLLECTION_DELETE_OPS = frozenset({"deleteCollection"})
+DISPOSABLE_COLLECTION_UPDATE_OPS = frozenset({"updateCollection"})
 DISPOSABLE_DOCUMENT_OPS = frozenset({"deleteDocument"})
 DISPOSABLE_CHAT_OPS = frozenset({"deleteChatSession"})
 DISPOSABLE_INVITE_OPS = frozenset({"revokeMemberInvite"})
 DISPOSABLE_MEMBER_OPS = frozenset({"deleteMember", "patchMember"})
+DISPOSABLE_CONFLICT_OPS = frozenset({"triageConflict"})
+
+SECONDARY_ROW_VARIANTS: dict[str, str] = {
+    "denial-resolveCitation-citation": "citation_matrix",
+    "denial-previewDocument-citation": "citation_preview",
+    "denial-task13-indexed-fts-ask": "indexed_fts",
+    "denial-task13-duplicate-names": "duplicate_names",
+    "denial-task13-stale-tokens": "stale_tokens",
+    "denial-task13-preview-download-sse": "preview_download_sse",
+    "denial-task13-in-flight-ask-revoke": "in_flight_revoke",
+}
 
 
 class HttpResponseLike(Protocol):
@@ -45,6 +58,7 @@ class ManifestRow:
     layer: str
     test_name: str
     binary: str
+    evidence_role: str
 
 
 @dataclass(frozen=True)
@@ -65,6 +79,7 @@ class DenialMappingEntry:
     authz_kind: str
     test_name: str
     binary: str
+    evidence_role: str
 
 
 @dataclass
@@ -201,12 +216,11 @@ def load_manifest_rows(manifest_path: Path = DEFAULT_MANIFEST) -> list[ManifestR
         layer = str(item.get("layer") or "")
         if layer not in {"http", "sse"}:
             continue
-        if item.get("evidenceRole") == "secondary":
-            continue
         operation_id = item.get("operationId")
         test_name = item.get("testName")
         binary = item.get("binary")
         row_id = item.get("id")
+        evidence_role = str(item.get("evidenceRole") or "primary")
         if not all(isinstance(value, str) and value.strip() for value in (operation_id, test_name, binary, row_id)):
             raise RuntimeError(f"manifest row missing executable HTTP/SSE fields: {row_id!r}")
         rows.append(
@@ -216,10 +230,13 @@ def load_manifest_rows(manifest_path: Path = DEFAULT_MANIFEST) -> list[ManifestR
                 layer=layer,
                 test_name=test_name,
                 binary=binary,
+                evidence_role=evidence_role,
             )
         )
-    if not rows:
-        raise RuntimeError("manifest has no executable HTTP/SSE rows")
+    if len(rows) != CANONICAL_EXECUTABLE_HTTP_SSE_COUNT:
+        raise RuntimeError(
+            f"manifest executable HTTP/SSE row count must be {CANONICAL_EXECUTABLE_HTTP_SSE_COUNT}, saw {len(rows)}"
+        )
     return rows
 
 
@@ -258,7 +275,6 @@ def build_http_sse_denial_mapping(
     guard = load_guard_routes(guard_path)
     mapping: list[DenialMappingEntry] = []
     seen_rows: set[str] = set()
-    seen_primary_ops: set[str] = set()
     for row in rows:
         if row.row_id in seen_rows:
             raise RuntimeError(f"duplicate manifest row id {row.row_id}")
@@ -266,9 +282,6 @@ def build_http_sse_denial_mapping(
         guard_route = guard.get(row.operation_id)
         if guard_route is None:
             raise RuntimeError(f"missing guard inventory mapping for operationId {row.operation_id}")
-        if row.operation_id in seen_primary_ops:
-            raise RuntimeError(f"duplicate HTTP/SSE mapping for operationId {row.operation_id}")
-        seen_primary_ops.add(row.operation_id)
         mapping.append(
             DenialMappingEntry(
                 row_id=row.row_id,
@@ -279,10 +292,10 @@ def build_http_sse_denial_mapping(
                 authz_kind=guard_route.authz_kind,
                 test_name=row.test_name,
                 binary=row.binary,
+                evidence_role=row.evidence_role,
             )
         )
-    expected = len(rows)
-    if len(mapping) != expected:
+    if len(mapping) != CANONICAL_EXECUTABLE_HTTP_SSE_COUNT:
         raise RuntimeError("incomplete HTTP/SSE denial mapping")
     return mapping
 
@@ -322,13 +335,63 @@ def _optional_seed_string(seed: Any, key: str, *, fallback: str) -> str:
     return fallback
 
 
+def _credential_string(credentials: Any, key: str, *, field: str) -> str:
+    value = getattr(credentials, key, None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    raise RuntimeError(f"credentials missing {field}")
+
+
+def _resolve_citation_body(seed: Any, *, credentials: Any, foreign: bool) -> dict[str, Any]:
+    document_id = seed.beta_document_id if foreign else seed.beta_document_id
+    version_id = seed.beta_version_id
+    return {
+        "logicalDocumentId": document_id,
+        "versionId": version_id,
+        "sourceContentSha256": _credential_string(
+            credentials, "beta_citation_source_content_sha256", field="betaCitationSourceContentSha256"
+        ),
+        "canonicalMarkdownSha256": _credential_string(
+            credentials, "beta_citation_canonical_markdown_sha256", field="betaCitationCanonicalMarkdownSha256"
+        ),
+        "chunkId": _credential_string(credentials, "beta_citation_chunk_id", field="betaCitationChunkId"),
+        "sourceSpanStart": int(getattr(credentials, "beta_citation_source_span_start", 0) or 0),
+        "sourceSpanEnd": int(getattr(credentials, "beta_citation_source_span_end", 0) or 0),
+        "quoteLocalStart": int(getattr(credentials, "beta_citation_quote_local_start", 0) or 0),
+        "quoteLocalEnd": int(getattr(credentials, "beta_citation_quote_local_end", 0) or 0),
+        "quote": _credential_string(credentials, "beta_citation_quote", field="betaCitationQuote"),
+    }
+
+
+def _owner_token(entry: DenialMappingEntry, *, seed: Any, credentials: Any) -> str | None:
+    if entry.operation_id == "acceptMemberInvite":
+        return _credential_string(
+            credentials, "beta_denial_accept_access_token", field="betaDenialAcceptAccessToken"
+        )
+    if entry.operation_id == "redeemDownload":
+        return None
+    if entry.operation_id in {"patchMember", "deleteMember"} and entry.path_template.endswith("{userId}"):
+        params = _owner_params(seed, credentials=credentials, operation_id=entry.operation_id)
+        disposable_member = _credential_string(
+            credentials, "beta_denial_disposable_member_user_id", field="betaDenialDisposableMemberUserId"
+        )
+        if params.get("userId") == disposable_member:
+            return _credential_string(credentials, "alpha_beta_access_token", field="alphaBetaAccessToken")
+        return _credential_string(credentials, "alpha_access_token", field="alphaAccessToken")
+    if entry.operation_id in {"createMemberInvite", "revokeMemberInvite"}:
+        return _credential_string(credentials, "alpha_beta_access_token", field="alphaBetaAccessToken")
+    return _credential_string(credentials, "alpha_beta_access_token", field="alphaBetaAccessToken")
+
+
 def _foreign_params(seed: Any, *, credentials: Any) -> dict[str, str]:
     return {
         "orgId": seed.org_beta_id,
         "collectionId": seed.beta_collection_id,
         "documentId": seed.beta_document_id,
         "jobId": seed.beta_job_id,
-        "userId": seed.beta_member_user_id,
+        "userId": _credential_string(
+            credentials, "beta_denial_disposable_member_user_id", field="betaDenialDisposableMemberUserId"
+        ),
         "sessionId": seed.beta_chat_session_id,
         "projectId": seed.beta_project_id,
         "versionId": seed.beta_version_id,
@@ -340,33 +403,44 @@ def _foreign_params(seed: Any, *, credentials: Any) -> dict[str, str]:
 
 def _owner_params(seed: Any, *, credentials: Any, operation_id: str) -> dict[str, str]:
     params = _foreign_params(seed, credentials=credentials)
-    if operation_id in DISPOSABLE_COLLECTION_OPS:
-        params["collectionId"] = seed.beta_denial_disposable_collection_id
+    if operation_id in DISPOSABLE_COLLECTION_DELETE_OPS:
+        params["collectionId"] = _credential_string(
+            credentials, "beta_denial_disposable_collection_id", field="betaDenialDisposableCollectionId"
+        )
+    if operation_id in DISPOSABLE_COLLECTION_UPDATE_OPS:
+        params["collectionId"] = _credential_string(
+            credentials,
+            "beta_denial_disposable_collection_update_id",
+            field="betaDenialDisposableCollectionUpdateId",
+        )
     if operation_id in DISPOSABLE_DOCUMENT_OPS:
-        params["documentId"] = _optional_seed_string(
-            seed,
-            "beta_denial_disposable_document_id",
-            fallback=seed.beta_document_id,
+        params["documentId"] = _credential_string(
+            credentials, "beta_denial_disposable_document_id", field="betaDenialDisposableDocumentId"
         )
     if operation_id in DISPOSABLE_CHAT_OPS:
-        params["sessionId"] = _optional_seed_string(
-            seed,
-            "beta_denial_disposable_chat_session_id",
-            fallback=seed.beta_chat_session_id,
+        params["sessionId"] = _credential_string(
+            credentials, "beta_denial_disposable_chat_session_id", field="betaDenialDisposableChatSessionId"
         )
     if operation_id in DISPOSABLE_INVITE_OPS:
-        params["inviteId"] = _optional_seed_string(
-            seed,
-            "beta_denial_disposable_invite_id",
-            fallback=seed.beta_invite_id,
+        params["inviteId"] = _credential_string(
+            credentials, "beta_denial_disposable_invite_id", field="betaDenialDisposableInviteId"
         )
     if operation_id in DISPOSABLE_MEMBER_OPS:
-        params["userId"] = _optional_seed_string(
-            seed,
-            "beta_denial_disposable_member_user_id",
-            fallback=seed.beta_member_user_id,
+        params["userId"] = _credential_string(
+            credentials, "beta_denial_disposable_member_user_id", field="betaDenialDisposableMemberUserId"
+        )
+    if operation_id in DISPOSABLE_CONFLICT_OPS:
+        params["conflictId"] = _credential_string(
+            credentials, "beta_denial_disposable_conflict_id", field="betaDenialDisposableConflictId"
         )
     return params
+
+
+def _variant_query_suffix(row_id: str, challenge: str) -> str:
+    variant = SECONDARY_ROW_VARIANTS.get(row_id)
+    if not variant:
+        return challenge[:8]
+    return f"{variant}-{challenge[:8]}"
 
 
 def _body_for_operation(
@@ -375,14 +449,16 @@ def _body_for_operation(
     *,
     credentials: Any,
     foreign: bool,
+    row_id: str = "",
 ) -> dict[str, Any] | None:
     collection_id = seed.beta_collection_id if foreign else seed.alpha_collection_id
     document_id = seed.beta_document_id if foreign else seed.alpha_document_id
     org_id = seed.org_beta_id if foreign else seed.org_alpha_id
+    suffix = _variant_query_suffix(row_id, seed.challenge)
     if operation_id in {"search", "ask"}:
-        return {"query": f"phase1c-denial-{seed.challenge}", "collectionIds": [collection_id]}
+        return {"query": f"phase1c-denial-{suffix}", "collectionIds": [collection_id]}
     if operation_id == "askStream":
-        return {"query": f"phase1c-denial-stream-{seed.challenge}", "collectionIds": [collection_id]}
+        return {"query": f"phase1c-denial-stream-{suffix}", "collectionIds": [collection_id]}
     if operation_id == "switchOrg":
         return {"orgId": org_id}
     if operation_id == "createOrg":
@@ -400,12 +476,9 @@ def _body_for_operation(
     if operation_id == "createMemberInvite":
         return {"email": f"invite-{seed.challenge[:8]}@example.com", "role": "viewer"}
     if operation_id == "acceptMemberInvite":
-        return {"token": credentials.beta_invite_token}
+        return {"token": _credential_string(credentials, "beta_denial_accept_invite_token", field="betaDenialAcceptInviteToken")}
     if operation_id == "resolveCitation":
-        return {
-            "documentId": document_id,
-            "versionId": seed.beta_version_id if foreign else seed.alpha_version_id,
-        }
+        return _resolve_citation_body(seed, credentials=credentials, foreign=foreign)
     if operation_id == "appendChatTurn":
         return {"role": "user", "content": f"phase1c-{seed.challenge[:8]}"}
     if operation_id == "createChatSession":
@@ -425,7 +498,7 @@ def _body_for_operation(
     if operation_id == "issueDownloadCapability":
         return {"purpose": "markdown"}
     if operation_id == "triageConflict":
-        return {"resolution": "accept_local"}
+        return {"status": "resolved", "resolutionNote": f"phase1c-{seed.challenge[:8]}"}
     if operation_id == "updateCollection":
         return {"name": f"denial-updated-{seed.challenge[:8]}"}
     if operation_id == "updateProject":
@@ -509,9 +582,9 @@ def _owner_body(operation_id: str, seed: Any, *, credentials: Any, params: dict[
     if operation_id == "createMemberInvite":
         return {"email": f"owner-{seed.challenge[:8]}@example.com", "role": "viewer"}
     if operation_id == "acceptMemberInvite":
-        return {"token": credentials.beta_invite_token}
+        return {"token": _credential_string(credentials, "beta_denial_accept_invite_token", field="betaDenialAcceptInviteToken")}
     if operation_id == "resolveCitation":
-        return {"documentId": seed.beta_document_id, "versionId": seed.beta_version_id}
+        return _resolve_citation_body(seed, credentials=credentials, foreign=False)
     if operation_id == "appendChatTurn":
         return {"role": "user", "content": f"phase1c-owner-{seed.challenge[:8]}"}
     if operation_id == "createChatSession":
@@ -525,7 +598,7 @@ def _owner_body(operation_id: str, seed: Any, *, credentials: Any, params: dict[
     if operation_id == "issueDownloadCapability":
         return {"purpose": "markdown"}
     if operation_id == "triageConflict":
-        return {"resolution": "accept_local"}
+        return {"status": "resolved", "resolutionNote": f"phase1c-{seed.challenge[:8]}"}
     if operation_id == "updateCollection":
         return {"name": f"owner-updated-{seed.challenge[:8]}"}
     if operation_id == "updateProject":
@@ -559,6 +632,7 @@ def _read_schema(operation_id: str) -> frozenset[str]:
         "getGraph": frozenset({"nodes"}),
         "getConflictEvidence": frozenset({"items"}),
         "authMe": frozenset({"userId", "sessionId"}),
+        "resolveCitation": frozenset({"citation", "requestId"}),
         "previewDocument": frozenset({"documentId"}),
         "diffDocumentVersions": frozenset({"fromVersionId"}),
     }
@@ -575,6 +649,8 @@ def build_owner_control_spec(
     path = _substitute_path(entry.path_template, params)
     method = entry.method.upper()
 
+    owner_token = _owner_token(entry, seed=seed, credentials=credentials)
+
     if entry.operation_id == "createUpload":
         multipart = _multipart_upload_body(
             collection_id=seed.beta_collection_id,
@@ -590,7 +666,7 @@ def build_owner_control_spec(
             content_type=f"multipart/form-data; boundary={MULTIPART_BOUNDARY}",
             multipart_body=multipart,
             success_schema_keys=frozenset({"documentId", "versionId"}),
-            token=credentials.beta_access_token,
+            token=owner_token,
         )
 
     if entry.operation_id == "redeemDownload":
@@ -609,7 +685,7 @@ def build_owner_control_spec(
             body=_owner_body("askStream", seed, credentials=credentials, params=params),
             expected_statuses=frozenset({200}),
             accept="text/event-stream",
-            token=credentials.beta_access_token,
+            token=owner_token,
         )
 
     if entry.operation_id == "jobEvents":
@@ -619,7 +695,7 @@ def build_owner_control_spec(
             body=None,
             expected_statuses=frozenset({200}),
             accept="text/event-stream",
-            token=credentials.beta_access_token,
+            token=owner_token,
         )
 
     if entry.method == "GET":
@@ -629,7 +705,7 @@ def build_owner_control_spec(
             body=None,
             expected_statuses=frozenset({200}),
             success_schema_keys=_read_schema(entry.operation_id),
-            token=credentials.beta_access_token,
+            token=owner_token,
         )
 
     body = _owner_body(entry.operation_id, seed, credentials=credentials, params=params)
@@ -637,13 +713,15 @@ def build_owner_control_spec(
     schema = None
     if entry.operation_id in {"createCollection", "createProject", "createChatSession", "createOrg"}:
         schema = frozenset({"id"})
+    if entry.operation_id == "resolveCitation":
+        schema = frozenset({"citation", "requestId"})
     return OwnerControlSpec(
         method=method,
         path=path,
         body=body,
         expected_statuses=expected,
         success_schema_keys=schema,
-        token=credentials.beta_access_token,
+        token=owner_token,
     )
 
 
@@ -657,7 +735,13 @@ def build_denial_request_specs(
     params = _foreign_params(seed, credentials=credentials)
     for entry in mapping:
         path = _substitute_path(entry.path_template, params)
-        body = _body_for_operation(entry.operation_id, seed, credentials=credentials, foreign=True)
+        body = _body_for_operation(
+            entry.operation_id,
+            seed,
+            credentials=credentials,
+            foreign=True,
+            row_id=entry.row_id,
+        )
         request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
         if _uses_foreign_scope(entry.operation_id, entry.path_template):
             owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
@@ -669,7 +753,7 @@ def build_denial_request_specs(
                         scenario="owner_control",
                         method=owner.method,
                         path=owner.path,
-                        token=owner.token if owner.token is not None else credentials.beta_access_token,
+                        token=owner.token if owner.token is not None else credentials.alpha_beta_access_token,
                         body=owner.body,
                         expected_statuses=owner.expected_statuses,
                         content_type=owner.content_type,
@@ -734,17 +818,21 @@ def scan_marker_leakage(body: str, *, forbidden_markers: set[str]) -> list[str]:
 
 
 def validate_denial_observation_matrix(observations: list[DenialObservation]) -> None:
-    foreign_ops = {item.operation_id for item in observations if item.scenario == "foreign"}
-    if not foreign_ops:
+    foreign_rows = {item.row_id for item in observations if item.scenario == "foreign"}
+    if not foreign_rows:
         return
-    by_op: dict[str, list[DenialObservation]] = {}
+    by_row: dict[str, list[DenialObservation]] = {}
     for item in observations:
-        by_op.setdefault(item.operation_id, []).append(item)
-    for operation_id, rows in by_op.items():
-        if len(rows) >= 2 and all(row.actual_status == 403 for row in rows):
-            raise RuntimeError(f"all-403 shim detected for {operation_id}")
-    owner_ops = {item.operation_id for item in observations if item.scenario == "owner_control"}
-    missing = foreign_ops - owner_ops
+        by_row.setdefault(item.row_id, []).append(item)
+    for row_id, rows in by_row.items():
+        foreign = [row for row in rows if row.scenario == "foreign"]
+        owner = [row for row in rows if row.scenario == "owner_control"]
+        if foreign and owner:
+            if all(row.actual_status == 403 for row in foreign) and all(row.actual_status == 403 for row in owner):
+                operation_id = foreign[0].operation_id
+                raise RuntimeError(f"all-403 shim detected for {operation_id}/{row_id}")
+    owner_rows = {item.row_id for item in observations if item.scenario == "owner_control"}
+    missing = foreign_rows - owner_rows
     if missing:
         raise RuntimeError(f"foreign rows missing owner_control: {sorted(missing)}")
 
@@ -758,7 +846,14 @@ def _validate_success_schema(body: str, required_keys: frozenset[str]) -> None:
             raise RuntimeError(f"owner control response missing {key}")
 
 
-def _validate_sse_envelope(body: str, *, operation_id: str) -> None:
+def _validate_sse_envelope(body: str, *, operation_id: str, headers: dict[str, str]) -> None:
+    content_type = ""
+    for key, value in headers.items():
+        if key.lower() == "content-type":
+            content_type = value.lower()
+            break
+    if "text/event-stream" not in content_type:
+        raise RuntimeError(f"{operation_id} SSE response missing text/event-stream content-type")
     if not body.strip():
         raise RuntimeError(f"{operation_id} SSE response empty")
     if "event:" not in body and "data:" not in body:
@@ -794,7 +889,8 @@ def execute_http_denial_suite(
         challenge=seed.challenge,
         executable_http_sse_count=len(mapping),
     )
-    forbidden = {seed.marker_beta}
+    forbidden = {seed.marker_alpha, seed.marker_beta}
+    forbidden.discard("")
     for spec in specs:
         url = api_base.rstrip("/") + spec.path
         response = http_request(
@@ -825,7 +921,11 @@ def execute_http_denial_suite(
                     report.failures.append(f"{spec.operation_id}/owner_control schema: {error}")
             if spec.operation_id in {"askStream", "jobEvents"}:
                 try:
-                    _validate_sse_envelope(response.body, operation_id=spec.operation_id)
+                    _validate_sse_envelope(
+                        response.body,
+                        operation_id=spec.operation_id,
+                        headers=response.headers,
+                    )
                 except RuntimeError as error:
                     report.failures.append(f"{spec.operation_id}/owner_control sse: {error}")
         try:
