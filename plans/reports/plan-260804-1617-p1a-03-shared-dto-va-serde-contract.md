@@ -2,7 +2,6 @@
 # P1A-03 — Shared DTO và serde contract
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#70](https://github.com/anhnth24/project-example/issues/70)
 Catalog: [`backlog/phase-1a/issues/README.md`](../markhand-web/backlog/phase-1a/issues/README.md)
 Phase plan: [`phase-1a-knowledge-extraction.md`](../markhand-web/phase-1a-knowledge-extraction.md)
@@ -18,7 +17,7 @@ Di chuyển index/search/ask types mà không đổi JSON.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #188.
 
 ## Implementation plan
 
@@ -57,7 +56,7 @@ OpenAPI generation.
 
 - [PR #188](https://github.com/anhnth24/project-example/pull/188) — feat: move knowledge DTO contracts to shared crate; merged `2026-07-17T16:50:41Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `fdb3b9a542ae3a34254c5dc904172f91ea1ccdbd`
 

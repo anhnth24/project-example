@@ -2,7 +2,6 @@
 # 1C-02 — Membership, invites và last-owner invariant
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#103](https://github.com/anhnth24/project-example/issues/103)
 Catalog: [`backlog/phase-1c/issues/README.md`](../markhand-web/backlog/phase-1c/issues/README.md)
 Phase plan: [`phase-1c-multi-org-security.md`](../markhand-web/phase-1c-multi-org-security.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> CI exact-SHA evidence on `a62850422dd070e7e1195bfe1d4f1dee0d73566d`
 > (run [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)):
 > `rust` [91151657403](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657403),
 > `web` [91151657388](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657388),
@@ -79,13 +79,9 @@ automated email delivery/SCIM/MFA.
 
 - [PR #317](https://github.com/anhnth24/project-example/pull/317) — Membership admin, end to end: server API + web UI (P2-11, P2-12; 1C-02/1C-11 slice); merged `2026-07-28T06:34:53Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
-- `30629207747`
 - `64b80d47fecad7d28c4a2b2df2422a892d56e46b`
-- `91151657388`
-- `91151657399`
-- `91151657403`
 - `a62850422dd070e7e1195bfe1d4f1dee0d73566d`
 
 - GitHub sync-closed timestamp: `2026-08-01T00:18:31Z` (recorded for traceability; not treated as the delivery date).

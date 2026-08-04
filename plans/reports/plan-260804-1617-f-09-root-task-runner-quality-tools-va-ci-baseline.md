@@ -2,7 +2,6 @@
 # F-09 — Root task runner, quality tools và CI baseline
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#54](https://github.com/anhnth24/project-example/issues/54)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Cùng command local/CI cho format/lint/test/build/dev/migrate.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #177.
 
 ## Implementation plan
 
@@ -60,7 +59,7 @@ Production release workflow.
 
 - [PR #177](https://github.com/anhnth24/project-example/pull/177) — ci: unify root quality and dependency gates; merged `2026-07-17T14:00:05Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `bf37b6160ac65bae7deeb7318c305263a04ad271`
 

@@ -2,7 +2,6 @@
 # 1C-06 — PostgreSQL ACL enforcement
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#108](https://github.com/anhnth24/project-example/issues/108)
 Catalog: [`backlog/phase-1c/issues/README.md`](../markhand-web/backlog/phase-1c/issues/README.md)
 Phase plan: [`phase-1c-multi-org-security.md`](../markhand-web/phase-1c-multi-org-security.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> CI exact-SHA evidence on `90742281e51d3c8ca8a32a78077a07fe3449bc68`
 > (run [30649044974](https://github.com/anhnth24/project-example/actions/runs/30649044974)):
 > changes/static
 > [91217513655](https://github.com/anhnth24/project-example/actions/runs/30649044974/job/91217513655),
@@ -92,13 +92,9 @@ leg; shared builder includes `acl_m.state = 'active'`.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
-- `30649044974`
 - `90742281e51d3c8ca8a32a78077a07fe3449bc68`
-- `91217513655`
-- `91217686329`
-- `91217686352`
 
 - GitHub sync-closed timestamp: `2026-08-01T00:18:40Z` (recorded for traceability; not treated as the delivery date).
 

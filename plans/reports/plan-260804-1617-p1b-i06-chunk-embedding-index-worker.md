@@ -2,7 +2,6 @@
 # P1B-I06 — Chunk/embedding/index worker
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#89](https://github.com/anhnth24/project-example/issues/89)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> Sol R2 evidence green: multi-generation
 > `lifecycle_refresh` (one idempotent job per materialized generation; no
 > active-generation fallback); Index↔LifecycleRefresh claim fairness
 > (ConvertWorker atomic pattern); mixed-scope filter-only Qdrant update (has_id
@@ -70,7 +70,7 @@ user-selected models.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

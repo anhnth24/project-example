@@ -2,7 +2,6 @@
 # P1B-O05 — Mixed-load soak và POC qualification
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#101](https://github.com/anhnth24/project-example/issues/101)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> the official 1800s run passed every gate on 2026-07-26 at
 > `f4f33cd`, on a 24-core Ubuntu host, Compose project
 > `markhand-poc-f02-20260726t121843z-1815269-17292`, with F02/O01/O02/O03/O04
 > passing on that same commit and project. `o05-soak.json` is `status=pass` with
@@ -72,10 +72,8 @@ production/multi-org.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
-- `1815269`
-- `20260726`
 - `a1a6d0e6ee57df4d`
 - `f4f33cd`
 

@@ -2,7 +2,6 @@
 # P1B-O01 — End-to-end telemetry và safe audit
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#97](https://github.com/anhnth24/project-example/issues/97)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> live evidence 2026-07-26 at `f4f33cd`: `o01-telemetry.json`
 > `status=pass` with 0 blockers. The async API→worker→provider canary closed all
 > 16 proofs (job terminal + payload `request_id`, DB audit row per request,
 > exact deny audit, same-trace ingest and ask exports with the required
@@ -66,7 +66,7 @@ SIEM.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `e8efc7b6975fdb4b`
 - `f4f33cd`

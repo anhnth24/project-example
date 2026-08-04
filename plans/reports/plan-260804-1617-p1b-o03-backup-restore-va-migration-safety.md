@@ -2,7 +2,6 @@
 # P1B-O03 — Backup/restore và migration safety
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#99](https://github.com/anhnth24/project-example/issues/99)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> live blue/green drill 2026-07-26 at `f4f33cd`, run inside
 > the O05 soak so it restored a loaded stack rather than an idle one:
 > `o03-restore.json` `status=pass`, 0 gaps. Measured attested consistency RPO
 > 328s (≤ 900s), query-ready RTO 1099s (≤ 3600s) and full-vector RTO 1099s
@@ -69,7 +69,7 @@ multi-region DR.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `66b5045a80925f90`
 - `f4f33cd`

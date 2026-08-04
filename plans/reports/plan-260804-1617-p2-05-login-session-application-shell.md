@@ -2,7 +2,6 @@
 # P2-05 — Login/session/application shell
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#120](https://github.com/anhnth24/project-example/issues/120)
 Catalog: [`backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md)
 Phase plan: [`phase-2-web-spa.md`](../markhand-web/phase-2-web-spa.md)
@@ -18,7 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> #311. Bearer refresh trong memory (không cookie/CSRF); router + guard matrix.
 
 ## Implementation plan
 
@@ -57,7 +56,7 @@ signup/reset/MFA/OIDC.
 
 - [PR #311](https://github.com/anhnth24/project-example/pull/311) — Web wave 0 remainder and wave 1: client, SSE, mocks, login shell, scope-safe org switch; merged `2026-07-27T03:09:05Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `370c8f738af25f8becb4ecde709057b4ed70a8d4`
 

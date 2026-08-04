@@ -2,7 +2,6 @@
 # P0-09 — Upload threat model, sandbox và license inventory
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#66](https://github.com/anhnth24/project-example/issues/66)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -18,6 +17,7 @@ Security policy thực thi được trước khi nhận upload.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> local-cpu policy/sandbox smoke evidence closes upload
 > threat model, adversarial disposition, and runtime license inventory. This
 > does not claim Profile B malware scanner coverage.
 
@@ -64,7 +64,7 @@ Production malware scanner.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

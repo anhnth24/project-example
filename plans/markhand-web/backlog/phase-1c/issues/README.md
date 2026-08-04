@@ -52,6 +52,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   re-verify, fail-closed OrgContext, RLS, `GET /orgs` / `GET /orgs/{id}` /
   `POST /orgs/switch` / `POST /orgs` with owner provision + audit.
 
+
 - **Plan file:** [1C-01 detailed implementation plan](../../../../reports/plan-260804-1617-1c-01-organization-lifecycle-va-validated-context.md)
 - **Plan/files:** Org create/list/detail/switch, service/repo/middleware; issue new
   context/session after verified membership.
@@ -77,6 +78,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   invites, PATCH/DELETE members, transactional last-owner + owner-tier guards,
   suspend/reactivate, session family revoke, audit allowlist. Membership ACL
   `version` remains deferred to 1C-05; automated email delivery remains out of scope.
+
 
 - **Plan file:** [1C-02 detailed implementation plan](../../../../reports/plan-260804-1617-1c-02-membership-invites-va-last-owner-invariant.md)
 - **Plan/files:** Hashed single-use invite; membership state; transactional last-owner;
@@ -110,6 +112,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   migration `0030` catalog + per-org provision unchanged. P1C.2 disposition: matrix
   follows the fixture. Guard inventory for active operations remains 1C-04 / later PRs.
 
+
 - **Plan file:** [1C-03 detailed implementation plan](../../../../reports/plan-260804-1617-1c-03-canonical-rbac-seed.md)
 - **Plan/files:** Permission constants + DB seed owner/admin/editor/viewer; immutable
   system roles; OpenAPI/web fixture consumers.
@@ -139,6 +142,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   `auth::guard_inventory` completeness/invariants green (60-row OpenAPI/route
   inventory) plus worker config fail-closed tests. Dual-layer route+service
   authorize and least-privilege worker identities landed in PR 3.
+
 
 
 - **Plan file:** [1C-04 detailed implementation plan](../../../../reports/plan-260804-1617-1c-04-route-service-guards-va-service-identities.md)
@@ -171,6 +175,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   branches; migration `0036` dormant-grant rejection; org-wide `acl_version` cache
   invalidation (migrations `0031`/`0033`); `auth::context_cache` freshness check on
   extractor hits.
+
 
 - **Plan file:** [1C-05 detailed implementation plan](../../../../reports/plan-260804-1617-1c-05-collection-acl-resolver-cache.md)
 - **Plan/files:** Private/org/groups grants (**done**); ACL/version
@@ -216,6 +221,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   (`doc.upload` / `doc.quarantine.review` at `AccessLevel::Write`, no read-projection
   inference).
 
+
 - **Plan file:** [1C-06 detailed implementation plan](../../../../reports/plan-260804-1617-1c-06-postgresql-acl-enforcement.md)
 - **Plan/files:** Tenant+ACL predicates cho FTS/hydration/conflict (**done**); upload write
   gate (**done**). Autocomplete không xây (out of scope — xem điểm 4 legacy note bên dưới).
@@ -257,6 +263,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   also ran fast forged-payload / malformed / empty-scope unit pins under
   `storage::qdrant::tests::*` and retrieval forged-candidate deny. Signed-URL N/A
   (capability tokens). Connected cross-org denial suite remains **1C-12**.
+
 
 
 - **Plan file:** [1C-07 detailed implementation plan](../../../../reports/plan-260804-1617-1c-07-qdrant-storage-jobs-fail-closed-enforcement.md)
@@ -312,6 +319,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   paths. Embedding-provider token metering remains backlog (out of issue scope).
 
 
+
 - **Plan file:** [1C-09 detailed implementation plan](../../../../reports/plan-260804-1617-1c-09-atomic-quota-lifecycle.md)
 - **Plan/files:** Reserve/finalize/refund, idempotency/expiry/sweeper/reconcile cho
   storage/token/jobs.
@@ -334,6 +342,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   worker-context pin. Fast unit coverage for per-org rate bucket and
   `workers::fairness::OrgRotation` green in `rust` job. Fairness SLO wall-clock
   remains **1C-13**; GPU semaphore remains N/A-until-GPU.
+
 
 
 - **Plan file:** [1C-10 detailed implementation plan](../../../../reports/plan-260804-1617-1c-10-rate-limit-va-per-org-fairness.md)
@@ -368,6 +377,7 @@ ADR RLS ───────→ 1C-08 ─────────────�
   `audit.view` 403 + deny-audit row, cross-org isolation, and metadata allowlist
   redaction. Direct-service `audit_view_permission_required_at_direct_list_page`
   green in `tests/direct_service_authz.rs`.
+
 
 
 - **Plan file:** [1C-11 detailed implementation plan](../../../../reports/plan-260804-1617-1c-11-audit-admin-apis.md)

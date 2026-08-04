@@ -2,7 +2,6 @@
 # F-08 — Reproducible local development environment
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#53](https://github.com/anhnth24/project-example/issues/53)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ One-command CPU-only dev stack, optional GPU profile.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #173.
 
 ## Implementation plan
 
@@ -57,7 +56,7 @@ Benchmark evidence và production orchestration.
 
 - [PR #173](https://github.com/anhnth24/project-example/pull/173) — feat: add reproducible local development stack; merged `2026-07-17T12:41:30Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `58918f94d1ec5871765639e2569d8a01d01a3258`
 

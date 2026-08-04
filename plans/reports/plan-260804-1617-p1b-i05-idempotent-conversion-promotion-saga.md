@@ -2,7 +2,6 @@
 # P1B-I05 — Idempotent conversion promotion saga
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#88](https://github.com/anhnth24/project-example/issues/88)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,7 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #244 (2026-07-20).
 
 ## Implementation plan
 
@@ -59,7 +58,7 @@ user merge.
 
 - [PR #244](https://github.com/anhnth24/project-example/pull/244) — feat(server): P1B-I05 idempotent conversion promotion saga; merged `2026-07-20T04:29:10Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `35ac9c4018ac91733a12b59d9d43886ed4464e7c`
 

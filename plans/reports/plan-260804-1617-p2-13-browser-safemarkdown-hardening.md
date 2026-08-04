@@ -2,7 +2,6 @@
 # P2-13 — Browser/SafeMarkdown hardening
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#128](https://github.com/anhnth24/project-example/issues/128)
 Catalog: [`backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md)
 Phase plan: [`phase-2-web-spa.md`](../markhand-web/phase-2-web-spa.md)
@@ -18,7 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> SafeMarkdown + sanitize allowlist + content bound ở #311; CSP/frame/nosniff/referrer landed cùng P2-16 (#313). HSTS để cho reverse proxy (không set ở app).
 
 ## Implementation plan
 
@@ -58,7 +57,7 @@ WAF/pentest.
 - [PR #311](https://github.com/anhnth24/project-example/pull/311) — Web wave 0 remainder and wave 1: client, SSE, mocks, login shell, scope-safe org switch; merged `2026-07-27T03:09:05Z`
 - [PR #313](https://github.com/anhnth24/project-example/pull/313) — Web accessibility pass and SPA static serving (P2-14, P2-16); merged `2026-07-27T08:32:24Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `370c8f738af25f8becb4ecde709057b4ed70a8d4`
 - `85991a1bfbf156b48a1d7af68b0088880c866f7f`

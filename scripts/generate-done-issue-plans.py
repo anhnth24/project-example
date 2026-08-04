@@ -448,7 +448,6 @@ def render_plan(
 # {issue.issue_id} — {issue.title}
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: {source_issue}
 Catalog: [`{issue.catalog_html_path}`]({catalog_link})
 Phase plan: [`{issue.phase_plan_html_path}`]({phase_link})

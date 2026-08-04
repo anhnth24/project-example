@@ -2,7 +2,6 @@
 # P0-03 — Mở rộng desktop baseline trên corpus Phase 0
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#60](https://github.com/anhnth24/project-example/issues/60)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -19,6 +18,7 @@ baseline authoritative để việc extraction không phải đợi toàn bộ c
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> real release conversion/local-RAG baseline and independently
 > recomputed evidence accepted as the current-state reference.
 
 ## Implementation plan
@@ -61,7 +61,7 @@ Sửa defect ranking/performance.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

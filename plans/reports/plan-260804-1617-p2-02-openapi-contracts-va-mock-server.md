@@ -2,7 +2,6 @@
 # P2-02 — OpenAPI contracts và mock server
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#117](https://github.com/anhnth24/project-example/issues/117)
 Catalog: [`backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md)
 Phase plan: [`phase-2-web-spa.md`](../markhand-web/phase-2-web-spa.md)
@@ -18,7 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> #311. Generated types + `pnpm api:check` drift gate; mock server sinh từ OpenAPI.
 
 ## Implementation plan
 
@@ -58,7 +57,7 @@ Chờ toàn bộ 1C mới làm UI.
 
 - [PR #311](https://github.com/anhnth24/project-example/pull/311) — Web wave 0 remainder and wave 1: client, SSE, mocks, login shell, scope-safe org switch; merged `2026-07-27T03:09:05Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `370c8f738af25f8becb4ecde709057b4ed70a8d4`
 

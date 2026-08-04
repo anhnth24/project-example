@@ -2,7 +2,6 @@
 # P0-08 — Sizing converter và ingest backpressure
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#65](https://github.com/anhnth24/project-example/issues/65)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -18,6 +17,7 @@ Chốt worker count, limits, timeout, queue và recovery headroom.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> interim local-cpu sizing harness/report closes P0-08
 > deliverables with `targetMatch=false`; Profile B `G0-CAP-INGEST-THROUGHPUT`
 > and production headroom remain blocked until measured on `on-prem-reference`.
 
@@ -62,7 +62,7 @@ Production job engine.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

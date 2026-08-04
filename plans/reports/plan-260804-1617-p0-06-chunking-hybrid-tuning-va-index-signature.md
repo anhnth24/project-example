@@ -2,7 +2,6 @@
 # P0-06 — Chunking, hybrid tuning và index signature
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#63](https://github.com/anhnth24/project-example/issues/63)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -18,6 +17,7 @@ Chốt chunking/hybrid parameters và canonical signature.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> identity schema v2 + expected-chunks + golden `chunkId` fill;
 > neural hybrid (AITeamVN CPU / `local-neural`) on `local-cpu-quality`; frozen RRF
 > `VECTOR_WEIGHT=0.55`; version-citation P/R scored as top-k `(doc,version,chunkId)`;
 > temporal/change/conflict gates via deterministic offline rules. Closes on P0-05
@@ -66,7 +66,7 @@ Server adapters/ACL.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

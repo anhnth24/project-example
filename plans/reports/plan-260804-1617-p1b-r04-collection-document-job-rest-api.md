@@ -2,7 +2,6 @@
 # P1B-R04 — Collection/document/job REST API
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#94](https://github.com/anhnth24/project-example/issues/94)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> all CI-runnable `api_http_contracts` tests green on
 > rust-integration (`b5cc92c`, run
 > [30603158015](https://github.com/anhnth24/project-example/actions/runs/30603158015)/job
 > [91070008980](https://github.com/anhnth24/project-example/actions/runs/30603158015/job/91070008980)),
@@ -70,10 +70,8 @@ admin membership API.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
-- `30603158015`
-- `91070008980`
 - `b5cc92c`
 
 - GitHub sync-closed timestamp: `2026-07-31T06:23:26Z` (recorded for traceability; not treated as the delivery date).

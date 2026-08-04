@@ -2,7 +2,6 @@
 # P2-12 — Usage/quota/reservations
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#127](https://github.com/anhnth24/project-example/issues/127)
 Catalog: [`backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md)
 Phase plan: [`phase-2-web-spa.md`](../markhand-web/phase-2-web-spa.md)
@@ -18,7 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> #317. Usage cards từ `GET /usage` (endpoint tổng hợp landed cùng lát membership); route gate `member.manage`. Actionable 429 dùng chung path với document actions.
 
 ## Implementation plan
 
@@ -56,7 +55,7 @@ billing.
 
 - [PR #317](https://github.com/anhnth24/project-example/pull/317) — Membership admin, end to end: server API + web UI (P2-11, P2-12; 1C-02/1C-11 slice); merged `2026-07-28T06:34:53Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `64b80d47fecad7d28c4a2b2df2422a892d56e46b`
 

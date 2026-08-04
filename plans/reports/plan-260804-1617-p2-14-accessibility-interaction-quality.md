@@ -2,7 +2,6 @@
 # P2-14 — Accessibility/interaction quality
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#129](https://github.com/anhnth24/project-example/issues/129)
 Catalog: [`backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md)
 Phase plan: [`phase-2-web-spa.md`](../markhand-web/phase-2-web-spa.md)
@@ -18,7 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> #313. axe không critical/serious (login/library/modal), focus-sau-route-change, progressbar job. Keyboard cho "ask" chưa làm được vì P2-10 chưa tồn tại.
 
 ## Implementation plan
 
@@ -56,7 +55,7 @@ formal certification/i18n.
 
 - [PR #313](https://github.com/anhnth24/project-example/pull/313) — Web accessibility pass and SPA static serving (P2-14, P2-16); merged `2026-07-27T08:32:24Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `85991a1bfbf156b48a1d7af68b0088880c866f7f`
 

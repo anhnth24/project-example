@@ -2,7 +2,6 @@
 # P0-07 — PG/Qdrant target-scale topology
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#64](https://github.com/anhnth24/project-example/issues/64)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -18,6 +17,7 @@ Chọn Qdrant topology và PG partition strategy bằng mixed-load evidence.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> 1B POC topology selected by offline/synthetic harness:
 > Qdrant shared collection with mandatory `org_id` filter and PG no-partition
 > for the single-org POC. Profile B `G0-SLO-QUERY-P99` / 20M mixed-load
 > evidence still blocks production aggregate scale.
@@ -64,7 +64,7 @@ Production RLS.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

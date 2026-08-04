@@ -2,7 +2,6 @@
 # 1C-07 — Qdrant/storage/jobs fail-closed enforcement
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#109](https://github.com/anhnth24/project-example/issues/109)
 Catalog: [`backlog/phase-1c/issues/README.md`](../markhand-web/backlog/phase-1c/issues/README.md)
 Phase plan: [`phase-1c-multi-org-security.md`](../markhand-web/phase-1c-multi-org-security.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> CI exact-SHA evidence on `6833f57d94949c75ea36609e1055a1139e097c8a`
 > (run [30678318560](https://github.com/anhnth24/project-example/actions/runs/30678318560)):
 > `rust`
 > [91310110938](https://github.com/anhnth24/project-example/actions/runs/30678318560/job/91310110938),
@@ -72,12 +72,9 @@ public sharing/CDN.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
-- `30678318560`
 - `6833f57d94949c75ea36609e1055a1139e097c8a`
-- `91310110925`
-- `91310110938`
 
 - GitHub sync-closed timestamp: `2026-08-01T04:06:30Z` (recorded for traceability; not treated as the delivery date).
 

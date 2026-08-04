@@ -2,7 +2,6 @@
 # P0-04 — Spike infrastructure tái lập
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#61](https://github.com/anhnth24/project-example/issues/61)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -18,6 +17,7 @@ Stack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> reproducible stack, pinned images, three-store lifecycle and bound
 > CPU-smoke evidence passed; Profile B GPU/IOPS measurements remain downstream gates.
 
 ## Implementation plan
@@ -59,7 +59,7 @@ HA/TLS/production orchestration.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

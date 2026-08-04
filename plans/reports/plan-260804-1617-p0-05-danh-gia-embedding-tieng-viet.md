@@ -2,7 +2,6 @@
 # P0-05 — Đánh giá embedding tiếng Việt
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#62](https://github.com/anhnth24/project-example/issues/62)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -19,6 +18,7 @@ trình Phase 0→1B; giữ đường cắt sang on-prem vLLM.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> closed 2026-07-20 on local AITeamVN CPU evidence (ADR 0005
 > Accepted). Selected: `AITeamVN/Vietnamese_Embedding` Recall@5 **0.9261**, nDCG
 > gap **0.0** vs BKAI comparator; `runtime_path=local-neural` on
 > `local-cpu-quality`. GLM cloud embedding path (ADR 0004) superseded — GLM
@@ -72,7 +72,7 @@ Autoscaling; đổi desktop local-hash fallback mặc định.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

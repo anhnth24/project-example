@@ -2,7 +2,6 @@
 # P0-10 — ADR, SLO/RPO/RTO và Phase 0 gate
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#67](https://github.com/anhnth24/project-example/issues/67)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -18,6 +17,7 @@ Chuyển evidence thành quyết định và restore/query-load smoke proof.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> decision/smoke track only; seven architecture decisions Accepted
 > (`phase0-decisions.json`); SLA/risk register + restore/query-load smoke recorded.
 > Not a production Phase 0 numeric exit: Profile B gates (query P95/P99, ingest
 > capacity, DR RPO/RTO, vLLM cutover) remain open (`productionPhase0ExitBlocked=true`).
@@ -65,7 +65,7 @@ Production HA và user onboarding.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

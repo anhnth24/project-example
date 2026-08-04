@@ -2,7 +2,6 @@
 # F-12 — Contributor workflow, setup docs và foundation gate
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#57](https://github.com/anhnth24/project-example/issues/57)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Chứng minh contributor mới có thể setup và tuân conventions.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #181.
 
 ## Implementation plan
 
@@ -59,7 +58,7 @@ Benchmark/business implementation/production runbooks.
 
 - [PR #181](https://github.com/anhnth24/project-example/pull/181) — docs: add contributor setup and Phase F gate; merged `2026-07-17T14:28:28Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `29832476c6a775b56101301dbddcbaa69cc9ed7b`
 

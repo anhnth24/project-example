@@ -2,7 +2,6 @@
 # P1B-I07 — Tombstone delete và reconcile
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#90](https://github.com/anhnth24/project-example/issues/90)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> merged via PR #245; #282 fixed reconcile audit `request_id`
 > length so `live_reconcile_repairs_orphan_vectors` /
 > `live_reconcile_dead_letter_staging_gc` pass under rust-integration. ADR 0015
 > (purge retention semantics) remains Proposed — wording follow-up only, not a
@@ -61,7 +61,7 @@ legal hold/full ACL revoke.
 - [PR #245](https://github.com/anhnth24/project-example/pull/245) — feat(server): P1B-I07 tombstone delete and reconcile; merged `2026-07-20T13:20:36Z`
 - [PR #282](https://github.com/anhnth24/project-example/pull/282) — fix(server): reconcile audit request_id vượt giới hạn 64 ký tự (rust-integration đỏ); merged `2026-07-23T00:52:36Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `633c96de246754ee7624e9cb92a376585d5cd8d4`
 - `e0fe30b2a1b27f0de6c6fb076718003198566964`

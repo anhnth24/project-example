@@ -2,7 +2,6 @@
 # P0-01 — Khóa workload, hardware và gate registry
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#58](https://github.com/anhnth24/project-example/issues/58)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -19,6 +18,7 @@ gate schema được duyệt.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> approved Profile B, numeric targets and fail-closed validators
 > merged to `master`.
 
 ## Implementation plan
@@ -60,7 +60,7 @@ Chọn model và tuyên bố đạt SLA.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

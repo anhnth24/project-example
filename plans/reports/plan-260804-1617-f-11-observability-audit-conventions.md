@@ -2,7 +2,6 @@
 # F-11 — Observability/audit conventions
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#56](https://github.com/anhnth24/project-example/issues/56)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Correlation/metrics/log/audit schema ổn định trước business services.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #179.
 
 ## Implementation plan
 
@@ -59,7 +58,7 @@ Production dashboards/SIEM.
 
 - [PR #179](https://github.com/anhnth24/project-example/pull/179) — feat: define observability and audit contracts; merged `2026-07-17T14:12:01Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `928167ceec39142f91b9188add41d00b048f10a3`
 

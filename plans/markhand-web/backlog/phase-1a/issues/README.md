@@ -18,6 +18,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-01 — Freeze desktop RAG và IPC contracts
 
 - **Status:** Done — merged to `master` via PR #184.
+
 - **Plan file:** [P1A-01 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-01-freeze-desktop-rag-va-ipc-contracts.md)
 - **Objective:** Baseline parity trước khi move code.
 - **Plan:** Inventory tests; fixtures top-k/score/snippet/anchor/answer/fallback/stats/
@@ -34,6 +35,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-02 — Populate knowledge skeleton và enforce dependency boundaries
 
 - **Status:** Done — merged to `master` via PR #186.
+
 - **Plan file:** [P1A-02 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-02-populate-knowledge-skeleton-va-enforce-dependency-bo.md)
 - **Objective:** Hoàn thiện skeleton `crates/knowledge` do F-02 tạo thành reusable
   crate có typed errors và optional desktop features.
@@ -51,6 +53,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-03 — Shared DTO và serde contract
 
 - **Status:** Done — merged to `master` via PR #188.
+
 - **Plan file:** [P1A-03 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-03-shared-dto-va-serde-contract.md)
 - **Objective:** Di chuyển index/search/ask types mà không đổi JSON.
 - **Plan:** Index request/result/stats, hit/anchor/grounded answer/metadata; serde
@@ -67,6 +70,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-04 — Durable identities và index signatures
 
 - **Status:** Done — merged to `master` via PR #189.
+
 - **Plan file:** [P1A-04 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-04-durable-identities-va-index-signatures.md)
 - **Objective:** Deterministic server identities, desktop compatibility.
 - **Plan:** Versioned length-delimited encoding; BLAKE3/SHA-256 document/chunk/index;
@@ -83,6 +87,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-05 — Query, local vectors và embedding plan
 
 - **Status:** Done — merged to `master` after local parity and security gates passed.
+
 - **Plan file:** [P1A-05 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-05-query-local-vectors-va-embedding-plan.md)
 - **Objective:** Tách pure query/embedding preparation.
 - **Plan:** Normalization, feature hash/vector norm, provider plan, dimension check,
@@ -98,6 +103,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-06 — Rank, citation và grounded answer
 
 - **Status:** Done — merged to `master` after parity and prompt-injection gates passed.
+
 - **Plan file:** [P1A-06 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-06-rank-citation-va-grounded-answer.md)
 - **Objective:** Reusable hybrid merge, anchors và grounding.
 - **Plan:** Cosine/RRF/rerank/sort; snippet/page-slide-sheet anchor; extractive answer;
@@ -113,6 +119,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-07 — SQLite desktop storage feature
 
 - **Status:** Done — merged to `master` with atomic storage and legacy DB gates.
+
 - **Plan file:** [P1A-07 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-07-sqlite-desktop-storage-feature.md)
 - **Objective:** Move SQLite persistence, bỏ reverse dependency vào Tauri.
 - **Plan:** Schema/metadata/vector/incremental/FTS/hydration; API nhận DB path +
@@ -129,6 +136,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-08 — Persistent HNSW desktop feature
 
 - **Status:** Done — merged to `master` with legacy binary and recovery gates.
+
 - **Plan file:** [P1A-08 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-08-persistent-hnsw-desktop-feature.md)
 - **Objective:** Move optional ANN cache, SQLite vẫn authority.
 - **Plan:** Manifest/partition/rebuild/search/clear; legacy signature compatibility;
@@ -145,6 +153,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-09 — Thin Tauri adapters
 
 - **Status:** Done — merged to `master` with backend/frontend IPC parity.
+
 - **Plan file:** [P1A-09 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-09-thin-tauri-adapters.md)
 - **Objective:** Desktop commands delegate shared crate, IPC giữ nguyên.
 - **Plan:** Tauri giữ state/settings/path load/spawn_blocking/error mapping; delegate
@@ -161,6 +170,7 @@ P1A-01 → P1A-02 → P1A-03 ─┬→ P1A-04
 ## P1A-10 — CI parity và extraction gate
 
 - **Status:** Done — merged to `master`; full local extraction gate passed.
+
 - **Plan file:** [P1A-10 detailed implementation plan](../../../../reports/plan-260804-1617-p1a-10-ci-parity-va-extraction-gate.md)
 - **Objective:** Chứng minh desktop equivalence và server usability.
 - **Plan:** Full feature/contract/golden matrix; no-feature server consumer test;

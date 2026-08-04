@@ -2,7 +2,6 @@
 # P0-02 — Golden corpus tiếng Việt và adversarial corpus
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#59](https://github.com/anhnth24/project-example/issues/59)
 Catalog: [`backlog/phase-0/issues/README.md`](../markhand-web/backlog/phase-0/issues/README.md)
 Phase plan: [`phase-0-discovery-and-gates.md`](../markhand-web/phase-0-discovery-and-gates.md)
@@ -18,6 +17,7 @@ Dataset tái lập cho conversion, retrieval, citation và upload attack.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> deterministic version/conflict corpus, dual adjudication and
 > strict reproducibility gates passed.
 
 ## Implementation plan
@@ -62,7 +62,7 @@ Customer data và expected chunk ID trước khi chốt chunking.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

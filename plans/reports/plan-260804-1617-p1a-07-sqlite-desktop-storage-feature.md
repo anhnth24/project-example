@@ -2,7 +2,6 @@
 # P1A-07 — SQLite desktop storage feature
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#74](https://github.com/anhnth24/project-example/issues/74)
 Catalog: [`backlog/phase-1a/issues/README.md`](../markhand-web/backlog/phase-1a/issues/README.md)
 Phase plan: [`phase-1a-knowledge-extraction.md`](../markhand-web/phase-1a-knowledge-extraction.md)
@@ -18,7 +17,7 @@ Move SQLite persistence, bỏ reverse dependency vào Tauri.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` with atomic storage and legacy DB gates.
 
 ## Implementation plan
 
@@ -57,7 +56,7 @@ PostgreSQL/perf redesign.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

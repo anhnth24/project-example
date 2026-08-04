@@ -2,7 +2,6 @@
 # P1B-O04 — Vertical-slice/security release suite
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#100](https://github.com/anhnth24/project-example/issues/100)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> live release gate 2026-07-26 at `f4f33cd`:
 > `o04-release.json` `status=pass` with no blockers, validated through
 > `MARKHAND_RELEASE_GATE=1 cargo test -p fileconv-server --test e2e_release_suite`
 > (3/3). Full workload format matrix observed (csv, docx, html, pdf, png OCR,
@@ -73,7 +73,7 @@ full 1C matrix.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `949e14202849cf8b`
 - `f4f33cd`

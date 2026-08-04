@@ -2,7 +2,6 @@
 # 1C-01 — Organization lifecycle và validated context
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#102](https://github.com/anhnth24/project-example/issues/102)
 Catalog: [`backlog/phase-1c/issues/README.md`](../markhand-web/backlog/phase-1c/issues/README.md)
 Phase plan: [`phase-1c-multi-org-security.md`](../markhand-web/phase-1c-multi-org-security.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> CI exact-SHA evidence on `a62850422dd070e7e1195bfe1d4f1dee0d73566d`
 > (run [30629207747](https://github.com/anhnth24/project-example/actions/runs/30629207747)):
 > `rust` [91151657403](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657403),
 > `web` [91151657388](https://github.com/anhnth24/project-example/actions/runs/30629207747/job/91151657388),
@@ -72,12 +72,8 @@ billing/OIDC.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
-- `30629207747`
-- `91151657388`
-- `91151657399`
-- `91151657403`
 - `a62850422dd070e7e1195bfe1d4f1dee0d73566d`
 
 - GitHub sync-closed timestamp: `2026-08-01T00:18:29Z` (recorded for traceability; not treated as the delivery date).

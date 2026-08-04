@@ -2,7 +2,6 @@
 # P2-09 — Download/delete/reindex/retry
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#124](https://github.com/anhnth24/project-example/issues/124)
 Catalog: [`backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md)
 Phase plan: [`phase-2-web-spa.md`](../markhand-web/phase-2-web-spa.md)
@@ -18,7 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> #312. Capability issue+redeem, delete tombstone có confirm. Không có endpoint retry-convert nên "thử lại" = reindex (ghi rõ trong UI).
 
 ## Implementation plan
 
@@ -56,7 +55,7 @@ purge policy.
 
 - [PR #312](https://github.com/anhnth24/project-example/pull/312) — Web: Organic design system, left rail shell, and library wave 2 (P2-07/08/09); merged `2026-07-27T05:59:33Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `461417bc700811e5ebb251ff76caac11c13cc07c`
 

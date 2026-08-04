@@ -2,7 +2,6 @@
 # P1B-O02 — Dashboards, alerts và runbooks
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#98](https://github.com/anhnth24/project-example/issues/98)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> live tabletop 2026-07-26 at `f4f33cd`: `o02-alerts.json`
 > `status=pass`, 31 passes / 0 fails, no blockers. Real fault executed against
 > the POC stack: `MarkhandDependencyDown` fired at 150s while Postgres was
 > stopped and went absent 24s after restore, both snapshots taken from the live
@@ -72,7 +72,7 @@ staffing.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `56f0475a26fd174d`
 - `f4f33cd`

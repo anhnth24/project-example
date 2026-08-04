@@ -2,7 +2,6 @@
 # P2-08 — Upload progress và job lifecycle
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#123](https://github.com/anhnth24/project-example/issues/123)
 Catalog: [`backlog/phase-2/issues/README.md`](../markhand-web/backlog/phase-2/issues/README.md)
 Phase plan: [`phase-2-web-spa.md`](../markhand-web/phase-2-web-spa.md)
@@ -18,6 +17,8 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> #312. XHR progress thật, job SSE-nudge → `GET /jobs/{id}`. Không quan sát được stage index (API chỉ trả convert job id) — báo "converted, indexing tiếp server-side".
+>
 > **Cập nhật (badge tự cập nhật khi tài liệu đang xử lý, 2026-07-29 — owner critique:
 > "trạng thái document chưa đúng giai đoạn xử lý khi load lại trang hoặc mở chức năng
 > khác rồi quay lại"):** `LibraryPage` trước đó chỉ `refreshDocuments()` (refetch
@@ -78,7 +79,7 @@ folder/watch/resumable protocol.
 
 - [PR #312](https://github.com/anhnth24/project-example/pull/312) — Web: Organic design system, left rail shell, and library wave 2 (P2-07/08/09); merged `2026-07-27T05:59:33Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `461417bc700811e5ebb251ff76caac11c13cc07c`
 

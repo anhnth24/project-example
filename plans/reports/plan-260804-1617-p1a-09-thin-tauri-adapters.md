@@ -2,7 +2,6 @@
 # P1A-09 — Thin Tauri adapters
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#76](https://github.com/anhnth24/project-example/issues/76)
 Catalog: [`backlog/phase-1a/issues/README.md`](../markhand-web/backlog/phase-1a/issues/README.md)
 Phase plan: [`phase-1a-knowledge-extraction.md`](../markhand-web/phase-1a-knowledge-extraction.md)
@@ -18,7 +17,7 @@ Desktop commands delegate shared crate, IPC giữ nguyên.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` with backend/frontend IPC parity.
 
 ## Implementation plan
 
@@ -57,7 +56,7 @@ UI/IPC rename/async redesign.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - UNKNOWN — no completion/evidence commit is cited in the catalog status.
 

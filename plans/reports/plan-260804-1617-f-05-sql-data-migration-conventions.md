@@ -2,7 +2,6 @@
 # F-05 — SQL/data/migration conventions
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#50](https://github.com/anhnth24/project-example/issues/50)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Ngăn schema/tenant/migration conventions bị phát minh theo từng PR.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #164.
 
 ## Implementation plan
 
@@ -58,7 +57,7 @@ Business tables và RLS decision.
 
 - [PR #164](https://github.com/anhnth24/project-example/pull/164) — docs: establish SQL migration conventions; merged `2026-07-17T08:18:04Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `8d8b326c9420744c7b07a0b61ead1f034df72ad6`
 

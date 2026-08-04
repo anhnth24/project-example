@@ -2,7 +2,6 @@
 # F-06 — REST/OpenAPI/SSE/error conventions
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#51](https://github.com/anhnth24/project-example/issues/51)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Contract thống nhất để backend/web không drift.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #165.
 
 ## Implementation plan
 
@@ -60,7 +59,7 @@ Business endpoints.
 
 - [PR #165](https://github.com/anhnth24/project-example/pull/165) — feat: establish API and SSE contract conventions; merged `2026-07-17T10:13:29Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `599a63c30ecc3ba072f3f56a0a51e691c12de838`
 

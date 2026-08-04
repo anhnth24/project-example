@@ -2,7 +2,6 @@
 # F-10 — Test pyramid, fixtures và golden-data conventions
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#55](https://github.com/anhnth24/project-example/issues/55)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Chuẩn test/evidence dùng chung trước Phase 0/1A.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #175.
 
 ## Implementation plan
 
@@ -58,7 +57,7 @@ Viết toàn bộ golden corpus.
 
 - [PR #175](https://github.com/anhnth24/project-example/pull/175) — test: establish fixture and evidence conventions; merged `2026-07-17T13:35:19Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `33a22d929d81f6abf6fb6c58f30dd1c78b0a2e5a`
 

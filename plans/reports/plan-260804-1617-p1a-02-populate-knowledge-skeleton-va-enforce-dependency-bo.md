@@ -2,7 +2,6 @@
 # P1A-02 — Populate knowledge skeleton và enforce dependency boundaries
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#69](https://github.com/anhnth24/project-example/issues/69)
 Catalog: [`backlog/phase-1a/issues/README.md`](../markhand-web/backlog/phase-1a/issues/README.md)
 Phase plan: [`phase-1a-knowledge-extraction.md`](../markhand-web/phase-1a-knowledge-extraction.md)
@@ -19,7 +18,7 @@ crate có typed errors và optional desktop features.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #186.
 
 ## Implementation plan
 
@@ -58,7 +57,7 @@ PG/Qdrant/server.
 
 - [PR #186](https://github.com/anhnth24/project-example/pull/186) — feat: populate reusable knowledge crate skeleton; merged `2026-07-17T16:44:42Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `cf80285d97f6915d32c6c202cffbabc3c8cba3bb`
 

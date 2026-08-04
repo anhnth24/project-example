@@ -2,7 +2,6 @@
 # P1A-04 — Durable identities và index signatures
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#71](https://github.com/anhnth24/project-example/issues/71)
 Catalog: [`backlog/phase-1a/issues/README.md`](../markhand-web/backlog/phase-1a/issues/README.md)
 Phase plan: [`phase-1a-knowledge-extraction.md`](../markhand-web/phase-1a-knowledge-extraction.md)
@@ -18,7 +17,7 @@ Deterministic server identities, desktop compatibility.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #189.
 
 ## Implementation plan
 
@@ -57,7 +56,7 @@ Chọn model.
 
 - [PR #189](https://github.com/anhnth24/project-example/pull/189) — feat: add durable knowledge identities and signatures; merged `2026-07-17T16:57:53Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `84ff303802fd9e0cffce31d0383fd0e3d274a2b1`
 

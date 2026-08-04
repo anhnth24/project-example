@@ -2,7 +2,6 @@
 # F-07 — Configuration, secrets và environment profiles
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#52](https://github.com/anhnth24/project-example/issues/52)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Typed, fail-fast, secret-safe config cho local/test/prod.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #171.
 
 ## Implementation plan
 
@@ -57,7 +56,7 @@ Production secret-manager implementation.
 
 - [PR #171](https://github.com/anhnth24/project-example/pull/171) — feat: add typed server configuration profiles; merged `2026-07-17T11:36:55Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `ddedd02c60c19e9a06d1f0d5222e93d1183f692a`
 

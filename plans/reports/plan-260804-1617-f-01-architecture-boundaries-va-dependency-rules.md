@@ -2,7 +2,6 @@
 # F-01 — Architecture boundaries và dependency rules
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#46](https://github.com/anhnth24/project-example/issues/46)
 Catalog: [`backlog/phase-f/issues/README.md`](../markhand-web/backlog/phase-f/issues/README.md)
 Phase plan: [`phase-f-engineering-foundation.md`](../markhand-web/phase-f-engineering-foundation.md)
@@ -18,7 +17,7 @@ Khóa dependency direction và module responsibilities trước scaffold.
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
-> Catalog records status as Done.
+> merged to `master` via PR #160.
 
 ## Implementation plan
 
@@ -62,7 +61,7 @@ Storage trait tổng quát và business implementation.
 
 - [PR #160](https://github.com/anhnth24/project-example/pull/160) — docs: establish Markhand Web architecture boundaries; merged `2026-07-17T08:08:21Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `ab3cc97f41a2021a8074500f808e220df9d54bbe`
 

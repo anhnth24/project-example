@@ -2,7 +2,6 @@
 # P1B-R01 — Tenant-scoped hybrid retrieval
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#91](https://github.com/anhnth24/project-example/issues/91)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> PR #252 + authorization hardening PR #254 merged; hermetic
 > unit acceptance in `services/retrieval` and gated PG tests in `tests/retrieval.rs`.
 
 ## Implementation plan
@@ -61,7 +61,7 @@ new reranker.
 - [PR #252](https://github.com/anhnth24/project-example/pull/252) — feat(server): P1B-R01 tenant-scoped hybrid retrieval; merged `2026-07-21T13:12:25Z`
 - [PR #254](https://github.com/anhnth24/project-example/pull/254) — fix(server): complete P1B-R01 authorization gates; merged `2026-07-21T15:35:28Z`
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 - `6fbd417d00b9d9da545c230aed8ffd6b98f131d6`
 - `749689600432bd8d80d5df38ab462a561a3ad5b0`

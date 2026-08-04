@@ -2,7 +2,6 @@
 # P1B-F02 — POC deployment và isolation scaffold
 
 Date: 2026-08-04
-Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: [#79](https://github.com/anhnth24/project-example/issues/79)
 Catalog: [`backlog/phase-1b/issues/README.md`](../markhand-web/backlog/phase-1b/issues/README.md)
 Phase plan: [`phase-1b-single-org-poc.md`](../markhand-web/phase-1b-single-org-poc.md)
@@ -18,6 +17,7 @@ Not separately recorded in the compact catalog card. The recorded outcome is the
 - The catalog is the status authority.
 - Historical status/evidence recorded by the catalog:
 
+> live boot evidence regenerated 2026-07-26 on a 24-core
 > Ubuntu 22.04 host from a clean tree at `f4f33cd`:
 > `poc-f02-boot.json` `passed=true`, 81 checks / 0 fails, project
 > `markhand-poc-f02-20260726t121843z-1815269-17292`, clean project boot measured,
@@ -67,10 +67,8 @@ Kubernetes/HA.
 
 - UNKNOWN — no implementation PR is cited in the catalog status.
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
-- `1815269`
-- `20260726`
 - `9d7214df30e57a95`
 - `f4f33cd`
 

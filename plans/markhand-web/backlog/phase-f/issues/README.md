@@ -22,6 +22,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-01 — Architecture boundaries và dependency rules
 
 - **Status:** Done — merged to `master` via PR #160.
+
 - **Plan file:** [F-01 detailed implementation plan](../../../../reports/plan-260804-1617-f-01-architecture-boundaries-va-dependency-rules.md)
 - **Objective:** Khóa dependency direction và module responsibilities trước scaffold.
 - **Implementation plan:** Viết architecture boundary ADR; define allowed/forbidden
@@ -43,6 +44,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-02 — Workspace và folder skeleton
 
 - **Status:** Done — merged to `master` via PR #160.
+
 - **Plan file:** [F-02 detailed implementation plan](../../../../reports/plan-260804-1617-f-02-workspace-va-folder-skeleton.md)
 - **Objective:** Tạo khung compile được cho knowledge/server/web/deploy/docs/bench.
 - **Implementation plan:** Add workspace members với minimal libraries/binaries; module
@@ -63,6 +65,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-03 — Rust coding và crate conventions
 
 - **Status:** Done — merged to `master` via PR #160.
+
 - **Plan file:** [F-03 detailed implementation plan](../../../../reports/plan-260804-1617-f-03-rust-coding-va-crate-conventions.md)
 - **Objective:** Một chuẩn Rust bắt buộc cho core/knowledge/server/workers.
 - **Implementation plan:** Rustfmt/clippy policy; error/context; async vs blocking;
@@ -80,6 +83,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-04 — TypeScript/React conventions
 
 - **Status:** Done — merged to `master` via PR #160.
+
 - **Plan file:** [F-04 detailed implementation plan](../../../../reports/plan-260804-1617-f-04-typescript-react-conventions.md)
 - **Objective:** Chuẩn strict TS, component/hook/state và accessibility cho web.
 - **Implementation plan:** TS strict policy; generated API immutable; naming/import
@@ -96,6 +100,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-05 — SQL/data/migration conventions
 
 - **Status:** Done — merged to `master` via PR #164.
+
 - **Plan file:** [F-05 detailed implementation plan](../../../../reports/plan-260804-1617-f-05-sql-data-migration-conventions.md)
 - **Objective:** Ngăn schema/tenant/migration conventions bị phát minh theo từng PR.
 - **Implementation plan:** Naming/types/time/UUID/FK/check/index; `org_id`; transaction/
@@ -113,6 +118,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-06 — REST/OpenAPI/SSE/error conventions
 
 - **Status:** Done — merged to `master` via PR #165.
+
 - **Plan file:** [F-06 detailed implementation plan](../../../../reports/plan-260804-1617-f-06-rest-openapi-sse-error-conventions.md)
 - **Objective:** Contract thống nhất để backend/web không drift.
 - **Implementation plan:** `/api/v1`; resources/pagination/idempotency; canonical error;
@@ -132,6 +138,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-07 — Configuration, secrets và environment profiles
 
 - **Status:** Done — merged to `master` via PR #171.
+
 - **Plan file:** [F-07 detailed implementation plan](../../../../reports/plan-260804-1617-f-07-configuration-secrets-va-environment-profiles.md)
 - **Objective:** Typed, fail-fast, secret-safe config cho local/test/prod.
 - **Implementation plan:** Define precedence; profile schema; mounted secret/env
@@ -148,6 +155,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-08 — Reproducible local development environment
 
 - **Status:** Done — merged to `master` via PR #173.
+
 - **Plan file:** [F-08 detailed implementation plan](../../../../reports/plan-260804-1617-f-08-reproducible-local-development-environment.md)
 - **Objective:** One-command CPU-only dev stack, optional GPU profile.
 - **Implementation plan:** Pin PG/Qdrant/MinIO/OTel; init buckets/extensions; health/
@@ -164,6 +172,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-09 — Root task runner, quality tools và CI baseline
 
 - **Status:** Done — merged to `master` via PR #177.
+
 - **Plan file:** [F-09 detailed implementation plan](../../../../reports/plan-260804-1617-f-09-root-task-runner-quality-tools-va-ci-baseline.md)
 - **Objective:** Cùng command local/CI cho format/lint/test/build/dev/migrate.
 - **Implementation plan:** Add `just`/equivalent root tasks theo test conventions
@@ -183,6 +192,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-10 — Test pyramid, fixtures và golden-data conventions
 
 - **Status:** Done — merged to `master` via PR #175.
+
 - **Plan file:** [F-10 detailed implementation plan](../../../../reports/plan-260804-1617-f-10-test-pyramid-fixtures-va-golden-data-conventions.md)
 - **Objective:** Chuẩn test/evidence dùng chung trước Phase 0/1A.
 - **Implementation plan:** Define unit/integration/contract/denial/E2E/benchmark/
@@ -200,6 +210,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-11 — Observability/audit conventions
 
 - **Status:** Done — merged to `master` via PR #179.
+
 - **Plan file:** [F-11 detailed implementation plan](../../../../reports/plan-260804-1617-f-11-observability-audit-conventions.md)
 - **Objective:** Correlation/metrics/log/audit schema ổn định trước business services.
 - **Implementation plan:** Field names; request/job/version/signature propagation;
@@ -218,6 +229,7 @@ Diagram là critical path rút gọn; trường `Dependencies/blocks` là author
 ## F-12 — Contributor workflow, setup docs và foundation gate
 
 - **Status:** Done — merged to `master` via PR #181.
+
 - **Plan file:** [F-12 detailed implementation plan](../../../../reports/plan-260804-1617-f-12-contributor-workflow-setup-docs-va-foundation-gate.md)
 - **Objective:** Chứng minh contributor mới có thể setup và tuân conventions.
 - **Implementation plan:** ADR/RFC templates/index; ownership/CODEOWNERS; issue/PR
