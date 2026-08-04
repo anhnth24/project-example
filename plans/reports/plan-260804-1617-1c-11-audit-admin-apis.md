@@ -65,6 +65,7 @@ scope**, chưa làm).
 
 No document/prompt/token/PII/URL (allowlist per-action giữ
 nguyên, `audit.read` chỉ thêm `result_count`). Không migration mới — RLS/seed
+permission đã có sẵn.
 
 ## Out of scope
 

@@ -70,6 +70,7 @@ leak; SQL join/subquery/missing-predicate tests — green on CI
 ## Security and migration notes
 
 PG authority, prepared queries; migration `0036` dormant-grant
+rejection enforced at seed + runtime.
 
 ## Out of scope
 

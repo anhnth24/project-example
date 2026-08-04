@@ -146,6 +146,9 @@ def parse_fields(section: str) -> dict[str, str]:
         stripped = raw_line.strip()
         matches = list(FIELD_PATTERN.finditer(stripped))
         if matches:
+            leading_text = stripped[: matches[0].start()].strip()
+            if current_key is not None and leading_text not in {"", "-"}:
+                current_lines.append(leading_text)
             flush()
             for index, match in enumerate(matches):
                 key = canonical_key(match.group("key"))

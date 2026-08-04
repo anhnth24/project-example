@@ -68,6 +68,7 @@ replay/expiry, escalation tests — green on CI
 
 Row lock (`FOR UPDATE` trên owner rows), expand/backfill
 version (deferred to 1C-05); plaintext invite không lưu DB/log (chỉ trả 1 lần trong
+response).
 
 ## Out of scope
 

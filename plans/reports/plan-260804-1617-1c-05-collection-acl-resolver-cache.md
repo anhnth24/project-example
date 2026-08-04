@@ -79,6 +79,7 @@ migration `0031`). **Gap version-bump đã ĐÓNG (migration `0033`, 2026-07-29)
 DB `bump_org_acl_version()` trên `collections`/`collection_user_access`/
 `org_memberships`/`roles`/`role_permissions` — bump cùng transaction cho MỌI writer,
 kể cả SQL trực tiếp (fixtures/vận hành; CI `rust-integration` bắt được đúng lỗ này
+ở `api_http_contracts`/`citation_authz_matrix` trước khi vá).
 
 ## Out of scope
 

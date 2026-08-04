@@ -47,6 +47,7 @@ The source catalog records implementation and file scope together; see **Impleme
 ## Dependencies / blocks
 
 1C-09 (dùng lại reservation `concurrent_jobs`) + Phase 0 SLO/capacity
+(chỉ còn cần cho phần SLO 1C-13).
 
 ## Acceptance criteria
 

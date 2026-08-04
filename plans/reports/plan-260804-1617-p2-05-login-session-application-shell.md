@@ -45,6 +45,7 @@ integration CSRF/cookie-origin contract theo auth ADR.
 
 Transport theo auth ADR. Nếu chọn cookie: HttpOnly/Secure/SameSite +
 CSRF/Origin contract; nếu chọn bearer refresh: không cookie/CSRF nhưng token không
+được persist/log. Server luôn là authority.
 
 ## Out of scope
 
