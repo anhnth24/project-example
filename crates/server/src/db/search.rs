@@ -158,6 +158,33 @@ fn historical_retrieval_acl_predicate(
     )
 }
 
+/// Non-sensitive summary of production FTS query normalization (token count only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NormalizedFtsQueryStats {
+    pub token_count: usize,
+    pub nonempty: bool,
+}
+
+/// Summarizes accent-fold + stop-word filtering applied before `plainto_tsquery`.
+pub fn normalized_fts_query_stats(query: &str) -> NormalizedFtsQueryStats {
+    let normalized = normalize_fts_query(query);
+    let token_count = normalized
+        .split_whitespace()
+        .filter(|token| !token.is_empty())
+        .count();
+    NormalizedFtsQueryStats {
+        token_count,
+        nonempty: !normalized.trim().is_empty(),
+    }
+}
+
+/// Production FTS normalization for SQL bind parity in integration diagnostics.
+///
+/// Callers must never log or persist the returned string (marker/query leakage).
+pub fn normalized_fts_query_for_retrieval(query: &str) -> String {
+    normalize_fts_query(query)
+}
+
 fn normalize_fts_query(query: &str) -> String {
     const QUESTION_STOP_WORDS: &[&str] = &["bao", "nhieu", "la", "gi", "nao"];
     let normalized = fileconv_core::intelligence::normalize_search_text(query);
@@ -836,6 +863,26 @@ mod tests {
             "bao nhieu",
             "all-stop-word questions must retain a non-empty fallback"
         );
+    }
+
+    #[test]
+    fn marker_shaped_denial_query_stats_are_non_empty() {
+        let marker = format!("phase1c-marker-alpha-{}", "a".repeat(32));
+        let stats = normalized_fts_query_stats(&marker);
+        assert!(stats.nonempty);
+        assert!(stats.token_count >= 3);
+    }
+
+    #[test]
+    fn normalized_fts_query_stats_count_tokens_without_logging_query() {
+        let query = "Kinh phí được phê duyệt là bao nhiêu?";
+        let stats = normalized_fts_query_stats(query);
+        let normalized_token_count = normalized_fts_query_for_retrieval(query)
+            .split_whitespace()
+            .count();
+        assert!(stats.nonempty);
+        assert_eq!(normalized_token_count, 5);
+        assert_eq!(stats.token_count, normalized_token_count);
     }
 
     /// 1C-06: chunk/claim queries route ACL through the shared

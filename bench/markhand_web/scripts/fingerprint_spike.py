@@ -9,12 +9,14 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import math
 import os
 import platform
 import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Sequence
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -45,6 +47,20 @@ EMBEDDING_STUB_DIMENSIONS = (8, 768)
 EMBEDDING_STUB_DEFAULT_DIMENSIONS = re.compile(
     r"MARKHAND_MOCK_EMBEDDING_DIMENSIONS\",\s*\"(\d+)\""
 )
+EMBEDDING_PROBE_QUANTUM = 1_000_000_000
+
+
+def serialize_embedding_probe_component(value: float) -> str:
+    if not math.isfinite(value):
+        raise ValueError(f"non-finite embedding probe component: {value!r}")
+    return str(round(value * EMBEDDING_PROBE_QUANTUM))
+
+
+def serialize_embedding_probe_vector(vector: Sequence[float]) -> bytes:
+    return json.dumps(
+        [serialize_embedding_probe_component(value) for value in vector],
+        separators=(",", ":"),
+    ).encode()
 
 
 def embedding_stub_seal(path: Path) -> str:
@@ -70,7 +86,7 @@ def embedding_stub_seal(path: Path) -> str:
     for dimensions in EMBEDDING_STUB_DIMENSIONS:
         for probe in EMBEDDING_STUB_PROBES:
             vector = module.embedding_for(probe, dimensions)
-            digest.update(json.dumps([f"{value:.17g}" for value in vector]).encode())
+            digest.update(serialize_embedding_probe_vector(vector))
             digest.update(b"\0")
     return digest.hexdigest()
 

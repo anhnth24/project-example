@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Sequence
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,6 +57,22 @@ EMBEDDING_STUB_DIMENSIONS = (8, 768)
 EMBEDDING_STUB_DEFAULT_DIMENSIONS = re.compile(
     r"MARKHAND_MOCK_EMBEDDING_DIMENSIONS\",\s*\"(\d+)\""
 )
+# Probe outputs are sealed with fixed-scale integer quantization so CPython
+# 3.10/3.12 float summation differences in l2_normalize cannot drift the hash.
+EMBEDDING_PROBE_QUANTUM = 1_000_000_000
+
+
+def serialize_embedding_probe_component(value: float) -> str:
+    if not math.isfinite(value):
+        raise ValueError(f"non-finite embedding probe component: {value!r}")
+    return str(round(value * EMBEDDING_PROBE_QUANTUM))
+
+
+def serialize_embedding_probe_vector(vector: Sequence[float]) -> bytes:
+    return json.dumps(
+        [serialize_embedding_probe_component(value) for value in vector],
+        separators=(",", ":"),
+    ).encode()
 
 
 def embedding_stub_seal(path: Path) -> str:
@@ -84,7 +101,7 @@ def embedding_stub_seal(path: Path) -> str:
     for dimensions in EMBEDDING_STUB_DIMENSIONS:
         for probe in EMBEDDING_STUB_PROBES:
             vector = module.embedding_for(probe, dimensions)
-            digest.update(json.dumps([f"{value:.17g}" for value in vector]).encode())
+            digest.update(serialize_embedding_probe_vector(vector))
             digest.update(b"\0")
     return digest.hexdigest()
 
@@ -645,6 +662,16 @@ class EmbeddingStubSealTests(unittest.TestCase):
         spec.loader.exec_module(writer)
         self.assertEqual(writer.IMPLEMENTATION_FILES, IMPLEMENTATION_FILES)
         self.assertEqual(writer.implementation_sha256(), implementation_sha256())
+
+    def test_sub_precision_probe_differences_serialize_identically(self) -> None:
+        left = serialize_embedding_probe_component(0.123456789012345)
+        right = serialize_embedding_probe_component(0.123456789012346)
+        self.assertEqual(left, right)
+
+    def test_meaningful_probe_differences_do_not_serialize_identically(self) -> None:
+        left = serialize_embedding_probe_component(0.123456789)
+        right = serialize_embedding_probe_component(0.123456790)
+        self.assertNotEqual(left, right)
 
 
 class SpikeValidatorTests(unittest.TestCase):

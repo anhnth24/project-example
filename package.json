@@ -8,6 +8,9 @@
   "pnpm": {
     "auditConfig": {
       "ignoreGhsas": ["GHSA-52cp-r559-cp3m"]
+    },
+    "overrides": {
+      "undici": "7.29.0"
     }
   }
 }
