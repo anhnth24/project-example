@@ -107,7 +107,9 @@ Không đo lại = không claims "nhanh/đúng hơn". Quy tắc Fail loud: báo 
   không gánh chi phí này.
 - `cuda` / `metal` / `vulkan` / `hipblas` / `openblas` / `openmp` → **kéo theo feature `audio`** (proxy
   sang `whisper-rs` để tăng tốc GPU/BLAS), không bật độc lập được.
-- `llm` → `reqwest` (blocking, rustls-tls) + `base64`, mở `pub mod llm`. **MCP crate luôn build với `llm`.**
+- `llm` → `reqwest` (blocking, rustls-tls) + `httpdate`, mở `pub mod llm`. `base64` là dependency
+  **không điều kiện** (dùng cả ngoài `llm`, ví dụ `pptx_preview.rs`), không phải feature dep của `llm`.
+  **MCP crate luôn build với `llm`.**
 
 ## Build native (yêu cầu môi trường)
 

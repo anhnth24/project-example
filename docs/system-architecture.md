@@ -17,18 +17,24 @@ Browser SPA ──HTTP/SSE──► fileconv-server
                               └── workers ──► fileconv CLI/core
 ```
 
-Hai luồng độc lập, không đi qua nhau:
+Hai ranh giới sản phẩm, không phải hai luồng tách biệt hoàn toàn — `fileconv-core`
+có giao điểm ở cả hai bên:
 
 - **CLI (`fileconv`) / Desktop "Markhand" / MCP (`fileconv-mcp`)** gọi thẳng
   `fileconv-core` trong tiến trình (path-dep, không HTTP) — `Converter::convert_path`/
   `convert_path_detailed` định tuyến theo `FormatKind` rồi chạm các native runtime
   PDF/OCR/audio (PDFium, Tesseract, Whisper) có cache. Nhóm này chạy **offline**,
   không cần Docker/Compose.
-- **Browser SPA (`web/`)** chỉ nói HTTP/SSE với **`fileconv-server`**
-  (`crates/server`): route/service/repository sở hữu auth, PostgreSQL, Qdrant
-  (vector), MinIO (object store); retrieval/grounding đi qua contract
-  `fileconv-knowledge`; các job nặng (convert/index/embedding) chạy trong
-  **worker** riêng, worker gọi lại `fileconv` CLI/`fileconv-core` để convert.
+- **Browser SPA (`web/`)** không bao giờ link `fileconv-core` — chỉ nói HTTP/SSE với
+  **`fileconv-server`** (`crates/server`): route/service/repository sở hữu auth,
+  PostgreSQL, Qdrant (vector), MinIO (object store); retrieval/grounding đi qua
+  contract `fileconv-knowledge`. Ngược lại, **`fileconv-server` có path-dependency
+  thẳng vào `fileconv-core`** (`crates/server/Cargo.toml`) để dùng chung các
+  primitive chunk/normalize/runtime — `chunk::{chunk_markdown, normalize_newlines,
+  locate_chunk_span, locate_chunk_text}`, `intelligence::normalize_search_text`,
+  `embedding_runtime` — không qua HTTP; **riêng job nặng (convert/index/embedding)**
+  chạy trong **worker** riêng, worker gọi converter path bằng cách spawn subprocess
+  `fileconv` CLI (mà CLI đó path-dep `fileconv-core` để convert).
   Luồng Markhand Web này **cần Compose** (`deploy/dev/compose.yml`, xem
   [`runbooks/local-development.md`](runbooks/local-development.md)) để
   dựng PostgreSQL/Qdrant/MinIO cho phát triển local; phát triển CLI/desktop

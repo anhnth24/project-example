@@ -312,22 +312,25 @@ embedding.
    `run_upload_saga`) — không cần enqueue thủ công.
 4. Theo dõi job bằng `jobId` trong response upload:
 
-```bash
-JOB_ID=<jobId lấy từ response upload>
+   ```bash
+   JOB_ID=<jobId lấy từ response upload>
 
-curl -sS http://127.0.0.1:8787/api/v1/jobs/$JOB_ID \
-  -H "Authorization: Bearer $TOKEN"
+   curl -sS http://127.0.0.1:8787/api/v1/jobs/$JOB_ID \
+     -H "Authorization: Bearer $TOKEN"
 
-# hoặc theo dõi realtime qua SSE
-curl -sS -N http://127.0.0.1:8787/api/v1/jobs/$JOB_ID/events \
-  -H "Authorization: Bearer $TOKEN"
-```
+   # hoặc theo dõi realtime qua SSE
+   curl -sS -N http://127.0.0.1:8787/api/v1/jobs/$JOB_ID/events \
+     -H "Authorization: Bearer $TOKEN"
+   ```
 
    Convert worker hoàn tất → promotion (chốt version/markdown artifact hiện tại) ghi outbox
-   event `document.index_requested`; chính index worker tự relay outbox này thành job `index`
-   trong claim-loop của nó (không phải convert worker tạo job `index` trực tiếp — nếu index
-   worker không chạy, event outbox nằm chờ, chưa có job `index`) → job `index` hoàn tất tạo job
-   `embedding_batch`; embedding worker upsert Qdrant (chi tiết ở mục Workers).
+   event `document.index_requested`; trong setup convert/index/embedding đang mô tả ở đây,
+   chính **index worker** tự relay outbox này thành job `index` trong claim-loop của nó
+   (không phải convert worker tạo job `index` trực tiếp — nếu index worker không chạy,
+   event outbox nằm chờ, chưa có job `index`) → job `index` hoàn tất tạo job
+   `embedding_batch`; embedding worker upsert Qdrant (chi tiết ở mục Workers). Delete worker
+   và reconcile worker dùng chung cơ chế relay outbox này (cùng `IndexingOutboxSink`) cho
+   event của riêng chúng, nhưng nằm ngoài walkthrough convert/index/embedding này.
 
 5. Verify khả năng tìm kiếm sau khi index/embedding xong: `POST /api/v1/search` (mục Verify).
 6. Verify hỏi-đáp: `POST /api/v1/ask` (mục Verify) — mặc định trả lời extractive

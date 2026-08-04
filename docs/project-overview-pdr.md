@@ -7,8 +7,10 @@
 
 `fileconv` là **backend Rust** chuyển đổi tài liệu / ảnh / âm thanh sang **Markdown**,
 tối ưu cho **nội dung tiếng Việt**. Code do dự án làm chủ hoàn toàn — gọi thẳng các crate
-gốc thay vì bọc công cụ có sẵn. Mục tiêu cuối: đóng gói thành **desktop app (Tauri)** chạy
-offline cho Win / Mac / Ubuntu.
+gốc thay vì bọc công cụ có sẵn. Ở track **offline-first** (mặc định của dự án), mục tiêu
+cuối là đóng gói thành **desktop app (Tauri)** chạy offline cho Win / Mac / Ubuntu, cùng
+CLI và MCP server; bên cạnh đó có track **Markhand Web** on-prem multi-org riêng (xem
+danh sách mặt sản phẩm ngay dưới).
 
 Các mặt sản phẩm hiện có, chia theo hai nhóm ranh giới (xem
 [`system-architecture.md`](system-architecture.md)):

@@ -5,17 +5,17 @@
 ## Bức tranh tổng thể
 
 ```text
-crates/core/       shared conversion engine and detailed diagnostics
-crates/cli/        conversion CLI, handoff and benchmark commands
-crates/mcp/        stdio MCP surface, deterministic and optional LLM tools
-crates/knowledge/  framework-free retrieval/grounding contracts plus opt-in desktop adapters
-crates/server/     Markhand Web API, auth, storage adapters and workers
-app/               Markhand Tauri desktop
-web/               browser-only React/Vite SPA over HTTP/SSE
-deploy/            local and POC infrastructure, scripts and observability
-bench/             reproducible converter/Web evaluation assets and reports
-plans/             authoritative Markhand Web issue catalog and evidence
-vendor/            reference-only markitdown-rs, excluded from the workspace
+crates/core/       engine convert dùng chung + diagnostics chi tiết
+crates/cli/        CLI convert, lệnh handoff và benchmark
+crates/mcp/        stdio MCP surface, tool deterministic và LLM opt-in
+crates/knowledge/  contract retrieval/grounding framework-free + adapter desktop opt-in
+crates/server/     Markhand Web API, auth, storage adapter và worker
+app/               desktop "Markhand" (Tauri)
+web/               SPA React/Vite chỉ chạy browser, qua HTTP/SSE
+deploy/            hạ tầng local và POC, script và observability
+bench/             tài sản đánh giá converter/Web tái tạo được + báo cáo
+plans/             danh mục issue Markhand Web chính thức + evidence
+vendor/            markitdown-rs tham khảo, đã loại khỏi workspace
 ```
 
 **CLI, desktop và MCP dùng chung `fileconv-core`**: cả ba path-dep thẳng vào
@@ -23,9 +23,16 @@ vendor/            reference-only markitdown-rs, excluded from the workspace
 khác. **Markhand Web đi theo boundary riêng**: `web/` (browser SPA) chỉ nói
 HTTP/SSE với `fileconv-server` (`crates/server`) — server sở hữu auth/services/
 repositories/storage adapters và các worker; phần retrieval/grounding (search,
-Q&A, chunk/embedding contract) đi qua `fileconv-knowledge` (`crates/knowledge`)
-dùng chung giữa server và các adapter desktop opt-in (SQLite/HNSW), không phải
-`fileconv-core`.
+Q&A) đi qua contract `fileconv-knowledge` (`crates/knowledge`) — `types`, `query`,
+`rank`, `citation`, `ask`, `identity`, và phần **kế hoạch embedding** (mode/dimension,
+`embedding.rs`) — dùng chung giữa server và các adapter desktop opt-in (SQLite/HNSW).
+**Chunk primitive** (`chunk_markdown`/`normalize_newlines`/`locate_chunk_span`/
+`locate_chunk_text`) và **embedding runtime** (suy luận/parse runtime path) đều bắt
+nguồn từ `fileconv-core` (`src/chunk.rs`, `src/embedding_runtime.rs`): server path-dep
+thẳng vào `fileconv-core` để chunk (`services/chunking.rs`, `services/citation.rs`),
+còn `fileconv-knowledge` chỉ tái dùng/re-export phần embedding runtime khi cần
+(ví dụ `infer_runtime_path` re-export `fileconv_core::embedding_runtime::infer_embedding_runtime_path`)
+chứ không tự định nghĩa lại.
 
 ## `crates/core/` — fileconv-core (engine)
 
@@ -96,14 +103,14 @@ thể). Desktop-only adapter nằm sau feature riêng:
 |---|---|
 | `src/desktop/sqlite.rs` | (feature `desktop-sqlite`) SQLite FTS5 — index/tra cứu chunk local |
 | `src/desktop/hnsw.rs` | (feature `desktop-hnsw`) persistent HNSW ANN cache cho vector local |
-| `src/desktop/service.rs` | ghép SQLite + HNSW thành service hybrid-search/ask cho desktop |
+| `src/desktop/service.rs` | (yêu cầu **cả hai** feature `desktop-sqlite` VÀ `desktop-hnsw`) ghép SQLite + HNSW thành service hybrid-search/ask cho desktop |
 
 ## `crates/server/` — fileconv-server (Markhand Web API)
 
 | Vùng | File chính | Trách nhiệm |
 |---|---|---|
 | routes | `src/routes/*.rs` | HTTP handler theo tài nguyên: `health`, `auth`, `uploads`, `collections`, `documents`, `jobs`, `members`, `orgs`, `projects`, `audit`, `search`, `ask`, `chat_sessions`, `events`, `graph` — ghép ở `src/http.rs::router` |
-| services | `src/services/*.rs` | logic domain: upload saga/sniff/limits, conversion, indexing/chunking, embedding, citation, access/ACL, quota, deletion, graph |
+| services | `src/services/*.rs` + `src/services/{upload,qa,retrieval}/` | logic domain: upload saga/sniff/limits, conversion, indexing/chunking, embedding, citation, access/ACL, quota, deletion, graph |
 | repositories | `src/db/*.rs` | truy vấn PostgreSQL theo bảng/nghiệp vụ (jobs, documents, collections, chunks, orgs, members, audit, acl_sql, ...) |
 | storage adapters | `src/storage/*.rs` | `minio.rs` (object store), `qdrant.rs` (vector index), `keys.rs`/`url_safety.rs` |
 | workers | `src/workers/*.rs` | `convert.rs`, `index.rs`, `embedding.rs`, `delete.rs`, `reconcile.rs`, `sandbox.rs`, `fairness.rs`, `limits.rs` — chạy qua `src/bin/worker.rs`, tách khỏi tiến trình API |
