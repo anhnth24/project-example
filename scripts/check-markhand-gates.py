@@ -1751,6 +1751,161 @@ def prepare_phase1c_fixture(temp_dir: Path) -> tuple[Path, Path]:
     return markhand_root, repo_root
 
 
+def prepare_phase1c_fixture(temp_dir: Path) -> tuple[Path, Path]:
+    """Copy Markhand Web + SLA doc into an isolated workspace for hermetic tests."""
+    repo_root = temp_dir
+    markhand_root = repo_root / "bench/markhand_web"
+    shutil.copytree(DEFAULT_ROOT, markhand_root, dirs_exist_ok=True)
+    sla_source = ROOT / PHASE1C_SLA_SOURCE
+    sla_dest = repo_root / PHASE1C_SLA_SOURCE
+    sla_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(sla_source, sla_dest)
+    return markhand_root, repo_root
+
+
+def init_git_repo(repo_root: Path, *, marker: str = "fixture\n") -> str:
+    """Initialize a disposable git repository and return its HEAD commit."""
+    subprocess.run(["git", "init"], cwd=repo_root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "phase1c-test@example.com"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "phase1c-test"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+    (repo_root / ".gitkeep").write_text(marker, encoding="utf-8")
+    subprocess.run(["git", "add", ".gitkeep"], cwd=repo_root, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "phase1c fixture"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    )
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
+
+
+class Phase1cDescriptorSecurityTests(unittest.TestCase):
+    """Fourth-review security tests: descriptor traversal and injected repo_root git binding."""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.markhand_root, self.repo_root = prepare_phase1c_fixture(Path(self._temp.name))
+
+    def tearDown(self) -> None:
+        self._temp.cleanup()
+
+    def _create_evidence_files(self) -> None:
+        for evidence_path in PHASE1C_EVIDENCE_ALLOWLIST:
+            path = self.repo_root / evidence_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"status":"pass","note":"test fixture"}\n', encoding="utf-8")
+
+    def test_evidence_rejects_post_lstat_symlink_swap(self) -> None:
+        """TOCTOU: lstat sees a regular file, then attacker swaps to symlink before resolve/stat."""
+        self._create_evidence_files()
+        evidence = sorted(PHASE1C_EVIDENCE_ALLOWLIST)[0]
+        evidence_file = self.repo_root / evidence
+        decoy = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/decoy-swap.json"
+        decoy.write_text('{"status":"pass","note":"decoy after swap"}\n', encoding="utf-8")
+
+        original_lstat = Path.lstat
+        swapped = False
+
+        def lstat_then_swap(path_self: Path) -> os.stat_result:
+            result = original_lstat(path_self)
+            nonlocal swapped
+            if not swapped and path_self == evidence_file:
+                swapped = True
+                evidence_file.unlink()
+                evidence_file.symlink_to(decoy)
+            return result
+
+        with mock.patch.object(Path, "lstat", lstat_then_swap):
+            errors = phase1c_evidence_path_errors(
+                self.repo_root,
+                evidence,
+                context="test.evidence",
+            )
+
+        self.assertTrue(
+            errors,
+            "post-lstat symlink swap must be rejected by descriptor/no-follow validation",
+        )
+        self.assertTrue(
+            any(
+                keyword in error
+                for error in errors
+                for keyword in ("symlink", "O_NOFOLLOW", "descriptor", "no-follow")
+            ),
+            f"expected descriptor/no-follow rejection, got {errors}",
+        )
+
+    def test_report_commit_resolves_against_injected_repo_root_not_ambient_root(self) -> None:
+        """Commit valid only in injected temp git repo must resolve via repo_root, not ambient ROOT."""
+        with tempfile.TemporaryDirectory() as git_temp:
+            git_repo = Path(git_temp)
+            git_commit = init_git_repo(git_repo, marker="isolated-git-root\n")
+            resolves_ambient, _ = git_commit_resolves(ROOT, git_commit)
+            self.assertFalse(
+                resolves_ambient,
+                "sanity: temp-repo commit must not resolve against ambient workspace ROOT",
+            )
+
+            markhand_root, repo_root = prepare_phase1c_fixture(git_repo)
+            for evidence_path in PHASE1C_EVIDENCE_ALLOWLIST:
+                path = repo_root / evidence_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('{"status":"pass"}\n', encoding="utf-8")
+
+            report = load_json_yaml(
+                markhand_root / "reports/phase-1c-gate/phase-1c-gate.template.json"
+            )
+            report["status"] = "pass"
+            report["targetMatch"] = True
+            report["metrics"] = {
+                metric: (1.0 if metric.endswith("_ratio") else 1 if metric == "worker_dedicated_role_verified" else 0)
+                for metric in PHASE1C_METRIC_THRESHOLDS
+            }
+            report["workerProof"] = {
+                "runtimeRole": "markhand_worker",
+                "dedicatedDatabaseUrlVerified": True,
+                "superuser": False,
+                "bypassRls": False,
+                "verifiedAt": "2026-08-04T00:00:00Z",
+            }
+            report["redactionScan"] = {"passed": True}
+            report["vulnerabilityScan"]["passed"] = True
+            report["vulnerabilityScan"]["undispositionedHighCritical"] = 0
+            for result in report["gateResults"]:
+                result["pass"] = True
+                result["value"] = report["metrics"][result["metric"]]
+            report["canonicalBinding"] = {
+                "registryRevision": 1,
+                **phase1c_canonical_fingerprints(markhand_root, workspace_root=repo_root)[0],
+            }
+            report["git"] = {"commit": git_commit, "dirty": False}
+
+            errors = phase1c_gate_report_errors(
+                report,
+                registry=load_json_yaml(markhand_root / "gates.yaml"),
+                root=markhand_root,
+                repo_root=repo_root,
+                workspace_root=repo_root,
+            )
+
+        git_errors = [error for error in errors if "git.commit" in error or "cat-file" in error]
+        self.assertEqual(
+            git_errors,
+            [],
+            f"injected repo_root commit must resolve without ambient ROOT; got {git_errors}",
+        )
+
+
 class Phase1cGateContractTests(unittest.TestCase):
     """Contract tests for G1C-SEC registry rows and phase-1c gate reports."""
 
@@ -2436,6 +2591,7 @@ def main() -> int:
         suite = unittest.TestSuite()
         suite.addTests(loader.loadTestsFromTestCase(GateValidatorTests))
         suite.addTests(loader.loadTestsFromTestCase(Phase1bGateReportConsistencyTests))
+        suite.addTests(loader.loadTestsFromTestCase(Phase1cDescriptorSecurityTests))
         suite.addTests(loader.loadTestsFromTestCase(Phase1cGateContractTests))
         suite.addTests(loader.loadTestsFromTestCase(Phase1cHermeticRegressionTests))
         return 0 if unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful() else 1
