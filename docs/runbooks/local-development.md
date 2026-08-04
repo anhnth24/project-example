@@ -17,8 +17,8 @@ lần đầu chậm vì tải model HuggingFace.
 | Auth, upload quarantine, jobs (API) | ✅ (cần bật auth nếu gọi route bảo vệ) |
 | `fileconv-worker` convert (Linux/WSL) | ✅ sandbox thật; Windows native fail-closed |
 | Index/embedding worker | ✅ (AITeamVN CPU @ `:8088`) |
-| Upload → convert → index qua HTTP | ⏳ upload quarantine OK; enqueue document/job API chưa đủ |
-| Search/Q&A/web SPA | ⏳ Phase 1B R* / Phase 2 |
+| Upload → convert → index qua HTTP | ✅ accepted upload tạo job `convert` durable trong cùng transaction (saga); cần convert + index + embedding worker chạy riêng để pipeline hoàn tất |
+| Search (`/api/v1/search`), Ask (`/api/v1/ask`, `/ask/stream`), web SPA | ✅ có trên `master`; câu trả lời sinh bởi LLM (ngoài extractive fallback mặc định) và production qualification vẫn phụ thuộc runtime/evidence đã cấu hình |
 
 Desktop Tauri (`pnpm --dir app tauri dev`) và CLI `fileconv` vẫn chạy độc lập — xem
 [`CLAUDE.md`](../../CLAUDE.md).
@@ -290,7 +290,8 @@ cargo run --release -p fileconv-server --bin fileconv-worker
 ```
 
 Index worker tạo job `embedding_batch`; embedding worker upsert Qdrant. Không có hash fallback —
-runtime lỗi → job failed, lexical search vẫn độc lập (khi có R*).
+runtime lỗi → job failed; lexical search (`/api/v1/search`, FTS) vẫn hoạt động độc lập với
+embedding.
 
 ## E2E checklist
 
@@ -304,20 +305,46 @@ runtime lỗi → job failed, lexical search vẫn độc lập (khi có R*).
 ### B. Pipeline workers (Linux/WSL)
 
 1. Hoàn thành A + `curl http://127.0.0.1:8088/health` (embedding-cpu ready)
-2. Terminal: convert worker
-3. Terminal: index worker (`MARKHAND_WORKER_KIND=index`)
-4. Terminal: embedding worker (`MARKHAND_WORKER_KIND=embedding`)
-5. Upload file qua curl (quarantine object trên MinIO)
-6. **Lưu ý:** trên `master`, HTTP upload chưa enqueue job `convert`/`index` tự động — pipeline
-   end-to-end qua API đang chờ issue document/job API (Phase 1B). Kiểm tra worker + indexing
-   logic:
+2. Terminal riêng cho từng worker — convert, index (`MARKHAND_WORKER_KIND=index`), embedding
+   (`MARKHAND_WORKER_KIND=embedding`) — xem mục Workers (`fileconv-worker`) để lấy env đầy đủ.
+3. Upload một file **accepted** qua HTTP (curl mục Verify) hoặc qua Web SPA (`web/`). Upload
+   accepted tạo job `convert` durable ngay trong transaction đăng ký document/version (saga
+   `run_upload_saga`) — không cần enqueue thủ công.
+4. Theo dõi job bằng `jobId` trong response upload:
 
 ```bash
-# Integration (cần stack + MARKHAND_TEST_* — xem crates/server/README.md)
+JOB_ID=<jobId lấy từ response upload>
+
+curl -sS http://127.0.0.1:8787/api/v1/jobs/$JOB_ID \
+  -H "Authorization: Bearer $TOKEN"
+
+# hoặc theo dõi realtime qua SSE
+curl -sS -N http://127.0.0.1:8787/api/v1/jobs/$JOB_ID/events \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+   Convert worker hoàn tất → job `convert` completed và tạo job `index`; index worker tạo job
+   `embedding_batch`; embedding worker upsert Qdrant (chi tiết ở mục Workers).
+
+5. Verify khả năng tìm kiếm sau khi index/embedding xong: `POST /api/v1/search` (mục Verify).
+6. Verify hỏi-đáp: `POST /api/v1/ask` (mục Verify) — mặc định trả lời extractive
+   (`offline_extractive`/`fallback_extractive`), không cần provider LLM nào. Chỉ cần cấu hình
+   provider (`MARKHAND_CHAT_BASE_URL`/`MARKHAND_CHAT_API_KEY`/`MARKHAND_CHAT_MODEL`, hoặc
+   `MARKHAND_GLM_*` tương ứng) khi muốn bật sinh câu trả lời bằng LLM thay cho extractive.
+
+**Lưu ý:** quarantined/rejected upload **không** theo path convert accepted ở trên — upload
+quarantined vẫn đăng ký document/version nhưng job `convert` chỉ được tạo khi có
+`doc.quarantine.review` approve (`approve_quarantined_upload`); upload rejected không lưu
+document/job nào.
+
+7. (Tuỳ chọn) Integration test worker/indexing thay vì chạy worker thủ công:
+
+```bash
+# Cần stack + MARKHAND_TEST_* — xem crates/server/README.md
 cargo test -p fileconv-server --test index_worker -- --ignored
 ```
 
-7. Theo dõi job trong DB (khi có job):
+8. Theo dõi job trong DB:
 
 ```bash
 docker compose -f deploy/dev/compose.yml exec -T postgres psql \
@@ -404,9 +431,30 @@ curl -sS -X POST http://127.0.0.1:8787/api/v1/uploads \
   -F 'collectionId=55555555-5555-5555-5555-555555555501'
 ```
 
-### Route chưa có
+Response accepted trả về `jobId` — theo dõi qua `GET /api/v1/jobs/{jobId}` hoặc
+`GET /api/v1/jobs/{jobId}/events` (xem mục E2E checklist B).
 
-Search/Q&A (`/api/v1/search`, `/api/v1/ask`) — Phase 1B R*.
+### Search & Ask
+
+Cần convert/index/embedding worker đã xử lý xong file upload (mục E2E checklist B) để có kết
+quả khớp:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8787/api/v1/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"hello markhand","collectionIds":["55555555-5555-5555-5555-555555555501"]}'
+
+curl -sS -X POST http://127.0.0.1:8787/api/v1/ask \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"Tài liệu nói gì?","collectionIds":["55555555-5555-5555-5555-555555555501"]}'
+```
+
+`ask` mặc định trả lời extractive (`mode: offline_extractive`/`fallback_extractive`) khi chưa
+cấu hình chat provider; cấu hình provider (`MARKHAND_CHAT_BASE_URL`/`MARKHAND_CHAT_API_KEY`/
+`MARKHAND_CHAT_MODEL`, hoặc `MARKHAND_GLM_*` tương ứng) chỉ cần khi muốn bật sinh câu trả lời
+bằng LLM.
 
 ## Failure and reset
 
