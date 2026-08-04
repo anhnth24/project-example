@@ -39,6 +39,7 @@ PHASE_LABELS = {
     "3": ("web-p3", "Phase 3 — Document Intelligence"),
     "4": ("web-p4", "Phase 4 — Production Hardening"),
 }
+MILESTONE_PHASE_CODE_PATTERN = re.compile(r"^Phase (?P<code>[^—\-\s]+)")
 SHARED_LABELS = {
     "markhand-web": "Markhand Web delivery backlog",
     "docs": "Planning/spec issue",
@@ -317,21 +318,46 @@ def ensure_labels() -> None:
             raise
 
 
-def ensure_milestones() -> dict[str, int]:
+def milestone_state(issues: list[CatalogIssue], phase_code: str) -> str:
+    phase_issues = [issue for issue in issues if issue.phase_code == phase_code]
+    if phase_issues and all(issue.status == "done" for issue in phase_issues):
+        return "closed"
+    return "open"
+
+
+def milestone_phase_code(title: str) -> str | None:
+    match = MILESTONE_PHASE_CODE_PATTERN.match(title.strip())
+    if not match:
+        return None
+    code = match.group("code")
+    return code if code in PHASE_LABELS else None
+
+
+def index_milestones_by_phase(items: list[dict]) -> dict[str, dict]:
+    by_phase: dict[str, dict] = {}
+    for item in items:
+        code = milestone_phase_code(item.get("title", ""))
+        if code is not None:
+            by_phase[code] = item
+    return by_phase
+
+
+def ensure_milestones(issues: list[CatalogIssue]) -> dict[str, int]:
     existing_items = gh_json(
         ["api", "repos/anhnth24/project-example/milestones?state=all&per_page=100"]
     )
-    by_title = {
-        item["title"]: item
-        for item in existing_items or []  # type: ignore[union-attr]
-    }
+    by_phase = index_milestones_by_phase(existing_items or [])  # type: ignore[arg-type]
     milestone_ids: dict[str, int] = {}
     for definition in load_milestones():
         description = milestone_description(definition)
-        current = by_title.get(definition.title)
+        desired_state = milestone_state(issues, definition.code)
+        current = by_phase.get(definition.code)
         if current:
             milestone_ids[definition.code] = current["number"]
-            if current.get("state") != "open" or current.get("description") != description:
+            if (
+                current.get("state") != desired_state
+                or current.get("description") != description
+            ):
                 gh_json(
                     [
                         "api",
@@ -339,10 +365,14 @@ def ensure_milestones() -> dict[str, int]:
                         "PATCH",
                         f"repos/anhnth24/project-example/milestones/{current['number']}",
                         "-f",
-                        "state=open",
+                        f"state={desired_state}",
                         "-f",
                         f"description={description}",
                     ]
+                )
+                print(
+                    f"milestone updated: {definition.title} "
+                    f"(#{current['number']}, state={desired_state})"
                 )
             continue
         created = gh_json(
@@ -356,7 +386,7 @@ def ensure_milestones() -> dict[str, int]:
                 "-f",
                 f"description={description}",
                 "-f",
-                "state=open",
+                f"state={desired_state}",
             ]
         )
         milestone_ids[definition.code] = created["number"]  # type: ignore[index]
@@ -636,7 +666,7 @@ def main() -> int:
 
     try:
         ensure_labels()
-        milestone_ids = ensure_milestones()
+        milestone_ids = ensure_milestones(issues)
     except RuntimeError as error:
         if "403" in str(error):
             print(
