@@ -23,7 +23,7 @@ SECRET_PATTERNS = (
     re.compile(r"(?:^|\s)/(?:home|Users|workspace|tmp)/\S+"),
     re.compile(r"\b[A-Za-z]:\\Users\\"),
 )
-GATE_FAMILIES = {"G0-ARCH", "G0-RET", "G0-SEC", "G0-CAP", "G0-SLO", "G0-LIC"}
+GATE_FAMILIES = {"G0-ARCH", "G0-RET", "G0-SEC", "G0-CAP", "G0-SLO", "G0-LIC", "G1C-SEC"}
 PHASE1C_GATE_REPORT_SCHEMA = DEFAULT_ROOT / "schema/phase1c-gate-report.schema.json"
 PHASE1C_ENVIRONMENT_ID = "phase1c-multi-org-poc"
 PHASE1C_WORKLOAD_PROFILE_ID = "phase1c-multi-org"
@@ -40,76 +40,86 @@ PHASE1C_METRIC_THRESHOLDS: dict[str, tuple[str, float | int]] = {
     "worker_dedicated_role_verified": ("==", 1),
     "undispositioned_high_critical_count": ("==", 0),
 }
-G1C_GATE_ROWS: tuple[dict[str, str | None], ...] = (
+G1C_GATE_ROWS: tuple[dict[str, object], ...] = (
     {
         "id": "G1C-SEC-LEAKAGE",
-        "metric": "cross_tenant_leakage_count",
+        "metrics": ("cross_tenant_leakage_count",),
         "owner": "security-owner",
         "approver": "security-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/leakage.json",
+        "notes": "Zero cross-tenant leakage under multi-org qualifying load on phase1c-multi-org-poc. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-REVOKE",
-        "metric": "membership_acl_revoke_max_ms",
+        "metrics": ("membership_acl_revoke_max_ms",),
         "owner": "security-owner",
         "approver": "operations-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/revoke.json",
+        "notes": "Membership/ACL revoke bound <=3000 ms on deployed POC. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-ACL-CACHE",
-        "metric": "post_commit_stale_authorizations",
+        "metrics": ("post_commit_stale_authorizations",),
         "owner": "security-owner",
         "approver": "security-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/acl-cache.json",
+        "notes": "Zero stale authorizations after ACL cache invalidation. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-QUOTA-RECOVERY",
-        "metric": "quota_drift_after_recovery",
+        "metrics": ("quota_drift_after_recovery",),
         "owner": "operations-owner",
         "approver": "operations-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/quota-recovery.json",
+        "notes": "Zero quota drift after crash/retry/cancel recovery. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-NOISY-NEIGHBOR",
-        "metric": "quiet_org_query_p95_ms",
+        "metrics": ("quiet_org_query_p95_ms", "starvation_events"),
         "owner": "operations-owner",
         "approver": "operations-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/noisy-neighbor.json",
+        "notes": "Quiet-org query P95 <=500 ms and zero starvation events under noisy-neighbor load. POC scope only; not Profile B scale. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-AUDIT-COVERAGE",
-        "metric": "admin_mutation_audit_coverage_ratio",
+        "metrics": ("admin_mutation_audit_coverage_ratio",),
         "owner": "security-owner",
         "approver": "security-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/audit-coverage.json",
+        "notes": "Administrative mutation audit coverage ratio 1.0. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-WORKER-ROLE",
-        "metric": "worker_dedicated_role_verified",
+        "metrics": ("worker_dedicated_role_verified",),
         "owner": "security-owner",
         "approver": "operations-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/worker-role.json",
+        "notes": "Deployed worker runtime role markhand_worker with dedicated DB URL. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-CONTAINER-VULNS",
-        "metric": "undispositioned_high_critical_count",
+        "metrics": ("undispositioned_high_critical_count",),
         "owner": "security-owner",
         "approver": "security-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/container-vulns.json",
+        "notes": "Zero undispositioned high/critical container findings. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-STALE-TOKENS",
-        "metric": "post_commit_stale_authorizations",
+        "metrics": ("post_commit_stale_authorizations",),
         "owner": "security-owner",
         "approver": "security-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/stale-tokens.json",
+        "notes": "Token rotation/reuse/revoke isolation; zero stale authorization after revoke. Evidence not_run until Task 16 harness.",
     },
     {
         "id": "G1C-SEC-QDRANT-FAIL-CLOSED",
-        "metric": "cross_tenant_leakage_count",
+        "metrics": ("cross_tenant_leakage_count",),
         "owner": "security-owner",
         "approver": "security-owner",
         "evidence": "bench/markhand_web/reports/phase-1c-gate/qdrant-fail-closed.json",
+        "notes": "Qdrant timeout/partial failure remains authz-safe with zero leakage. Evidence not_run until Task 16 harness.",
     },
 )
 OPERATORS = {">=", ">", "<=", "<", "=="}
@@ -121,6 +131,29 @@ FAILURE_DISPOSITIONS = {
     "research-only",
     "waive-with-adr",
 }
+
+
+def g1c_gate_metrics(row: dict[str, object]) -> tuple[str, ...]:
+    metrics = row.get("metrics")
+    if isinstance(metrics, (list, tuple)):
+        return tuple(str(item) for item in metrics)
+    metric = row.get("metric")
+    if isinstance(metric, str):
+        return (metric,)
+    return ()
+
+
+def g1c_metric_spec(metric: str) -> tuple[str, str]:
+    operator, _value = PHASE1C_METRIC_THRESHOLDS[metric]
+    if metric.endswith("_ratio"):
+        return "ratio", "min"
+    if metric.endswith("_ms"):
+        return "milliseconds", "max"
+    if metric == "worker_dedicated_role_verified":
+        return "count", "min"
+    return "count", "max" if operator in {"<=", "<", "=="} else "min"
+
+
 SCALE_FIELDS = (
     "orgCount",
     "collectionsPerOrg",
@@ -414,6 +447,15 @@ def validate(root: Path) -> list[str]:
                 or any(not isinstance(field, str) or not field.strip() for field in fingerprint_fields)
             ):
                 errors.append(f"{source}: fingerprintRequiredFields must be unique non-empty strings")
+        if environment_id == PHASE1C_ENVIRONMENT_ID and environment.get("status") == "approved":
+            for field, expected in (
+                ("orgCount", 2),
+                ("embeddingProfile", "mock"),
+                ("requiresDedicatedWorkerRole", True),
+                ("requiresWorkerDatabaseUrl", True),
+            ):
+                if environment.get(field) != expected:
+                    errors.append(f"{source}: {field} must be {expected!r}")
 
     workload_environment = workload.get("hardware", {}).get("environmentId")
     if workload_environment not in environment_ids:
@@ -545,6 +587,8 @@ def validate(root: Path) -> list[str]:
             threshold = gate.get("threshold", {}) if gate else {}
             if not gate or threshold.get("operator") != operator or threshold.get("value") != value:
                 errors.append(f"gates: {gate_id} diverges from approved workload target")
+    if registry.get("registryStatus") == "approved":
+        errors += phase1c_registry_contract_errors(registry, environments)
     return errors
 
 
@@ -631,14 +675,143 @@ def phase1c_registry_contract_errors(
     require_g1c_rows: bool = True,
 ) -> list[str]:
     """Validate Phase 1C G1C-SEC registry rows and qualifying environment binding."""
-    _ = registry, environments, require_g1c_rows
-    return []
+    errors: list[str] = []
+    if not require_g1c_rows:
+        return errors
+
+    gates = registry.get("gates") or []
+    if not isinstance(gates, list):
+        return ["gates: gates must be an array"]
+
+    env_by_id = {
+        environment.get("environmentId"): environment
+        for environment in environments
+        if isinstance(environment, dict) and isinstance(environment.get("environmentId"), str)
+    }
+    phase1c_env = env_by_id.get(PHASE1C_ENVIRONMENT_ID)
+    if phase1c_env is None:
+        errors.append(f"gates: missing qualifying environment {PHASE1C_ENVIRONMENT_ID}")
+    else:
+        for field, expected in (
+            ("orgCount", 2),
+            ("embeddingProfile", "mock"),
+            ("requiresDedicatedWorkerRole", True),
+            ("requiresWorkerDatabaseUrl", True),
+        ):
+            if phase1c_env.get(field) != expected:
+                errors.append(
+                    f"environment {PHASE1C_ENVIRONMENT_ID}: {field} must be {expected!r}"
+                )
+
+    g1c_gates = [
+        gate
+        for gate in gates
+        if isinstance(gate, dict) and str(gate.get("id", "")).startswith("G1C-SEC-")
+    ]
+    expected_ids = {str(row["id"]) for row in G1C_GATE_ROWS}
+    found_ids = {gate.get("id") for gate in g1c_gates}
+    missing_ids = sorted(expected_ids - found_ids)
+    if missing_ids:
+        errors.append(f"gates: missing G1C-SEC rows {missing_ids}")
+
+    if not any(
+        isinstance(gate, dict) and gate.get("externalGate") == G1C_GATE_FAMILY for gate in gates
+    ):
+        errors.append(f"gates: missing external family {G1C_GATE_FAMILY}")
+
+    covered_metrics: set[str] = set()
+    for row in G1C_GATE_ROWS:
+        row_id = str(row["id"])
+        gate = next((item for item in g1c_gates if item.get("id") == row_id), None)
+        if gate is None:
+            continue
+        row_metrics = g1c_gate_metrics(row)
+        covered_metrics.update(row_metrics)
+        metric = (gate.get("metric") or {}).get("name")
+        primary = row_metrics[0]
+        if metric != primary:
+            errors.append(f"gate {row_id}: metric.name must be {primary}")
+        threshold = gate.get("threshold") or {}
+        if primary in PHASE1C_METRIC_THRESHOLDS:
+            expected_op, expected_val = PHASE1C_METRIC_THRESHOLDS[primary]
+            if (
+                threshold.get("operator") != expected_op
+                or threshold.get("value") != expected_val
+            ):
+                errors.append(
+                    f"gate {row_id}: threshold diverges from POC qualification for {primary}"
+                )
+
+    for gate in g1c_gates:
+        gate_id = str(gate.get("id", "<missing>"))
+        if gate.get("externalGate") != G1C_GATE_FAMILY:
+            errors.append(f"gate {gate_id}: externalGate must be {G1C_GATE_FAMILY}")
+        if gate.get("environmentId") != PHASE1C_ENVIRONMENT_ID:
+            errors.append(f"gate {gate_id}: environmentId must be {PHASE1C_ENVIRONMENT_ID}")
+        if gate.get("failureDisposition") != PHASE1C_FAILURE_DISPOSITION:
+            errors.append(f"gate {gate_id}: failureDisposition must be {PHASE1C_FAILURE_DISPOSITION}")
+        for field in ("owner", "approver"):
+            if not isinstance(gate.get(field), str) or not gate[field].strip():
+                errors.append(f"gate {gate_id}: {field} must be non-empty")
+        if gate.get("status") == "approved" and not gate.get("evidence"):
+            errors.append(f"gate {gate_id}: approved G1C gate requires evidence path")
+        if gate_id not in expected_ids:
+            errors.append(f"gate {gate_id}: unexpected G1C-SEC row")
+        row = next(item for item in G1C_GATE_ROWS if item["id"] == gate_id)
+        if gate.get("owner") != row["owner"]:
+            errors.append(f"gate {gate_id}: owner must be {row['owner']!r}")
+        if gate.get("approver") != row["approver"]:
+            errors.append(f"gate {gate_id}: approver must be {row['approver']!r}")
+
+    missing_metrics = sorted(set(PHASE1C_METRIC_THRESHOLDS) - covered_metrics)
+    if missing_metrics:
+        errors.append(f"gates: G1C-SEC registry missing metrics {missing_metrics}")
+
+    return errors
 
 
 def phase1c_gate_report_errors(report: dict) -> list[str]:
     """Fail closed on Phase 1C qualifying report invariants beyond JSON Schema."""
-    _ = report
-    return []
+    errors: list[str] = []
+    try:
+        schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
+    except (OSError, ValueError) as error:
+        return [f"phase1c report schema: {error}"]
+    errors.extend(schema_errors(report, schema, "phase1c-report"))
+
+    status = report.get("status")
+    if status == "pass" and report.get("targetMatch") is False:
+        errors.append("phase1c-report: status pass requires targetMatch=true")
+
+    worker_proof = report.get("workerProof")
+    if not isinstance(worker_proof, dict):
+        errors.append("phase1c-report: missing workerProof")
+    elif status == "pass":
+        if worker_proof.get("runtimeRole") != "markhand_worker":
+            errors.append("phase1c-report: workerProof.runtimeRole must be markhand_worker")
+        if worker_proof.get("dedicatedDatabaseUrlVerified") is not True:
+            errors.append(
+                "phase1c-report: workerProof.dedicatedDatabaseUrlVerified must be true"
+            )
+        if worker_proof.get("superuser") is not False:
+            errors.append("phase1c-report: workerProof.superuser must be false")
+        if worker_proof.get("bypassRls") is not False:
+            errors.append("phase1c-report: workerProof.bypassRls must be false")
+
+    decisions = report.get("thresholdDecisions")
+    if not isinstance(decisions, list) or not decisions:
+        errors.append("phase1c-report: thresholdDecisions must be non-empty")
+    else:
+        covered = {
+            decision.get("metric")
+            for decision in decisions
+            if isinstance(decision, dict) and isinstance(decision.get("metric"), str)
+        }
+        missing = sorted(set(PHASE1C_METRIC_THRESHOLDS) - covered)
+        if missing:
+            errors.append(f"phase1c-report: thresholdDecisions missing metrics {missing}")
+
+    return errors
 
 
 class GateValidatorTests(unittest.TestCase):
@@ -908,8 +1081,7 @@ class Phase1cGateContractTests(unittest.TestCase):
     def _gate_results(self) -> list[dict]:
         results: list[dict] = []
         for row in G1C_GATE_ROWS:
-            metric = str(row["metric"])
-            operator, threshold = PHASE1C_METRIC_THRESHOLDS[metric]
+            metric = g1c_gate_metrics(row)[0]
             results.append(
                 {
                     "gateId": row["id"],
@@ -921,7 +1093,6 @@ class Phase1cGateContractTests(unittest.TestCase):
                     "evidence": row["evidence"],
                 }
             )
-            _ = operator, threshold
         return results
 
     def _baseline_report(self) -> dict:
@@ -960,16 +1131,17 @@ class Phase1cGateContractTests(unittest.TestCase):
     def _baseline_registry(self) -> dict:
         gates: list[dict] = []
         for row in G1C_GATE_ROWS:
-            metric = str(row["metric"])
+            metric = g1c_gate_metrics(row)[0]
             operator, value = PHASE1C_METRIC_THRESHOLDS[metric]
+            unit, statistic = g1c_metric_spec(metric)
             gates.append(
                 {
                     "id": row["id"],
                     "externalGate": G1C_GATE_FAMILY,
                     "metric": {
                         "name": metric,
-                        "unit": "count" if isinstance(value, int) else "milliseconds",
-                        "statistic": "max" if operator in {"<=", "<"} else "min",
+                        "unit": unit,
+                        "statistic": statistic,
                     },
                     "workload": "loads.peak",
                     "corpus": None,
@@ -1040,7 +1212,12 @@ class Phase1cGateContractTests(unittest.TestCase):
         registry["gates"][0]["failureDisposition"] = "block-phase-1b"
         registry["gates"][1]["evidence"] = None
         errors = phase1c_registry_contract_errors(registry, environments)
-        self.assertTrue(any("metric" in error.lower() for error in errors))
+        self.assertTrue(
+            any(
+                "missing metrics" in error.lower() or "missing g1c-sec rows" in error.lower()
+                for error in errors
+            )
+        )
         self.assertTrue(any("block-phase-1c" in error for error in errors))
         self.assertTrue(any("evidence" in error for error in errors))
 

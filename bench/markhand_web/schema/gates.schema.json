@@ -12,7 +12,14 @@
         "required": [
           "id", "externalGate", "metric", "workload", "threshold", "command",
           "environmentId", "owner", "approver", "status", "failureDisposition"
-        ]
+        ],
+        "properties": {
+          "externalGate": {
+            "enum": [
+              "G0-ARCH", "G0-RET", "G0-SEC", "G0-CAP", "G0-SLO", "G0-LIC", "G1C-SEC"
+            ]
+          }
+        }
       }
     }
   }
