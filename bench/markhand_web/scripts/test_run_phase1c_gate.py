@@ -374,6 +374,77 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         self.assertEqual(status, "pass", msg=f"unexpected blockers: {blockers}")
         self.assertEqual(blockers, [])
 
+    def test_rejects_pass_when_evidence_coverage_limited(self) -> None:
+        report = self._passing_report()
+        self._write_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["coverageLimited"] = True
+        payload["coverageLimitedReasons"] = ["denial:denial-resolveCitation-citation:citation_repeat"]
+        payload["status"] = "fail"
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        status, blockers = self.evaluate(report)
+        self.assertNotEqual(status, "pass")
+        self.assertTrue(any("coverage_limited" in item for item in blockers))
+
+    def test_rejects_pass_when_metrics_not_observed(self) -> None:
+        report = self._passing_report()
+        self._write_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/noisy-neighbor.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metricsObserved"] = False
+        payload["status"] = "fail"
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        status, blockers = self.evaluate(report)
+        self.assertNotEqual(status, "pass")
+        self.assertTrue(any("metrics_not_observed" in item for item in blockers))
+
+    def test_rejects_pass_when_report_declares_coverage_limited(self) -> None:
+        report = self._passing_report()
+        report["coverageLimited"] = ["denial:approveIntake"]
+        self._write_evidence()
+        status, blockers = self.evaluate(report)
+        self.assertNotEqual(status, "pass")
+        self.assertTrue(any("report_coverage_limited" in item for item in blockers))
+
+    def test_build_evidence_payload_marks_coverage_limited_non_pass(self) -> None:
+        payload = gate.build_evidence_payload(
+            gate_id="G1C-SEC-LEAKAGE",
+            scenario="cross_tenant_denial",
+            probe={"commandExitCode": 0, "timedOut": False, "outputTruncated": False, "eof": True},
+            metrics={"cross_tenant_leakage_count": 0},
+            source_revision={"commit": self.git_commit, "dirty": False},
+            markhand_root=self.markhand_root,
+            repo_root=self.repo_root,
+            coverage_limited=True,
+            coverage_limited_reasons=["denial:citation_repeat"],
+            metrics_observed=False,
+        )
+        self.assertTrue(payload["coverageLimited"])
+        self.assertNotEqual(payload["status"], "pass")
+        self.assertFalse(payload.get("metricsObserved", True))
+
+    def test_deployed_probe_to_command_probe_propagates_coverage_limited(self) -> None:
+        probes = importlib.util.spec_from_file_location(
+            "phase1c_deployed_probes_backbone",
+            gate.ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py",
+        )
+        assert probes and probes.loader
+        module = importlib.util.module_from_spec(probes)
+        probes.loader.exec_module(module)
+        result = module.DeployedProbeResult(
+            gate_id="G1C-SEC-QUOTA-RECOVERY",
+            probe={"deployedApi": True, "eof": True},
+            metrics={},
+            coverage_limited=True,
+            coverage_limited_reasons=["quota:docker_unavailable"],
+            metrics_observed=False,
+        )
+        command_probe = module.deployed_probe_to_command_probe(result)
+        self.assertTrue(command_probe.get("coverageLimited"))
+        self.assertIn("quota:docker_unavailable", command_probe.get("coverageLimitedReasons", []))
+        self.assertFalse(command_probe.get("metricsObserved", True))
+
 
 class Phase1cReviewFixContractTests(unittest.TestCase):
     """Review-fix RED tests (Commit C): must fail until harness implementation lands."""

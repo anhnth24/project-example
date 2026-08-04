@@ -2311,6 +2311,135 @@ class Phase1cSemanticsSliceTests(unittest.TestCase):
         self.assertEqual(seed.beta_duplicate_collection_id, "23232323-2323-2323-2323-232323232322")
 
 
+class Phase1cBackboneSemanticsTests(unittest.TestCase):
+    """RED/GREEN: no-false-PASS backbone and re-review concrete semantics."""
+
+    def test_quota_ground_truth_sql_uses_version_artifact_and_reservations(self) -> None:
+        probes = load_probes()
+        org_id = "22222222-2222-2222-2222-222222222201"
+        queries = probes.quota_ground_truth_queries(org_id)
+        storage_sql = queries["storage_bytes"].lower()
+        slots_sql = queries["concurrent_reserved"].lower()
+        self.assertIn("document_versions", storage_sql)
+        self.assertIn("derived_artifacts", storage_sql)
+        self.assertIn("quota_reservations", slots_sql)
+        self.assertIn("concurrent_jobs", slots_sql)
+        self.assertNotIn("documents.storage_bytes", storage_sql)
+        self.assertNotIn("reserved_concurrent_slots", slots_sql)
+
+    def test_parse_quota_ground_truth_from_psql_rows(self) -> None:
+        probes = load_probes()
+        parsed = probes.parse_quota_ground_truth_rows(
+            documents_stdout="3\n",
+            storage_stdout="4096\n",
+            concurrent_stdout="2\n",
+            counter_documents_stdout="3\n",
+            counter_storage_stdout="4096\n",
+        )
+        self.assertEqual(probes.compute_quota_drift(**parsed), 2)
+
+    def test_psql_outcome_must_succeed_before_parse(self) -> None:
+        probes = load_probes()
+        with self.assertRaises(RuntimeError):
+            probes.require_psql_success(
+                probes.CommandOutcome(exit_code=1, stdout="", stderr="ERROR"),
+                context="usage_counters",
+            )
+
+    def test_noisy_non_2xx_uploads_cannot_qualify_p95(self) -> None:
+        probes = load_probes()
+        ok, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 120,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertTrue(ok, reason)
+        bad, bad_reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[403] * 120,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertFalse(bad)
+        self.assertIn("noisy upload", bad_reason.lower())
+
+    def test_logout_audit_binds_submitted_refresh_token_family(self) -> None:
+        probes = load_probes()
+        text = PROBES_PY.read_text(encoding="utf-8")
+        audit = text.split("def run_audit_probe", 1)[1].split("\n    def run_", 1)[0]
+        self.assertIn("_family_id_from_refresh_token", audit)
+        self.assertIn("alpha_refresh_token", audit)
+        self.assertNotIn("me_before_logout = self._http", audit)
+
+    def test_qdrant_scans_structured_foreign_ids(self) -> None:
+        probes = load_probes()
+        denial = load_denial()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        foreign_ids = {
+            seed.beta_collection_id,
+            seed.beta_document_id,
+            seed.beta_version_id,
+            seed.org_beta_id,
+        }
+        payload = {
+            "hits": [
+                {
+                    "collectionId": seed.beta_collection_id,
+                    "documentId": seed.beta_document_id,
+                    "versionId": seed.beta_version_id,
+                }
+            ],
+            "warnings": ["vector unavailable"],
+        }
+        leaks = probes.scan_structured_foreign_ids(json.dumps(payload), forbidden_ids=foreign_ids)
+        self.assertTrue(leaks)
+        clean = probes.scan_structured_foreign_ids(
+            json.dumps({"hits": [{"collectionId": seed.alpha_collection_id}], "warnings": []}),
+            forbidden_ids=foreign_ids,
+        )
+        self.assertFalse(clean)
+        self.assertTrue(hasattr(denial, "scan_structured_foreign_ids") or hasattr(probes, "scan_structured_foreign_ids"))
+
+    def test_citation_expired_is_coverage_limited_with_real_status(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = make_seed_credentials(probes, seed)
+        entry = next(
+            e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-resolveCitation-citation"
+        )
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        expired = next(s for s in specs if s.scenario == "citation_expired")
+        self.assertTrue(expired.coverage_limited)
+        self.assertEqual(expired.expected_statuses, frozenset({404}))
+
+    def test_in_flight_revoke_stream_after_removal_expects_403(self) -> None:
+        denial = load_denial()
+        text = denial.__file__ and Path(denial.__file__).read_text(encoding="utf-8")
+        assert text is not None
+        block = text.split('if transition == "ask_stream_revoked"', 1)[1].split("\n    report.failures", 1)[0]
+        self.assertIn("403", block)
+        self.assertNotIn("expected 200 stream", block)
+
+    def test_stateful_fake_stream_returns_403_after_membership_removed(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        text = fake_path.read_text(encoding="utf-8")
+        stream_block = text.split('if path.endswith("/api/v1/ask/stream")', 1)[1].split(
+            'operation_id = self._resolve_operation_id', 1
+        )[0]
+        self.assertIn("403", stream_block)
+        self.assertNotIn("principal_denied", stream_block)
+
+
 class DeployedCiRouteTests(unittest.TestCase):
     def test_ci_failure_uploads_safe_diagnostic_not_raw_logs(self) -> None:
         ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
