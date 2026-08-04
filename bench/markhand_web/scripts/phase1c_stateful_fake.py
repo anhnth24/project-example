@@ -41,10 +41,12 @@ class StatefulFakeDeployment:
     _deleted_collections: set[str] = field(default_factory=set)
     _deleted_documents: set[str] = field(default_factory=set)
     _deleted_chat_sessions: set[str] = field(default_factory=set)
+    _deleted_members: set[str] = field(default_factory=set)
     _revoked_invites: set[str] = field(default_factory=set)
     _triaged_conflicts: set[str] = field(default_factory=set)
     _accepted_invites: set[str] = field(default_factory=set)
     _revoked_refresh_tokens: set[str] = field(default_factory=set)
+    _member_roles: dict[str, str] = field(default_factory=dict)
 
     def _probes(self):
         return _load("phase1c_deployed_probes_fake", ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py")
@@ -69,15 +71,167 @@ class StatefulFakeDeployment:
             },
         )
 
-    def _is_owner_token(self, token: str | None) -> bool:
-        if token is None:
-            return False
-        owner_tokens = {
-            self.credentials.alpha_access_token,
-            getattr(self.credentials, "alpha_beta_access_token", ""),
-            getattr(self.credentials, "beta_denial_accept_access_token", ""),
-        }
-        return token in owner_tokens
+    def _resolve_operation_id(self, path: str, method: str) -> str:
+        mapping = self._denial().build_http_sse_denial_mapping()
+        for entry in mapping:
+            if entry.method.upper() != method:
+                continue
+            template_path = self._denial().API_PREFIX + entry.path_template
+            for key, value in {
+                "orgId": self.seed.org_beta_id,
+                "collectionId": self.seed.beta_collection_id,
+                "documentId": self.seed.beta_document_id,
+                "jobId": self.seed.beta_job_id,
+                "userId": getattr(self.credentials, "beta_denial_disposable_member_user_id", ""),
+                "sessionId": self.seed.beta_chat_session_id,
+                "projectId": self.seed.beta_project_id,
+                "versionId": self.seed.beta_version_id,
+                "conflictId": self.seed.beta_conflict_id,
+                "inviteId": getattr(self.credentials, "beta_denial_disposable_invite_id", ""),
+                "capability": self.credentials.beta_download_capability,
+            }.items():
+                template_path = template_path.replace("{" + key + "}", value)
+            if template_path.split("?", 1)[0] == path.split("?", 1)[0]:
+                return entry.operation_id
+        return ""
+
+    def _owner_success(self, *, operation_id: str, path: str, method: str) -> Any | None:
+        denial_mod = self._denial()
+        if path.endswith("/api/v1/usage") and method == "GET":
+            return self._response(status=200, body=json.dumps({"items": []}))
+        if path.endswith("/api/v1/members") and method == "GET" and path.count("/") == 3:
+            return self._response(
+                status=200,
+                body=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "userId": "55555555-5555-5555-5555-555555555501",
+                                "role": "viewer",
+                                "email": "phase1c-accept@poc.example",
+                            }
+                        ]
+                    }
+                ),
+            )
+        if path.endswith("/api/v1/members/invites") and method == "GET":
+            invite_id = getattr(self.credentials, "beta_denial_disposable_invite_id", "")
+            return self._response(
+                status=200,
+                body=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "id": invite_id,
+                                "status": "revoked" if invite_id in self._revoked_invites else "pending",
+                            }
+                        ]
+                    }
+                ),
+            )
+        disposable_member = getattr(self.credentials, "beta_denial_disposable_member_user_id", "")
+        delete_member = getattr(self.credentials, "beta_denial_disposable_delete_member_user_id", "")
+        if disposable_member and path.endswith(f"/api/v1/members/{disposable_member}") and method == "GET":
+            if disposable_member in self._deleted_members:
+                return self._response(status=404, body='{"code":"not_found"}')
+            role = self._member_roles.get(disposable_member, "editor")
+            return self._response(status=200, body=json.dumps({"userId": disposable_member, "role": role}))
+        if delete_member and path.endswith(f"/api/v1/members/{delete_member}") and method == "GET":
+            if delete_member in self._deleted_members:
+                return self._response(status=404, body='{"code":"not_found"}')
+            return self._response(status=200, body=json.dumps({"userId": delete_member, "role": "viewer"}))
+        if "/versions/" in path and "/diff" in path and method == "GET":
+            version_id = self.seed.beta_version_id
+            return self._response(
+                status=200,
+                body=json.dumps(
+                    {
+                        "documentId": self.seed.beta_document_id,
+                        "left": {"id": version_id, "documentId": self.seed.beta_document_id, "versionNumber": 1},
+                        "right": {"id": version_id, "documentId": self.seed.beta_document_id, "versionNumber": 1},
+                        "note": "identity diff",
+                        "requestId": _mint_server_request_id(),
+                    }
+                ),
+            )
+        if "/versions/" in path and method == "GET":
+            return self._response(
+                status=200,
+                body=json.dumps(
+                    {
+                        "id": self.seed.beta_version_id,
+                        "documentId": self.seed.beta_document_id,
+                        "versionNumber": 1,
+                        "isCurrent": True,
+                        "sourceContentSha256": "a" * 64,
+                    }
+                ),
+            )
+        if path.endswith("/api/v1/ask/stream") and method == "POST":
+            return self._response(
+                status=200,
+                body=(
+                    "event: message\ndata: {}\n\n"
+                    f"event: {denial_mod.SSE_TERMINAL_EVENT}\ndata: {{\"reason\":\"done\"}}\n\n"
+                ),
+                content_type="text/event-stream",
+            )
+        if path.endswith("/events") and method == "GET":
+            return self._response(
+                status=200,
+                body=(
+                    "event: status\ndata: {\"state\":\"queued\"}\n\n"
+                    f"event: {denial_mod.SSE_TERMINAL_EVENT}\ndata: {{\"reason\":\"done\"}}\n\n"
+                ),
+                content_type="text/event-stream",
+            )
+        if path.endswith(f"/api/v1/collections/{self.seed.beta_collection_id}") and method == "GET":
+            return self._response(
+                status=200,
+                body=json.dumps({"id": self.seed.beta_collection_id, "name": self.seed.marker_beta}),
+            )
+        disposable_update = getattr(self.credentials, "beta_denial_disposable_collection_update_id", "")
+        if disposable_update and path.endswith(f"/api/v1/collections/{disposable_update}") and method == "GET":
+            return self._response(status=200, body=json.dumps({"id": disposable_update, "name": "owner-updated"}))
+        if path.endswith(f"/api/v1/documents/{self.seed.beta_document_id}") and method == "GET":
+            return self._response(status=200, body=json.dumps({"id": self.seed.beta_document_id, "title": "beta"}))
+        if path.endswith(f"/api/v1/documents/{self.seed.beta_document_id}/preview") and method == "GET":
+            return self._response(
+                status=200,
+                body=json.dumps({"documentId": self.seed.beta_document_id, "versionId": self.seed.beta_version_id}),
+            )
+        if path.endswith("/api/v1/search") or path.endswith("/api/v1/ask"):
+            return self._response(status=200, body=json.dumps({"items": []}))
+        if path.endswith("/api/v1/collections") and method == "GET":
+            return self._response(status=200, body=json.dumps({"items": [{"id": self.seed.beta_collection_id, "name": self.seed.marker_beta}]}))
+        if path.endswith("/api/v1/conflicts") and method == "GET":
+            return self._response(status=200, body=json.dumps({"items": [], "requestId": _mint_server_request_id()}))
+        disposable_conflict = getattr(self.credentials, "beta_denial_disposable_conflict_id", "")
+        if disposable_conflict and path.endswith(f"/api/v1/conflicts/{disposable_conflict}") and method == "GET":
+            status = "resolved" if disposable_conflict in self._triaged_conflicts else "open"
+            return self._response(status=200, body=json.dumps({"id": disposable_conflict, "status": status}))
+        if path.endswith(f"/api/v1/jobs/{self.seed.beta_job_id}") and method == "GET":
+            return self._response(status=200, body=json.dumps({"id": self.seed.beta_job_id, "status": "queued"}))
+        if method == "GET" and operation_id:
+            schema = denial_mod.HTTP_OWNER_SUCCESS_SCHEMA.get(operation_id)
+            if schema:
+                payload: dict[str, Any] = {}
+                for key in schema:
+                    if key == "items":
+                        payload[key] = []
+                    elif key == "page":
+                        payload[key] = {"hasMore": False}
+                    elif key == "nodes":
+                        payload[key] = []
+                    elif key in {"left", "right", "citation"}:
+                        payload[key] = {}
+                    else:
+                        payload[key] = self.seed.beta_collection_id if key.endswith("Id") else "ok"
+                return self._response(status=200, body=json.dumps(payload))
+        return None
+
+    def _unknown_owner_mapping(self, *, method: str, path: str) -> Any:
+        raise RuntimeError(f"stateful fake missing explicit handler: {method} {path}")
 
     def _http_request(self, **kwargs: Any):
         method = str(kwargs.get("method") or "GET").upper()
@@ -92,7 +246,8 @@ class StatefulFakeDeployment:
         if token is None:
             return self._response(status=401, body='{"code":"unauthorized"}')
 
-        if token == "unrelated-token-value":
+        stale_access = getattr(self.credentials, "beta_denial_stale_access_token", "")
+        if stale_access and token == stale_access:
             return self._response(status=401, body='{"code":"unauthorized"}')
 
         if path.endswith("/api/v1/auth/refresh"):
@@ -273,18 +428,6 @@ class StatefulFakeDeployment:
                         }
                     ),
                 )
-            if path.endswith("/api/v1/ask/stream") and method == "POST":
-                return self._response(
-                    status=200,
-                    body="event: message\ndata: {}\n\n",
-                    content_type="text/event-stream",
-                )
-            if path.endswith("/events") and method == "GET":
-                return self._response(
-                    status=200,
-                    body="event: status\ndata: {\"state\":\"queued\"}\n\n",
-                    content_type="text/event-stream",
-                )
             if path.endswith(f"/api/v1/downloads/{self.credentials.beta_download_capability}"):
                 return self._response(status=200, body=self.seed.marker_beta, content_type="text/plain")
             if path.endswith("/api/v1/uploads") and method == "POST" and multipart_body is not None:
@@ -306,14 +449,23 @@ class StatefulFakeDeployment:
             disposable_chat = getattr(self.credentials, "beta_denial_disposable_chat_session_id", "")
             disposable_invite = getattr(self.credentials, "beta_denial_disposable_invite_id", "")
             disposable_conflict = getattr(self.credentials, "beta_denial_disposable_conflict_id", "")
+            disposable_member = getattr(self.credentials, "beta_denial_disposable_member_user_id", "")
+            delete_member = getattr(self.credentials, "beta_denial_disposable_delete_member_user_id", "")
 
+            if disposable_member and path.endswith(f"/api/v1/members/{disposable_member}") and method == "PATCH":
+                role = body.get("role") if isinstance(body, dict) else "viewer"
+                self._member_roles[disposable_member] = str(role)
+                return self._response(status=200, body="{}")
+            if delete_member and path.endswith(f"/api/v1/members/{delete_member}") and method == "DELETE":
+                self._deleted_members.add(delete_member)
+                return self._response(status=204, body="")
             if disposable_collection and path.endswith(f"/api/v1/collections/{disposable_collection}") and method == "DELETE":
                 if disposable_collection in self._deleted_collections:
                     return self._response(status=404, body='{"code":"not_found"}')
                 self._deleted_collections.add(disposable_collection)
                 return self._response(status=204, body="")
             if disposable_update and path.endswith(f"/api/v1/collections/{disposable_update}") and method == "PATCH":
-                return self._response(status=200, body=json.dumps({"id": disposable_update}))
+                return self._response(status=200, body=json.dumps({"id": disposable_update, "name": body.get("name", "updated")}))
             if disposable_doc and path.endswith(f"/api/v1/documents/{disposable_doc}") and method == "DELETE":
                 if disposable_doc in self._deleted_documents:
                     return self._response(status=404, body='{"code":"not_found"}')
@@ -344,42 +496,13 @@ class StatefulFakeDeployment:
                         }
                     ),
                 )
-            if "/versions/" in path and "/diff" in path and method == "GET":
-                return self._response(
-                    status=200,
-                    body=json.dumps(
-                        {
-                            "fromVersionId": self.seed.beta_version_id,
-                            "toVersionId": self.seed.beta_version_id,
-                        }
-                    ),
-                )
-            if "/versions/" in path and method == "GET":
-                return self._response(
-                    status=200,
-                    body=json.dumps({"id": self.seed.beta_version_id, "versionId": self.seed.beta_version_id}),
-                )
-            if path.endswith(f"/api/v1/collections/{self.seed.beta_collection_id}") and method == "GET":
-                return self._response(
-                    status=200,
-                    body=json.dumps({"id": self.seed.beta_collection_id, "name": self.seed.marker_beta}),
-                )
-            if path.endswith(f"/api/v1/documents/{self.seed.beta_document_id}") and method == "GET":
-                return self._response(status=200, body=json.dumps({"id": self.seed.beta_document_id}))
-            if path.endswith(f"/api/v1/documents/{self.seed.beta_document_id}/preview") and method == "GET":
-                return self._response(
-                    status=200,
-                    body=json.dumps({"documentId": self.seed.beta_document_id, "versionId": self.seed.beta_version_id}),
-                )
-            if path.endswith("/api/v1/search") or path.endswith("/api/v1/ask"):
-                return self._response(status=200, body=json.dumps({"items": []}))
-            if method == "GET":
-                return self._response(status=200, body=json.dumps({"id": "ok", "items": []}))
-            if method == "DELETE":
-                return self._response(status=204, body="")
-            if method in {"POST", "PATCH"}:
-                return self._response(status=200, body="{}")
-            return self._response(status=404, body='{"code":"not_found"}')
+            operation_id = self._resolve_operation_id(path, method)
+            handled = self._owner_success(operation_id=operation_id, path=path, method=method)
+            if handled is not None:
+                return handled
+            if method in {"POST", "PATCH", "DELETE"}:
+                return self._response(status=200 if method != "DELETE" else 204, body="" if method == "DELETE" else "{}")
+            return self._unknown_owner_mapping(method=method, path=path)
 
         if token == self.credentials.beta_alpha_access_token:
             if not self._membership_active or (multipart_body is not None and not self._beta_alpha_editor):

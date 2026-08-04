@@ -802,7 +802,7 @@ def build_deployed_context(
             )
     creds_path = os.environ.get("MARKHAND_PHASE1C_CREDENTIALS_JSON")
     if creds_path and Path(creds_path).is_file():
-        credentials = _DEPLOYED.load_seed_credentials(
+        credentials = _DEPLOYED.load_seed_credentials_secure(
             Path(creds_path), expected_challenge=probe_challenge, purge_after_load=True
         )
     else:

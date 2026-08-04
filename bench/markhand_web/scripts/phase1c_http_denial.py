@@ -31,7 +31,8 @@ DISPOSABLE_COLLECTION_UPDATE_OPS = frozenset({"updateCollection"})
 DISPOSABLE_DOCUMENT_OPS = frozenset({"deleteDocument"})
 DISPOSABLE_CHAT_OPS = frozenset({"deleteChatSession"})
 DISPOSABLE_INVITE_OPS = frozenset({"revokeMemberInvite"})
-DISPOSABLE_MEMBER_OPS = frozenset({"deleteMember", "patchMember"})
+DISPOSABLE_MEMBER_PATCH_OPS = frozenset({"patchMember"})
+DISPOSABLE_MEMBER_DELETE_OPS = frozenset({"deleteMember"})
 DISPOSABLE_CONFLICT_OPS = frozenset({"triageConflict"})
 
 SECONDARY_ROW_IDS: frozenset[str] = frozenset(
@@ -45,6 +46,39 @@ SECONDARY_ROW_IDS: frozenset[str] = frozenset(
         "denial-task13-in-flight-ask-revoke",
     }
 )
+
+SSE_TERMINAL_EVENT = "stream.closed"
+
+# Owner-control success JSON keys aligned with OpenAPI + canonical Rust integration tests.
+HTTP_OWNER_SUCCESS_SCHEMA: dict[str, frozenset[str]] = {
+    "authMe": frozenset({"userId", "sessionId", "orgId"}),
+    "diffDocumentVersions": frozenset({"documentId", "left", "right", "note", "requestId"}),
+    "getChatSession": frozenset({"id", "title"}),
+    "getCollection": frozenset({"id", "name"}),
+    "getConflict": frozenset({"id", "status"}),
+    "getConflictEvidence": frozenset({"items"}),
+    "getDocument": frozenset({"id", "title"}),
+    "getDocumentVersion": frozenset(
+        {"id", "documentId", "versionNumber", "isCurrent", "sourceContentSha256"}
+    ),
+    "getGraph": frozenset({"nodes"}),
+    "getJob": frozenset({"id", "status"}),
+    "getOrg": frozenset({"id", "name"}),
+    "getProject": frozenset({"id", "name"}),
+    "getUsage": frozenset({"items"}),
+    "listAudit": frozenset({"items", "page"}),
+    "listChatSessions": frozenset({"items"}),
+    "listCollections": frozenset({"items"}),
+    "listConflicts": frozenset({"items", "requestId"}),
+    "listDocumentVersions": frozenset({"items"}),
+    "listDocuments": frozenset({"items"}),
+    "listMemberInvites": frozenset({"items"}),
+    "listMembers": frozenset({"items"}),
+    "listOrgs": frozenset({"items"}),
+    "listProjects": frozenset({"items"}),
+    "previewDocument": frozenset({"documentId", "versionId"}),
+    "resolveCitation": frozenset({"citation", "requestId"}),
+}
 
 OPERATION_FOREIGN_DENIAL: dict[str, frozenset[int]] = {
     "switchOrg": frozenset({403}),
@@ -385,10 +419,17 @@ def _owner_token(entry: DenialMappingEntry, *, seed: Any, credentials: Any) -> s
         return None
     if entry.operation_id in {"patchMember", "deleteMember"} and entry.path_template.endswith("{userId}"):
         params = _owner_params(seed, credentials=credentials, operation_id=entry.operation_id)
-        disposable_member = _credential_string(
+        patch_member = _credential_string(
             credentials, "beta_denial_disposable_member_user_id", field="betaDenialDisposableMemberUserId"
         )
-        if params.get("userId") == disposable_member:
+        delete_member = _credential_string(
+            credentials,
+            "beta_denial_disposable_delete_member_user_id",
+            field="betaDenialDisposableDeleteMemberUserId",
+        )
+        if params.get("userId") == patch_member:
+            return _credential_string(credentials, "alpha_beta_access_token", field="alphaBetaAccessToken")
+        if params.get("userId") == delete_member:
             return _credential_string(credentials, "alpha_beta_access_token", field="alphaBetaAccessToken")
         return _credential_string(credentials, "alpha_access_token", field="alphaAccessToken")
     if entry.operation_id in {"createMemberInvite", "revokeMemberInvite"}:
@@ -438,9 +479,15 @@ def _owner_params(seed: Any, *, credentials: Any, operation_id: str) -> dict[str
         params["inviteId"] = _credential_string(
             credentials, "beta_denial_disposable_invite_id", field="betaDenialDisposableInviteId"
         )
-    if operation_id in DISPOSABLE_MEMBER_OPS:
+    if operation_id in DISPOSABLE_MEMBER_PATCH_OPS:
         params["userId"] = _credential_string(
             credentials, "beta_denial_disposable_member_user_id", field="betaDenialDisposableMemberUserId"
+        )
+    if operation_id in DISPOSABLE_MEMBER_DELETE_OPS:
+        params["userId"] = _credential_string(
+            credentials,
+            "beta_denial_disposable_delete_member_user_id",
+            field="betaDenialDisposableDeleteMemberUserId",
         )
     if operation_id in DISPOSABLE_CONFLICT_OPS:
         params["conflictId"] = _credential_string(
@@ -651,34 +698,27 @@ def _owner_body(operation_id: str, seed: Any, *, credentials: Any, params: dict[
 
 
 def _read_schema(operation_id: str) -> frozenset[str]:
-    mapping: dict[str, frozenset[str]] = {
-        "getCollection": frozenset({"id"}),
-        "getDocument": frozenset({"id"}),
-        "getJob": frozenset({"id"}),
-        "getDocumentVersion": frozenset({"id", "versionId"}),
-        "getConflict": frozenset({"id"}),
-        "getChatSession": frozenset({"id"}),
-        "getProject": frozenset({"id"}),
-        "getOrg": frozenset({"id"}),
-        "listConflicts": frozenset({"items"}),
-        "listDocuments": frozenset({"items"}),
-        "listCollections": frozenset({"items"}),
-        "listProjects": frozenset({"items"}),
-        "listMembers": frozenset({"items"}),
-        "listMemberInvites": frozenset({"items"}),
-        "listChatSessions": frozenset({"items"}),
-        "listDocumentVersions": frozenset({"items"}),
-        "listOrgs": frozenset({"items"}),
-        "listAudit": frozenset({"items"}),
-        "getUsage": frozenset({"documents"}),
-        "getGraph": frozenset({"nodes"}),
-        "getConflictEvidence": frozenset({"items"}),
-        "authMe": frozenset({"userId", "sessionId"}),
-        "resolveCitation": frozenset({"citation", "requestId"}),
-        "previewDocument": frozenset({"documentId"}),
-        "diffDocumentVersions": frozenset({"fromVersionId"}),
+    schema = HTTP_OWNER_SUCCESS_SCHEMA.get(operation_id)
+    if schema is not None:
+        return schema
+    return frozenset({"id"})
+
+
+def validate_http_contract_schema_table() -> None:
+    for operation_id, keys in HTTP_OWNER_SUCCESS_SCHEMA.items():
+        if not keys:
+            raise RuntimeError(f"HTTP_OWNER_SUCCESS_SCHEMA[{operation_id!r}] must be non-empty")
+    mapping = build_http_sse_denial_mapping()
+    get_ops = {
+        entry.operation_id
+        for entry in mapping
+        if entry.method.upper() == "GET"
+        and entry.operation_id not in {"redeemDownload", "jobEvents"}
+        and entry.layer != "sse"
     }
-    return mapping.get(operation_id, frozenset({"id"}))
+    missing = sorted(get_ops - set(HTTP_OWNER_SUCCESS_SCHEMA))
+    if missing:
+        raise RuntimeError(f"HTTP_OWNER_SUCCESS_SCHEMA missing GET operations: {missing}")
 
 
 def build_owner_control_spec(
@@ -689,6 +729,9 @@ def build_owner_control_spec(
 ) -> OwnerControlSpec | None:
     params = _owner_params(seed, credentials=credentials, operation_id=entry.operation_id)
     path = _substitute_path(entry.path_template, params)
+    if entry.operation_id == "diffDocumentVersions":
+        against = params.get("versionId") or seed.beta_version_id
+        path = f"{path}?against={against}"
     method = entry.method.upper()
 
     owner_token = _owner_token(entry, seed=seed, credentials=credentials)
@@ -929,11 +972,37 @@ def _handler_duplicate_names(entry: DenialMappingEntry, seed: Any, credentials: 
 
 def _handler_stale_tokens(entry: DenialMappingEntry, seed: Any, credentials: Any) -> list[DenialRequestSpec]:
     specs = _build_primary_row_specs(entry, seed=seed, credentials=credentials)
-    for spec in specs:
-        if spec.scenario == "foreign" and spec.operation_id == "authMe":
-            spec.scenario = "stale_token"
-            spec.token = "unrelated-token-value"
-            spec.expected_statuses = frozenset({401})
+    owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
+    if owner is not None and not any(spec.scenario == "owner_control" for spec in specs):
+        specs.append(
+            DenialRequestSpec(
+                row_id=entry.row_id,
+                operation_id=entry.operation_id,
+                scenario="owner_control",
+                method=owner.method,
+                path=owner.path,
+                token=owner.token,
+                body=owner.body,
+                expected_statuses=owner.expected_statuses,
+                success_schema_keys=owner.success_schema_keys,
+            )
+        )
+    stale_token = _credential_string(
+        credentials, "beta_denial_stale_access_token", field="betaDenialStaleAccessToken"
+    )
+    specs.append(
+        DenialRequestSpec(
+            row_id=entry.row_id,
+            operation_id="authMe",
+            scenario="stale_token",
+            method="GET",
+            path=f"{API_PREFIX}/auth/me",
+            token=stale_token,
+            body=None,
+            expected_statuses=frozenset({401}),
+            supplied_request_id=f"phase1c-{entry.row_id}-stale-{secrets.token_hex(4)}",
+        )
+    )
     return specs
 
 
@@ -1072,7 +1141,7 @@ def _validate_sse_envelope(body: str, *, operation_id: str, headers: dict[str, s
             break
     if "text/event-stream" not in content_type:
         raise RuntimeError(f"{operation_id} SSE response missing text/event-stream content-type")
-    parse_sse_stream(body, required_terminal=None)
+    parse_sse_stream(body, required_terminal=SSE_TERMINAL_EVENT)
 
 
 def _validate_owner_transition(
@@ -1091,6 +1160,17 @@ def _validate_owner_transition(
     follow_up_path: str | None = None
     expected_status = 404
     token = spec.token or credentials.alpha_beta_access_token
+    member_id = _credential_string(
+        credentials, "beta_denial_disposable_member_user_id", field="betaDenialDisposableMemberUserId"
+    )
+    delete_member_id = _credential_string(
+        credentials,
+        "beta_denial_disposable_delete_member_user_id",
+        field="betaDenialDisposableDeleteMemberUserId",
+    )
+    invite_id = _credential_string(
+        credentials, "beta_denial_disposable_invite_id", field="betaDenialDisposableInviteId"
+    )
     if transition == "collection_deleted":
         follow_up_path = f"{API_PREFIX}/collections/{credentials.beta_denial_disposable_collection_id}"
     elif transition == "collection_updated":
@@ -1103,7 +1183,21 @@ def _validate_owner_transition(
     elif transition == "conflict_triaged":
         follow_up_path = f"{API_PREFIX}/conflicts/{credentials.beta_denial_disposable_conflict_id}"
         expected_status = 200
+    elif transition == "member_role_updated":
+        follow_up_path = f"{API_PREFIX}/members/{member_id}"
+        expected_status = 200
+    elif transition == "member_deleted":
+        follow_up_path = f"{API_PREFIX}/members/{delete_member_id}"
+    elif transition == "invite_revoked":
+        follow_up_path = f"{API_PREFIX}/members/invites"
+        expected_status = 200
+    elif transition == "invite_accepted":
+        follow_up_path = f"{API_PREFIX}/members"
+        expected_status = 200
+    elif transition == "ask_stream_started":
+        return transition
     if follow_up_path is None:
+        report.failures.append(f"{spec.operation_id}/owner_control transition {transition} missing follow-up")
         return transition
     follow = http_request(
         method="GET",
@@ -1116,6 +1210,65 @@ def _validate_owner_transition(
         report.failures.append(
             f"{spec.operation_id}/owner_control transition {transition} follow-up expected {expected_status} got {follow.status}"
         )
+        return transition
+    if transition == "member_role_updated":
+        try:
+            payload = json.loads(follow.body)
+            role = payload.get("role")
+            if role != "viewer":
+                report.failures.append(
+                    f"{spec.operation_id}/owner_control transition member_role_updated expected role viewer got {role!r}"
+                )
+        except json.JSONDecodeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition member_role_updated invalid json: {error}")
+    elif transition == "invite_revoked":
+        try:
+            payload = json.loads(follow.body)
+            items = payload.get("items") or []
+            for item in items:
+                if isinstance(item, dict) and str(item.get("id")) == invite_id:
+                    if item.get("status") not in {"revoked", "expired"}:
+                        report.failures.append(
+                            f"{spec.operation_id}/owner_control transition invite_revoked invite still active"
+                        )
+                    break
+            else:
+                report.failures.append(
+                    f"{spec.operation_id}/owner_control transition invite_revoked missing invite {invite_id}"
+                )
+        except json.JSONDecodeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition invite_revoked invalid json: {error}")
+    elif transition == "invite_accepted":
+        try:
+            payload = json.loads(follow.body)
+            accept_user = "55555555-5555-5555-5555-555555555501"
+            user_ids = [
+                str(item.get("userId"))
+                for item in (payload.get("items") or [])
+                if isinstance(item, dict) and item.get("userId")
+            ]
+            if accept_user not in user_ids:
+                report.failures.append(
+                    f"{spec.operation_id}/owner_control transition invite_accepted missing accepted member"
+                )
+        except json.JSONDecodeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition invite_accepted invalid json: {error}")
+    elif transition == "collection_updated" and expected_status == 200:
+        try:
+            payload = json.loads(follow.body)
+            if not isinstance(payload.get("name"), str) or not payload["name"].strip():
+                report.failures.append(f"{spec.operation_id}/owner_control transition collection_updated missing name")
+        except json.JSONDecodeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition collection_updated invalid json: {error}")
+    elif transition == "conflict_triaged" and expected_status == 200:
+        try:
+            payload = json.loads(follow.body)
+            if payload.get("status") not in {"resolved", "accepted_exception", "false_positive"}:
+                report.failures.append(
+                    f"{spec.operation_id}/owner_control transition conflict_triaged unexpected status {payload.get('status')!r}"
+                )
+        except json.JSONDecodeError as error:
+            report.failures.append(f"{spec.operation_id}/owner_control transition conflict_triaged invalid json: {error}")
     return transition
 
 

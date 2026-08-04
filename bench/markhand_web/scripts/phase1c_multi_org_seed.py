@@ -38,6 +38,8 @@ DISPOSABLE_USER_ID = "44444444-4444-4444-4444-444444444401"
 DISPOSABLE_EMAIL = "phase1c-disposable@poc.example"
 ACCEPT_USER_ID = "55555555-5555-5555-5555-555555555501"
 ACCEPT_EMAIL = "phase1c-accept@poc.example"
+DELETE_MEMBER_USER_ID = "77777777-7777-7777-7777-777777777701"
+DELETE_MEMBER_EMAIL = "phase1c-delete-member@poc.example"
 ALPHA_ORG_ID = "11111111-1111-1111-1111-111111111111"
 ALPHA_USER_ID = "22222222-2222-2222-2222-222222222201"
 
@@ -107,6 +109,26 @@ def _psql(sql: str) -> str:
     return (proc.stdout or "").strip()
 
 
+def _reconcile_identity_fixtures() -> None:
+    """Clear deterministic fixture users/invites/memberships (member_invites -> org_invites)."""
+    _psql(
+        f"""
+        BEGIN;
+        -- member_invites fixture cleanup
+        DELETE FROM org_invites
+        WHERE lower(email) IN (
+            lower('{BETA_EMAIL}'),
+            lower('{DISPOSABLE_EMAIL}'),
+            lower('{ACCEPT_EMAIL}'),
+            lower('{DELETE_MEMBER_EMAIL}')
+        );
+        DELETE FROM org_memberships
+        WHERE user_id IN ('{DISPOSABLE_USER_ID}', '{ACCEPT_USER_ID}', '{DELETE_MEMBER_USER_ID}');
+        COMMIT;
+        """
+    )
+
+
 def _bootstrap_identity_users(password_hash_sql: str) -> None:
     # IDENTITY_FIXTURE_BOUNDARY: no registration API; bootstrap login-capable users only.
     _psql(
@@ -124,6 +146,9 @@ def _bootstrap_identity_users(password_hash_sql: str) -> None:
         ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
         INSERT INTO users (id, email, display_name, password_hash)
         VALUES ('{ACCEPT_USER_ID}', '{ACCEPT_EMAIL}', 'Phase 1C Accept', '{password_hash_sql}')
+        ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
+        INSERT INTO users (id, email, display_name, password_hash)
+        VALUES ('{DELETE_MEMBER_USER_ID}', '{DELETE_MEMBER_EMAIL}', 'Phase 1C Delete Member', '{password_hash_sql}')
         ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
         COMMIT;
         """
@@ -211,6 +236,38 @@ def _login(api_base: str, email: str, password: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise RuntimeError("login response invalid")
     return payload
+
+
+def _auth_logout(api_base: str, *, access_token: str, refresh_token: str) -> None:
+    status, _, _ = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/auth/logout",
+        token=access_token,
+        body={"refreshToken": refresh_token},
+    )
+    if status // 100 != 2 and status != 204:
+        raise RuntimeError("fixture logout failed")
+
+
+def _capture_stale_access_token(api_base: str, *, email: str, password: str) -> str:
+    login = _login(api_base, email, password)
+    access = login.get("accessToken") or login.get("access_token")
+    refresh = login.get("refreshToken") or login.get("refresh_token")
+    if not isinstance(access, str) or not isinstance(refresh, str):
+        raise RuntimeError("stale token fixture login missing token pair")
+    _auth_logout(api_base, access_token=access, refresh_token=refresh)
+    denied_status, _, _ = _http(
+        api_base=api_base,
+        method="GET",
+        path="/api/v1/auth/me",
+        token=access,
+    )
+    if denied_status == 200:
+        raise RuntimeError("stale access token must be revoked after logout")
+    if denied_status != 401:
+        raise RuntimeError(f"stale access token must be exact 401 after logout, got {denied_status}")
+    return access
 
 
 def _auth_me(api_base: str, access_token: str) -> dict[str, Any]:
@@ -516,6 +573,7 @@ def run_seed() -> int:
     if hash_proc.returncode != 0:
         raise RuntimeError("password hash generation failed")
     password_hash = hash_proc.stdout.strip().replace("'", "''")
+    _reconcile_identity_fixtures()
     _bootstrap_identity_users(password_hash)
 
     alpha_login = _login(api_base, alpha_email, password)
@@ -654,6 +712,34 @@ def run_seed() -> int:
     if accept_disposable_status not in {200, 201}:
         raise RuntimeError("disposable invite accept failed")
     beta_denial_disposable_member_user_id = DISPOSABLE_USER_ID
+
+    delete_invite_status, _, delete_invite_raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites",
+        token=beta_org_access,
+        body={"email": DELETE_MEMBER_EMAIL, "role": "viewer"},
+    )
+    if delete_invite_status not in {200, 201}:
+        raise RuntimeError("delete-member invite failed")
+    delete_invite_payload = json.loads(delete_invite_raw)
+    delete_invite_token = delete_invite_payload.get("token")
+    if not isinstance(delete_invite_token, str):
+        raise RuntimeError("delete-member invite response missing token")
+    delete_login = _login(api_base, DELETE_MEMBER_EMAIL, password)
+    delete_access = delete_login.get("accessToken") or delete_login.get("access_token")
+    if not isinstance(delete_access, str):
+        raise RuntimeError("delete-member login missing access token")
+    accept_delete_status, _, _ = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites/accept",
+        token=delete_access,
+        body={"token": delete_invite_token},
+    )
+    if accept_delete_status not in {200, 201}:
+        raise RuntimeError("delete-member invite accept failed")
+    beta_denial_disposable_delete_member_user_id = DELETE_MEMBER_USER_ID
 
     alpha_upload = _multipart_upload(
         api_base=api_base,
@@ -804,6 +890,9 @@ def run_seed() -> int:
         version_id=beta_version_id,
         marker=marker_beta,
     )
+    beta_denial_stale_access_token = _capture_stale_access_token(
+        api_base, email=DISPOSABLE_EMAIL, password=password
+    )
 
     seed_raw: dict[str, Any] = {
         "schemaVersion": 1,
@@ -867,11 +956,13 @@ def run_seed() -> int:
         "betaDenialDisposableChatSessionId": beta_denial_disposable_chat_session_id,
         "betaDenialDisposableInviteId": beta_denial_disposable_invite_id,
         "betaDenialDisposableMemberUserId": beta_denial_disposable_member_user_id,
+        "betaDenialDisposableDeleteMemberUserId": beta_denial_disposable_delete_member_user_id,
         "betaDenialDisposableConflictId": beta_denial_disposable_conflict_id,
         "betaDenialAcceptInviteToken": beta_denial_accept_invite_token,
         "betaDenialAcceptAccessToken": beta_denial_accept_access_token,
         "betaDenialNegativeInviteToken": beta_denial_negative_invite_token,
         "betaDenialWrongDownloadCapability": beta_denial_wrong_download_capability,
+        "betaDenialStaleAccessToken": beta_denial_stale_access_token,
         **citation_fixture,
     }
     _atomic_write(out, evidence, mode=0o644)

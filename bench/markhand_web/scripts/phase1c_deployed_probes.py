@@ -108,6 +108,7 @@ CREDENTIAL_REQUIRED_FIELDS: tuple[str, ...] = (
     "betaDenialDisposableChatSessionId",
     "betaDenialDisposableInviteId",
     "betaDenialDisposableMemberUserId",
+    "betaDenialDisposableDeleteMemberUserId",
     "betaDenialDisposableConflictId",
     "betaDenialAcceptInviteToken",
     "betaDenialAcceptAccessToken",
@@ -121,6 +122,7 @@ CREDENTIAL_REQUIRED_FIELDS: tuple[str, ...] = (
     "betaCitationQuote",
     "betaDenialNegativeInviteToken",
     "betaDenialWrongDownloadCapability",
+    "betaDenialStaleAccessToken",
 )
 
 AUDIT_MUTATION_ACTIONS: tuple[str, ...] = (
@@ -292,6 +294,7 @@ class SeedCredentials:
     beta_denial_disposable_chat_session_id: str
     beta_denial_disposable_invite_id: str
     beta_denial_disposable_member_user_id: str
+    beta_denial_disposable_delete_member_user_id: str
     beta_denial_disposable_conflict_id: str
     beta_denial_accept_invite_token: str
     beta_denial_accept_access_token: str
@@ -305,6 +308,7 @@ class SeedCredentials:
     beta_citation_quote: str
     beta_denial_negative_invite_token: str
     beta_denial_wrong_download_capability: str
+    beta_denial_stale_access_token: str
 
 
 @dataclass
@@ -542,6 +546,7 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
         credentials.beta_denial_disposable_chat_session_id,
         credentials.beta_denial_disposable_invite_id,
         credentials.beta_denial_disposable_member_user_id,
+        credentials.beta_denial_disposable_delete_member_user_id,
         credentials.beta_denial_disposable_conflict_id,
     ]
     if len(set(disposable_ids)) != len(disposable_ids):
@@ -553,6 +558,7 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
         "beta_denial_disposable_chat_session_id",
         "beta_denial_disposable_invite_id",
         "beta_denial_disposable_member_user_id",
+        "beta_denial_disposable_delete_member_user_id",
         "beta_denial_disposable_conflict_id",
         "beta_denial_accept_invite_token",
         "beta_denial_accept_access_token",
@@ -563,6 +569,7 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
         "alpha_beta_access_token",
         "beta_denial_negative_invite_token",
         "beta_denial_wrong_download_capability",
+        "beta_denial_stale_access_token",
     ):
         value = getattr(credentials, field_name, None)
         if isinstance(value, str):
@@ -572,6 +579,81 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
                 validate_uuid(value, field=field_name)
         elif value is None:
             raise RuntimeError(f"credentials missing {field_name}")
+
+
+def _parse_seed_credentials_raw(raw: dict[str, Any], *, expected_challenge: str) -> SeedCredentials:
+    if raw.get("schemaVersion") != 1:
+        raise RuntimeError("credential schemaVersion mismatch")
+    if raw.get("challenge") != expected_challenge:
+        raise RuntimeError("credential challenge mismatch")
+    for key in CREDENTIAL_REQUIRED_FIELDS:
+        if key in {
+            "betaCitationSourceSpanStart",
+            "betaCitationSourceSpanEnd",
+            "betaCitationQuoteLocalStart",
+            "betaCitationQuoteLocalEnd",
+        }:
+            if key not in raw:
+                raise RuntimeError(f"credentials missing {key}")
+            continue
+        _require_string(raw, key)
+    credentials = SeedCredentials(
+        challenge=expected_challenge,
+        alpha_access_token=_require_string(raw, "alphaAccessToken"),
+        alpha_refresh_token=_require_string(raw, "alphaRefreshToken"),
+        beta_access_token=_require_string(raw, "betaAccessToken"),
+        beta_refresh_token=_require_string(raw, "betaRefreshToken"),
+        beta_alpha_access_token=_require_string(raw, "betaAlphaAccessToken"),
+        beta_alpha_refresh_token=_require_string(raw, "betaAlphaRefreshToken"),
+        alpha_beta_access_token=_require_string(raw, "alphaBetaAccessToken"),
+        alpha_beta_refresh_token=_require_string(raw, "alphaBetaRefreshToken"),
+        alpha_session_id=validate_uuid(_require_string(raw, "alphaSessionId"), field="alphaSessionId"),
+        beta_session_id=validate_uuid(_require_string(raw, "betaSessionId"), field="betaSessionId"),
+        beta_invite_token=_require_string(raw, "betaInviteToken"),
+        alpha_download_capability=_require_string(raw, "alphaDownloadCapability"),
+        beta_download_capability=_require_string(raw, "betaDownloadCapability"),
+        beta_denial_disposable_collection_id=validate_uuid(
+            _require_string(raw, "betaDenialDisposableCollectionId"), field="betaDenialDisposableCollectionId"
+        ),
+        beta_denial_disposable_collection_update_id=validate_uuid(
+            _require_string(raw, "betaDenialDisposableCollectionUpdateId"),
+            field="betaDenialDisposableCollectionUpdateId",
+        ),
+        beta_denial_disposable_document_id=validate_uuid(
+            _require_string(raw, "betaDenialDisposableDocumentId"), field="betaDenialDisposableDocumentId"
+        ),
+        beta_denial_disposable_chat_session_id=validate_uuid(
+            _require_string(raw, "betaDenialDisposableChatSessionId"), field="betaDenialDisposableChatSessionId"
+        ),
+        beta_denial_disposable_invite_id=validate_uuid(
+            _require_string(raw, "betaDenialDisposableInviteId"), field="betaDenialDisposableInviteId"
+        ),
+            beta_denial_disposable_member_user_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableMemberUserId"), field="betaDenialDisposableMemberUserId"
+            ),
+            beta_denial_disposable_delete_member_user_id=validate_uuid(
+                _require_string(raw, "betaDenialDisposableDeleteMemberUserId"),
+                field="betaDenialDisposableDeleteMemberUserId",
+            ),
+            beta_denial_disposable_conflict_id=validate_uuid(
+            _require_string(raw, "betaDenialDisposableConflictId"), field="betaDenialDisposableConflictId"
+        ),
+        beta_denial_accept_invite_token=_require_string(raw, "betaDenialAcceptInviteToken"),
+        beta_denial_accept_access_token=_require_string(raw, "betaDenialAcceptAccessToken"),
+        beta_citation_chunk_id=validate_uuid(_require_string(raw, "betaCitationChunkId"), field="betaCitationChunkId"),
+        beta_citation_source_content_sha256=_require_string(raw, "betaCitationSourceContentSha256"),
+        beta_citation_canonical_markdown_sha256=_require_string(raw, "betaCitationCanonicalMarkdownSha256"),
+        beta_citation_source_span_start=int(raw["betaCitationSourceSpanStart"]),
+        beta_citation_source_span_end=int(raw["betaCitationSourceSpanEnd"]),
+        beta_citation_quote_local_start=int(raw["betaCitationQuoteLocalStart"]),
+        beta_citation_quote_local_end=int(raw["betaCitationQuoteLocalEnd"]),
+        beta_citation_quote=_require_string(raw, "betaCitationQuote"),
+        beta_denial_negative_invite_token=_require_string(raw, "betaDenialNegativeInviteToken"),
+        beta_denial_wrong_download_capability=_require_string(raw, "betaDenialWrongDownloadCapability"),
+        beta_denial_stale_access_token=_require_string(raw, "betaDenialStaleAccessToken"),
+    )
+    validate_fixture_credentials(credentials)
+    return credentials
 
 
 def load_seed_credentials_secure(
@@ -594,17 +676,24 @@ def load_seed_credentials_secure(
         raise RuntimeError("credentials file exceeds bounded size")
     fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW)
     try:
+        fd_stat = os.fstat(fd)
+        if not stat.S_ISREG(fd_stat.st_mode):
+            raise RuntimeError("credentials descriptor must be regular file")
+        if fd_stat.st_uid != os.getuid():
+            raise RuntimeError("credentials descriptor must be owned by current uid")
+        if (fd_stat.st_mode & 0o777) != 0o600:
+            raise RuntimeError("credentials descriptor must be mode 0600")
+        if fd_stat.st_size > max_bytes:
+            raise RuntimeError("credentials file exceeds bounded size")
         raw_bytes = os.read(fd, max_bytes + 1)
     finally:
         os.close(fd)
     if len(raw_bytes) > max_bytes:
         raise RuntimeError("credentials file exceeds bounded size")
-    tmp_path = path.with_suffix(path.suffix + ".loaded")
-    tmp_path.write_bytes(raw_bytes)
     try:
-        return load_seed_credentials(tmp_path, expected_challenge=expected_challenge, purge_after_load=False)
+        raw = json.loads(raw_bytes.decode("utf-8"))
+        return _parse_seed_credentials_raw(raw, expected_challenge=expected_challenge)
     finally:
-        tmp_path.unlink(missing_ok=True)
         if purge_after_load:
             purge_phase1c_credentials(path)
 
@@ -617,73 +706,7 @@ def load_seed_credentials(
 ) -> SeedCredentials:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if raw.get("schemaVersion") != 1:
-            raise RuntimeError("credential schemaVersion mismatch")
-        if raw.get("challenge") != expected_challenge:
-            raise RuntimeError("credential challenge mismatch")
-        for key in CREDENTIAL_REQUIRED_FIELDS:
-            if key in {
-                "betaCitationSourceSpanStart",
-                "betaCitationSourceSpanEnd",
-                "betaCitationQuoteLocalStart",
-                "betaCitationQuoteLocalEnd",
-            }:
-                if key not in raw:
-                    raise RuntimeError(f"credentials missing {key}")
-                continue
-            _require_string(raw, key)
-        credentials = SeedCredentials(
-            challenge=expected_challenge,
-            alpha_access_token=_require_string(raw, "alphaAccessToken"),
-            alpha_refresh_token=_require_string(raw, "alphaRefreshToken"),
-            beta_access_token=_require_string(raw, "betaAccessToken"),
-            beta_refresh_token=_require_string(raw, "betaRefreshToken"),
-            beta_alpha_access_token=_require_string(raw, "betaAlphaAccessToken"),
-            beta_alpha_refresh_token=_require_string(raw, "betaAlphaRefreshToken"),
-            alpha_beta_access_token=_require_string(raw, "alphaBetaAccessToken"),
-            alpha_beta_refresh_token=_require_string(raw, "alphaBetaRefreshToken"),
-            alpha_session_id=validate_uuid(_require_string(raw, "alphaSessionId"), field="alphaSessionId"),
-            beta_session_id=validate_uuid(_require_string(raw, "betaSessionId"), field="betaSessionId"),
-            beta_invite_token=_require_string(raw, "betaInviteToken"),
-            alpha_download_capability=_require_string(raw, "alphaDownloadCapability"),
-            beta_download_capability=_require_string(raw, "betaDownloadCapability"),
-            beta_denial_disposable_collection_id=validate_uuid(
-                _require_string(raw, "betaDenialDisposableCollectionId"), field="betaDenialDisposableCollectionId"
-            ),
-            beta_denial_disposable_collection_update_id=validate_uuid(
-                _require_string(raw, "betaDenialDisposableCollectionUpdateId"),
-                field="betaDenialDisposableCollectionUpdateId",
-            ),
-            beta_denial_disposable_document_id=validate_uuid(
-                _require_string(raw, "betaDenialDisposableDocumentId"), field="betaDenialDisposableDocumentId"
-            ),
-            beta_denial_disposable_chat_session_id=validate_uuid(
-                _require_string(raw, "betaDenialDisposableChatSessionId"), field="betaDenialDisposableChatSessionId"
-            ),
-            beta_denial_disposable_invite_id=validate_uuid(
-                _require_string(raw, "betaDenialDisposableInviteId"), field="betaDenialDisposableInviteId"
-            ),
-            beta_denial_disposable_member_user_id=validate_uuid(
-                _require_string(raw, "betaDenialDisposableMemberUserId"), field="betaDenialDisposableMemberUserId"
-            ),
-            beta_denial_disposable_conflict_id=validate_uuid(
-                _require_string(raw, "betaDenialDisposableConflictId"), field="betaDenialDisposableConflictId"
-            ),
-            beta_denial_accept_invite_token=_require_string(raw, "betaDenialAcceptInviteToken"),
-            beta_denial_accept_access_token=_require_string(raw, "betaDenialAcceptAccessToken"),
-            beta_citation_chunk_id=validate_uuid(_require_string(raw, "betaCitationChunkId"), field="betaCitationChunkId"),
-            beta_citation_source_content_sha256=_require_string(raw, "betaCitationSourceContentSha256"),
-            beta_citation_canonical_markdown_sha256=_require_string(raw, "betaCitationCanonicalMarkdownSha256"),
-            beta_citation_source_span_start=int(raw["betaCitationSourceSpanStart"]),
-            beta_citation_source_span_end=int(raw["betaCitationSourceSpanEnd"]),
-            beta_citation_quote_local_start=int(raw["betaCitationQuoteLocalStart"]),
-            beta_citation_quote_local_end=int(raw["betaCitationQuoteLocalEnd"]),
-            beta_citation_quote=_require_string(raw, "betaCitationQuote"),
-            beta_denial_negative_invite_token=_require_string(raw, "betaDenialNegativeInviteToken"),
-            beta_denial_wrong_download_capability=_require_string(raw, "betaDenialWrongDownloadCapability"),
-        )
-        validate_fixture_credentials(credentials)
-        return credentials
+        return _parse_seed_credentials_raw(raw, expected_challenge=expected_challenge)
     finally:
         if purge_after_load:
             purge_phase1c_credentials(path)
@@ -1565,7 +1588,12 @@ class DeployedProbeRunner:
         if isinstance(new_refresh, str):
             self.credentials.beta_refresh_token = new_refresh
 
-        logout = self._http("POST", "/api/v1/auth/logout", token=token, body={})
+        logout = self._http(
+            "POST",
+            "/api/v1/auth/logout",
+            token=token,
+            body={"refreshToken": self.credentials.alpha_refresh_token},
+        )
         logout_request_id = extract_server_request_id(logout.body, logout.headers) or ""
         expected.append(
             {

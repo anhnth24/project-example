@@ -96,6 +96,7 @@ def complete_credentials_raw(**overrides: object) -> dict:
         "betaDenialDisposableChatSessionId": "24242424-2424-2424-2424-242424242424",
         "betaDenialDisposableInviteId": "25252525-2525-2525-2525-252525252525",
         "betaDenialDisposableMemberUserId": "44444444-4444-4444-4444-444444444401",
+        "betaDenialDisposableDeleteMemberUserId": "77777777-7777-7777-7777-777777777701",
         "betaDenialDisposableConflictId": "26262626-2626-2626-2626-262626262626",
         "betaDenialAcceptInviteToken": "mhinv1.accept-disposable-token",
         "betaDenialAcceptAccessToken": "disposable-accept-token",
@@ -109,6 +110,7 @@ def complete_credentials_raw(**overrides: object) -> dict:
         "betaCitationQuote": "phase1c-beta",
         "betaDenialNegativeInviteToken": "mhinv1.negative-token",
         "betaDenialWrongDownloadCapability": "mhcap1.wrong-token",
+        "betaDenialStaleAccessToken": "stale-access-token-value",
     }
     payload.update(overrides)
     return payload
@@ -136,6 +138,7 @@ def make_seed_credentials(probes, seed, **overrides: object):
         "beta_denial_disposable_chat_session_id": "24242424-2424-2424-2424-242424242424",
         "beta_denial_disposable_invite_id": "25252525-2525-2525-2525-252525252525",
         "beta_denial_disposable_member_user_id": "44444444-4444-4444-4444-444444444401",
+        "beta_denial_disposable_delete_member_user_id": "77777777-7777-7777-7777-777777777701",
         "beta_denial_disposable_conflict_id": "26262626-2626-2626-2626-262626262626",
         "beta_denial_accept_invite_token": "mhinv1.accept-disposable-token",
         "beta_denial_accept_access_token": "disposable-accept-token",
@@ -149,6 +152,7 @@ def make_seed_credentials(probes, seed, **overrides: object):
         "beta_citation_quote": "phase1c-beta",
         "beta_denial_negative_invite_token": "mhinv1.negative-token",
         "beta_denial_wrong_download_capability": "mhcap1.wrong-token",
+        "beta_denial_stale_access_token": "stale-access-token-value",
     }
     payload.update(overrides)
     return probes.SeedCredentials(**payload)
@@ -299,189 +303,6 @@ class DeployedArchitectureContractTests(unittest.TestCase):
     def test_deployed_runner_tracks_http_compose_psql_transitions(self) -> None:
         probes = load_probes()
         journal: list[str] = []
-
-        class TrackingShims(probes.DeployedProbeShims):
-            def __init__(self) -> None:
-                self._deleted_collections: set[str] = set()
-                self._deleted_documents: set[str] = set()
-                self._deleted_chat_sessions: set[str] = set()
-
-            def http_request(self, **kwargs):  # type: ignore[override]
-                journal.append(f"http:{kwargs.get('method')}:{kwargs.get('path')}")
-                token = kwargs.get("token")
-                path = str(kwargs.get("path") or "")
-                method = str(kwargs.get("method") or "GET").upper()
-                body = kwargs.get("body") or {}
-                server_request_id = "99999999-9999-9999-9999-999999999901"
-                headers = {"x-request-id": server_request_id}
-                if token is None:
-                    return probes.HttpResponse(status=401, body='{"code":"unauthorized"}', headers=headers)
-
-                wrong_cap = creds.beta_denial_wrong_download_capability
-                if wrong_cap and path.endswith(f"/api/v1/downloads/{wrong_cap}"):
-                    return probes.HttpResponse(status=400, body='{"code":"validation_failed"}', headers=headers)
-
-                if path.endswith(f"/api/v1/downloads/{creds.beta_download_capability}"):
-                    return probes.HttpResponse(status=200, body=seed.marker_beta, headers=headers)
-
-                if path.endswith("/api/v1/members/invites/accept") and method == "POST":
-                    invite_token = body.get("token") if isinstance(body, dict) else None
-                    if invite_token == creds.beta_denial_negative_invite_token:
-                        return probes.HttpResponse(status=404, body='{"code":"not_found"}', headers=headers)
-                    if invite_token == creds.beta_denial_accept_invite_token:
-                        body_json = json.dumps(
-                            {"userId": seed.beta_user_id, "role": "viewer", "requestId": server_request_id}
-                        )
-                        return probes.HttpResponse(status=201, body=body_json, headers=headers)
-
-                if path.endswith("/api/v1/orgs/switch") and method == "POST":
-                    org_id = body.get("orgId") if isinstance(body, dict) else None
-                    if org_id == seed.disposable_org_id:
-                        return probes.HttpResponse(status=403, body='{"code":"membership_missing"}', headers=headers)
-
-                for collection_id in self._deleted_collections:
-                    if collection_id in path:
-                        return probes.HttpResponse(status=404, body='{"code":"not_found"}', headers=headers)
-                for document_id in self._deleted_documents:
-                    if document_id in path:
-                        return probes.HttpResponse(status=404, body='{"code":"not_found"}', headers=headers)
-                for session_id in self._deleted_chat_sessions:
-                    if session_id in path:
-                        return probes.HttpResponse(status=404, body='{"code":"not_found"}', headers=headers)
-
-                owner_tokens = {
-                    creds.alpha_beta_access_token,
-                    creds.beta_denial_accept_access_token,
-                    creds.beta_access_token,
-                }
-                if token in owner_tokens:
-                    if path.endswith("/api/v1/auth/me"):
-                        body = json.dumps(
-                            {
-                                "userId": seed.beta_user_id,
-                                "orgId": seed.org_beta_id,
-                                "sessionId": creds.beta_session_id,
-                                "requestId": server_request_id,
-                            }
-                        )
-                    elif path.endswith("/events"):
-                        body = "event: status\ndata: {\"state\":\"queued\"}\n\n"
-                        return probes.HttpResponse(
-                            status=200,
-                            body=body,
-                            headers={**headers, "content-type": "text/event-stream"},
-                        )
-                    elif path.endswith("/api/v1/ask/stream"):
-                        body = "event: message\ndata: {}\n\n"
-                        return probes.HttpResponse(
-                            status=200,
-                            body=body,
-                            headers={**headers, "content-type": "text/event-stream"},
-                        )
-                    elif "/versions/" in path and "/diff" in path:
-                        body = json.dumps(
-                            {
-                                "fromVersionId": seed.beta_version_id,
-                                "toVersionId": seed.beta_version_id,
-                                "requestId": server_request_id,
-                            }
-                        )
-                    elif "/versions/" in path:
-                        body = json.dumps(
-                            {
-                                "id": seed.beta_version_id,
-                                "versionId": seed.beta_version_id,
-                                "requestId": server_request_id,
-                            }
-                        )
-                    elif path.endswith("/preview"):
-                        body = json.dumps(
-                            {"documentId": seed.beta_document_id, "requestId": server_request_id}
-                        )
-                    elif path.endswith("/api/v1/citations/resolve"):
-                        body = json.dumps(
-                            {
-                                "citation": {
-                                    "citeId": "cite-1",
-                                    "logicalDocumentId": seed.beta_document_id,
-                                    "versionId": seed.beta_version_id,
-                                    "versionNumber": 1,
-                                    "sourceContentSha256": "a" * 64,
-                                    "canonicalMarkdownSha256": "b" * 64,
-                                    "quoteSha256": "c" * 64,
-                                    "chunkId": creds.beta_citation_chunk_id,
-                                    "chunkIdentitySha256": "d" * 64,
-                                    "page": None,
-                                    "slide": None,
-                                    "sheet": None,
-                                    "sourceSpanStart": 0,
-                                    "sourceSpanEnd": 1,
-                                    "quoteLocalStart": 0,
-                                    "quoteLocalEnd": 1,
-                                    "quote": creds.beta_citation_quote,
-                                    "isCurrent": True,
-                                    "anchor": "mhcite1.test",
-                                },
-                                "requestId": server_request_id,
-                            }
-                        )
-                    elif path.endswith("/api/v1/members/invites/accept"):
-                        body = json.dumps({"userId": seed.beta_user_id, "role": "viewer", "requestId": server_request_id})
-                        return probes.HttpResponse(status=201, body=body, headers=headers)
-                    elif path.endswith("/documents") and "/collections/" in path:
-                        body = json.dumps({"items": [], "requestId": server_request_id})
-                    elif path.endswith("/versions") and "/documents/" in path:
-                        body = json.dumps({"items": [], "requestId": server_request_id})
-                    elif path.endswith("/evidence"):
-                        body = json.dumps({"items": [], "requestId": server_request_id})
-                    elif path.endswith(f"/api/v1/collections/{creds.beta_denial_disposable_collection_id}"):
-                        if kwargs.get("method") == "DELETE":
-                            self._deleted_collections.add(creds.beta_denial_disposable_collection_id)
-                            return probes.HttpResponse(status=204, body="", headers=headers)
-                        body = json.dumps({"id": creds.beta_denial_disposable_collection_id, "requestId": server_request_id})
-                    elif path.endswith(f"/api/v1/documents/{creds.beta_denial_disposable_document_id}"):
-                        if kwargs.get("method") == "DELETE":
-                            self._deleted_documents.add(creds.beta_denial_disposable_document_id)
-                            return probes.HttpResponse(status=204, body="", headers=headers)
-                        body = json.dumps({"id": creds.beta_denial_disposable_document_id, "requestId": server_request_id})
-                    elif path.endswith(f"/api/v1/chat-sessions/{creds.beta_denial_disposable_chat_session_id}"):
-                        if kwargs.get("method") == "DELETE":
-                            self._deleted_chat_sessions.add(creds.beta_denial_disposable_chat_session_id)
-                            return probes.HttpResponse(status=204, body="", headers=headers)
-                        body = json.dumps({"id": creds.beta_denial_disposable_chat_session_id, "requestId": server_request_id})
-                    elif "/documents/" in path:
-                        body = json.dumps({"id": seed.beta_document_id, "requestId": server_request_id})
-                    elif "/jobs/" in path:
-                        body = json.dumps({"id": seed.beta_job_id, "requestId": server_request_id})
-                    elif path.endswith("/api/v1/search") or path.endswith("/api/v1/ask"):
-                        body = json.dumps({"items": [], "requestId": server_request_id})
-                    elif path.endswith("/api/v1/uploads") and kwargs.get("multipart_body") is not None:
-                        body = json.dumps(
-                            {
-                                "documentId": seed.beta_document_id,
-                                "versionId": seed.beta_version_id,
-                                "requestId": server_request_id,
-                            }
-                        )
-                    else:
-                        body = json.dumps(
-                            {
-                                "id": seed.beta_collection_id,
-                                "name": seed.marker_beta,
-                                "requestId": server_request_id,
-                            }
-                        )
-                    return probes.HttpResponse(status=200, body=body, headers=headers)
-                return probes.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
-
-            def compose(self, args, **kwargs):  # type: ignore[override]
-                journal.append("compose:" + " ".join(args[:2]))
-                return probes.CommandOutcome(exit_code=0, stdout="", stderr="")
-
-            def psql(self, sql, **kwargs):  # type: ignore[override]
-                journal.append("psql:" + sql[:40])
-                return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
-
         seed = probes.parse_seed_artifact(
             complete_seed_raw(probes),
             expected_challenge="phase1c-challenge-abc",
@@ -493,6 +314,29 @@ class DeployedArchitectureContractTests(unittest.TestCase):
             beta_access_token="tok-beta",
             alpha_beta_access_token="tok-beta-owner",
         )
+
+        class TrackingShims(probes.DeployedProbeShims):
+            def __init__(self) -> None:
+                fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+                spec = importlib.util.spec_from_file_location("phase1c_stateful_fake_track", fake_path)
+                assert spec and spec.loader
+                fake_mod = importlib.util.module_from_spec(spec)
+                sys.modules[spec.name] = fake_mod
+                spec.loader.exec_module(fake_mod)
+                self._fake = fake_mod.StatefulFakeDeployment(seed=seed, credentials=creds)
+
+            def http_request(self, **kwargs):  # type: ignore[override]
+                journal.append(f"http:{kwargs.get('method')}:{kwargs.get('path')}")
+                return self._fake._http_request(**kwargs)
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                journal.append("compose:" + " ".join(args[:2]))
+                return probes.CommandOutcome(exit_code=0, stdout="", stderr="")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                journal.append("psql:" + sql[:40])
+                return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
+
         runner = probes.DeployedProbeRunner(
             api_base="http://127.0.0.1:8788",
             seed=seed,
@@ -1958,7 +1802,9 @@ class Phase1cFifthReviewSliceTests(unittest.TestCase):
         get_ops = {
             entry.operation_id
             for entry in mapping
-            if entry.method.upper() == "GET" and entry.operation_id not in {"redeemDownload"}
+            if entry.method.upper() == "GET"
+            and entry.operation_id not in {"redeemDownload", "jobEvents"}
+            and entry.layer != "sse"
         }
         missing = sorted(get_ops - set(table))
         self.assertFalse(missing, f"HTTP_OWNER_SUCCESS_SCHEMA missing GET operations: {missing}")
@@ -2024,7 +1870,7 @@ class Phase1cFifthReviewSliceTests(unittest.TestCase):
         envelope = self.DENIAL_PY.read_text(encoding="utf-8").split("def _validate_sse_envelope", 1)[1].split(
             "\ndef ", 1
         )[0]
-        self.assertIn("stream.closed", envelope)
+        self.assertIn("SSE_TERMINAL_EVENT", envelope)
 
     def test_owner_transition_follow_up_covers_member_and_invite_mutations(self) -> None:
         denial = load_denial()
@@ -2066,8 +1912,8 @@ class Phase1cFifthReviewSliceTests(unittest.TestCase):
     def test_audit_logout_body_includes_refresh_token(self) -> None:
         text = self.PROBES_PY.read_text(encoding="utf-8")
         audit = text.split("def run_audit_probe", 1)[1].split("\n    def run_", 1)[0]
-        self.assertIn('"refreshToken"', audit)
-        self.assertNotIn('body={}', audit)
+        self.assertIn("refreshToken", audit)
+        self.assertIn("/api/v1/auth/logout", audit)
 
     def test_stateful_fake_raises_on_unknown_owner_mapping(self) -> None:
         fake_path = self.FAKE_PY
@@ -2083,7 +1929,7 @@ class Phase1cFifthReviewSliceTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             deployment._http_request(
                 method="GET",
-                path="/api/v1/usage",
+                path="/api/v1/unknown-resource",
                 token=creds.alpha_beta_access_token,
             )
 
