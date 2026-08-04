@@ -337,11 +337,14 @@ def fetch_github_prs() -> dict[int, GitHubPr]:
 
 
 def status_without_done(raw_status: str) -> str:
-    first_line = raw_status.strip().splitlines()[0] if raw_status.strip() else ""
-    match = roadmap.STATUS_VALUE_PATTERN.match(first_line)
-    if not match:
-        return raw_status.strip()
-    remainder = raw_status.strip()[match.end() :].strip()
+    remainder = re.sub(
+        r"^`?(?:done|in[ _-]?progress|review|ready|blocked|backlog)`?"
+        r"\s*(?:[—:=-]\s*)?",
+        "",
+        raw_status.strip(),
+        count=1,
+        flags=re.IGNORECASE,
+    ).strip()
     return remainder.lstrip("—-: ").strip() or "Catalog records status as Done."
 
 
@@ -365,6 +368,7 @@ def evidence_shas(issue: IssueRecord, linked_prs: list[GitHubPr]) -> list[str]:
     shas = {
         match.group("sha")
         for match in SHA_PATTERN.finditer(issue.fields.get("Status", ""))
+        if any(character in "abcdef" for character in match.group("sha"))
     }
     shas.update(pr.merge_commit for pr in linked_prs if pr.merge_commit)
     return sorted(sha for sha in shas if sha)
@@ -382,7 +386,7 @@ def render_plan(
     source_issue = (
         f"[#{github_issue.number}]({github_issue.url})"
         if github_issue
-        else "UNKNOWN — matching GitHub issue was not resolved during backfill"
+        else "UNKNOWN — matching GitHub issue was not resolved during generation"
     )
     objective = issue.fields.get("Objective", "").strip()
     if not objective:
@@ -496,7 +500,7 @@ Status: Done
 
 {pr_lines}
 
-### Completion/evidence commits
+### Recorded commit/SHA references
 
 {sha_lines}
 
@@ -518,21 +522,28 @@ def link_for(filename: str, issue_id: str) -> str:
     )
 
 
-def insertion_offset(issue: IssueRecord) -> int:
+def section_with_plan_link(section: str, link: str) -> str:
+    section = PLAN_LINK_PATTERN.sub("", section)
     status_match = re.search(
-        r"(?m)^- \*\*Status:\*\*.*$", issue.section,
+        r"(?m)^- \*\*Status:\*\*.*$", section,
     )
     if status_match is None:
-        raise ValueError(f"{issue.issue_id}: Done issue has no explicit Status field")
-    for match in re.finditer(r"(?m)^- \*\*(?P<key>[^*]+?):\*\*.*$", issue.section):
+        raise ValueError("Done issue has no explicit Status field")
+    for match in re.finditer(r"(?m)^- \*\*(?P<key>[^*]+?):\*\*.*$", section):
         if match.start() <= status_match.start():
             continue
-        if canonical_key(match.group("key")) != "Status":
-            return issue.section_start + match.start()
-    return issue.section_end
+        key = canonical_key(match.group("key"))
+        if key is not None and key not in {"Status", "Plan file"}:
+            return f"{section[:match.start()]}{link}\n{section[match.start():]}"
+    return f"{section.rstrip()}\n{link}\n"
 
 
-def write_plans(records: list[IssueRecord], stamp: str, use_github: bool) -> None:
+def write_plans(
+    records: list[IssueRecord],
+    stamp: str,
+    use_github: bool,
+    refresh_generated: bool,
+) -> None:
     if not STAMP_PATTERN.fullmatch(stamp):
         raise ValueError("--stamp must use YYMMDD-HHMM")
     done = [issue for issue in records if issue.status == "done"]
@@ -543,31 +554,53 @@ def write_plans(records: list[IssueRecord], stamp: str, use_github: bool) -> Non
         github_prs = fetch_github_prs()
 
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
-    catalog_insertions: dict[Path, list[tuple[int, str]]] = {}
+    catalog_replacements: dict[Path, list[tuple[int, int, str]]] = {}
+    created = 0
     for issue in done:
         existing = PLAN_LINK_PATTERN.search(issue.section)
         if existing:
-            continue
-        filename = filename_for(issue, stamp)
-        destination = REPORTS_DIR / filename
-        if destination.exists():
-            raise FileExistsError(f"refusing to overwrite {destination}")
-        destination.write_text(
-            render_plan(issue, github_issues.get(issue.issue_id), github_prs),
-            encoding="utf-8",
+            filename = Path(existing.group("path")).name
+            if refresh_generated:
+                destination = resolve_plan_path(issue, existing.group("path"))
+                marker = f"<!-- {PLAN_MARKER}: {issue.issue_id} -->"
+                if not destination.is_file() or marker not in destination.read_text(
+                    encoding="utf-8"
+                ):
+                    raise ValueError(
+                        f"refusing to refresh non-generated plan for {issue.issue_id}: "
+                        f"{destination}"
+                    )
+                destination.write_text(
+                    render_plan(issue, github_issues.get(issue.issue_id), github_prs),
+                    encoding="utf-8",
+                )
+        else:
+            filename = filename_for(issue, stamp)
+            destination = REPORTS_DIR / filename
+            if destination.exists():
+                raise FileExistsError(f"refusing to overwrite {destination}")
+            destination.write_text(
+                render_plan(issue, github_issues.get(issue.issue_id), github_prs),
+                encoding="utf-8",
+            )
+            created += 1
+        normalized_section = section_with_plan_link(
+            issue.section,
+            link_for(filename, issue.issue_id),
         )
-        catalog_insertions.setdefault(issue.catalog, []).append(
-            (insertion_offset(issue), link_for(filename, issue.issue_id))
-        )
+        if normalized_section != issue.section:
+            catalog_replacements.setdefault(issue.catalog, []).append(
+                (issue.section_start, issue.section_end, normalized_section)
+            )
 
-    for catalog, insertions in catalog_insertions.items():
+    for catalog, replacements in catalog_replacements.items():
         markdown = catalog.read_text(encoding="utf-8")
-        for offset, link in sorted(insertions, reverse=True):
-            markdown = f"{markdown[:offset]}{link}\n{markdown[offset:]}"
+        for start, end, section in sorted(replacements, reverse=True):
+            markdown = f"{markdown[:start]}{section}{markdown[end:]}"
         catalog.write_text(markdown, encoding="utf-8")
     print(
-        f"wrote {sum(len(items) for items in catalog_insertions.values())} "
-        f"Done issue plans across {len(catalog_insertions)} catalogs"
+        f"created {created} Done issue plans; normalized links in "
+        f"{len(catalog_replacements)} catalogs"
     )
 
 
@@ -618,7 +651,7 @@ def check_plans(records: list[IssueRecord]) -> list[str]:
 
     for issue in records:
         if issue.status != "done" and PLAN_LINK_PATTERN.search(issue.section):
-            errors.append(f"{issue.issue_id}: non-Done issue must not have a backfill plan")
+            errors.append(f"{issue.issue_id}: non-Done issue must not have a generated plan")
 
     generated = {
         path.resolve()
@@ -644,6 +677,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not resolve direct GitHub issue/PR evidence links",
     )
+    parser.add_argument(
+        "--refresh-generated",
+        action="store_true",
+        help="Refresh linked plans that retain their generated marker",
+    )
     return parser.parse_args()
 
 
@@ -654,7 +692,12 @@ def main() -> int:
         if not args.stamp:
             print("--write requires --stamp YYMMDD-HHMM", file=sys.stderr)
             return 2
-        write_plans(records, args.stamp, not args.no_github)
+        write_plans(
+            records,
+            args.stamp,
+            not args.no_github,
+            args.refresh_generated,
+        )
         records = load_records()
     errors = check_plans(records)
     if errors:
