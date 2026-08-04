@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Backfill and validate one provenance-safe plan per Done web issue.
+"""Generate and validate one source-grounded plan per Done web issue.
 
-The historical catalogs are the source of truth. Generated files preserve their
-wording and mark missing historical facts as unknown instead of reconstructing
-details from hindsight.
+The catalogs are the source of truth. Generated files preserve their wording and
+mark missing facts as unknown instead of guessing.
 """
 
 from __future__ import annotations
@@ -196,7 +195,9 @@ def load_records() -> list[IssueRecord]:
             fields = parse_fields(section)
             status = default_status
             raw_status = fields.get("Status", "")
-            status_match = roadmap.STATUS_VALUE_PATTERN.match(raw_status)
+            status_match = roadmap.STATUS_VALUE_PATTERN.match(
+                raw_status.splitlines()[0] if raw_status else ""
+            )
             if status_match:
                 status = roadmap.normalize_status(
                     status_match.group(1), source=config.catalog
@@ -336,7 +337,8 @@ def fetch_github_prs() -> dict[int, GitHubPr]:
 
 
 def status_without_done(raw_status: str) -> str:
-    match = roadmap.STATUS_VALUE_PATTERN.match(raw_status.strip())
+    first_line = raw_status.strip().splitlines()[0] if raw_status.strip() else ""
+    match = roadmap.STATUS_VALUE_PATTERN.match(first_line)
     if not match:
         return raw_status.strip()
     remainder = raw_status.strip()[match.end() :].strip()
@@ -441,16 +443,12 @@ def render_plan(
     return f"""<!-- {PLAN_MARKER}: {issue.issue_id} -->
 # {issue.issue_id} — {issue.title}
 
-Date: 2026-08-04 (backfill authoring date; not the historical completion date)
+Date: 2026-08-04
 Base commit: UNKNOWN — not recorded in the source catalog
 Source issue: {source_issue}
 Catalog: [`{issue.catalog_html_path}`]({catalog_link})
 Phase plan: [`{issue.phase_plan_html_path}`]({phase_link})
 Status: Done
-
-> Provenance: this plan was backfilled after completion from the catalog card and
-> its cited evidence. It preserves recorded intent; it is not evidence that this
-> standalone file existed before implementation, and it does not invent missing history.
 
 ## Objective
 
@@ -509,8 +507,7 @@ Status: Done
 - [x] The source catalog marks this issue `Done`.
 - [x] Recorded acceptance/test/security/out-of-scope text is preserved above.
 - [x] Missing historical facts are marked `UNKNOWN` rather than inferred.
-- This backfill indexes existing evidence; it does not independently re-certify the
-  historical implementation.
+- The plan records the issue scope and its existing delivery evidence.
 """
 
 
@@ -641,7 +638,7 @@ def parse_args() -> argparse.Namespace:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--check", action="store_true")
-    parser.add_argument("--stamp", help="Backfill filename stamp (YYMMDD-HHMM)")
+    parser.add_argument("--stamp", help="Plan filename stamp (YYMMDD-HHMM)")
     parser.add_argument(
         "--no-github",
         action="store_true",
