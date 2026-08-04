@@ -180,7 +180,7 @@ def load_records() -> list[IssueRecord]:
     for config in configs:
         markdown = config.catalog.read_text(encoding="utf-8")
         masked = roadmap.mask_non_content(markdown)
-        default_matches = roadmap.DEFAULT_STATUS_PATTERN.findall(masked)
+        default_matches = roadmap.DEFAULT_STATUS_PATTERN.findall(markdown)
         default_status = roadmap.normalize_status(
             default_matches[0], source=config.catalog
         )
