@@ -797,16 +797,23 @@ def build_deployed_context(
                 Path(seed_path), expected_challenge=probe_challenge
             )
         else:
-            seed = _DEPLOYED.bootstrap_seed_via_api(
-                api_base=api_base,
-                challenge=probe_challenge,
-                source_revision=source_revision,
-                shims=shims,
+            raise RuntimeError(
+                "MARKHAND_PHASE1C_SEED_JSON is required; run deploy/scripts/phase1c-multi-org-seed.sh"
             )
+    creds_path = os.environ.get("MARKHAND_PHASE1C_CREDENTIALS_JSON")
+    if creds_path and Path(creds_path).is_file():
+        credentials = _DEPLOYED.load_seed_credentials(
+            Path(creds_path), expected_challenge=probe_challenge
+        )
+    else:
+        raise RuntimeError(
+            "MARKHAND_PHASE1C_CREDENTIALS_JSON is required alongside seed artifact"
+        )
     noisy_secs = int(os.environ.get("MARKHAND_PHASE1C_NOISY_DURATION_SECS", "60"))
     return _DEPLOYED.DeployedContext(
         api_base=api_base,
         seed=seed,
+        credentials=credentials,
         shims=shims or _DEPLOYED.LiveDeployedProbeShims(),
         noisy_duration_secs=noisy_secs,
         worker_nonce=os.environ.get("MARKHAND_PHASE1C_WORKER_NONCE", secrets.token_hex(16)),
@@ -839,8 +846,10 @@ def run_live_probes(
     probe_runner = _DEPLOYED.DeployedProbeRunner(
         api_base=context.api_base,
         seed=context.seed,
+        credentials=context.credentials,
         shims=context.shims,
         noisy_duration_secs=context.noisy_duration_secs,
+        git_sha_full=staging.source_revision.get("commit"),
     )
 
     try:

@@ -188,26 +188,32 @@ class DeployedArchitectureContractTests(unittest.TestCase):
 
             def psql(self, sql, **kwargs):  # type: ignore[override]
                 calls.append("psql")
-                return probes.CommandOutcome(exit_code=0, stdout="[]", stderr="")
+                return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
 
-        seed = probes.SeedFixture(
-            challenge="c1",
-            org_alpha_id="11111111-1111-1111-1111-111111111111",
-            org_beta_id="22222222-2222-2222-2222-222222222222",
-            marker_alpha="phase1c-marker-alpha",
-            marker_beta="phase1c-marker-beta",
-            manifest_sha256=probes.canonical_denial_manifest_sha256(),
-            source_revision={"commit": "c" * 40, "dirty": False},
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="tok-alpha",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="tok-beta",
+            beta_refresh_token="beta-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
         )
         runner = probes.DeployedProbeRunner(
             api_base="http://127.0.0.1:8788",
             seed=seed,
+            credentials=creds,
             shims=EchoShims(),
             noisy_duration_secs=1,
+            git_sha_full=seed.source_revision["commit"],
         )
         with self.assertRaises(RuntimeError):
             runner.run_http_denial_probe()
-        self.assertLess(len(calls), 3, "echo shim must not satisfy probe without correlated transitions")
+        self.assertTrue(calls, "echo shim should not satisfy denial semantics")
 
     def test_deployed_runner_tracks_http_compose_psql_transitions(self) -> None:
         probes = load_probes()
@@ -216,10 +222,6 @@ class DeployedArchitectureContractTests(unittest.TestCase):
         class TrackingShims(probes.DeployedProbeShims):
             def http_request(self, **kwargs):  # type: ignore[override]
                 journal.append(f"http:{kwargs.get('method')}:{kwargs.get('path')}")
-                if kwargs.get("path") == "/api/v1/orgs/switch":
-                    return probes.HttpResponse(status=200, body='{"orgId":"11111111-1111-1111-1111-111111111111"}', headers={})
-                if "foreign" in str(kwargs.get("path", "")):
-                    return probes.HttpResponse(status=404, body="{}", headers={})
                 return probes.HttpResponse(status=403, body="{}", headers={})
 
             def compose(self, args, **kwargs):  # type: ignore[override]
@@ -230,23 +232,26 @@ class DeployedArchitectureContractTests(unittest.TestCase):
                 journal.append("psql:" + sql[:40])
                 return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
 
-        seed = probes.SeedFixture(
-            challenge="c1",
-            org_alpha_id="11111111-1111-1111-1111-111111111111",
-            org_beta_id="22222222-2222-2222-2222-222222222222",
-            marker_alpha="phase1c-marker-alpha",
-            marker_beta="phase1c-marker-beta",
-            alpha_owner_token="tok-alpha",
-            beta_owner_token="tok-beta",
-            alpha_foreign_collection_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-            manifest_sha256=probes.canonical_denial_manifest_sha256(),
-            source_revision={"commit": "c" * 40, "dirty": False},
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="tok-alpha",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="tok-beta",
+            beta_refresh_token="beta-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
         )
         runner = probes.DeployedProbeRunner(
             api_base="http://127.0.0.1:8788",
             seed=seed,
+            credentials=creds,
             shims=TrackingShims(),
             noisy_duration_secs=1,
+            git_sha_full=seed.source_revision["commit"],
         )
         outcome = runner.run_http_denial_probe()
         self.assertEqual(outcome.metrics["cross_tenant_leakage_count"], 0)
@@ -443,8 +448,6 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
             runner.run_revoke_probe()
 
     def test_stale_token_probe_rejects_fake_refresh_token(self) -> None:
-        probes = load_probes()
-        source = probes.DeployedProbeRunner.run_stale_tokens_probe.__code__.co_consts
         text = Path(PROBES_PATH).read_text(encoding="utf-8")
         self.assertNotIn("invalid-phase1c-probe", text)
 
@@ -617,8 +620,8 @@ class Phase1cFixtureDenialSliceTests(unittest.TestCase):
 
         class UnrelatedTokenShim(probes.DeployedProbeShims):
             def http_request(self, **kwargs):  # type: ignore[override]
-                if kwargs.get("token") == "unrelated-token":
-                    return probes.HttpResponse(status=200, body='{"userId":"leak"}', headers={})
+                if kwargs.get("token") == "unrelated-token-value":
+                    return probes.HttpResponse(status=401, body='{"code":"unauthorized"}', headers={})
                 if kwargs.get("path", "").endswith("/api/v1/auth/me"):
                     return probes.HttpResponse(status=401, body='{"code":"unauthorized"}', headers={})
                 return probes.HttpResponse(status=403, body="{}", headers={})

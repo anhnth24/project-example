@@ -40,7 +40,7 @@ Qualifying PASS metrics come **only** from deployed probes in
 
 | Subsystem | Source |
 |-----------|--------|
-| Cross-tenant denial | Black-box HTTP driver against `MARKHAND_API_BASE` with manifest SHA256 + git revision binding |
+| Cross-tenant denial | `phase1c_http_denial.py` black-box driver: all primary HTTP/SSE manifest rows mapped through guard inventory/OpenAPI paths; foreign/unauth scenarios; `leakageCount` from observed marker violations only |
 | Revoke / ACL cache / stale tokens | Production auth + member PATCH/DELETE/refresh APIs |
 | Quota recovery | Real upload + authoritative POC jobs SQL + worker lifecycle + `quota.reconcile` audit |
 | Noisy neighbor | 60s concurrent uploads + 100 quiet-org search samples (canonical duration enforced) |
@@ -49,12 +49,15 @@ Qualifying PASS metrics come **only** from deployed probes in
 | Worker role | Harness-supplied `MARKHAND_PHASE1C_WORKER_NONCE`; worker echoes exact nonce |
 | Container vulns | Digest-pinned Trivy (no `--ignore-unfixed`); both API and worker reports validated |
 
-**Seed boundary:** `deploy/scripts/phase1c-multi-org-seed.sh` seeds the second org
-via production HTTP APIs. The primary POC org (`11111111-…`) is fixture-bound in
-the POC database when account self-registration is unavailable. All membership,
-collection, and marker setup after bootstrap uses production APIs. Seed output is
-challenge-bound, staged, and sanitized — never prints tokens, raw bodies, or
-absolute paths.
+**Seed boundary:** `deploy/scripts/phase1c-multi-org-seed.sh` delegates to
+`bench/markhand_web/scripts/phase1c_multi_org_seed.py`. The primary POC org/admin
+(`11111111-…` / `22222222-…201`) is fixture-bound in the POC database; the second
+identity (`33333333-…301`, `phase1c-beta@poc.example`) is bootstrapped via controlled
+POC DB setup because self-registration is unavailable. All org/collection/membership
+relationships after bootstrap use production login/invite/accept/org-switch/collection APIs.
+Tokens live only in `MARKHAND_PHASE1C_CREDENTIALS_JSON` (mode `0600`, purged after run);
+public seed evidence contains hashes/IDs only and binds `sourceRevision` to `GITHUB_SHA`
+and `manifestSha256` to canonical manifest bytes.
 
 **CI substrate:** Cargo integration tests (`crates/server/tests/*` with
 `PHASE1C_PROBE_RESULT`) and `scripts/run-phase1c-denial-suite.py` remain CI

@@ -4,12 +4,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import math
 import os
 import re
 import secrets
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -20,11 +22,15 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[3]
 DENIAL_MANIFEST = ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json"
 COMPOSE_FILE = ROOT / "deploy/compose.poc.yml"
+HTTP_DENIAL = ROOT / "bench/markhand_web/scripts/phase1c_http_denial.py"
 
 CANONICAL_NOISY_UPLOAD_DURATION_SECS = 60
 QUALIFYING_QUIET_SEARCH_SAMPLES = 100
 STARVATION_SLOW_MS = 2_000
 DEPLOYED_PROBE_SCHEMA_VERSION = 1
+REVOKE_POLL_TIMEOUT_MS = 3_000
+REVOKE_POLL_INTERVAL_MS = 50
+ACL_CACHE_POLL_TIMEOUT_MS = 3_000
 
 DEPLOYED_PROBE_GATES: tuple[str, ...] = (
     "G1C-SEC-LEAKAGE",
@@ -37,16 +43,62 @@ DEPLOYED_PROBE_GATES: tuple[str, ...] = (
     "G1C-SEC-QDRANT-FAIL-CLOSED",
 )
 
-DENIAL_HTTP_OPS: tuple[dict[str, str], ...] = (
-    {"operationId": "getOrg", "method": "GET", "path_template": "/api/v1/orgs/{foreign_org_id}"},
-    {"operationId": "getCollection", "method": "GET", "path_template": "/api/v1/collections/{foreign_collection_id}"},
-    {"operationId": "listDocuments", "method": "GET", "path_template": "/api/v1/collections/{foreign_collection_id}/documents"},
-    {"operationId": "getDocument", "method": "GET", "path_template": "/api/v1/documents/{foreign_document_id}"},
-    {"operationId": "search", "method": "POST", "path_template": "/api/v1/search", "body": "search"},
-    {"operationId": "authMe", "method": "GET", "path_template": "/api/v1/auth/me"},
+SEED_REQUIRED_FIELDS: tuple[str, ...] = (
+    "schemaVersion",
+    "challenge",
+    "sourceRevision",
+    "manifestSha256",
+    "orgAlphaId",
+    "orgBetaId",
+    "alphaUserId",
+    "betaUserId",
+    "markerAlpha",
+    "markerBeta",
+    "alphaCollectionId",
+    "betaCollectionId",
+    "alphaDocumentId",
+    "betaDocumentId",
+    "alphaJobId",
+    "betaJobId",
+    "alphaVersionId",
+    "betaVersionId",
+    "alphaChatSessionId",
+    "betaChatSessionId",
+    "alphaProjectId",
+    "betaProjectId",
+    "alphaConflictId",
+    "betaConflictId",
+    "betaMemberUserId",
+    "alphaInviteId",
+    "betaInviteId",
+    "betaInviteAcceptToken",
+    "betaDownloadCapability",
+    "alphaSessionIdHash",
+    "betaSessionIdHash",
+    "orgAlphaSlug",
+    "orgBetaSlug",
 )
 
-FOREIGN_MARKER_RE = re.compile(r"phase1c-marker-(alpha|beta)")
+SECRET_RESIDUAL_RE = re.compile(
+    r"(?i)("
+    r"Bearer\s+[A-Za-z0-9._\-+=/]{8,}|"
+    r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}|"
+    r"/(?:home|Users|workspace|tmp)/\S+"
+    r")"
+)
+
+
+def _load_http_denial():
+    spec = importlib.util.spec_from_file_location("phase1c_http_denial", HTTP_DENIAL)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("phase1c_http_denial.py missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_DENIAL = _load_http_denial()
 
 
 @dataclass
@@ -68,20 +120,46 @@ class SeedFixture:
     challenge: str
     org_alpha_id: str
     org_beta_id: str
+    alpha_user_id: str
+    beta_user_id: str
     marker_alpha: str
     marker_beta: str
     manifest_sha256: str
     source_revision: dict[str, Any]
-    org_alpha_slug: str = "denial-org-alpha"
-    org_beta_slug: str = "denial-org-beta"
-    alpha_owner_token: str = ""
-    beta_owner_token: str = ""
-    alpha_foreign_collection_id: str = ""
-    beta_foreign_collection_id: str = ""
-    alpha_foreign_document_id: str = ""
-    beta_foreign_document_id: str = ""
-    alpha_admin_user_id: str = ""
-    beta_member_user_id: str = ""
+    alpha_collection_id: str
+    beta_collection_id: str
+    alpha_document_id: str
+    beta_document_id: str
+    alpha_job_id: str
+    beta_job_id: str
+    alpha_version_id: str
+    beta_version_id: str
+    alpha_chat_session_id: str
+    beta_chat_session_id: str
+    alpha_project_id: str
+    beta_project_id: str
+    alpha_conflict_id: str
+    beta_conflict_id: str
+    beta_member_user_id: str
+    alpha_invite_id: str
+    beta_invite_id: str
+    beta_invite_accept_token: str
+    beta_download_capability: str
+    alpha_session_id_hash: str
+    beta_session_id_hash: str
+    org_alpha_slug: str
+    org_beta_slug: str
+
+
+@dataclass
+class SeedCredentials:
+    challenge: str
+    alpha_access_token: str
+    alpha_refresh_token: str
+    beta_access_token: str
+    beta_refresh_token: str
+    alpha_session_id: str
+    beta_session_id: str
 
 
 @dataclass
@@ -122,7 +200,7 @@ class LiveDeployedProbeShims(DeployedProbeShims):
         path: str = "",
     ) -> HttpResponse:
         data = None
-        headers = {"content-type": "application/json"}
+        headers = {"content-type": "application/json", "x-phase1c-challenge": os.environ.get("MARKHAND_PHASE1C_CHALLENGE", "")}
         if token:
             headers["authorization"] = f"Bearer {token}"
         if body is not None:
@@ -143,16 +221,27 @@ class LiveDeployedProbeShims(DeployedProbeShims):
 
     def psql(self, sql: str, *, timeout_secs: int = 120) -> CommandOutcome:
         cmd = [
-            "docker", "compose", "-f", str(COMPOSE_FILE), "exec", "-T", "postgres", "psql",
-            "-U", os.environ.get("MARKHAND_POSTGRES_USER", "markhand"),
-            "-d", os.environ.get("MARKHAND_POSTGRES_DB", "markhand"), "-tAc", sql,
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE_FILE),
+            "exec",
+            "-T",
+            "postgres",
+            "psql",
+            "-U",
+            os.environ.get("MARKHAND_POSTGRES_USER", "markhand"),
+            "-d",
+            os.environ.get("MARKHAND_POSTGRES_DB", "markhand"),
+            "-tAc",
+            sql,
         ]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_secs, check=False)
         return CommandOutcome(proc.returncode, proc.stdout or "", proc.stderr or "")
 
 
 def canonical_denial_manifest_sha256() -> str:
-    return hashlib.sha256(DENIAL_MANIFEST.read_bytes()).hexdigest()
+    return _DENIAL.canonical_manifest_sha256(DENIAL_MANIFEST)
 
 
 def nearest_rank_p95_ms(samples_ns: list[int]) -> int:
@@ -167,31 +256,127 @@ def compute_quota_drift(*, documents: int, storage_bytes: int, reserved_concurre
     return int(documents) + int(storage_bytes) + int(reserved_concurrent_slots)
 
 
+def _require_string(raw: dict[str, Any], key: str) -> str:
+    value = raw.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"seed missing {key}")
+    return value.strip()
+
+
+def validate_source_revision_binding(raw: dict[str, Any], *, git_sha_full: str) -> None:
+    source_revision = raw.get("sourceRevision")
+    if not isinstance(source_revision, dict):
+        raise RuntimeError("seed missing sourceRevision")
+    commit = source_revision.get("commit")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise RuntimeError("sourceRevision.commit must be 40-char git SHA")
+    if source_revision.get("dirty") is not False:
+        raise RuntimeError("sourceRevision.dirty must be false")
+    if commit != git_sha_full:
+        raise RuntimeError("sourceRevision.commit mismatch with gitShaFull")
+
+
 def parse_seed_artifact(raw: dict[str, Any], *, expected_challenge: str) -> SeedFixture:
     if raw.get("schemaVersion") != 1:
         raise RuntimeError("seed schemaVersion mismatch")
     if raw.get("challenge") != expected_challenge:
         raise RuntimeError("seed challenge mismatch")
-    for key in ("orgAlphaId", "orgBetaId", "markerAlpha", "markerBeta"):
-        if not isinstance(raw.get(key), str) or not raw[key]:
-            raise RuntimeError(f"seed missing {key}")
+    for key in SEED_REQUIRED_FIELDS:
+        if key in {"sourceRevision", "schemaVersion"}:
+            continue
+        _require_string(raw, key)
+    source_revision = raw.get("sourceRevision")
+    if not isinstance(source_revision, dict):
+        raise RuntimeError("seed missing sourceRevision")
+    manifest_sha = _require_string(raw, "manifestSha256")
+    if manifest_sha != canonical_denial_manifest_sha256():
+        raise RuntimeError("seed manifestSha256 mismatch")
+    alpha_user = _require_string(raw, "alphaUserId")
+    beta_user = _require_string(raw, "betaUserId")
+    if alpha_user == beta_user:
+        raise RuntimeError("seed duplicate alpha/beta user ids")
+    alpha_org = _require_string(raw, "orgAlphaId")
+    beta_org = _require_string(raw, "orgBetaId")
+    if alpha_org == beta_org:
+        raise RuntimeError("seed duplicate org ids")
+    marker_alpha = _require_string(raw, "markerAlpha")
+    marker_beta = _require_string(raw, "markerBeta")
+    if marker_alpha == marker_beta:
+        raise RuntimeError("seed duplicate markers")
     return SeedFixture(
-        challenge=str(raw["challenge"]),
-        org_alpha_id=str(raw["orgAlphaId"]),
-        org_beta_id=str(raw["orgBetaId"]),
-        marker_alpha=str(raw["markerAlpha"]),
-        marker_beta=str(raw["markerBeta"]),
-        manifest_sha256=str(raw.get("manifestSha256") or canonical_denial_manifest_sha256()),
-        source_revision=dict(raw.get("sourceRevision") or {}),
-        org_alpha_slug=str(raw.get("orgAlphaSlug") or "denial-org-alpha"),
-        org_beta_slug=str(raw.get("orgBetaSlug") or "denial-org-beta"),
-        alpha_foreign_collection_id=str(raw.get("alphaForeignCollectionId") or ""),
-        beta_foreign_collection_id=str(raw.get("betaForeignCollectionId") or ""),
-        alpha_foreign_document_id=str(raw.get("alphaForeignDocumentId") or ""),
-        beta_foreign_document_id=str(raw.get("betaForeignDocumentId") or ""),
-        alpha_admin_user_id=str(raw.get("alphaAdminUserId") or ""),
-        beta_member_user_id=str(raw.get("betaMemberUserId") or ""),
+        challenge=_require_string(raw, "challenge"),
+        org_alpha_id=alpha_org,
+        org_beta_id=beta_org,
+        alpha_user_id=alpha_user,
+        beta_user_id=beta_user,
+        marker_alpha=marker_alpha,
+        marker_beta=marker_beta,
+        manifest_sha256=manifest_sha,
+        source_revision=dict(source_revision),
+        alpha_collection_id=_require_string(raw, "alphaCollectionId"),
+        beta_collection_id=_require_string(raw, "betaCollectionId"),
+        alpha_document_id=_require_string(raw, "alphaDocumentId"),
+        beta_document_id=_require_string(raw, "betaDocumentId"),
+        alpha_job_id=_require_string(raw, "alphaJobId"),
+        beta_job_id=_require_string(raw, "betaJobId"),
+        alpha_version_id=_require_string(raw, "alphaVersionId"),
+        beta_version_id=_require_string(raw, "betaVersionId"),
+        alpha_chat_session_id=_require_string(raw, "alphaChatSessionId"),
+        beta_chat_session_id=_require_string(raw, "betaChatSessionId"),
+        alpha_project_id=_require_string(raw, "alphaProjectId"),
+        beta_project_id=_require_string(raw, "betaProjectId"),
+        alpha_conflict_id=_require_string(raw, "alphaConflictId"),
+        beta_conflict_id=_require_string(raw, "betaConflictId"),
+        beta_member_user_id=_require_string(raw, "betaMemberUserId"),
+        alpha_invite_id=_require_string(raw, "alphaInviteId"),
+        beta_invite_id=_require_string(raw, "betaInviteId"),
+        beta_invite_accept_token=_require_string(raw, "betaInviteAcceptToken"),
+        beta_download_capability=_require_string(raw, "betaDownloadCapability"),
+        alpha_session_id_hash=_require_string(raw, "alphaSessionIdHash"),
+        beta_session_id_hash=_require_string(raw, "betaSessionIdHash"),
+        org_alpha_slug=_require_string(raw, "orgAlphaSlug"),
+        org_beta_slug=_require_string(raw, "orgBetaSlug"),
     )
+
+
+def build_public_seed_evidence(raw: dict[str, Any]) -> dict[str, Any]:
+    public = {
+        key: raw[key]
+        for key in SEED_REQUIRED_FIELDS
+        if key not in {"betaInviteAcceptToken"}
+    }
+    if isinstance(raw.get("sourceRevision"), dict):
+        public["sourceRevision"] = {
+            "commit": raw["sourceRevision"].get("commit"),
+            "dirty": raw["sourceRevision"].get("dirty"),
+        }
+    public["completionMarker"] = "PHASE1C_SEED_EOF"
+    serialized = json.dumps(public, sort_keys=True)
+    if SECRET_RESIDUAL_RE.search(serialized):
+        raise RuntimeError("seed evidence residual secret/path material")
+    return public
+
+
+def load_seed_credentials(path: Path, *, expected_challenge: str) -> SeedCredentials:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("schemaVersion") != 1:
+        raise RuntimeError("credential schemaVersion mismatch")
+    if raw.get("challenge") != expected_challenge:
+        raise RuntimeError("credential challenge mismatch")
+    return SeedCredentials(
+        challenge=expected_challenge,
+        alpha_access_token=_require_string(raw, "alphaAccessToken"),
+        alpha_refresh_token=_require_string(raw, "alphaRefreshToken"),
+        beta_access_token=_require_string(raw, "betaAccessToken"),
+        beta_refresh_token=_require_string(raw, "betaRefreshToken"),
+        alpha_session_id=_require_string(raw, "alphaSessionId"),
+        beta_session_id=_require_string(raw, "betaSessionId"),
+    )
+
+
+def load_seed_artifact(path: Path, *, expected_challenge: str) -> SeedFixture:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    return parse_seed_artifact(raw, expected_challenge=expected_challenge)
 
 
 def validate_trivy_report_target(report: dict[str, Any], *, requested_ref: str) -> None:
@@ -213,38 +398,57 @@ def extract_high_critical_findings(report: dict[str, Any]) -> list[dict[str, str
                 raise RuntimeError("trivy vulnerability malformed")
             severity = str(vuln.get("Severity", "")).upper()
             if severity in {"HIGH", "CRITICAL"}:
-                findings.append({
-                    "vulnerabilityId": str(vuln.get("VulnerabilityID", "")),
-                    "severity": severity,
-                    "status": str(vuln.get("Status") or "unknown"),
-                })
+                findings.append(
+                    {
+                        "vulnerabilityId": str(vuln.get("VulnerabilityID", "")),
+                        "severity": severity,
+                        "status": str(vuln.get("Status") or "unknown"),
+                    }
+                )
     return findings
-
-
-def scan_foreign_markers(body: str, *, forbidden: set[str]) -> int:
-    leaks = 0
-    for marker in forbidden:
-        if marker and marker in body:
-            leaks += 1
-    if leaks == 0 and FOREIGN_MARKER_RE.search(body):
-        for marker in forbidden:
-            if marker not in body:
-                leaks += 1
-                break
-    return leaks
 
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-ALLOWED_DENIAL_STATUSES = frozenset({401, 403, 404})
+def _parse_audit_page(body: str) -> list[dict[str, Any]]:
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise RuntimeError("audit response must be object")
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise RuntimeError("audit response missing items")
+    parsed: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise RuntimeError("audit item must be object")
+        for key in ("id", "action", "targetType", "outcome", "occurredAt"):
+            if key not in item:
+                raise RuntimeError(f"audit item missing {key}")
+        parsed.append(item)
+    return parsed
+
+
+def _audit_matches(expected: dict[str, Any], entry: dict[str, Any]) -> bool:
+    if entry.get("action") != expected["action"]:
+        return False
+    actor = entry.get("actorId") or entry.get("actor_id")
+    if str(actor) != str(expected.get("actorId")):
+        return False
+    target_id = entry.get("targetId") or entry.get("target_id")
+    if expected.get("targetId") is not None and str(target_id) != str(expected["targetId"]):
+        return False
+    if expected.get("requestId") and entry.get("requestId") != expected["requestId"]:
+        return False
+    return True
 
 
 @dataclass
 class DeployedContext:
     api_base: str
     seed: SeedFixture
+    credentials: SeedCredentials
     shims: DeployedProbeShims
     noisy_duration_secs: int = CANONICAL_NOISY_UPLOAD_DURATION_SECS
     quiet_search_samples: int = QUALIFYING_QUIET_SEARCH_SAMPLES
@@ -259,15 +463,19 @@ class DeployedProbeRunner:
         *,
         api_base: str,
         seed: SeedFixture,
+        credentials: SeedCredentials,
         shims: DeployedProbeShims | None = None,
         noisy_duration_secs: int = CANONICAL_NOISY_UPLOAD_DURATION_SECS,
         quiet_search_samples: int = QUALIFYING_QUIET_SEARCH_SAMPLES,
+        git_sha_full: str | None = None,
     ) -> None:
         self.api_base = api_base.rstrip("/")
         self.seed = seed
+        self.credentials = credentials
         self.shims = shims or LiveDeployedProbeShims()
         self.noisy_duration_secs = noisy_duration_secs
         self.quiet_search_samples = quiet_search_samples
+        self.git_sha_full = git_sha_full or str(seed.source_revision.get("commit") or "")
         self._transition_kinds: set[str] = set()
 
     def _record_transition(self, kind: str) -> None:
@@ -308,118 +516,104 @@ class DeployedProbeRunner:
         self._record_transition("psql")
         return self.shims.psql(sql, timeout_secs=timeout_secs)
 
-    def _forbidden_markers(self, *, viewer_org: str) -> set[str]:
-        if viewer_org == self.seed.org_alpha_id:
-            return {self.seed.marker_beta}
-        return {self.seed.marker_alpha}
-
     def _validate_manifest_binding(self) -> None:
-        manifest_sha = canonical_denial_manifest_sha256()
-        if manifest_sha != self.seed.manifest_sha256:
-            raise RuntimeError("seed manifestSha256 mismatch")
-        commit = str(self.seed.source_revision.get("commit") or "")
-        if not re.fullmatch(r"[0-9a-f]{40}", commit):
-            raise RuntimeError("seed source revision missing")
-        psql_out = self._psql(
-            f"SELECT encode(digest('{self.seed.challenge}', 'sha256'), 'hex')"
+        _DENIAL.validate_revision_binding(
+            source_revision=self.seed.source_revision,
+            manifest_sha256=self.seed.manifest_sha256,
+            git_sha_full=self.git_sha_full,
+            manifest_path=DENIAL_MANIFEST,
         )
+        psql_out = self._psql(f"SELECT encode(digest('{self.seed.challenge}', 'sha256'), 'hex')")
         if psql_out.exit_code != 0:
             raise RuntimeError("challenge binding psql failed")
         self._compose(["ps", "-q", "api"])
 
-    def _switch_org(self, org_id: str, token: str) -> HttpResponse:
-        return self._http(
-            "POST",
-            "/api/v1/orgs/switch",
-            token=token,
-            body={"orgId": org_id},
-        )
+    def _protected_resource_path(self) -> str:
+        return f"/api/v1/collections/{self.seed.alpha_collection_id}"
 
-    def _validate_switch(self, response: HttpResponse, *, org_id: str) -> None:
-        if response.status != 200:
-            raise RuntimeError(f"org switch denied unexpectedly: {response.status}")
-        if org_id not in response.body:
-            raise RuntimeError("org switch response missing target org id")
+    def _poll_until_denied(
+        self,
+        *,
+        token: str,
+        path: str,
+        timeout_ms: int,
+    ) -> tuple[int, int]:
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        commit_started = time.monotonic()
+        max_stale = 0
+        elapsed_ms = 0
+        while time.monotonic() <= deadline:
+            response = self._http("GET", path, token=token)
+            elapsed_ms = int((time.monotonic() - commit_started) * 1000)
+            if response.status in {401, 403, 404}:
+                return elapsed_ms, max_stale
+            if response.status // 100 == 2:
+                max_stale += 1
+            time.sleep(REVOKE_POLL_INTERVAL_MS / 1000.0)
+        raise RuntimeError(f"protected resource still authorized after {timeout_ms}ms")
 
     def run_http_denial_probe(self) -> DeployedProbeResult:
-        if not self.seed.alpha_owner_token:
-            raise RuntimeError("seed missing alpha owner token for denial probe")
-        switch = self._switch_org(self.seed.org_alpha_id, self.seed.alpha_owner_token)
-        self._validate_switch(switch, org_id=self.seed.org_alpha_id)
         self._validate_manifest_binding()
 
-        forbidden = self._forbidden_markers(viewer_org=self.seed.org_alpha_id)
-        leakage = 0
-        rows: list[dict[str, Any]] = []
-        foreign_org = self.seed.org_beta_id
-        foreign_collection = self.seed.alpha_foreign_collection_id or foreign_org
-        foreign_document = self.seed.alpha_foreign_document_id or foreign_collection
+        def http_wrapper(**kwargs: Any) -> HttpResponse:
+            self._record_transition("http")
+            return self.shims.http_request(**kwargs)
 
-        for op in DENIAL_HTTP_OPS:
-            path = op["path_template"].format(
-                foreign_org_id=foreign_org,
-                foreign_collection_id=foreign_collection,
-                foreign_document_id=foreign_document,
-            )
-            body = None
-            if op.get("body") == "search":
-                body = {"query": "phase1c-denial-probe", "collectionIds": [foreign_collection]}
-            response = self._http(
-                op["method"],
-                path,
-                token=self.seed.alpha_owner_token,
-                body=body,
-            )
-            if response.status not in ALLOWED_DENIAL_STATUSES:
-                raise RuntimeError(
-                    f"denial op {op['operationId']} expected 401/403/404, got {response.status}"
-                )
-            leaks = scan_foreign_markers(response.body, forbidden=forbidden)
-            leakage += leaks
-            rows.append(
-                {
-                    "operationId": op["operationId"],
-                    "status": response.status,
-                    "bodySha256": _sha256_text(response.body),
-                    "challenge": self.seed.challenge,
-                }
-            )
-
-        self._require_correlated_transitions(minimum=3)
-        metrics = {"cross_tenant_leakage_count": leakage}
+        report = _DENIAL.execute_http_denial_suite(
+            seed=self.seed,
+            credentials=self.credentials,
+            http_request=http_wrapper,
+            api_base=self.api_base,
+            git_sha_full=self.git_sha_full,
+            manifest_path=DENIAL_MANIFEST,
+        )
+        if report.failures:
+            raise RuntimeError("; ".join(report.failures))
+        self._require_correlated_transitions(minimum=1)
         return DeployedProbeResult(
             gate_id="G1C-SEC-LEAKAGE",
             probe={
                 "deployedApi": True,
-                "manifestSha256": self.seed.manifest_sha256,
-                "gitShaFull": self.seed.source_revision.get("commit"),
-                "rows": rows,
+                "manifestSha256": report.manifest_sha256,
+                "gitShaFull": report.git_sha_full,
+                "executableHttpSseCount": report.executable_http_sse_count,
+                "observationCount": len(report.observations),
                 "eof": True,
             },
-            metrics=metrics,
-            detail={"transitionKinds": sorted(self._transition_kinds)},
+            metrics={"cross_tenant_leakage_count": report.leakage_count},
+            detail={"report": report.as_dict()},
         )
 
     def run_revoke_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
-        token = self.seed.alpha_owner_token
-        if not token or not self.seed.beta_member_user_id:
-            raise RuntimeError("seed missing revoke probe identities")
-        started = time.monotonic()
+        warm = self._http("GET", "/api/v1/auth/me", token=self.credentials.beta_access_token)
+        if warm.status != 200:
+            raise RuntimeError("beta warm auth failed before revoke")
+        commit_started = time.monotonic()
         delete = self._http(
             "DELETE",
             f"/api/v1/members/{self.seed.beta_member_user_id}",
-            token=token,
+            token=self.credentials.alpha_access_token,
         )
-        if delete.status not in {204, 403, 404}:
-            raise RuntimeError(f"member delete unexpected status {delete.status}")
-        probe = self._http("GET", "/api/v1/members", token=self.seed.beta_owner_token or token)
-        stale = 1 if probe.status == 200 else 0
-        elapsed_ms = int((time.monotonic() - started) * 1000)
-        self._require_correlated_transitions(minimum=3)
+        if delete.status // 100 != 2:
+            raise RuntimeError(f"member delete must succeed with 2xx, got {delete.status}")
+        elapsed_ms, stale = self._poll_until_denied(
+            token=self.credentials.beta_access_token,
+            path="/api/v1/auth/me",
+            timeout_ms=REVOKE_POLL_TIMEOUT_MS,
+        )
+        if stale > 0:
+            raise RuntimeError(f"post-commit stale authorizations observed: {stale}")
+        self._require_correlated_transitions(minimum=2)
         return DeployedProbeResult(
             gate_id="G1C-SEC-REVOKE",
-            probe={"deployedApi": True, "eof": True},
+            probe={
+                "deployedApi": True,
+                "deleteStatus": delete.status,
+                "betaUserIdHash": _sha256_text(self.seed.beta_member_user_id),
+                "orgIdHash": _sha256_text(self.seed.org_alpha_id),
+                "eof": True,
+            },
             metrics={
                 "membership_acl_revoke_max_ms": elapsed_ms,
                 "post_commit_stale_authorizations": stale,
@@ -427,41 +621,91 @@ class DeployedProbeRunner:
         )
 
     def run_acl_cache_probe(self) -> DeployedProbeResult:
-        revoke = self.run_revoke_probe()
+        self._validate_manifest_binding()
+        warm = self._http("GET", self._protected_resource_path(), token=self.credentials.beta_access_token)
+        if warm.status != 200:
+            raise RuntimeError("beta warm collection read failed before acl cache probe")
+        patch = self._http(
+            "PATCH",
+            f"/api/v1/members/{self.seed.beta_member_user_id}",
+            token=self.credentials.alpha_access_token,
+            body={"role": "viewer"},
+        )
+        if patch.status // 100 != 2:
+            raise RuntimeError(f"member patch must succeed with 2xx, got {patch.status}")
+        elapsed_ms, stale = self._poll_until_denied(
+            token=self.credentials.beta_access_token,
+            path=self._protected_resource_path(),
+            timeout_ms=ACL_CACHE_POLL_TIMEOUT_MS,
+        )
+        self._require_correlated_transitions(minimum=2)
         return DeployedProbeResult(
             gate_id="G1C-SEC-ACL-CACHE",
-            probe=revoke.probe,
-            metrics={"post_commit_stale_authorizations": revoke.metrics["post_commit_stale_authorizations"]},
+            probe={
+                "deployedApi": True,
+                "patchStatus": patch.status,
+                "observationPath": self._protected_resource_path(),
+                "eof": True,
+            },
+            metrics={
+                "membership_acl_revoke_max_ms": elapsed_ms,
+                "post_commit_stale_authorizations": stale,
+            },
         )
 
     def run_stale_tokens_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
-        token = self.seed.beta_owner_token or self.seed.alpha_owner_token
-        if not token:
-            raise RuntimeError("seed missing token for stale probe")
-        warm = self._http("GET", "/api/v1/auth/me", token=token)
+        unrelated = self._http("GET", "/api/v1/auth/me", token="unrelated-token-value")
+        if unrelated.status == 200:
+            raise RuntimeError("unrelated token must not authorize protected resource")
+        warm = self._http("GET", "/api/v1/auth/me", token=self.credentials.beta_access_token)
         if warm.status != 200:
             raise RuntimeError("auth warm failed")
-        if self.seed.beta_member_user_id and self.seed.alpha_owner_token:
-            self._http(
-                "DELETE",
-                f"/api/v1/members/{self.seed.beta_member_user_id}",
-                token=self.seed.alpha_owner_token,
-            )
-        after = self._http("GET", "/api/v1/auth/me", token=token)
-        stale = 1 if after.status == 200 else 0
+        captured_refresh = self.credentials.beta_refresh_token
         refresh = self._http(
             "POST",
             "/api/v1/auth/refresh",
-            body={"refreshToken": "invalid-phase1c-probe"},
+            body={"refreshToken": captured_refresh},
         )
-        if refresh.status not in ALLOWED_DENIAL_STATUSES | {400, 401}:
-            raise RuntimeError(f"refresh probe unexpected status {refresh.status}")
+        if refresh.status != 200:
+            raise RuntimeError(f"refresh must succeed, got {refresh.status}")
+        payload = json.loads(refresh.body)
+        new_access = payload.get("accessToken") or payload.get("access_token")
+        new_refresh = payload.get("refreshToken") or payload.get("refresh_token")
+        if not isinstance(new_access, str) or not isinstance(new_refresh, str):
+            raise RuntimeError("refresh response missing token pair")
+        reuse = self._http(
+            "POST",
+            "/api/v1/auth/refresh",
+            body={"refreshToken": captured_refresh},
+        )
+        if reuse.status // 100 == 2:
+            raise RuntimeError("reuse of old refresh token must fail")
+        delete = self._http(
+            "DELETE",
+            f"/api/v1/members/{self.seed.beta_member_user_id}",
+            token=self.credentials.alpha_access_token,
+        )
+        if delete.status // 100 != 2:
+            raise RuntimeError(f"revoke membership must succeed, got {delete.status}")
+        stale = 0
+        for token in (self.credentials.beta_access_token, new_access):
+            after = self._http("GET", "/api/v1/auth/me", token=token)
+            if after.status // 100 == 2:
+                stale += 1
         self._psql("SELECT COUNT(*) FROM refresh_tokens")
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-STALE-TOKENS",
-            probe={"deployedApi": True, "refreshStatus": refresh.status, "eof": True},
+            probe={
+                "deployedApi": True,
+                "refreshStatus": refresh.status,
+                "reuseStatus": reuse.status,
+                "betaSessionIdHash": _sha256_text(self.credentials.beta_session_id),
+                "betaUserIdHash": _sha256_text(self.seed.beta_user_id),
+                "orgIdHash": _sha256_text(self.seed.org_alpha_id),
+                "eof": True,
+            },
             metrics={"post_commit_stale_authorizations": stale},
         )
 
@@ -500,9 +744,7 @@ class DeployedProbeRunner:
             )
         samples_ns: list[int] = []
         starvation = 0
-        token = self.seed.beta_owner_token or self.seed.alpha_owner_token
-        if not token:
-            raise RuntimeError("seed missing token for noisy-neighbor probe")
+        token = self.credentials.beta_access_token
         deadline = time.monotonic() + min(self.noisy_duration_secs, 5)
         while time.monotonic() < deadline:
             started = time.perf_counter_ns()
@@ -546,19 +788,23 @@ class DeployedProbeRunner:
 
     def run_audit_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
-        token = self.seed.alpha_owner_token
-        if not token:
-            raise RuntimeError("seed missing admin token")
-        expected_actions: list[str] = []
-        observed: set[str] = set()
+        token = self.credentials.alpha_access_token
+        expected: list[dict[str, Any]] = []
         switch = self._http(
             "POST",
             "/api/v1/orgs/switch",
             token=token,
             body={"orgId": self.seed.org_alpha_id},
         )
-        if switch.status == 200:
-            expected_actions.append("org.switch")
+        expected.append(
+            {
+                "action": "org.switch",
+                "actorId": self.seed.alpha_user_id,
+                "targetId": self.seed.org_alpha_id,
+                "requestId": switch.headers.get("x-request-id"),
+                "attemptStatus": switch.status,
+            }
+        )
         slug = f"phase1c-audit-{secrets.token_hex(4)}"
         create = self._http(
             "POST",
@@ -566,27 +812,41 @@ class DeployedProbeRunner:
             token=token,
             body={"name": "phase1c-audit", "slug": slug, "visibility": "org"},
         )
-        if create.status in {200, 201}:
-            expected_actions.append("collection.create")
+        expected.append(
+            {
+                "action": "collection.create",
+                "actorId": self.seed.alpha_user_id,
+                "targetId": None,
+                "requestId": create.headers.get("x-request-id"),
+                "attemptStatus": create.status,
+            }
+        )
+        if any(item["attemptStatus"] // 100 != 2 for item in expected):
+            raise RuntimeError("audit probe mutation attempts must succeed")
         audit = self._http("GET", "/api/v1/audit", token=token)
         if audit.status != 200:
             raise RuntimeError("audit fetch failed")
-        for action in expected_actions:
-            if action in audit.body:
-                observed.add(action)
-        ratio = len(observed) / len(expected_actions) if expected_actions else 0.0
-        self._require_correlated_transitions(minimum=3)
+        entries = _parse_audit_page(audit.body)
+        observed = 0
+        for item in expected:
+            if any(_audit_matches(item, entry) for entry in entries):
+                observed += 1
+        ratio = observed / len(expected)
+        self._require_correlated_transitions(minimum=2)
         return DeployedProbeResult(
             gate_id="G1C-SEC-AUDIT-COVERAGE",
-            probe={"deployedApi": True, "observedActions": sorted(observed), "expectedActions": expected_actions, "eof": True},
+            probe={
+                "deployedApi": True,
+                "expectedCount": len(expected),
+                "observedCount": observed,
+                "eof": True,
+            },
             metrics={"admin_mutation_audit_coverage_ratio": ratio},
         )
 
     def run_qdrant_fail_closed_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
-        token = self.seed.alpha_owner_token
-        if not token:
-            raise RuntimeError("seed missing token for qdrant probe")
+        token = self.credentials.alpha_access_token
         stop = self._compose(["stop", "qdrant"], timeout_secs=120)
         if stop.exit_code != 0:
             raise RuntimeError("qdrant stop failed")
@@ -602,9 +862,9 @@ class DeployedProbeRunner:
             token=token,
             body={"query": "phase1c-qdrant-down"},
         )
-        leakage = scan_foreign_markers(
+        leakage = _DENIAL.scan_marker_leakage(
             search.body + ask.body,
-            forbidden=self._forbidden_markers(viewer_org=self.seed.org_alpha_id),
+            forbidden_markers={self.seed.marker_beta},
         )
         if search.status == 200 and ask.status == 200:
             raise RuntimeError("qdrant unavailable must not return 200 success")
@@ -620,7 +880,7 @@ class DeployedProbeRunner:
                 "askStatus": ask.status,
                 "eof": True,
             },
-            metrics={"cross_tenant_leakage_count": leakage},
+            metrics={"cross_tenant_leakage_count": len(leakage)},
         )
 
     def run_gate(self, gate_id: str) -> DeployedProbeResult:
@@ -645,75 +905,11 @@ def bootstrap_seed_via_api(
     challenge: str,
     source_revision: dict[str, Any],
     shims: DeployedProbeShims | None = None,
-    marker_alpha: str = "phase1c-marker-alpha",
-    marker_beta: str = "phase1c-marker-beta",
-) -> SeedFixture:
-    """Seed two-org fixture through production APIs; sanitized output only."""
-    live = shims or LiveDeployedProbeShims()
-    email = os.environ.get("MARKHAND_PHASE1C_SEED_EMAIL", "admin@poc.example")
-    password = os.environ.get(
-        "MARKHAND_PHASE1C_SEED_PASSWORD",
-        os.environ.get("MARKHAND_O04_API_PASSWORD", "markhand-dev"),
+) -> tuple[SeedFixture, SeedCredentials]:
+    raise RuntimeError(
+        "bootstrap_seed_via_api requires deploy/scripts/phase1c-multi-org-seed.sh output; "
+        "set MARKHAND_PHASE1C_SEED_JSON and MARKHAND_PHASE1C_CREDENTIALS_JSON"
     )
-    login = live.http_request(
-        method="POST",
-        url=f"{api_base.rstrip('/')}/api/v1/auth/login",
-        body={"email": email, "password": password},
-        path="/api/v1/auth/login",
-    )
-    if login.status != 200:
-        raise RuntimeError("seed login failed")
-    login_body = json.loads(login.body)
-    alpha_token = str(login_body.get("accessToken") or login_body.get("access_token") or "")
-    if not alpha_token:
-        raise RuntimeError("seed login missing access token")
-
-    org_alpha_id = os.environ.get(
-        "MARKHAND_PHASE1C_ORG_ALPHA_ID", "11111111-1111-1111-1111-111111111111"
-    )
-    create = live.http_request(
-        method="POST",
-        url=f"{api_base.rstrip('/')}/api/v1/orgs",
-        token=alpha_token,
-        body={"slug": f"phase1c-beta-{secrets.token_hex(3)}", "name": "Phase 1C Beta Org"},
-        path="/api/v1/orgs",
-    )
-    if create.status not in {200, 201}:
-        raise RuntimeError("seed org create failed")
-    org_beta = json.loads(create.body)
-    org_beta_id = str(org_beta.get("id") or org_beta.get("orgId") or "")
-
-    collection = live.http_request(
-        method="POST",
-        url=f"{api_base.rstrip('/')}/api/v1/collections",
-        token=alpha_token,
-        body={
-            "name": marker_alpha,
-            "slug": f"phase1c-alpha-{secrets.token_hex(3)}",
-            "visibility": "org",
-        },
-        path="/api/v1/collections",
-    )
-    collection_id = ""
-    if collection.status in {200, 201}:
-        collection_id = str(json.loads(collection.body).get("id") or "")
-
-    return SeedFixture(
-        challenge=challenge,
-        org_alpha_id=org_alpha_id,
-        org_beta_id=org_beta_id,
-        marker_alpha=marker_alpha,
-        marker_beta=marker_beta,
-        manifest_sha256=canonical_denial_manifest_sha256(),
-        source_revision=source_revision,
-        alpha_owner_token=alpha_token,
-        alpha_foreign_collection_id=collection_id,
-    )
-
-
-def load_seed_artifact(path: Path, *, expected_challenge: str) -> SeedFixture:
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    return parse_seed_artifact(raw, expected_challenge=expected_challenge)
 
 
 def deployed_probe_to_command_probe(result: DeployedProbeResult) -> dict[str, Any]:

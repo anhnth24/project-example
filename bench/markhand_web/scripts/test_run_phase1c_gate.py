@@ -683,11 +683,17 @@ class Phase1cShellEntrypointTests(unittest.TestCase):
 
 class Phase1cSeedScriptContractTests(unittest.TestCase):
     SEED = gate.ROOT / "deploy/scripts/phase1c-multi-org-seed.sh"
+    SEED_PY = gate.ROOT / "bench/markhand_web/scripts/phase1c_multi_org_seed.py"
 
-    def test_seed_script_has_schema_validation_helper(self) -> None:
+    def test_seed_script_delegates_to_python_module(self) -> None:
         text = self.SEED.read_text(encoding="utf-8")
+        self.assertIn("phase1c_multi_org_seed.py", text)
+        self.assertNotIn("accessToken", text)
+
+    def test_seed_python_module_has_schema_validation(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
         self.assertIn("schemaVersion", text)
-        self.assertNotIn("accessToken", text.split("seed =")[1] if "seed = {" in text else text)
+        self.assertIn("build_public_seed_evidence", text)
 
 
 class Phase1cDeployedArchitectureTests(unittest.TestCase):
