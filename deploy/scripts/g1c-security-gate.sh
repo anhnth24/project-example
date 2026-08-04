@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+export ROOT
 cd "$ROOT"
 
 OUTPUT_DIR="${MARKHAND_PHASE1C_OUTPUT_DIR:-}"
@@ -32,6 +33,14 @@ validate_output_dir() {
     echo "output directory must not be a symlink" >&2
     exit 1
   fi
+  local probe="$dir"
+  while [[ "$probe" != "/" ]]; do
+    if [[ -L "$probe" ]]; then
+      echo "output directory must not traverse symlinks" >&2
+      exit 1
+    fi
+    probe="$(dirname "$probe")"
+  done
 }
 
 while [[ $# -gt 0 ]]; do

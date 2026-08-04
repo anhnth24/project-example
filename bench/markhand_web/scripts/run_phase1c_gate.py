@@ -131,6 +131,22 @@ class HarnessWriteError(RuntimeError):
     """Raised when report/evidence write fails redaction or atomic commit."""
 
 
+def validate_output_dir(path: Path) -> Path:
+    resolved = path.expanduser()
+    if not resolved.is_absolute():
+        raise RuntimeError("output directory must be absolute")
+    if ".." in resolved.parts:
+        raise RuntimeError("unsafe output directory (path traversal rejected)")
+    probe = resolved
+    while probe != probe.parent:
+        if probe.is_symlink():
+            raise RuntimeError("output directory must not traverse symlinks")
+        probe = probe.parent
+    if resolved.exists() and resolved.is_symlink():
+        raise RuntimeError("output directory must not be a symlink")
+    return resolved
+
+
 class StagingWorkspace:
     """Private staging area; commits allowlisted evidence atomically."""
 
@@ -336,10 +352,14 @@ def parse_worker_role_probe(output: str, *, expected_nonce: str | None = None) -
     payload: dict[str, Any] | None = None
     eof_seen = False
     after_eof = False
+    probe_lines = 0
     for line in output.splitlines():
         if after_eof and line.strip():
             raise RuntimeError("worker probe trailing output")
         if line.startswith("PHASE1C_WORKER_ROLE_PROBE\t"):
+            probe_lines += 1
+            if probe_lines > 1:
+                raise RuntimeError("worker probe requires exactly one payload")
             raw = line.split("\t", 1)[1]
             parsed = json.loads(raw)
             if parsed.get("schemaVersion") != WORKER_PROBE_SCHEMA_VERSION:
@@ -370,12 +390,24 @@ def parse_worker_role_probe(output: str, *, expected_nonce: str | None = None) -
 
 def load_trivyignore_ids(text: str) -> set[str]:
     ids: set[str] = set()
-    for line in text.splitlines():
+    for line_no, line in enumerate(text.splitlines(), start=1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        token = stripped.split()[0]
-        if token:
+        parts = stripped.split()
+        if not parts:
+            continue
+        token = parts[0]
+        if token.startswith("CVE-") or token.startswith("GHSA-"):
+            comment = ""
+            if "#" in stripped:
+                comment = stripped.split("#", 1)[1].strip()
+            if "owner:" not in comment or "exp:" not in comment.replace("expiry:", "exp:"):
+                raise RuntimeError(f".trivyignore line {line_no} missing owner/expiry disposition")
+            if " exp:" in f" {comment}" or "exp:" in comment:
+                pass
+            else:
+                raise RuntimeError(f".trivyignore line {line_no} missing expiry disposition")
             ids.add(token)
     return ids
 
@@ -441,15 +473,19 @@ def parse_combined_trivy_scan(
 
 def docker_image_digest(tag: str, runner: CommandRunner) -> str:
     outcome = runner(["docker", "inspect", "--format", "{{json .RepoDigests}}", tag], timeout_secs=120)
-    if outcome["commandExitCode"] != 0:
-        raise RuntimeError("docker inspect failed for image digest")
-    digests = json.loads(outcome["stdout"].strip() or "[]")
-    if not isinstance(digests, list) or not digests:
-        raise RuntimeError("image digest missing")
-    digest = str(digests[0])
-    if "@sha256:" not in digest:
-        raise RuntimeError("image digest unpinned")
-    return digest
+    if outcome["commandExitCode"] == 0:
+        digests = json.loads(outcome["stdout"].strip() or "[]")
+        if isinstance(digests, list) and digests:
+            digest = str(digests[0])
+            if "@sha256:" in digest:
+                return digest
+    id_outcome = runner(["docker", "inspect", "--format", "{{.Id}}", tag], timeout_secs=120)
+    if id_outcome["commandExitCode"] != 0:
+        raise RuntimeError(f"docker inspect failed for image digest: {tag}")
+    image_id = str(id_outcome["stdout"]).strip()
+    if not image_id.startswith("sha256:"):
+        raise RuntimeError(f"image id unpinned for {tag}")
+    return f"{tag}@{image_id}"
 
 
 def scanner_pin_errors(scanner: object) -> list[str]:
@@ -857,7 +893,13 @@ def run_live_probes(
             result = probe_runner.run_gate(gate_id)
             probe = _DEPLOYED.deployed_probe_to_command_probe(result)
             gate_metrics = dict(result.metrics)
+            if gate_id == "G1C-SEC-QDRANT-FAIL-CLOSED":
+                qdrant_leakage = gate_metrics.pop("qdrant_fail_closed_leakage_count", None)
+                if qdrant_leakage is not None:
+                    gate_metrics["cross_tenant_leakage_count"] = qdrant_leakage
             for key, value in gate_metrics.items():
+                if gate_id == "G1C-SEC-QDRANT-FAIL-CLOSED" and key == "cross_tenant_leakage_count":
+                    continue
                 metrics[key] = value
             write_gate_evidence_staged(
                 staging,
@@ -920,6 +962,8 @@ def run_live_probes(
                 "--rm",
                 "-v",
                 "/var/run/docker.sock:/var/run/docker.sock:ro",
+                "-v",
+                f"{staging.temp_dir}:{staging.temp_dir}",
                 trivy_image,
                 "image",
                 "--severity",
@@ -1104,7 +1148,7 @@ def main() -> int:
     markhand_root = MARKHAND_ROOT
     output_report = DEFAULT_REPORT
     if args.output_dir is not None:
-        output_report = args.output_dir / "phase-1c-gate.json"
+        output_report = validate_output_dir(args.output_dir) / "phase-1c-gate.json"
 
     if os.environ.get("MARKHAND_PHASE1C_GATE") != "1":
         report = write_not_run_report(repo_root, markhand_root)
