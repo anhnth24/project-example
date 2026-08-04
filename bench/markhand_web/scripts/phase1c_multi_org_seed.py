@@ -24,6 +24,7 @@ from phase1c_deployed_probes import (  # noqa: E402
     build_public_seed_evidence,
     canonical_denial_manifest_sha256,
     purge_phase1c_credentials,
+    validate_uuid,
 )
 
 COMPOSE_FILE = ROOT / "deploy/compose.poc.yml"
@@ -32,6 +33,8 @@ IDENTITY_FIXTURE_BOUNDARY = "phase1c-identity-fixture-boundary"
 RESOURCE_FIXTURE_BOUNDARY = "phase1c-resource-fixture-boundary"
 BETA_USER_ID = "33333333-3333-3333-3333-333333333301"
 BETA_EMAIL = "phase1c-beta@poc.example"
+DISPOSABLE_USER_ID = "44444444-4444-4444-4444-444444444401"
+DISPOSABLE_EMAIL = "phase1c-disposable@poc.example"
 ALPHA_ORG_ID = "11111111-1111-1111-1111-111111111111"
 ALPHA_USER_ID = "22222222-2222-2222-2222-222222222201"
 
@@ -101,8 +104,8 @@ def _psql(sql: str) -> str:
     return (proc.stdout or "").strip()
 
 
-def _bootstrap_beta_identity(password_hash_sql: str) -> None:
-    # IDENTITY_FIXTURE_BOUNDARY: no registration API; bootstrap beta user + primary-org membership.
+def _bootstrap_identity_users(password_hash_sql: str) -> None:
+    # IDENTITY_FIXTURE_BOUNDARY: no registration API; bootstrap login-capable users only.
     _psql(
         f"""
         BEGIN;
@@ -113,6 +116,9 @@ def _bootstrap_beta_identity(password_hash_sql: str) -> None:
         INSERT INTO org_memberships (org_id, user_id, role, state)
         VALUES ('{ALPHA_ORG_ID}', '{BETA_USER_ID}', 'viewer', 'active')
         ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role, state = 'active';
+        INSERT INTO users (id, email, display_name, password_hash)
+        VALUES ('{DISPOSABLE_USER_ID}', '{DISPOSABLE_EMAIL}', 'Phase 1C Disposable', '{password_hash_sql}')
+        ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
         COMMIT;
         """
     )
@@ -120,35 +126,53 @@ def _bootstrap_beta_identity(password_hash_sql: str) -> None:
     membership_ok = _psql(
         f"SELECT COUNT(*) FROM org_memberships WHERE org_id = '{ALPHA_ORG_ID}' AND user_id = '{BETA_USER_ID}' AND state = 'active'"
     )
-    if user_ok != "1" or membership_ok != "1":
+    disposable_ok = _psql(f"SELECT COUNT(*) FROM users WHERE id = '{DISPOSABLE_USER_ID}' AND email = '{DISPOSABLE_EMAIL}'")
+    if user_ok != "1" or membership_ok != "1" or disposable_ok != "1":
         raise RuntimeError("identity fixture bootstrap validation failed")
 
 
 def _bootstrap_conflict_fixture(
     *,
     org_id: str,
-    collection_id: str,
     document_id: str,
     version_id: str,
     conflict_id: str,
 ) -> None:
     # RESOURCE_FIXTURE_BOUNDARY: conflicts have no production create HTTP route.
-    claim_low = str(uuid.uuid4())
-    claim_high = str(uuid.uuid4())
+    # Migration 0007 ck_conflicts__canonical_pair requires claim_a_id < claim_b_id ordering.
+    claim_pair_order = "claim_a_id < claim_b_id"
+    claim_low = "aaaaaaaa-0001-4000-8000-000000000001"
+    claim_high = "bbbbbbbb-0002-4000-8000-000000000002"
+    if claim_low > claim_high:
+        claim_low, claim_high = claim_high, claim_low
+    effective_from = "2026-08-04T00:00:00Z"
     _psql(
         f"""
         BEGIN;
         SET LOCAL app.org_id = '{org_id}';
-        INSERT INTO claims (id, org_id, document_id, version_id, field_path, normalized_value, raw_value)
-        VALUES
-            ('{claim_low}', '{org_id}', '{document_id}', '{version_id}', 'amount', '100', '100'),
-            ('{claim_high}', '{org_id}', '{document_id}', '{version_id}', 'amount', '200', '200')
+        INSERT INTO claims (
+            id, org_id, document_id, version_id, claim_key, subject, predicate,
+            value_type, value_money, effective_from
+        ) VALUES
+            (
+                '{claim_low}', '{org_id}', '{document_id}', '{version_id}',
+                'amount', 'contract', 'total', 'money', 100, '{effective_from}'
+            ),
+            (
+                '{claim_high}', '{org_id}', '{document_id}', '{version_id}',
+                'amount', 'contract', 'total', 'money', 200, '{effective_from}'
+            )
         ON CONFLICT (id) DO NOTHING;
         INSERT INTO conflicts (
             id, org_id, status, severity, conflict_type, claim_a_id, claim_b_id, first_detected_version_id
         ) VALUES (
             '{conflict_id}', '{org_id}', 'open', 'warning', 'numeric', '{claim_low}', '{claim_high}', '{version_id}'
         ) ON CONFLICT (id) DO NOTHING;
+        INSERT INTO conflict_evidence (org_id, conflict_id, claim_id, evidence_role, citation_quote)
+        VALUES
+            ('{org_id}', '{conflict_id}', '{claim_low}', 'left', '100'),
+            ('{org_id}', '{conflict_id}', '{claim_high}', 'right', '200')
+        ON CONFLICT DO NOTHING;
         COMMIT;
         """
     )
@@ -172,7 +196,7 @@ def _login(api_base: str, email: str, password: str) -> dict[str, Any]:
     return payload
 
 
-def _auth_me_session_id(api_base: str, access_token: str) -> str:
+def _auth_me(api_base: str, access_token: str) -> dict[str, Any]:
     status, _, body = _http(
         api_base=api_base,
         method="GET",
@@ -182,10 +206,36 @@ def _auth_me_session_id(api_base: str, access_token: str) -> str:
     if status != 200:
         raise RuntimeError("auth/me failed during seed")
     payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise RuntimeError("auth/me response invalid")
+    return payload
+
+
+def _auth_me_session_id(api_base: str, access_token: str) -> str:
+    payload = _auth_me(api_base, access_token)
     session_id = payload.get("sessionId") or payload.get("session_id")
     if not isinstance(session_id, str) or not session_id.strip():
         raise RuntimeError("auth/me missing sessionId")
-    return session_id
+    return validate_uuid(session_id, field="sessionId")
+
+
+def _switch_org(api_base: str, token: str, org_id: str) -> tuple[str, str, str]:
+    status, _, body = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/orgs/switch",
+        token=token,
+        body={"orgId": org_id},
+    )
+    if status // 100 != 2:
+        raise RuntimeError("org switch failed during seed")
+    payload = json.loads(body)
+    access = payload.get("accessToken") or payload.get("access_token")
+    refresh = payload.get("refreshToken") or payload.get("refresh_token")
+    if not isinstance(access, str) or not isinstance(refresh, str):
+        raise RuntimeError("org switch missing token pair")
+    _auth_me(api_base, access)
+    return access, refresh, validate_uuid(_auth_me_session_id(api_base, access), field="sessionId")
 
 
 def _multipart_upload(
@@ -240,9 +290,7 @@ def _publish_version(*, api_base: str, token: str, document_id: str, version_id:
         raise RuntimeError("publish version failed")
 
 
-def _issue_download_capability(
-    *, api_base: str, token: str, document_id: str, version_id: str
-) -> str:
+def _issue_download_capability(*, api_base: str, token: str, document_id: str, version_id: str) -> str:
     status, _, raw = _http(
         api_base=api_base,
         method="POST",
@@ -272,7 +320,7 @@ def _create_project(*, api_base: str, token: str, name: str) -> str:
     project_id = json.loads(raw).get("id")
     if not isinstance(project_id, str):
         raise RuntimeError("project response missing id")
-    return project_id
+    return validate_uuid(project_id, field="projectId")
 
 
 def _create_chat_session(*, api_base: str, token: str, title: str) -> str:
@@ -288,7 +336,45 @@ def _create_chat_session(*, api_base: str, token: str, title: str) -> str:
     session_id = json.loads(raw).get("id")
     if not isinstance(session_id, str):
         raise RuntimeError("chat session response missing id")
-    return session_id
+    return validate_uuid(session_id, field="chatSessionId")
+
+
+def _create_collection(*, api_base: str, token: str, marker: str, slug_prefix: str) -> str:
+    status, _, raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/collections",
+        token=token,
+        body={
+            "name": marker,
+            "slug": f"{slug_prefix}-{secrets.token_hex(3)}",
+            "visibility": "org",
+        },
+    )
+    if status not in {200, 201}:
+        raise RuntimeError("collection create failed")
+    collection_id = json.loads(raw).get("id")
+    if not isinstance(collection_id, str):
+        raise RuntimeError("collection response missing id")
+    return validate_uuid(collection_id, field="collectionId")
+
+
+def _verify_conflict(api_base: str, token: str, conflict_id: str) -> None:
+    list_status, _, list_raw = _http(api_base=api_base, method="GET", path="/api/v1/conflicts", token=token)
+    if list_status != 200:
+        raise RuntimeError("conflict list verification failed")
+    list_payload = json.loads(list_raw)
+    items = list_payload.get("items") or []
+    if not any(isinstance(item, dict) and item.get("id") == conflict_id for item in items):
+        raise RuntimeError("conflict missing from list endpoint")
+    get_status, _, _ = _http(
+        api_base=api_base,
+        method="GET",
+        path=f"/api/v1/conflicts/{conflict_id}",
+        token=token,
+    )
+    if get_status != 200:
+        raise RuntimeError("conflict get verification failed")
 
 
 def _atomic_write(path: Path, payload: dict[str, Any], *, mode: int = 0o644) -> None:
@@ -338,13 +424,14 @@ def run_seed() -> int:
     if hash_proc.returncode != 0:
         raise RuntimeError("password hash generation failed")
     password_hash = hash_proc.stdout.strip().replace("'", "''")
-    _bootstrap_beta_identity(password_hash)
+    _bootstrap_identity_users(password_hash)
 
     alpha_login = _login(api_base, alpha_email, password)
     alpha_access = alpha_login.get("accessToken") or alpha_login.get("access_token")
     alpha_refresh = alpha_login.get("refreshToken") or alpha_login.get("refresh_token")
     if not isinstance(alpha_access, str) or not isinstance(alpha_refresh, str):
         raise RuntimeError("alpha login missing token pair")
+    _auth_me(api_base, alpha_access)
 
     status, _, body = _http(
         api_base=api_base,
@@ -360,60 +447,97 @@ def run_seed() -> int:
     org_beta_slug = beta_org.get("slug")
     if not isinstance(org_beta_id, str) or not isinstance(org_beta_slug, str):
         raise RuntimeError("beta org response missing id/slug")
+    org_beta_id = validate_uuid(org_beta_id, field="orgBetaId")
 
-    beta_login = _login(api_base, BETA_EMAIL, password)
-    beta_access = beta_login.get("accessToken") or beta_login.get("access_token")
-    beta_refresh = beta_login.get("refreshToken") or beta_login.get("refresh_token")
-    if not isinstance(beta_access, str) or not isinstance(beta_refresh, str):
-        raise RuntimeError("beta login missing token pair")
+    alpha_beta_access, alpha_beta_refresh, _ = _switch_org(api_base, alpha_access, org_beta_id)
 
-    def create_collection(token: str, *, marker: str, slug_prefix: str) -> str:
-        status, _, raw = _http(
-            api_base=api_base,
-            method="POST",
-            path="/api/v1/collections",
-            token=token,
-            body={
-                "name": marker,
-                "slug": f"{slug_prefix}-{secrets.token_hex(3)}",
-                "visibility": "org",
-            },
-        )
-        if status not in {200, 201}:
-            raise RuntimeError("collection create failed")
-        collection_id = json.loads(raw).get("id")
-        if not isinstance(collection_id, str):
-            raise RuntimeError("collection response missing id")
-        return collection_id
-
-    alpha_collection_id = create_collection(alpha_access, marker=marker_alpha, slug_prefix="phase1c-alpha")
-    beta_collection_id = create_collection(beta_access, marker=marker_beta, slug_prefix="phase1c-beta")
-
-    invite_status, _, invite_raw = _http(
+    beta_org_invite_body = {"email": BETA_EMAIL, "role": "editor"}
+    beta_org_invite_status, _, beta_org_invite_raw = _http(
         api_base=api_base,
         method="POST",
         path="/api/v1/members/invites",
-        token=alpha_access,
-        body={"email": BETA_EMAIL, "role": "editor"},
+        token=alpha_beta_access,
+        body=beta_org_invite_body,
     )
-    if invite_status not in {200, 201}:
-        raise RuntimeError("member invite failed")
-    invite_payload = json.loads(invite_raw)
-    invite = invite_payload.get("invite") or {}
-    invite_id = invite.get("id")
-    invite_token = invite_payload.get("token")
-    if not isinstance(invite_id, str) or not isinstance(invite_token, str):
-        raise RuntimeError("invite response missing id/token")
+    if beta_org_invite_status not in {200, 201}:
+        raise RuntimeError("beta org member invite failed")
+    beta_org_invite_payload = json.loads(beta_org_invite_raw)
+    beta_org_invite = beta_org_invite_payload.get("invite") or {}
+    beta_invite_id = beta_org_invite.get("id")
+    beta_invite_token = beta_org_invite_payload.get("token")
+    if not isinstance(beta_invite_id, str) or not isinstance(beta_invite_token, str):
+        raise RuntimeError("beta org invite response missing id/token")
+
+    beta_login = _login(api_base, BETA_EMAIL, password)
+    beta_alpha_access = beta_login.get("accessToken") or beta_login.get("access_token")
+    beta_alpha_refresh = beta_login.get("refreshToken") or beta_login.get("refresh_token")
+    if not isinstance(beta_alpha_access, str) or not isinstance(beta_alpha_refresh, str):
+        raise RuntimeError("beta login missing token pair")
+    _auth_me(api_base, beta_alpha_access)
 
     accept_status, _, _ = _http(
         api_base=api_base,
         method="POST",
         path="/api/v1/members/invites/accept",
-        token=beta_access,
-        body={"token": invite_token},
+        token=beta_alpha_access,
+        body={"token": beta_invite_token},
     )
     if accept_status not in {200, 201}:
-        raise RuntimeError("invite accept failed")
+        raise RuntimeError("beta org invite accept failed")
+
+    beta_org_access, beta_org_refresh, beta_session_id = _switch_org(api_base, beta_alpha_access, org_beta_id)
+
+    alpha_access, alpha_refresh, alpha_session_id = _switch_org(api_base, alpha_access, ALPHA_ORG_ID)
+
+    alpha_collection_id = _create_collection(
+        api_base=api_base,
+        token=alpha_access,
+        marker=marker_alpha,
+        slug_prefix="phase1c-alpha",
+    )
+    beta_collection_id = _create_collection(
+        api_base=api_base,
+        token=beta_org_access,
+        marker=marker_beta,
+        slug_prefix="phase1c-beta",
+    )
+    beta_denial_disposable_collection_id = _create_collection(
+        api_base=api_base,
+        token=beta_org_access,
+        marker=f"{marker_beta}-disposable",
+        slug_prefix="phase1c-beta-denial",
+    )
+
+    disposable_invite_status, _, disposable_invite_raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites",
+        token=beta_org_access,
+        body={"email": DISPOSABLE_EMAIL, "role": "viewer"},
+    )
+    if disposable_invite_status not in {200, 201}:
+        raise RuntimeError("disposable member invite failed")
+    disposable_invite_payload = json.loads(disposable_invite_raw)
+    disposable_invite = disposable_invite_payload.get("invite") or {}
+    beta_denial_disposable_invite_id = disposable_invite.get("id")
+    disposable_invite_token = disposable_invite_payload.get("token")
+    if not isinstance(beta_denial_disposable_invite_id, str) or not isinstance(disposable_invite_token, str):
+        raise RuntimeError("disposable invite response missing id/token")
+
+    disposable_login = _login(api_base, DISPOSABLE_EMAIL, password)
+    disposable_access = disposable_login.get("accessToken") or disposable_login.get("access_token")
+    if not isinstance(disposable_access, str):
+        raise RuntimeError("disposable login missing access token")
+    accept_disposable_status, _, _ = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites/accept",
+        token=disposable_access,
+        body={"token": disposable_invite_token},
+    )
+    if accept_disposable_status not in {200, 201}:
+        raise RuntimeError("disposable invite accept failed")
+    beta_denial_disposable_member_user_id = DISPOSABLE_USER_ID
 
     alpha_upload = _multipart_upload(
         api_base=api_base,
@@ -424,21 +548,35 @@ def run_seed() -> int:
     )
     beta_upload = _multipart_upload(
         api_base=api_base,
-        token=beta_access,
+        token=beta_org_access,
         collection_id=beta_collection_id,
         filename="phase1c-beta.txt",
         content=f"{marker_beta}\n".encode("utf-8"),
     )
-    alpha_document_id = alpha_upload["documentId"]
-    beta_document_id = beta_upload["documentId"]
-    alpha_version_id = alpha_upload["versionId"]
-    beta_version_id = beta_upload["versionId"]
+    disposable_upload = _multipart_upload(
+        api_base=api_base,
+        token=beta_org_access,
+        collection_id=beta_denial_disposable_collection_id,
+        filename="phase1c-beta-disposable.txt",
+        content=b"phase1c-disposable\n",
+    )
+    alpha_document_id = validate_uuid(alpha_upload["documentId"], field="alphaDocumentId")
+    beta_document_id = validate_uuid(beta_upload["documentId"], field="betaDocumentId")
+    beta_denial_disposable_document_id = validate_uuid(
+        disposable_upload["documentId"], field="betaDenialDisposableDocumentId"
+    )
+    alpha_version_id = validate_uuid(alpha_upload["versionId"], field="alphaVersionId")
+    beta_version_id = validate_uuid(beta_upload["versionId"], field="betaVersionId")
     alpha_job_id = alpha_upload.get("jobId") or ""
     beta_job_id = beta_upload.get("jobId") or ""
     if not isinstance(alpha_job_id, str):
         alpha_job_id = ""
     if not isinstance(beta_job_id, str):
         beta_job_id = ""
+    if alpha_job_id:
+        validate_uuid(alpha_job_id, field="alphaJobId")
+    if beta_job_id:
+        validate_uuid(beta_job_id, field="betaJobId")
 
     _publish_version(
         api_base=api_base,
@@ -448,9 +586,15 @@ def run_seed() -> int:
     )
     _publish_version(
         api_base=api_base,
-        token=beta_access,
+        token=beta_org_access,
         document_id=beta_document_id,
         version_id=beta_version_id,
+    )
+    _publish_version(
+        api_base=api_base,
+        token=beta_org_access,
+        document_id=beta_denial_disposable_document_id,
+        version_id=validate_uuid(disposable_upload["versionId"], field="betaDenialDisposableVersionId"),
     )
     alpha_download_capability = _issue_download_capability(
         api_base=api_base,
@@ -460,7 +604,7 @@ def run_seed() -> int:
     )
     beta_download_capability = _issue_download_capability(
         api_base=api_base,
-        token=beta_access,
+        token=beta_org_access,
         document_id=beta_document_id,
         version_id=beta_version_id,
     )
@@ -468,34 +612,34 @@ def run_seed() -> int:
         api_base=api_base, token=alpha_access, name=f"phase1c-alpha-project-{secrets.token_hex(3)}"
     )
     beta_project_id = _create_project(
-        api_base=api_base, token=beta_access, name=f"phase1c-beta-project-{secrets.token_hex(3)}"
+        api_base=api_base, token=beta_org_access, name=f"phase1c-beta-project-{secrets.token_hex(3)}"
     )
     alpha_chat_session_id = _create_chat_session(
         api_base=api_base, token=alpha_access, title=f"phase1c-alpha-chat-{secrets.token_hex(3)}"
     )
     beta_chat_session_id = _create_chat_session(
-        api_base=api_base, token=beta_access, title=f"phase1c-beta-chat-{secrets.token_hex(3)}"
+        api_base=api_base, token=beta_org_access, title=f"phase1c-beta-chat-{secrets.token_hex(3)}"
+    )
+    beta_denial_disposable_chat_session_id = _create_chat_session(
+        api_base=api_base, token=beta_org_access, title=f"phase1c-beta-disposable-chat-{secrets.token_hex(3)}"
     )
 
     alpha_conflict_id = str(uuid.uuid4())
     beta_conflict_id = str(uuid.uuid4())
     _bootstrap_conflict_fixture(
         org_id=ALPHA_ORG_ID,
-        collection_id=alpha_collection_id,
         document_id=alpha_document_id,
         version_id=alpha_version_id,
         conflict_id=alpha_conflict_id,
     )
     _bootstrap_conflict_fixture(
         org_id=org_beta_id,
-        collection_id=beta_collection_id,
         document_id=beta_document_id,
         version_id=beta_version_id,
         conflict_id=beta_conflict_id,
     )
-
-    alpha_session_id = _auth_me_session_id(api_base, alpha_access)
-    beta_session_id = _auth_me_session_id(api_base, beta_access)
+    _verify_conflict(api_base, alpha_access, alpha_conflict_id)
+    _verify_conflict(api_base, beta_org_access, beta_conflict_id)
 
     seed_raw: dict[str, Any] = {
         "schemaVersion": 1,
@@ -525,14 +669,20 @@ def run_seed() -> int:
         "alphaConflictId": alpha_conflict_id,
         "betaConflictId": beta_conflict_id,
         "betaMemberUserId": BETA_USER_ID,
-        "alphaInviteId": invite_id,
-        "betaInviteId": invite_id,
-        "betaDownloadCapability": beta_download_capability,
-        "alphaDownloadCapability": alpha_download_capability,
+        "alphaInviteId": beta_invite_id,
+        "betaInviteId": beta_invite_id,
+        "betaDownloadCapabilityHash": _sha256_text(beta_download_capability),
+        "alphaDownloadCapabilityHash": _sha256_text(alpha_download_capability),
+        "betaInviteTokenHash": _sha256_text(beta_invite_token),
         "alphaSessionIdHash": _sha256_text(alpha_session_id),
         "betaSessionIdHash": _sha256_text(beta_session_id),
         "orgAlphaSlug": "poc",
         "orgBetaSlug": org_beta_slug,
+        "betaDenialDisposableCollectionId": beta_denial_disposable_collection_id,
+        "betaDenialDisposableDocumentId": beta_denial_disposable_document_id,
+        "betaDenialDisposableChatSessionId": beta_denial_disposable_chat_session_id,
+        "betaDenialDisposableInviteId": beta_denial_disposable_invite_id,
+        "betaDenialDisposableMemberUserId": beta_denial_disposable_member_user_id,
     }
     evidence = build_public_seed_evidence(seed_raw)
     credentials = {
@@ -540,11 +690,15 @@ def run_seed() -> int:
         "challenge": challenge,
         "alphaAccessToken": alpha_access,
         "alphaRefreshToken": alpha_refresh,
-        "betaAccessToken": beta_access,
-        "betaRefreshToken": beta_refresh,
+        "betaAccessToken": beta_org_access,
+        "betaRefreshToken": beta_org_refresh,
+        "betaAlphaAccessToken": beta_alpha_access,
+        "betaAlphaRefreshToken": beta_alpha_refresh,
         "alphaSessionId": alpha_session_id,
         "betaSessionId": beta_session_id,
-        "betaInviteToken": invite_token,
+        "betaInviteToken": beta_invite_token,
+        "alphaDownloadCapability": alpha_download_capability,
+        "betaDownloadCapability": beta_download_capability,
     }
     _atomic_write(out, evidence, mode=0o644)
     _atomic_write(creds_out, credentials, mode=0o600)
@@ -574,6 +728,7 @@ def main() -> int:
 
     import signal
 
+    signal.signal(signal.SIGHUP, lambda *_: (_cleanup_credentials(), sys.exit(129)))
     signal.signal(signal.SIGINT, lambda *_: (_cleanup_credentials(), sys.exit(130)))
     signal.signal(signal.SIGTERM, lambda *_: (_cleanup_credentials(), sys.exit(143)))
     try:

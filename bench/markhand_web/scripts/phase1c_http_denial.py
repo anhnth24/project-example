@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import secrets
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -15,8 +16,20 @@ ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST = ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json"
 DEFAULT_GUARD_INVENTORY = ROOT / "crates/server/openapi/guard-inventory.json"
 API_PREFIX = "/api/v1"
+MULTIPART_BOUNDARY = "----markhandPhase1cDenialBoundary"
 
 HttpRequestFn = Callable[..., Any]
+
+UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+DISPOSABLE_COLLECTION_OPS = frozenset({"deleteCollection", "updateCollection"})
+DISPOSABLE_DOCUMENT_OPS = frozenset({"deleteDocument"})
+DISPOSABLE_CHAT_OPS = frozenset({"deleteChatSession"})
+DISPOSABLE_INVITE_OPS = frozenset({"revokeMemberInvite"})
+DISPOSABLE_MEMBER_OPS = frozenset({"deleteMember", "patchMember"})
 
 
 class HttpResponseLike(Protocol):
@@ -55,6 +68,19 @@ class DenialMappingEntry:
 
 
 @dataclass
+class OwnerControlSpec:
+    method: str
+    path: str
+    body: dict[str, Any] | None
+    expected_statuses: frozenset[int]
+    content_type: str = "application/json"
+    multipart_body: bytes | None = None
+    accept: str | None = None
+    success_schema_keys: frozenset[str] | None = None
+    token: str | None = None
+
+
+@dataclass
 class DenialRequestSpec:
     row_id: str
     operation_id: str
@@ -68,6 +94,7 @@ class DenialRequestSpec:
     multipart_body: bytes | None = None
     supplied_request_id: str | None = None
     success_schema_keys: frozenset[str] | None = None
+    accept: str | None = None
 
 
 @dataclass
@@ -79,7 +106,6 @@ class DenialObservation:
     actual_status: int
     body_sha256: str
     request_id: str | None
-    challenge_echo: str | None
     leaked_markers: list[str]
 
 
@@ -111,7 +137,6 @@ class DenialExecutionReport:
                     "actualStatus": item.actual_status,
                     "bodySha256": item.body_sha256,
                     "requestId": item.request_id,
-                    "challengeEcho": item.challenge_echo,
                     "leakedMarkers": item.leaked_markers,
                 }
                 for item in self.observations
@@ -128,6 +153,37 @@ def sha256_bytes(data: bytes) -> str:
 
 def sha256_text(value: str) -> str:
     return sha256_bytes(value.encode("utf-8"))
+
+
+def validate_uuid(value: str, *, field: str) -> str:
+    normalized = value.strip().lower()
+    if not UUID_RE.fullmatch(normalized):
+        raise RuntimeError(f"{field} must be UUID")
+    return normalized
+
+
+def extract_server_request_id(body: str, headers: dict[str, str]) -> str | None:
+    for key, value in headers.items():
+        if key.lower() == "x-request-id" and isinstance(value, str) and value.strip():
+            candidate = value.strip()
+            if UUID_RE.fullmatch(candidate):
+                return candidate.lower()
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(payload, dict):
+        request_id = payload.get("requestId") or payload.get("request_id")
+        if isinstance(request_id, str) and UUID_RE.fullmatch(request_id.strip()):
+            return request_id.strip().lower()
+    return None
+
+
+def validate_server_request_id(*, body: str, headers: dict[str, str]) -> str:
+    request_id = extract_server_request_id(body, headers)
+    if not request_id:
+        raise RuntimeError("missing server-minted request id")
+    return validate_uuid(request_id, field="requestId")
 
 
 def canonical_manifest_sha256(manifest_path: Path = DEFAULT_MANIFEST) -> str:
@@ -259,7 +315,14 @@ def _substitute_path(template: str, params: dict[str, str]) -> str:
     return API_PREFIX + path
 
 
-def _foreign_params(seed: Any) -> dict[str, str]:
+def _optional_seed_string(seed: Any, key: str, *, fallback: str) -> str:
+    value = getattr(seed, key, None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback
+
+
+def _foreign_params(seed: Any, *, credentials: Any) -> dict[str, str]:
     return {
         "orgId": seed.org_beta_id,
         "collectionId": seed.beta_collection_id,
@@ -271,8 +334,39 @@ def _foreign_params(seed: Any) -> dict[str, str]:
         "versionId": seed.beta_version_id,
         "conflictId": seed.beta_conflict_id,
         "inviteId": seed.beta_invite_id,
-        "capability": seed.beta_download_capability,
+        "capability": credentials.beta_download_capability,
     }
+
+
+def _owner_params(seed: Any, *, credentials: Any, operation_id: str) -> dict[str, str]:
+    params = _foreign_params(seed, credentials=credentials)
+    if operation_id in DISPOSABLE_COLLECTION_OPS:
+        params["collectionId"] = seed.beta_denial_disposable_collection_id
+    if operation_id in DISPOSABLE_DOCUMENT_OPS:
+        params["documentId"] = _optional_seed_string(
+            seed,
+            "beta_denial_disposable_document_id",
+            fallback=seed.beta_document_id,
+        )
+    if operation_id in DISPOSABLE_CHAT_OPS:
+        params["sessionId"] = _optional_seed_string(
+            seed,
+            "beta_denial_disposable_chat_session_id",
+            fallback=seed.beta_chat_session_id,
+        )
+    if operation_id in DISPOSABLE_INVITE_OPS:
+        params["inviteId"] = _optional_seed_string(
+            seed,
+            "beta_denial_disposable_invite_id",
+            fallback=seed.beta_invite_id,
+        )
+    if operation_id in DISPOSABLE_MEMBER_OPS:
+        params["userId"] = _optional_seed_string(
+            seed,
+            "beta_denial_disposable_member_user_id",
+            fallback=seed.beta_member_user_id,
+        )
+    return params
 
 
 def _body_for_operation(
@@ -308,7 +402,10 @@ def _body_for_operation(
     if operation_id == "acceptMemberInvite":
         return {"token": credentials.beta_invite_token}
     if operation_id == "resolveCitation":
-        return {"documentId": document_id, "versionId": seed.beta_version_id if foreign else seed.alpha_version_id}
+        return {
+            "documentId": document_id,
+            "versionId": seed.beta_version_id if foreign else seed.alpha_version_id,
+        }
     if operation_id == "appendChatTurn":
         return {"role": "user", "content": f"phase1c-{seed.challenge[:8]}"}
     if operation_id == "createChatSession":
@@ -326,7 +423,7 @@ def _body_for_operation(
     if operation_id == "assignCollectionProject":
         return {"projectId": seed.beta_project_id if foreign else seed.alpha_project_id}
     if operation_id == "issueDownloadCapability":
-        return {}
+        return {"purpose": "markdown"}
     if operation_id == "triageConflict":
         return {"resolution": "accept_local"}
     if operation_id == "updateCollection":
@@ -338,7 +435,10 @@ def _body_for_operation(
     return None
 
 
-def _uses_foreign_scope(operation_id: str, path_template: str) -> bool:
+def _uses_foreign_scope(operation_id: str, path_template: str) -> frozenset[str]:
+    reasons: set[str] = set()
+    if operation_id == "createUpload":
+        reasons.add("createUpload")
     if any(
         token in path_template
         for token in (
@@ -355,8 +455,8 @@ def _uses_foreign_scope(operation_id: str, path_template: str) -> bool:
             "{capability}",
         )
     ):
-        return True
-    return operation_id in {
+        reasons.add("path_template")
+    if operation_id in {
         "search",
         "ask",
         "askStream",
@@ -364,67 +464,9 @@ def _uses_foreign_scope(operation_id: str, path_template: str) -> bool:
         "resolveCitation",
         "switchOrg",
         "acceptMemberInvite",
-    }
-
-
-def _owner_control_spec(
-    entry: DenialMappingEntry,
-    *,
-    seed: Any,
-    params: dict[str, str],
-) -> tuple[str, str, dict[str, Any] | None, frozenset[int], frozenset[str]] | None:
-    path = _substitute_path(entry.path_template, params)
-    read_map: dict[str, tuple[str, str, frozenset[str]]] = {
-        "getCollection": ("GET", path, frozenset({"id", "name"})),
-        "getDocument": ("GET", f"{API_PREFIX}/documents/{params['documentId']}", frozenset({"id"})),
-        "getJob": ("GET", f"{API_PREFIX}/jobs/{params['jobId']}", frozenset({"id"})),
-        "getDocumentVersion": (
-            "GET",
-            f"{API_PREFIX}/documents/{params['documentId']}/versions/{params['versionId']}",
-            frozenset({"id", "versionId"}),
-        ),
-        "getConflict": ("GET", f"{API_PREFIX}/conflicts/{params['conflictId']}", frozenset({"id"})),
-        "getChatSession": ("GET", f"{API_PREFIX}/chat-sessions/{params['sessionId']}", frozenset({"id"})),
-        "getProject": ("GET", f"{API_PREFIX}/projects/{params['projectId']}", frozenset({"id"})),
-        "listConflicts": ("GET", f"{API_PREFIX}/conflicts", frozenset({"items"})),
-        "listDocuments": (
-            "GET",
-            f"{API_PREFIX}/collections/{params['collectionId']}/documents",
-            frozenset({"items"}),
-        ),
-    }
-    if entry.operation_id in read_map:
-        method, read_path, schema = read_map[entry.operation_id]
-        return method, read_path, None, frozenset({200}), schema
-    if entry.operation_id in {"search", "ask"}:
-        body = {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [params["collectionId"]]}
-        return "POST", f"{API_PREFIX}/search", body, frozenset({200}), frozenset({"items"})
-    if entry.operation_id == "authMe":
-        return "GET", f"{API_PREFIX}/auth/me", None, frozenset({200}), frozenset({"userId", "sessionId"})
-    if entry.operation_id == "switchOrg":
-        return "GET", f"{API_PREFIX}/auth/me", None, frozenset({200}), frozenset({"orgId", "sessionId"})
-    if entry.operation_id == "createUpload":
-        return (
-            "GET",
-            f"{API_PREFIX}/collections/{params['collectionId']}",
-            None,
-            frozenset({200}),
-            frozenset({"id"}),
-        )
-    if entry.operation_id == "askStream":
-        body = {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [params["collectionId"]]}
-        return "POST", f"{API_PREFIX}/search", body, frozenset({200}), frozenset({"items"})
-    if entry.operation_id == "jobEvents":
-        return "GET", f"{API_PREFIX}/jobs/{params['jobId']}", None, frozenset({200}), frozenset({"id"})
-    if entry.method == "GET":
-        return entry.method, path, None, frozenset({200}), frozenset({"id"})
-    return (
-        "GET",
-        f"{API_PREFIX}/collections/{params['collectionId']}",
-        None,
-        frozenset({200}),
-        frozenset({"id"}),
-    )
+    }:
+        reasons.add(operation_id)
+    return frozenset(reasons)
 
 
 def _multipart_upload_body(*, collection_id: str, filename: str, content: bytes, boundary: str) -> bytes:
@@ -445,6 +487,166 @@ def _multipart_upload_body(*, collection_id: str, filename: str, content: bytes,
     return b"".join(parts)
 
 
+def _owner_body(operation_id: str, seed: Any, *, credentials: Any, params: dict[str, str]) -> dict[str, Any] | None:
+    if operation_id == "search":
+        return {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
+    if operation_id == "ask":
+        return {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
+    if operation_id == "askStream":
+        return {"query": f"phase1c-owner-{seed.challenge[:8]}", "collectionIds": [seed.beta_collection_id]}
+    if operation_id == "switchOrg":
+        return {"orgId": seed.org_beta_id}
+    if operation_id == "createOrg":
+        return {"slug": f"owner-{seed.challenge[:8]}", "name": "Owner Probe Org"}
+    if operation_id == "createCollection":
+        return {
+            "name": f"owner-{seed.challenge[:8]}",
+            "slug": f"owner-{seed.challenge[:8]}",
+            "visibility": "org",
+        }
+    if operation_id == "createProject":
+        return {"name": f"owner-project-{seed.challenge[:8]}"}
+    if operation_id == "createMemberInvite":
+        return {"email": f"owner-{seed.challenge[:8]}@example.com", "role": "viewer"}
+    if operation_id == "acceptMemberInvite":
+        return {"token": credentials.beta_invite_token}
+    if operation_id == "resolveCitation":
+        return {"documentId": seed.beta_document_id, "versionId": seed.beta_version_id}
+    if operation_id == "appendChatTurn":
+        return {"role": "user", "content": f"phase1c-owner-{seed.challenge[:8]}"}
+    if operation_id == "createChatSession":
+        return {"title": f"phase1c-owner-{seed.challenge[:8]}"}
+    if operation_id == "updateChatSession":
+        return {"title": f"phase1c-owner-updated-{seed.challenge[:8]}"}
+    if operation_id == "patchMember":
+        return {"role": "viewer"}
+    if operation_id == "assignCollectionProject":
+        return {"projectId": seed.beta_project_id}
+    if operation_id == "issueDownloadCapability":
+        return {"purpose": "markdown"}
+    if operation_id == "triageConflict":
+        return {"resolution": "accept_local"}
+    if operation_id == "updateCollection":
+        return {"name": f"owner-updated-{seed.challenge[:8]}"}
+    if operation_id == "updateProject":
+        return {"name": f"owner-project-updated-{seed.challenge[:8]}"}
+    if operation_id in {"publishDocumentVersion", "reindexDocument", "approveIntake", "revokeMemberInvite"}:
+        return {}
+    return _body_for_operation(operation_id, seed, credentials=credentials, foreign=False)
+
+
+def _read_schema(operation_id: str) -> frozenset[str]:
+    mapping: dict[str, frozenset[str]] = {
+        "getCollection": frozenset({"id"}),
+        "getDocument": frozenset({"id"}),
+        "getJob": frozenset({"id"}),
+        "getDocumentVersion": frozenset({"id", "versionId"}),
+        "getConflict": frozenset({"id"}),
+        "getChatSession": frozenset({"id"}),
+        "getProject": frozenset({"id"}),
+        "getOrg": frozenset({"id"}),
+        "listConflicts": frozenset({"items"}),
+        "listDocuments": frozenset({"items"}),
+        "listCollections": frozenset({"items"}),
+        "listProjects": frozenset({"items"}),
+        "listMembers": frozenset({"items"}),
+        "listMemberInvites": frozenset({"items"}),
+        "listChatSessions": frozenset({"items"}),
+        "listDocumentVersions": frozenset({"items"}),
+        "listOrgs": frozenset({"items"}),
+        "listAudit": frozenset({"items"}),
+        "getUsage": frozenset({"documents"}),
+        "getGraph": frozenset({"nodes"}),
+        "getConflictEvidence": frozenset({"items"}),
+        "authMe": frozenset({"userId", "sessionId"}),
+        "previewDocument": frozenset({"documentId"}),
+        "diffDocumentVersions": frozenset({"fromVersionId"}),
+    }
+    return mapping.get(operation_id, frozenset({"id"}))
+
+
+def build_owner_control_spec(
+    entry: DenialMappingEntry,
+    *,
+    seed: Any,
+    credentials: Any,
+) -> OwnerControlSpec | None:
+    params = _owner_params(seed, credentials=credentials, operation_id=entry.operation_id)
+    path = _substitute_path(entry.path_template, params)
+    method = entry.method.upper()
+
+    if entry.operation_id == "createUpload":
+        multipart = _multipart_upload_body(
+            collection_id=seed.beta_collection_id,
+            filename="owner-denial.txt",
+            content=f"phase1c-owner-{seed.challenge}\n".encode("utf-8"),
+            boundary=MULTIPART_BOUNDARY,
+        )
+        return OwnerControlSpec(
+            method="POST",
+            path=f"{API_PREFIX}/uploads",
+            body=None,
+            expected_statuses=frozenset({200, 201}),
+            content_type=f"multipart/form-data; boundary={MULTIPART_BOUNDARY}",
+            multipart_body=multipart,
+            success_schema_keys=frozenset({"documentId", "versionId"}),
+            token=credentials.beta_access_token,
+        )
+
+    if entry.operation_id == "redeemDownload":
+        return OwnerControlSpec(
+            method="GET",
+            path=f"{API_PREFIX}/downloads/{credentials.beta_download_capability}",
+            body=None,
+            expected_statuses=frozenset({200}),
+            token=None,
+        )
+
+    if entry.operation_id == "askStream":
+        return OwnerControlSpec(
+            method="POST",
+            path=f"{API_PREFIX}/ask/stream",
+            body=_owner_body("askStream", seed, credentials=credentials, params=params),
+            expected_statuses=frozenset({200}),
+            accept="text/event-stream",
+            token=credentials.beta_access_token,
+        )
+
+    if entry.operation_id == "jobEvents":
+        return OwnerControlSpec(
+            method="GET",
+            path=path,
+            body=None,
+            expected_statuses=frozenset({200}),
+            accept="text/event-stream",
+            token=credentials.beta_access_token,
+        )
+
+    if entry.method == "GET":
+        return OwnerControlSpec(
+            method=method,
+            path=path,
+            body=None,
+            expected_statuses=frozenset({200}),
+            success_schema_keys=_read_schema(entry.operation_id),
+            token=credentials.beta_access_token,
+        )
+
+    body = _owner_body(entry.operation_id, seed, credentials=credentials, params=params)
+    expected = frozenset({200, 201, 204})
+    schema = None
+    if entry.operation_id in {"createCollection", "createProject", "createChatSession", "createOrg"}:
+        schema = frozenset({"id"})
+    return OwnerControlSpec(
+        method=method,
+        path=path,
+        body=body,
+        expected_statuses=expected,
+        success_schema_keys=schema,
+        token=credentials.beta_access_token,
+    )
+
+
 def build_denial_request_specs(
     mapping: list[DenialMappingEntry],
     *,
@@ -452,40 +654,41 @@ def build_denial_request_specs(
     credentials: Any,
 ) -> list[DenialRequestSpec]:
     specs: list[DenialRequestSpec] = []
-    params = _foreign_params(seed)
+    params = _foreign_params(seed, credentials=credentials)
     for entry in mapping:
         path = _substitute_path(entry.path_template, params)
         body = _body_for_operation(entry.operation_id, seed, credentials=credentials, foreign=True)
         request_id = f"phase1c-{entry.row_id}-{secrets.token_hex(4)}"
         if _uses_foreign_scope(entry.operation_id, entry.path_template):
-            owner = _owner_control_spec(entry, seed=seed, params=params)
+            owner = build_owner_control_spec(entry, seed=seed, credentials=credentials)
             if owner is not None:
-                owner_method, owner_path, owner_body, owner_statuses, owner_schema = owner
                 specs.append(
                     DenialRequestSpec(
                         row_id=entry.row_id,
                         operation_id=entry.operation_id,
                         scenario="owner_control",
-                        method=owner_method,
-                        path=owner_path,
-                        token=credentials.beta_access_token,
-                        body=owner_body,
-                        expected_statuses=owner_statuses,
+                        method=owner.method,
+                        path=owner.path,
+                        token=owner.token if owner.token is not None else credentials.beta_access_token,
+                        body=owner.body,
+                        expected_statuses=owner.expected_statuses,
+                        content_type=owner.content_type,
+                        multipart_body=owner.multipart_body,
                         supplied_request_id=f"{request_id}-owner",
-                        success_schema_keys=owner_schema,
+                        success_schema_keys=owner.success_schema_keys,
+                        accept=owner.accept,
                     )
                 )
         upload_multipart = None
         content_type = "application/json"
         if entry.operation_id == "createUpload":
-            boundary = "----markhandPhase1cDenialBoundary"
             upload_multipart = _multipart_upload_body(
                 collection_id=seed.beta_collection_id,
                 filename="denial.txt",
                 content=f"phase1c-denial-{seed.challenge}\n".encode("utf-8"),
-                boundary=boundary,
+                boundary=MULTIPART_BOUNDARY,
             )
-            content_type = f"multipart/form-data; boundary={boundary}"
+            content_type = f"multipart/form-data; boundary={MULTIPART_BOUNDARY}"
             body = None
         if entry.authz_kind != "public":
             specs.append(
@@ -522,54 +725,12 @@ def build_denial_request_specs(
     return specs
 
 
-def _extract_request_id(body: str, headers: dict[str, str]) -> str | None:
-    for key, value in headers.items():
-        if key.lower() == "x-request-id" and value.strip():
-            return value.strip()
-    try:
-        payload = json.loads(body)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(payload, dict):
-        request_id = payload.get("requestId") or payload.get("request_id")
-        if isinstance(request_id, str) and request_id.strip():
-            return request_id.strip()
-    return None
-
-
-def _challenge_echo(body: str, headers: dict[str, str], challenge: str) -> str | None:
-    header = headers.get("x-phase1c-challenge") or headers.get("X-Phase1c-Challenge")
-    if isinstance(header, str) and header == challenge:
-        return header
-    if challenge in body:
-        return None
-    return None
-
-
 def scan_marker_leakage(body: str, *, forbidden_markers: set[str]) -> list[str]:
     leaks: list[str] = []
     for marker in sorted(forbidden_markers):
         if marker and marker in body:
             leaks.append(marker)
     return leaks
-
-
-def validate_request_id_correlation(
-    *,
-    supplied_request_id: str,
-    response_request_id: str | None,
-    response_headers: dict[str, str],
-) -> None:
-    header_id = None
-    for key, value in response_headers.items():
-        if key.lower() == "x-request-id" and value.strip():
-            header_id = value.strip()
-            break
-    actual = response_request_id or header_id
-    if actual != supplied_request_id:
-        raise RuntimeError(
-            f"request id not correlated: supplied={supplied_request_id!r} actual={actual!r}"
-        )
 
 
 def validate_denial_observation_matrix(observations: list[DenialObservation]) -> None:
@@ -595,6 +756,17 @@ def _validate_success_schema(body: str, required_keys: frozenset[str]) -> None:
     for key in required_keys:
         if key not in payload:
             raise RuntimeError(f"owner control response missing {key}")
+
+
+def _validate_sse_envelope(body: str, *, operation_id: str) -> None:
+    if not body.strip():
+        raise RuntimeError(f"{operation_id} SSE response empty")
+    if "event:" not in body and "data:" not in body:
+        raise RuntimeError(f"{operation_id} SSE response missing event envelope")
+
+
+def _mint_fake_server_request_id() -> str:
+    return str(uuid.uuid4())
 
 
 def execute_http_denial_suite(
@@ -634,8 +806,13 @@ def execute_http_denial_suite(
             content_type=spec.content_type,
             multipart_body=spec.multipart_body,
             supplied_request_id=spec.supplied_request_id,
+            accept=spec.accept,
         )
-        leaked = scan_marker_leakage(response.body, forbidden_markers=forbidden)
+        scan_body = response.body
+        if spec.scenario in {"foreign", "unauthenticated"}:
+            leaked = scan_marker_leakage(scan_body, forbidden_markers=forbidden)
+        else:
+            leaked = []
         if response.status not in spec.expected_statuses:
             report.failures.append(
                 f"{spec.operation_id}/{spec.scenario} expected {sorted(spec.expected_statuses)} got {response.status}"
@@ -646,17 +823,16 @@ def execute_http_denial_suite(
                     _validate_success_schema(response.body, spec.success_schema_keys)
                 except RuntimeError as error:
                     report.failures.append(f"{spec.operation_id}/owner_control schema: {error}")
-            if seed.marker_beta in response.body:
-                report.failures.append(f"{spec.operation_id}/owner_control leaked beta marker")
-        if spec.supplied_request_id:
-            try:
-                validate_request_id_correlation(
-                    supplied_request_id=spec.supplied_request_id,
-                    response_request_id=_extract_request_id(response.body, response.headers),
-                    response_headers=response.headers,
-                )
-            except RuntimeError as error:
-                report.failures.append(f"{spec.operation_id}/{spec.scenario} request-id: {error}")
+            if spec.operation_id in {"askStream", "jobEvents"}:
+                try:
+                    _validate_sse_envelope(response.body, operation_id=spec.operation_id)
+                except RuntimeError as error:
+                    report.failures.append(f"{spec.operation_id}/owner_control sse: {error}")
+        try:
+            server_request_id = validate_server_request_id(body=response.body, headers=response.headers)
+        except RuntimeError as error:
+            report.failures.append(f"{spec.operation_id}/{spec.scenario} request-id: {error}")
+            server_request_id = extract_server_request_id(response.body, response.headers)
         if leaked:
             report.leakage_count += len(leaked)
             report.failures.append(
@@ -670,8 +846,7 @@ def execute_http_denial_suite(
                 expected_statuses=sorted(spec.expected_statuses),
                 actual_status=response.status,
                 body_sha256=sha256_text(response.body),
-                request_id=_extract_request_id(response.body, response.headers),
-                challenge_echo=_challenge_echo(response.body, response.headers, seed.challenge),
+                request_id=server_request_id,
                 leaked_markers=leaked,
             )
         )

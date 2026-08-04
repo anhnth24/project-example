@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,10 @@ def _load(name: str, path: Path):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _mint_server_request_id() -> str:
+    return str(uuid.uuid4())
 
 
 @dataclass
@@ -40,163 +45,240 @@ class StatefulFakeDeployment:
     def _denial(self):
         return _load("phase1c_http_denial_fake", ROOT / "bench/markhand_web/scripts/phase1c_http_denial.py")
 
+    def _response(
+        self,
+        *,
+        status: int,
+        body: str,
+        content_type: str = "application/json",
+    ):
+        probes_mod = self._probes()
+        return probes_mod.HttpResponse(
+            status=status,
+            body=body,
+            headers={
+                "content-type": content_type,
+                "x-request-id": _mint_server_request_id(),
+            },
+        )
+
     def _http_request(self, **kwargs: Any):
         probes_mod = self._probes()
-        method = str(kwargs.get("method") or "GET")
+        method = str(kwargs.get("method") or "GET").upper()
         path = str(kwargs.get("path") or "")
         token = kwargs.get("token")
-        supplied_request_id = kwargs.get("supplied_request_id")
-        headers = {"content-type": kwargs.get("content_type") or "application/json"}
-        if isinstance(supplied_request_id, str) and supplied_request_id.strip():
-            headers["x-request-id"] = supplied_request_id.strip()
+        body = kwargs.get("body") or {}
+        content_type = str(kwargs.get("content_type") or "application/json")
+        multipart_body = kwargs.get("multipart_body")
 
         if self.force_all_403:
-            return probes_mod.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
+            return self._response(status=403, body='{"code":"forbidden"}')
 
-        if token == "unrelated-token-value" or (token is None and path.endswith("/api/v1/auth/me")):
-            return probes_mod.HttpResponse(status=401, body='{"code":"unauthorized"}', headers=headers)
+        if token is None:
+            return self._response(status=401, body='{"code":"unauthorized"}')
 
-        if path.endswith("/api/v1/auth/me") and token == self.credentials.beta_access_token:
-            if not self._membership_active:
-                return probes_mod.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
-            return probes_mod.HttpResponse(
-                status=200,
-                body=json.dumps(
-                    {
-                        "userId": self.seed.beta_user_id,
-                        "orgId": self.seed.org_alpha_id,
-                        "sessionId": self.credentials.beta_session_id,
-                    }
-                ),
-                headers=headers,
-            )
+        if token == "unrelated-token-value":
+            return self._response(status=401, body='{"code":"unauthorized"}')
 
         if path.endswith("/api/v1/auth/refresh"):
-            refresh = (kwargs.get("body") or {}).get("refreshToken")
+            refresh = body.get("refreshToken")
             if refresh == self.credentials.beta_refresh_token:
-                return probes_mod.HttpResponse(
+                return self._response(
                     status=200,
                     body=json.dumps({"accessToken": "rotated-access", "refreshToken": "rotated-refresh"}),
-                    headers=headers,
                 )
-            return probes_mod.HttpResponse(status=401, body='{"code":"unauthorized"}', headers=headers)
+            return self._response(status=401, body='{"code":"unauthorized"}')
 
-        if "/api/v1/members/" in path and method == "DELETE":
-            self._membership_active = False
-            return probes_mod.HttpResponse(status=204, body="", headers=headers)
-
-        if path.endswith("/api/v1/orgs/switch") and method == "POST":
-            session_target = "session-family-" + self.credentials.alpha_session_id[:8]
-            self._audit_entries.append(
-                {
-                    "id": "audit-switch",
-                    "action": "org.switch",
-                    "targetType": "session",
-                    "targetId": session_target,
-                    "actorId": self.seed.alpha_user_id,
-                    "outcome": "success",
-                    "requestId": headers.get("x-request-id"),
-                    "occurredAt": "2026-08-04T12:00:00Z",
-                }
-            )
-            return probes_mod.HttpResponse(
-                status=200,
-                body=json.dumps({"switchSessionTargetId": session_target, "sessionId": session_target}),
-                headers=headers,
-            )
-
-        if path.endswith("/api/v1/collections") and method == "POST":
-            collection_id = "collection-" + self.seed.challenge[:8]
-            self._audit_entries.append(
-                {
-                    "id": "audit-create",
-                    "action": "collection.create",
-                    "targetType": "collection",
-                    "targetId": collection_id,
-                    "actorId": self.seed.alpha_user_id,
-                    "outcome": "success",
-                    "requestId": headers.get("x-request-id"),
-                    "occurredAt": "2026-08-04T12:00:01Z",
-                }
-            )
-            return probes_mod.HttpResponse(status=201, body=json.dumps({"id": collection_id}), headers=headers)
-
-        if path.endswith("/api/v1/audit"):
-            return probes_mod.HttpResponse(
-                status=200,
-                body=json.dumps({"items": self._audit_entries, "page": {"hasMore": False, "nextCursor": None}}),
-                headers=headers,
-            )
-
-        if self.force_missing_resource:
-            return probes_mod.HttpResponse(status=404, body='{"code":"not_found"}', headers=headers)
+        if path.endswith("/api/v1/auth/me"):
+            if token == self.credentials.beta_access_token:
+                if not self._membership_active:
+                    return self._response(status=403, body='{"code":"forbidden"}')
+                return self._response(
+                    status=200,
+                    body=json.dumps(
+                        {
+                            "userId": self.seed.beta_user_id,
+                            "orgId": self.seed.org_beta_id,
+                            "sessionId": self.credentials.beta_session_id,
+                        }
+                    ),
+                )
+            if token == self.credentials.alpha_access_token:
+                return self._response(
+                    status=200,
+                    body=json.dumps(
+                        {
+                            "userId": self.seed.alpha_user_id,
+                            "orgId": self.seed.org_alpha_id,
+                            "sessionId": self.credentials.alpha_session_id,
+                        }
+                    ),
+                )
+            return self._response(status=401, body='{"code":"unauthorized"}')
 
         if token == self.credentials.alpha_access_token:
             if self.accept_5xx:
-                return probes_mod.HttpResponse(status=500, body='{"code":"error"}', headers=headers)
-            return probes_mod.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
+                return self._response(status=500, body='{"code":"error"}')
+            return self._response(status=403, body='{"code":"forbidden"}')
+
+        if "/api/v1/members/" in path and method == "DELETE":
+            self._membership_active = False
+            return self._response(status=204, body="")
 
         if token == self.credentials.beta_access_token:
             if self.skip_owner_control:
-                return probes_mod.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
-            if path.endswith(f"/api/v1/collections/{self.seed.beta_collection_id}"):
-                return probes_mod.HttpResponse(
+                return self._response(status=403, body='{"code":"forbidden"}')
+
+            if self.force_missing_resource:
+                return self._response(status=404, body='{"code":"not_found"}')
+
+            if path.endswith("/api/v1/ask/stream") and method == "POST":
+                return self._response(
+                    status=200,
+                    body="event: message\ndata: {}\n\n",
+                    content_type="text/event-stream",
+                )
+
+            if path.endswith("/events") and method == "GET":
+                return self._response(
+                    status=200,
+                    body="event: status\ndata: {\"state\":\"queued\"}\n\n",
+                    content_type="text/event-stream",
+                )
+
+            if path.endswith(f"/api/v1/downloads/{self.credentials.beta_download_capability}"):
+                return self._response(status=200, body=self.seed.marker_beta, content_type="text/plain")
+
+            if path.endswith("/api/v1/uploads") and method == "POST" and multipart_body is not None:
+                return self._response(
+                    status=201,
+                    body=json.dumps(
+                        {
+                            "documentId": self.seed.beta_document_id,
+                            "versionId": self.seed.beta_version_id,
+                            "jobId": self.seed.beta_job_id,
+                        }
+                    ),
+                )
+
+            if "/diff" in path and method == "GET":
+                return self._response(
+                    status=200,
+                    body=json.dumps(
+                        {
+                            "fromVersionId": self.seed.beta_version_id,
+                            "toVersionId": self.seed.beta_version_id,
+                        }
+                    ),
+                )
+
+            if path.endswith("/preview") and method == "GET":
+                return self._response(
+                    status=200,
+                    body=json.dumps({"documentId": self.seed.beta_document_id}),
+                )
+
+            if path.endswith("/evidence") and method == "GET":
+                return self._response(status=200, body=json.dumps({"items": []}))
+
+            if path.endswith(f"/api/v1/collections/{self.seed.beta_collection_id}") and method == "GET":
+                return self._response(
                     status=200,
                     body=json.dumps({"id": self.seed.beta_collection_id, "name": self.seed.marker_beta}),
-                    headers=headers,
                 )
-            if path.endswith(f"/api/v1/documents/{self.seed.beta_document_id}"):
-                return probes_mod.HttpResponse(status=200, body=json.dumps({"id": self.seed.beta_document_id}), headers=headers)
-            if path.endswith(f"/api/v1/jobs/{self.seed.beta_job_id}"):
-                return probes_mod.HttpResponse(status=200, body=json.dumps({"id": self.seed.beta_job_id}), headers=headers)
-            if path.endswith("/api/v1/search") and method == "POST":
-                return probes_mod.HttpResponse(status=200, body=json.dumps({"items": []}), headers=headers)
-            return probes_mod.HttpResponse(status=200, body=json.dumps({"id": "ok"}), headers=headers)
 
-        if token is None:
-            return probes_mod.HttpResponse(status=401, body='{"code":"unauthorized"}', headers=headers)
-        return probes_mod.HttpResponse(status=403, body='{"code":"forbidden"}', headers=headers)
+            if (
+                path.endswith(f"/api/v1/collections/{self.seed.beta_denial_disposable_collection_id}")
+                and method in {"GET", "PATCH", "DELETE"}
+            ):
+                payload = {"id": self.seed.beta_denial_disposable_collection_id, "name": "disposable"}
+                status = 200 if method != "DELETE" else 204
+                return self._response(status=status, body=json.dumps(payload) if method != "DELETE" else "")
+
+            if "/versions/" in path and method == "GET":
+                return self._response(
+                    status=200,
+                    body=json.dumps({"id": self.seed.beta_version_id, "versionId": self.seed.beta_version_id}),
+                )
+
+            if path.endswith("/documents") and "/collections/" in path and method == "GET":
+                return self._response(status=200, body=json.dumps({"items": []}))
+
+            if path.endswith("/versions") and "/documents/" in path and method == "GET":
+                return self._response(status=200, body=json.dumps({"items": []}))
+
+            if path.endswith(f"/api/v1/documents/{self.seed.beta_document_id}") and method == "GET":
+                return self._response(status=200, body=json.dumps({"id": self.seed.beta_document_id}))
+
+            disposable_doc = getattr(self.seed, "beta_denial_disposable_document_id", "") or self.seed.beta_document_id
+            if path.endswith(f"/api/v1/documents/{disposable_doc}") and method == "DELETE":
+                return self._response(status=204, body="")
+
+            if path.endswith(f"/api/v1/jobs/{self.seed.beta_job_id}") and method == "GET":
+                return self._response(status=200, body=json.dumps({"id": self.seed.beta_job_id}))
+
+            if path.endswith(f"/api/v1/conflicts/{self.seed.beta_conflict_id}") and method == "GET":
+                return self._response(status=200, body=json.dumps({"id": self.seed.beta_conflict_id}))
+
+            if path.endswith("/api/v1/conflicts") and method == "GET":
+                return self._response(status=200, body=json.dumps({"items": [{"id": self.seed.beta_conflict_id}]}))
+
+            if path.endswith(f"/api/v1/chat-sessions/{self.seed.beta_chat_session_id}") and method == "GET":
+                return self._response(status=200, body=json.dumps({"id": self.seed.beta_chat_session_id}))
+
+            disposable_chat = getattr(self.seed, "beta_denial_disposable_chat_session_id", "") or self.seed.beta_chat_session_id
+            if path.endswith(f"/api/v1/chat-sessions/{disposable_chat}") and method == "DELETE":
+                return self._response(status=204, body="")
+
+            if path.endswith(f"/api/v1/projects/{self.seed.beta_project_id}") and method == "GET":
+                return self._response(status=200, body=json.dumps({"id": self.seed.beta_project_id}))
+
+            if path.endswith("/api/v1/search") or path.endswith("/api/v1/ask"):
+                return self._response(status=200, body=json.dumps({"items": []}))
+
+            if path.endswith("/api/v1/collections") and method == "GET":
+                return self._response(status=200, body=json.dumps({"items": [{"id": self.seed.beta_collection_id}]}))
+
+            if path.endswith("/api/v1/collections") and method == "POST":
+                new_id = str(uuid.uuid4())
+                return self._response(status=201, body=json.dumps({"id": new_id}))
+
+            if path.endswith("/api/v1/graph") and method == "GET":
+                return self._response(status=200, body=json.dumps({"nodes": []}))
+
+            if path.endswith("/api/v1/usage") and method == "GET":
+                return self._response(status=200, body=json.dumps({"documents": 0}))
+
+            if method in {"POST", "PATCH", "DELETE"}:
+                return self._response(status=204 if method == "DELETE" else 200, body="{}" if method != "DELETE" else "")
+
+            if method == "GET":
+                return self._response(status=200, body=json.dumps({"id": "ok", "items": []}))
+
+        return self._response(status=403, body='{"code":"forbidden"}')
 
     def run_denial_suite(self) -> dict[str, Any]:
         denial_mod = self._denial()
+        git_sha = self.seed.source_revision.get("commit") or ("a" * 40)
         mapping = denial_mod.build_http_sse_denial_mapping()
-        subset = [entry for entry in mapping if entry.operation_id in {"getCollection", "getDocument", "createUpload"}]
-        specs = denial_mod.build_denial_request_specs(subset, seed=self.seed, credentials=self.credentials)
+        report = denial_mod.execute_http_denial_suite(
+            seed=self.seed,
+            credentials=self.credentials,
+            http_request=self._http_request,
+            api_base="http://fake",
+            git_sha_full=git_sha,
+        )
         if self.skip_owner_control:
-            specs = [spec for spec in specs if spec.scenario != "owner_control"]
-        foreign_count = sum(1 for spec in specs if spec.scenario == "foreign")
-        owner_count = sum(1 for spec in specs if spec.scenario == "owner_control")
-        observations: list[Any] = []
-        for spec in specs:
-            response = self._http_request(
-                method=spec.method,
-                url="http://fake" + spec.path,
-                token=spec.token,
-                body=spec.body,
-                path=spec.path,
-                content_type=spec.content_type,
-                multipart_body=spec.multipart_body,
-                supplied_request_id=spec.supplied_request_id,
-            )
-            if response.status not in spec.expected_statuses and not self.accept_5xx:
-                raise RuntimeError(
-                    f"{spec.operation_id}/{spec.scenario} expected {sorted(spec.expected_statuses)} got {response.status}"
-                )
-            observations.append(
-                denial_mod.DenialObservation(
-                    operation_id=spec.operation_id,
-                    row_id=spec.row_id,
-                    scenario=spec.scenario,
-                    expected_statuses=sorted(spec.expected_statuses),
-                    actual_status=response.status,
-                    body_sha256="fake",
-                    request_id=response.headers.get("x-request-id"),
-                    challenge_echo=None,
-                    leaked_markers=[],
-                )
-            )
-        denial_mod.validate_denial_observation_matrix(observations)
-        return {"foreignCount": foreign_count, "ownerControlCount": owner_count}
+            raise RuntimeError("skip_owner_control incompatible with execute_http_denial_suite")
+        if report.failures and not self.accept_5xx:
+            raise RuntimeError("; ".join(report.failures))
+        foreign_count = sum(1 for item in report.observations if item.scenario == "foreign")
+        owner_count = sum(1 for item in report.observations if item.scenario == "owner_control")
+        return {
+            "foreignCount": foreign_count,
+            "ownerControlCount": owner_count,
+            "executableHttpSseCount": len(mapping),
+        }
 
     @staticmethod
     def assert_credentials_purged(path: Path) -> None:

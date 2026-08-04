@@ -27,7 +27,8 @@ if cred_path:
 PY
 }
 
-trap purge_phase1c_credentials EXIT INT TERM
+SEED_OK=0
+trap '[[ "$SEED_OK" == "1" ]] || purge_phase1c_credentials' EXIT HUP INT TERM
 
 mkdir -p "$(dirname "$MARKHAND_PHASE1C_SEED_JSON")"
 
@@ -60,6 +61,5 @@ if oct(cred_path.stat().st_mode & 0o777) not in {"0o600", "0o400"}:
     cred_path.chmod(0o600)
 PY
 
-trap - EXIT INT TERM
-
+SEED_OK=1
 echo "PHASE1C_SEED_EOF"
