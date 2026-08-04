@@ -16,7 +16,59 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[3]
 PROBES_PATH = ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py"
+DENIAL_PATH = ROOT / "bench/markhand_web/scripts/phase1c_http_denial.py"
 GATE_PATH = ROOT / "bench/markhand_web/scripts/run_phase1c_gate.py"
+
+
+def load_denial():
+    spec = importlib.util.spec_from_file_location("phase1c_http_denial", DENIAL_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError("phase1c_http_denial.py missing")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def complete_seed_raw(probes, **overrides: object) -> dict:
+    commit = "a" * 40
+    base = {
+        "schemaVersion": 1,
+        "challenge": "phase1c-challenge-abc",
+        "sourceRevision": {"commit": commit, "dirty": False},
+        "manifestSha256": probes.canonical_denial_manifest_sha256(),
+        "orgAlphaId": "11111111-1111-1111-1111-111111111111",
+        "orgBetaId": "22222222-2222-2222-2222-222222222222",
+        "alphaUserId": "22222222-2222-2222-2222-222222222201",
+        "betaUserId": "33333333-3333-3333-3333-333333333301",
+        "markerAlpha": "phase1c-marker-alpha-aaa111",
+        "markerBeta": "phase1c-marker-beta-bbb222",
+        "alphaCollectionId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "betaCollectionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "alphaDocumentId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "betaDocumentId": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "alphaJobId": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        "betaJobId": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "alphaVersionId": "12121212-1212-1212-1212-121212121212",
+        "betaVersionId": "13131313-1313-1313-1313-131313131313",
+        "alphaChatSessionId": "14141414-1414-1414-1414-141414141414",
+        "betaChatSessionId": "15151515-1515-1515-1515-151515151515",
+        "alphaProjectId": "16161616-1616-1616-1616-161616161616",
+        "betaProjectId": "17171717-1717-1717-1717-171717171717",
+        "alphaConflictId": "18181818-1818-1818-1818-181818181818",
+        "betaConflictId": "19191919-1919-1919-1919-191919191919",
+        "betaMemberUserId": "33333333-3333-3333-3333-333333333301",
+        "alphaInviteId": "99999999-9999-9999-9999-999999999999",
+        "betaInviteId": "88888888-8888-8888-8888-888888888888",
+        "betaInviteAcceptToken": "mhinv1.test-token",
+        "betaDownloadCapability": "cap-denial-test",
+        "alphaSessionIdHash": "sha256:" + "a" * 64,
+        "betaSessionIdHash": "sha256:" + "b" * 64,
+        "orgAlphaSlug": "poc",
+        "orgBetaSlug": "phase1c-beta",
+    }
+    base.update(overrides)
+    return base
 
 
 def load_probes():
@@ -115,16 +167,9 @@ class DeployedArchitectureContractTests(unittest.TestCase):
 
     def test_seed_fixture_requires_challenge_binding(self) -> None:
         probes = load_probes()
-        raw = {
-            "schemaVersion": 1,
-            "challenge": "phase1c-challenge-abc",
-            "orgAlphaId": "11111111-1111-1111-1111-111111111111",
-            "orgBetaId": "22222222-2222-2222-2222-222222222222",
-            "markerAlpha": "phase1c-marker-alpha",
-            "markerBeta": "phase1c-marker-beta",
-        }
+        raw = complete_seed_raw(probes)
         fixture = probes.parse_seed_artifact(raw, expected_challenge="phase1c-challenge-abc")
-        self.assertEqual(fixture.marker_alpha, "phase1c-marker-alpha")
+        self.assertEqual(fixture.marker_alpha, "phase1c-marker-alpha-aaa111")
         with self.assertRaises(RuntimeError):
             probes.parse_seed_artifact(raw, expected_challenge="wrong-challenge")
 
@@ -271,6 +316,329 @@ class DeployedArchitectureContractTests(unittest.TestCase):
                 symlink,
                 relative_path=sorted(gates_mod.PHASE1C_EVIDENCE_ALLOWLIST)[0],
             )
+
+
+class Phase1cFixtureDenialSliceTests(unittest.TestCase):
+    """Commit G RED: fixture + HTTP denial + revoke/token/audit slice contracts."""
+
+    def test_http_denial_module_required(self) -> None:
+        self.assertTrue(DENIAL_PATH.is_file(), "phase1c_http_denial.py required")
+
+    def test_parse_seed_rejects_missing_required_fields(self) -> None:
+        probes = load_probes()
+        raw = complete_seed_raw(probes)
+        raw.pop("betaCollectionId")
+        with self.assertRaises(RuntimeError):
+            probes.parse_seed_artifact(raw, expected_challenge=raw["challenge"])
+
+    def test_parse_seed_rejects_duplicate_identities(self) -> None:
+        probes = load_probes()
+        raw = complete_seed_raw(probes, betaUserId="22222222-2222-2222-2222-222222222201")
+        with self.assertRaises(RuntimeError):
+            probes.parse_seed_artifact(raw, expected_challenge=raw["challenge"])
+
+    def test_parse_seed_rejects_manifest_sha_mismatch(self) -> None:
+        probes = load_probes()
+        raw = complete_seed_raw(probes, manifestSha256="f" * 64)
+        with self.assertRaises(RuntimeError):
+            probes.parse_seed_artifact(raw, expected_challenge=raw["challenge"])
+
+    def test_parse_seed_rejects_source_revision_mismatch(self) -> None:
+        probes = load_probes()
+        raw = complete_seed_raw(probes, sourceRevision={"commit": "b" * 40, "dirty": False})
+        with self.assertRaises(RuntimeError):
+            probes.validate_source_revision_binding(
+                raw,
+                git_sha_full="a" * 40,
+            )
+
+    def test_denial_mapping_covers_all_http_sse_rows(self) -> None:
+        denial = load_denial()
+        mapping = denial.build_http_sse_denial_mapping()
+        rows = denial.load_manifest_rows()
+        self.assertEqual(len(mapping), len(rows))
+        self.assertEqual(
+            {entry.operation_id for entry in mapping},
+            {row.operation_id for row in rows},
+        )
+
+    def test_denial_mapping_rejects_unknown_operation(self) -> None:
+        denial = load_denial()
+        manifest = json.loads(
+            (ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        manifest["rows"].append(
+            {
+                "id": "denial-unknown-op",
+                "binary": "multi_org_denial",
+                "testName": "shared_world_http_surfaces_respect_org_scope",
+                "operationId": "notARealOperation",
+                "guardInventoryRef": "notARealOperation",
+                "layer": "http",
+                "status": "executable",
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                denial.build_http_sse_denial_mapping(manifest_path=path)
+
+    def test_denial_mapping_rejects_duplicate_operation(self) -> None:
+        denial = load_denial()
+        manifest = json.loads(
+            (ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        duplicate = dict(manifest["rows"][0])
+        duplicate["id"] = "denial-dup-op"
+        manifest["rows"].append(duplicate)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "manifest.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            with self.assertRaises(RuntimeError):
+                denial.build_http_sse_denial_mapping(manifest_path=path)
+
+    def test_revoke_probe_rejects_404_mutation(self) -> None:
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(load_probes()),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="alpha-token",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="beta-token",
+            beta_refresh_token="beta-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
+        )
+
+        class Revoke404Shim(probes.DeployedProbeShims):
+            def http_request(self, **kwargs):  # type: ignore[override]
+                path = str(kwargs.get("path") or "")
+                if path.endswith("/api/v1/auth/me") and kwargs.get("token") == creds.beta_access_token:
+                    return probes.HttpResponse(status=200, body='{"userId":"ok"}', headers={})
+                if path.startswith("/api/v1/members/") and kwargs.get("method") == "DELETE":
+                    return probes.HttpResponse(status=404, body='{"code":"not_found"}', headers={})
+                return probes.HttpResponse(status=403, body="{}", headers={})
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="", stderr="")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://127.0.0.1:8788",
+            seed=seed,
+            credentials=creds,
+            shims=Revoke404Shim(),
+        )
+        with self.assertRaises(RuntimeError):
+            runner.run_revoke_probe()
+
+    def test_stale_token_probe_rejects_fake_refresh_token(self) -> None:
+        probes = load_probes()
+        source = probes.DeployedProbeRunner.run_stale_tokens_probe.__code__.co_consts
+        text = Path(PROBES_PATH).read_text(encoding="utf-8")
+        self.assertNotIn("invalid-phase1c-probe", text)
+
+    def test_audit_ratio_uses_correlation_not_substring(self) -> None:
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(load_probes()),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="alpha-token",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="beta-token",
+            beta_refresh_token="beta-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
+        )
+
+        class AuditShim(probes.DeployedProbeShims):
+            def http_request(self, **kwargs):  # type: ignore[override]
+                path = str(kwargs.get("path") or "")
+                if path.endswith("/api/v1/orgs/switch"):
+                    return probes.HttpResponse(status=200, body='{"orgId":"11111111-1111-1111-1111-111111111111"}', headers={})
+                if path.endswith("/api/v1/collections") and kwargs.get("method") == "POST":
+                    return probes.HttpResponse(
+                        status=201,
+                        body='{"id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}',
+                        headers={"x-request-id": "req-create-collection"},
+                    )
+                if path.endswith("/api/v1/audit"):
+                    body = json.dumps(
+                        {
+                            "items": [
+                                {
+                                    "id": "1",
+                                    "seq": 1,
+                                    "actorId": seed.alpha_user_id,
+                                    "action": "org.switch",
+                                    "targetType": "org",
+                                    "targetId": seed.org_alpha_id,
+                                    "outcome": "success",
+                                    "metadata": {},
+                                    "requestId": "req-switch",
+                                    "occurredAt": "2026-08-04T00:00:00Z",
+                                }
+                            ],
+                            "page": {"nextCursor": None, "hasMore": False},
+                        }
+                    )
+                    return probes.HttpResponse(status=200, body=body, headers={})
+                return probes.HttpResponse(status=403, body="{}", headers={})
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="", stderr="")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://127.0.0.1:8788",
+            seed=seed,
+            credentials=creds,
+            shims=AuditShim(),
+        )
+        outcome = runner.run_audit_probe()
+        ratio = outcome.metrics["admin_mutation_audit_coverage_ratio"]
+        self.assertGreaterEqual(ratio, 0.5)
+        self.assertLess(ratio, 1.0)
+
+    def test_audit_denominator_includes_failed_mutations(self) -> None:
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(load_probes()),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="alpha-token",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="beta-token",
+            beta_refresh_token="beta-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
+        )
+
+        class AuditFailShim(probes.DeployedProbeShims):
+            def http_request(self, **kwargs):  # type: ignore[override]
+                path = str(kwargs.get("path") or "")
+                if path.endswith("/api/v1/orgs/switch"):
+                    return probes.HttpResponse(status=403, body='{"code":"denied"}', headers={})
+                if path.endswith("/api/v1/collections") and kwargs.get("method") == "POST":
+                    return probes.HttpResponse(status=403, body='{"code":"denied"}', headers={})
+                if path.endswith("/api/v1/audit"):
+                    return probes.HttpResponse(
+                        status=200,
+                        body=json.dumps({"items": [], "page": {"nextCursor": None, "hasMore": False}}),
+                        headers={},
+                    )
+                return probes.HttpResponse(status=403, body="{}", headers={})
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="", stderr="")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://127.0.0.1:8788",
+            seed=seed,
+            credentials=creds,
+            shims=AuditFailShim(),
+        )
+        with self.assertRaises(RuntimeError):
+            runner.run_audit_probe()
+
+    def test_leakage_count_derived_from_violations_only(self) -> None:
+        denial = load_denial()
+        report = denial.DenialExecutionReport(
+            schema_version=1,
+            git_sha_full="a" * 40,
+            manifest_sha256=denial.canonical_manifest_sha256(),
+            challenge="c1",
+            executable_http_sse_count=1,
+            leakage_count=2,
+            observations=[
+                denial.DenialObservation(
+                    operation_id="getCollection",
+                    row_id="denial-getCollection",
+                    scenario="foreign",
+                    expected_statuses=[403, 404],
+                    actual_status=404,
+                    body_sha256="abc",
+                    request_id=None,
+                    challenge_echo=None,
+                    leaked_markers=["phase1c-marker-beta-bbb222"],
+                )
+            ],
+        )
+        self.assertEqual(report.leakage_count, 2)
+        report.leakage_count = 0
+        self.assertNotEqual(report.leakage_count, len(report.observations))
+
+    def test_seed_evidence_is_secret_free(self) -> None:
+        probes = load_probes()
+        raw = complete_seed_raw(probes)
+        evidence = probes.build_public_seed_evidence(raw)
+        serialized = json.dumps(evidence)
+        self.assertNotIn("accessToken", serialized)
+        self.assertNotIn("refreshToken", serialized)
+        self.assertNotIn("/workspace/", serialized)
+        self.assertNotIn("Bearer", serialized)
+        self.assertIn("alphaSessionIdHash", serialized)
+
+    def test_unrelated_token_denied_on_protected_resource(self) -> None:
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(load_probes()),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = probes.SeedCredentials(
+            challenge=seed.challenge,
+            alpha_access_token="alpha-token",
+            alpha_refresh_token="alpha-refresh",
+            beta_access_token="beta-token",
+            beta_refresh_token="beta-refresh",
+            alpha_session_id="sess-alpha",
+            beta_session_id="sess-beta",
+        )
+
+        class UnrelatedTokenShim(probes.DeployedProbeShims):
+            def http_request(self, **kwargs):  # type: ignore[override]
+                if kwargs.get("token") == "unrelated-token":
+                    return probes.HttpResponse(status=200, body='{"userId":"leak"}', headers={})
+                if kwargs.get("path", "").endswith("/api/v1/auth/me"):
+                    return probes.HttpResponse(status=401, body='{"code":"unauthorized"}', headers={})
+                return probes.HttpResponse(status=403, body="{}", headers={})
+
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="", stderr="")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                return probes.CommandOutcome(exit_code=0, stdout="0", stderr="")
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://127.0.0.1:8788",
+            seed=seed,
+            credentials=creds,
+            shims=UnrelatedTokenShim(),
+        )
+        response = runner._http("GET", "/api/v1/auth/me", token="unrelated-token")
+        self.assertEqual(response.status, 401)
+        with self.assertRaises(RuntimeError):
+            runner.run_stale_tokens_probe()
 
 
 class DeployedCiRouteTests(unittest.TestCase):
