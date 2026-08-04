@@ -25,19 +25,21 @@ the canonical approval phrase defined below authorizes automatic synchronization
    code/docs and existing issues before drafting. Do not create a duplicate for behavior
    already supported. Convert a broad request into one independently reviewable outcome.
    Before writing the draft, resolve these two required decisions when the prompt does not:
-   - **Tracking:** when no owning catalog exists or multiple milestones look plausible,
-     present the viable locations and ask the owner which catalog/milestone owns the work.
-     Do not choose a convenient active phase or reopen a completed phase by inference. Do
-     not force core/desktop/CLI work into a Web phase.
+   - **Tracking:** whenever the owner, tracking location, catalog, or milestone is unknown
+     or ambiguous—including when no catalog exists or multiple locations look plausible—
+     present the viable choices and ask the user/owner to decide. Do not choose a
+     convenient active phase or reopen a completed phase by inference. Do not force
+     core/desktop/CLI work into a Web phase.
    - **Consumer scope:** for a shared core/library/API, enumerate every direct consumer
      and any gate that runs before the shared code. Ask whether the outcome is core-only
      or end-to-end for named consumers when that choice changes files, tests,
      dependencies, security review, or acceptance evidence. Do not assume every consumer
      automatically inherits the core behavior. If another boundary/owner is required,
      propose a separate dependent issue instead of silently broadening or hiding the gap.
-   Record the answers in objective, files/modules, dependencies, acceptance tests, and
-   out-of-scope. For example, a TXT UTF-16 core request must distinguish direct
-   CLI/desktop/MCP calls from a server upload gate that may reject the bytes before core.
+   Record the answers in `Objective`, `Files/modules`, `Dependencies/blocks`,
+   `Acceptance criteria`, `Required tests/evidence`, and `Out of scope`. For example, a
+   TXT UTF-16 core request must distinguish direct CLI/desktop/MCP calls from a server
+   upload gate that may reject the bytes before core.
 3. **Create the authoritative record.** Write the catalog entry first using the exact
    fields and status rules in `issues-and-plans.md`. Record concrete blockers instead of
    inventing owner, approval, dependency completion, benchmark, or security evidence.
