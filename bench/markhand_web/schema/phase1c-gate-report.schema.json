@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
   "required": [
     "version",
     "reportId",
@@ -17,20 +18,22 @@
     "workerProof",
     "gateResults",
     "redactionScan",
-    "vulnerabilityScan"
+    "vulnerabilityScan",
+    "canonicalBinding"
   ],
   "properties": {
     "version": {"const": 1},
     "reportId": {"type": "string", "minLength": 1},
-    "generatedAt": {"type": "string", "minLength": 1},
-    "status": {"enum": ["pass", "fail", "incomplete"]},
-    "command": {"type": "string", "minLength": 1},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "status": {"enum": ["pass", "fail", "incomplete", "not_run"]},
+    "command": {"const": "python3 bench/markhand_web/scripts/run_phase1c_gate.py"},
     "environmentId": {"const": "phase1c-multi-org-poc"},
     "workloadProfileId": {"const": "phase1c-multi-org"},
     "targetMatch": {"type": "boolean"},
     "denialManifestSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "git": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["commit", "dirty"],
       "properties": {
         "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
@@ -39,6 +42,7 @@
     },
     "metrics": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "cross_tenant_leakage_count",
         "post_commit_stale_authorizations",
@@ -65,30 +69,41 @@
     "thresholdDecisions": {
       "type": "array",
       "minItems": 9,
+      "maxItems": 9,
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "metric",
           "operator",
           "value",
+          "unit",
+          "statistic",
           "source",
+          "provenance",
+          "provenanceKind",
           "owner",
           "approver",
-          "approvedAt"
+          "recordedAt"
         ],
         "properties": {
           "metric": {"type": "string", "minLength": 1},
           "operator": {"enum": [">=", ">", "<=", "<", "=="]},
           "value": {"type": "number"},
-          "source": {"type": "string", "minLength": 1},
+          "unit": {"enum": ["count", "milliseconds", "ratio"]},
+          "statistic": {"enum": ["min", "max"]},
+          "source": {"const": "docs/markhand-web-sla-targets.md"},
+          "provenance": {"const": "docs/superpowers/plans/2026-07-31-phase1c-closure.md"},
+          "provenanceKind": {"const": "repository-design-decision"},
           "owner": {"type": "string", "minLength": 1},
           "approver": {"type": "string", "minLength": 1},
-          "approvedAt": {"type": "string", "minLength": 1}
+          "recordedAt": {"type": "string", "format": "date-time"}
         }
       }
     },
     "workerProof": {
       "type": "object",
+      "additionalProperties": false,
       "required": [
         "runtimeRole",
         "dedicatedDatabaseUrlVerified",
@@ -101,28 +116,39 @@
         "dedicatedDatabaseUrlVerified": {"type": "boolean"},
         "superuser": {"type": "boolean"},
         "bypassRls": {"type": "boolean"},
-        "verifiedAt": {"type": "string", "minLength": 1}
+        "verifiedAt": {"type": "string", "format": "date-time"}
       }
     },
     "gateResults": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 10,
+      "maxItems": 10,
       "items": {
         "type": "object",
-        "required": ["gateId", "externalGate", "metric", "value", "pass", "failureDisposition"],
+        "additionalProperties": false,
+        "required": [
+          "gateId",
+          "externalGate",
+          "metric",
+          "value",
+          "pass",
+          "failureDisposition",
+          "evidence"
+        ],
         "properties": {
-          "gateId": {"type": "string", "pattern": "^G1C-SEC-"},
+          "gateId": {"type": "string", "pattern": "^G1C-SEC-[A-Z0-9-]+$"},
           "externalGate": {"const": "G1C-SEC"},
           "metric": {"type": "string", "minLength": 1},
           "value": {"type": "number"},
           "pass": {"type": "boolean"},
           "failureDisposition": {"const": "block-phase-1c"},
-          "evidence": {"type": ["string", "null"], "minLength": 1}
+          "evidence": {"type": "string", "minLength": 1}
         }
       }
     },
     "redactionScan": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["passed"],
       "properties": {
         "passed": {"type": "boolean"}
@@ -130,11 +156,33 @@
     },
     "vulnerabilityScan": {
       "type": "object",
-      "required": ["scanner", "undispositionedHighCritical", "findings"],
+      "additionalProperties": false,
+      "required": ["scanner", "undispositionedHighCritical", "findings", "passed"],
       "properties": {
         "scanner": {"type": "string", "minLength": 1},
         "undispositionedHighCritical": {"type": "integer", "minimum": 0},
-        "findings": {"type": "array"}
+        "findings": {"type": "array"},
+        "passed": {"type": "boolean"}
+      }
+    },
+    "canonicalBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "registryRevision",
+        "environmentSha256",
+        "workloadSha256",
+        "gatesSha256",
+        "slaSha256",
+        "thresholdDecisionsSha256"
+      ],
+      "properties": {
+        "registryRevision": {"const": 1},
+        "environmentSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "workloadSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "gatesSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "slaSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "thresholdDecisionsSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     }
   }

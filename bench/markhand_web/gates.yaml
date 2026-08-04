@@ -505,7 +505,7 @@
         "unit": "count",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",
@@ -531,7 +531,7 @@
         "unit": "milliseconds",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "<=",
@@ -557,7 +557,7 @@
         "unit": "count",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",
@@ -583,7 +583,7 @@
         "unit": "count",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",
@@ -609,7 +609,7 @@
         "unit": "milliseconds",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "<=",
@@ -625,7 +625,31 @@
       "blocksIssues": [
         "1C-13"
       ],
-      "notes": "Quiet-org query P95 <=500 ms and zero starvation events under noisy-neighbor load. POC scope only; not Profile B scale. Evidence not_run until Task 16 harness."
+      "notes": "Quiet-org query P95 <=500 ms and zero starvation events under noisy-neighbor load. POC scope only; not Profile B scale. Evidence not_run until Task 16 harness.",
+      "metricContracts": [
+        {
+          "name": "quiet_org_query_p95_ms",
+          "unit": "milliseconds",
+          "statistic": "max",
+          "threshold": {
+            "operator": "<=",
+            "value": 500
+          },
+          "owner": "operations-owner",
+          "approver": "operations-owner"
+        },
+        {
+          "name": "starvation_events",
+          "unit": "count",
+          "statistic": "max",
+          "threshold": {
+            "operator": "==",
+            "value": 0
+          },
+          "owner": "operations-owner",
+          "approver": "operations-owner"
+        }
+      ]
     },
     {
       "id": "G1C-SEC-AUDIT-COVERAGE",
@@ -635,7 +659,7 @@
         "unit": "ratio",
         "statistic": "min"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",
@@ -661,7 +685,7 @@
         "unit": "count",
         "statistic": "min"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",
@@ -687,7 +711,7 @@
         "unit": "count",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",
@@ -713,7 +737,7 @@
         "unit": "count",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",
@@ -739,7 +763,7 @@
         "unit": "count",
         "statistic": "max"
       },
-      "workload": "loads.peak",
+      "workload": "workloads.phase1c-multi-org",
       "corpus": null,
       "threshold": {
         "operator": "==",

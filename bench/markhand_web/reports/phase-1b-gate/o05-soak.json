@@ -789,7 +789,7 @@
   "thresholds": {
     "allowedErrorsOutsideInjection": 0,
     "canonicalBindingPass": true,
-    "canonicalGatesSha256": "e5806716ac55f28852505f54a1303ed9e3e706b4c65b3d12b7e1115815b9889e",
+    "canonicalGatesSha256": "76864900dd979e7684c0f6ec8289fb220d94fe7642f845581e31dce2443f40a3",
     "canonicalProfileSha256": "ee99f59424bf967d8e52572687ad38a9efe0976e693e56cb54233bb64330192e",
     "canonicalThresholdValues": {
       "ingestDocsPerHour": 300.0,
@@ -802,7 +802,7 @@
     },
     "completenessRatio": 0.95,
     "fullVectorRtoMinutes": 240,
-    "gatesSha256": "e5806716ac55f28852505f54a1303ed9e3e706b4c65b3d12b7e1115815b9889e",
+    "gatesSha256": "76864900dd979e7684c0f6ec8289fb220d94fe7642f845581e31dce2443f40a3",
     "ingestDocsPerHour": 300.0,
     "ingestGateBinding": true,
     "maxDbConnections": 40,
