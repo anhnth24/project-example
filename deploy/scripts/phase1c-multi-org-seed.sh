@@ -8,10 +8,11 @@ EMAIL="${MARKHAND_PHASE1C_SEED_EMAIL:-admin@poc.example}"
 PASSWORD="${MARKHAND_PHASE1C_SEED_PASSWORD:-${MARKHAND_O04_API_PASSWORD:-markhand-dev}}"
 ORG_SLUG="${MARKHAND_PHASE1C_SECOND_ORG_SLUG:-phase1c-quiet-org}"
 ORG_NAME="${MARKHAND_PHASE1C_SECOND_ORG_NAME:-Phase 1C Quiet Org}"
+STAGING="${MARKHAND_PHASE1C_SEED_STAGING:-$ROOT/.artifacts/phase1c-multi-org-seed.staging.json}"
 OUT="${MARKHAND_PHASE1C_SEED_JSON:-$ROOT/.artifacts/phase1c-multi-org-seed.json}"
 
-export API_BASE EMAIL PASSWORD ORG_SLUG ORG_NAME OUT
-mkdir -p "$(dirname "$OUT")"
+export API_BASE EMAIL PASSWORD ORG_SLUG ORG_NAME STAGING OUT
+mkdir -p "$(dirname "$STAGING")" "$(dirname "$OUT")"
 
 login_body="$(EMAIL="$EMAIL" PASSWORD="$PASSWORD" python3 - <<'PY'
 import json, os
@@ -26,8 +27,10 @@ login_resp="$(curl --fail-with-body -sS -X POST "$API_BASE/api/v1/auth/login" \
 token="$(CREATE_RESP="$login_resp" python3 - <<'PY'
 import json, os, sys
 body = json.loads(os.environ["CREATE_RESP"])
+if not isinstance(body, dict):
+    sys.exit("login response must be object")
 token = body.get("accessToken") or body.get("access_token")
-if not token:
+if not isinstance(token, str) or not token.strip():
     sys.exit("login response missing access token")
 print(token)
 PY
@@ -46,16 +49,50 @@ create_resp="$(curl --fail-with-body -sS -X POST "$API_BASE/api/v1/orgs" \
 
 export CREATE_RESP
 python3 - <<'PY'
-import json, os
+import json
+import os
+import tempfile
 from pathlib import Path
 
+create = json.loads(os.environ["CREATE_RESP"])
+if not isinstance(create, dict):
+    raise SystemExit("create org response must be object")
+org_id = create.get("id") or create.get("orgId")
+slug = create.get("slug")
+if not isinstance(org_id, str) or not org_id.strip():
+    raise SystemExit("create org response missing id")
+if not isinstance(slug, str) or not slug.strip():
+    raise SystemExit("create org response missing slug")
+
 seed = {
-    "apiBase": os.environ["API_BASE"],
-    "primaryOrgId": "11111111-1111-1111-1111-111111111111",
-    "seededSecondOrg": json.loads(os.environ["CREATE_RESP"]),
-    "orgCount": 2,
+    "schemaVersion": 1,
+    "environmentId": "phase1c-multi-org-poc",
+    "workloadProfileId": "phase1c-multi-org",
     "embeddingProfile": "mock",
+    "orgCount": 2,
+    "primaryOrgId": "11111111-1111-1111-1111-111111111111",
+    "secondOrgId": org_id,
+    "secondOrgSlug": slug,
+    "completionMarker": "PHASE1C_SEED_EOF",
 }
-Path(os.environ["OUT"]).write_text(json.dumps(seed, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(os.environ["OUT"])
+staging = Path(os.environ["STAGING"])
+final_path = Path(os.environ["OUT"])
+payload = json.dumps(seed, indent=2, sort_keys=True) + "\n"
+fd, tmp_name = tempfile.mkstemp(prefix=".phase1c-seed.", dir=staging.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    Path(tmp_name).replace(staging)
+    fd2, tmp_final = tempfile.mkstemp(prefix=".phase1c-seed.", dir=final_path.parent)
+    with os.fdopen(fd2, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    Path(tmp_final).replace(final_path)
+finally:
+    if Path(tmp_name).exists() and not staging.exists():
+        Path(tmp_name).unlink(missing_ok=True)
+print(str(final_path))
 PY

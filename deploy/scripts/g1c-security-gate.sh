@@ -5,17 +5,88 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-OUTPUT_DIR="${1:-${MARKHAND_PHASE1C_OUTPUT_DIR:-${TMPDIR:-/tmp}/markhand-phase1c-gate}}"
-shift || true
+OUTPUT_DIR="${MARKHAND_PHASE1C_OUTPUT_DIR:-}"
+SELF_TEST=0
+VALIDATE_ARGS=0
+declare -A SEEN_OPTS=()
 
-if [[ "${1:-}" == "--output-dir" ]]; then
-  OUTPUT_DIR="$2"
-  shift 2
-fi
+usage() {
+  echo "usage: g1c-security-gate.sh [--output-dir DIR] [--self-test]" >&2
+}
 
-if [[ "${1:-}" == "--self-test" ]]; then
+validate_output_dir() {
+  local dir="$1"
+  if [[ -z "$dir" ]]; then
+    echo "missing output directory; pass --output-dir or set MARKHAND_PHASE1C_OUTPUT_DIR" >&2
+    exit 1
+  fi
+  if [[ "$dir" == *".."* ]]; then
+    echo "unsafe output directory (path traversal rejected)" >&2
+    exit 1
+  fi
+  if [[ "$dir" != /* ]]; then
+    echo "output directory must be absolute" >&2
+    exit 1
+  fi
+  if [[ -e "$dir" && -L "$dir" ]]; then
+    echo "output directory must not be a symlink" >&2
+    exit 1
+  fi
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-dir)
+      [[ $# -ge 2 ]] || { echo "missing value for --output-dir" >&2; exit 1; }
+      if [[ -n "${SEEN_OPTS[output-dir]:-}" ]]; then
+        echo "duplicate --output-dir" >&2
+        exit 1
+      fi
+      SEEN_OPTS[output-dir]=1
+      OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --self-test)
+      if [[ -n "${SEEN_OPTS[self-test]:-}" ]]; then
+        echo "duplicate --self-test" >&2
+        exit 1
+      fi
+      SEEN_OPTS[self-test]=1
+      SELF_TEST=1
+      shift
+      ;;
+    --validate-args)
+      if [[ -n "${SEEN_OPTS[validate-args]:-}" ]]; then
+        echo "duplicate --validate-args" >&2
+        exit 1
+      fi
+      SEEN_OPTS[validate-args]=1
+      VALIDATE_ARGS=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "$SELF_TEST" -eq 1 ]]; then
   exec python3 bench/markhand_web/scripts/test_run_phase1c_gate.py
 fi
+
+if [[ "$VALIDATE_ARGS" -eq 1 ]]; then
+  validate_output_dir "$OUTPUT_DIR"
+  echo "phase1c-gate-args-ok"
+  exit 0
+fi
+
+validate_output_dir "$OUTPUT_DIR"
 
 : "${MARKHAND_TEST_REQUIRED:=1}"
 : "${MARKHAND_PHASE1C_GATE:=1}"
@@ -64,4 +135,5 @@ python3 bench/markhand_web/scripts/run_phase1c_gate.py --output-dir "$OUTPUT_DIR
 exec env \
   MARKHAND_PHASE1C_GATE=1 \
   MARKHAND_PHASE1C_REPORT_PATH="$OUTPUT_DIR/phase-1c-gate.json" \
-  cargo test -p fileconv-server --test e2e_phase1c_gate -- --ignored e2e_phase1c_gate --nocapture "$@"
+  GITHUB_SHA="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD)}" \
+  cargo test -p fileconv-server --test e2e_phase1c_gate -- --ignored e2e_phase1c_gate --nocapture

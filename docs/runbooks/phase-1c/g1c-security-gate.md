@@ -13,9 +13,16 @@ every push.
 cp deploy/.env.example deploy/.env
 deploy/scripts/poc-up.sh
 deploy/scripts/poc-health.sh
+export GITHUB_SHA="$(git rev-parse HEAD)"
 MARKHAND_TEST_REQUIRED=1 MARKHAND_PHASE1C_GATE=1 \
   bash deploy/scripts/g1c-security-gate.sh --output-dir /tmp/markhand-phase1c-gate
 ```
+
+Required inputs:
+- `GITHUB_SHA` — exact source revision binding (defaults to `git rev-parse HEAD` in the shell orchestrator when unset)
+- `MARKHAND_TEST_REQUIRED=1` and `MARKHAND_PHASE1C_GATE=1`
+- `COMPOSE_PROFILES=mock`
+- `MARKHAND_PHASE1C_OUTPUT_DIR` or `--output-dir` (absolute path)
 
 ## Preconditions
 

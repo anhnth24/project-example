@@ -106,20 +106,21 @@ fn e2e_phase1c_gate_default_is_not_run() {
     );
 
     let path = phase1c_report_path();
-    if path.ends_with("phase-1c-gate.template.json") {
-        let (status, blockers, _code) = validate_report_via_python(&path);
+    let validate_path = if path.is_file() {
+        path
+    } else {
+        workspace_root().join(PHASE1C_TEMPLATE)
+    };
+    if validate_path.ends_with("phase-1c-gate.template.json") {
+        let (status, blockers, code) = validate_report_via_python(&validate_path);
         assert_eq!(status, "not_run");
-        assert!(
-            blockers
-                .iter()
-                .any(|b| b.contains("harness_not_implemented") || b.contains("template")),
-            "template validation blockers: {blockers:?}"
-        );
+        assert_ne!(code, 0, "template fixture must not validate as pass");
+        eprintln!("e2e_phase1c_gate template blockers={blockers:?}");
         return;
     }
 
-    let report = load_json_path(&path).unwrap_or(template);
-    let (status, blockers, _code) = validate_report_via_python(&path);
+    let report = load_json_path(&validate_path).unwrap_or(template);
+    let (status, blockers, _code) = validate_report_via_python(&validate_path);
     match status.as_str() {
         "pass" => {
             assert_eq!(
@@ -139,10 +140,9 @@ fn e2e_phase1c_gate_default_is_not_run() {
 #[ignore = "requires MARKHAND_PHASE1C_GATE=1 and live deployed evidence"]
 fn e2e_phase1c_gate() {
     if std::env::var("MARKHAND_PHASE1C_GATE").ok().as_deref() != Some("1") {
-        eprintln!(
-            "e2e_phase1c_gate: template mode; set MARKHAND_PHASE1C_GATE=1 after live G1C run"
+        panic!(
+            "e2e_phase1c_gate requires MARKHAND_PHASE1C_GATE=1; skip only via rust-integration --skip e2e_phase1c_gate"
         );
-        return;
     }
 
     let path = phase1c_report_path();
@@ -204,6 +204,7 @@ fn e2e_phase1c_gate_missing_opt_in_fails_not_skips() {
 }
 
 #[test]
+fn phase1c_python_validator_rejects_non_pass_fixtures() {
     let tmp = tempfile::tempdir().expect("tmpdir");
     let not_run = serde_json::json!({
         "version": 1,

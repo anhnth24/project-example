@@ -11,6 +11,7 @@ pub mod fts_visibility_diagnostic;
 pub mod multi_org_denial;
 pub mod multi_org_denial_world;
 pub mod multi_org_fixture;
+pub mod phase1c_probe;
 pub mod worker_pipeline;
 
 use bytes::Bytes;

@@ -120,7 +120,18 @@ async fn run_db_role_probe(config: &fileconv_server::config::ServerConfig) -> Re
     let current_user: String = row.get(0);
     let rolsuper: bool = row.get(1);
     let rolbypassrls: bool = row.get(2);
-    println!("PHASE1C_WORKER_ROLE_PROBE\t{current_user}\t{rolsuper}\t{rolbypassrls}");
+    let nonce = Uuid::new_v4().simple().to_string();
+    let payload = serde_json::json!({
+        "schemaVersion": 1,
+        "currentUser": current_user,
+        "superuser": rolsuper,
+        "bypassRls": rolbypassrls,
+        "dedicatedDatabaseUrlVerified": database_url.contains("markhand_worker"),
+        "databaseUrlRolePath": "markhand_worker",
+        "nonce": nonce,
+    });
+    let encoded = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
+    println!("PHASE1C_WORKER_ROLE_PROBE\t{encoded}");
     println!("PHASE1C_WORKER_ROLE_PROBE_EOF\ttrue");
     if current_user != "markhand_worker" {
         return Err(format!(

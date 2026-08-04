@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 1C G1C-SEC deployed qualification harness.
-
-Produces sanitized ``phase-1c-gate.json`` and per-gate evidence under
-``bench/markhand_web/reports/phase-1c-gate/``. Default status is honest
-``not_run``. ``pass`` requires ``MARKHAND_PHASE1C_GATE=1``, live deployed
-probes, registry/report contract validation, and redaction-safe evidence.
-"""
+"""Phase 1C G1C-SEC deployed qualification harness."""
 
 from __future__ import annotations
 
@@ -16,6 +10,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,7 +28,13 @@ COMPOSE_FILE = ROOT / "deploy/compose.poc.yml"
 DENIAL_MANIFEST = ROOT / "crates/server/tests/fixtures/multi-org-denial.manifest.json"
 DENIAL_RUNNER = ROOT / "scripts/run-phase1c-denial-suite.py"
 REDACT_SCRIPT = ROOT / "deploy/scripts/redact_secrets.py"
+TRIVYIGNORE = ROOT / ".trivyignore"
 G1C_COMMAND = "python3 bench/markhand_web/scripts/run_phase1c_gate.py"
+
+PROBE_SCHEMA_VERSION = 1
+WORKER_PROBE_SCHEMA_VERSION = 1
+DENIAL_REPORT_SCHEMA_VERSION = 1
+EVIDENCE_SCHEMA_VERSION = 1
 
 HARNESS_EXTENSION_KEYS = frozenset(
     {"markhandPhase1cGate", "embeddingProfile", "p1c8EvidenceMapping", "notes"}
@@ -81,6 +82,44 @@ SCENARIO_BY_GATE: dict[str, str] = {
     "G1C-SEC-QDRANT-FAIL-CLOSED": "qdrant_partial_fail_closed",
 }
 
+CARGO_PROBE_SPECS: dict[str, tuple[str, str, str]] = {
+    "G1C-SEC-REVOKE": (
+        "acl_cache",
+        "cached_context_denies_immediately_after_remove",
+        "membership_revoke_bound",
+    ),
+    "G1C-SEC-ACL-CACHE": (
+        "acl_cache",
+        "cached_context_denies_immediately_after_role_downgrade",
+        "acl_cache_invalidation",
+    ),
+    "G1C-SEC-STALE-TOKENS": (
+        "multi_org_denial",
+        "pre_revoke_tokens_fail_after_downgrade_suspend_and_remove",
+        "stale_token_isolation",
+    ),
+    "G1C-SEC-QUOTA-RECOVERY": (
+        "quota",
+        "reconcile_repairs_counter_drift_and_orphaned_job_slots",
+        "quota_recovery",
+    ),
+    "G1C-SEC-NOISY-NEIGHBOR": (
+        "noisy_neighbor",
+        "noisy_org_backlog_does_not_starve_quiet_org",
+        "noisy_neighbor_fairness",
+    ),
+    "G1C-SEC-AUDIT-COVERAGE": (
+        "telemetry_audit",
+        "live_o01_audit_append_only_correlation_and_canary",
+        "admin_audit_coverage",
+    ),
+    "G1C-SEC-QDRANT-FAIL-CLOSED": (
+        "storage",
+        "qdrant_connection_failure_fails_closed_as_transport",
+        "qdrant_fail_closed",
+    ),
+}
+
 SECRET_RESIDUAL_RE = re.compile(
     r"(?i)("
     r"Bearer\s+[A-Za-z0-9._\-+=/]{8,}|"
@@ -94,6 +133,7 @@ SECRET_RESIDUAL_RE = re.compile(
 )
 
 TRIVY_PIN_RE = re.compile(r"^aquasec/trivy:[0-9.]+@sha256:[a-f0-9]{64}$")
+CommandRunner = Callable[..., dict[str, Any]]
 
 
 def _load_gate_validator():
@@ -114,8 +154,92 @@ class HarnessWriteError(RuntimeError):
     """Raised when report/evidence write fails redaction or atomic commit."""
 
 
+class StagingWorkspace:
+    """Private staging area; commits allowlisted evidence atomically."""
+
+    def __init__(
+        self,
+        *,
+        repo_root: Path,
+        final_dir: Path,
+        source_revision: dict[str, Any] | None = None,
+    ) -> None:
+        self.repo_root = repo_root
+        self.final_dir = final_dir.resolve()
+        self.temp_dir = Path(tempfile.mkdtemp(prefix=".phase1c-staging."))
+        self.source_revision = source_revision or capture_source_revision(repo_root)
+        self._staged: dict[str, Path] = {}
+
+    def stage_json(self, relative_path: str, payload: dict[str, Any]) -> Path:
+        if relative_path not in GATES.PHASE1C_EVIDENCE_ALLOWLIST and not relative_path.endswith(
+            "phase-1c-gate.json"
+        ):
+            raise RuntimeError(f"refusing to stage non-allowlisted path: {relative_path}")
+        staged_path = self.temp_dir / Path(relative_path).name
+        atomic_write_json(staged_path, payload, validate=False)
+        self._staged[relative_path] = staged_path
+        return staged_path
+
+    def commit_file(self, src: Path, *, relative_path: str) -> None:
+        if src.is_symlink():
+            raise HarnessWriteError("refusing_symlink_staged_file")
+        resolved = src.resolve()
+        if self.temp_dir not in resolved.parents and resolved != self.temp_dir:
+            if not resolved.is_file():
+                raise HarnessWriteError("staged_file_missing")
+        dest = self.final_dir / Path(relative_path).name
+        if dest.exists() or dest.is_symlink():
+            dest.unlink(missing_ok=True)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=f".{dest.name}.", dir=dest.parent)
+        tmp_path = Path(tmp)
+        try:
+            shutil.copyfile(resolved, tmp_path)
+            os.chmod(tmp_path, 0o644)
+            tmp_path.replace(dest)
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
+
+    def commit_all(self) -> None:
+        for relative_path, staged in self._staged.items():
+            self.commit_file(staged, relative_path=relative_path)
+
+    def purge_final_allowlisted_artifacts(self) -> None:
+        for relative_path in GATES.PHASE1C_EVIDENCE_ALLOWLIST:
+            target = self.final_dir / Path(relative_path).name
+            if target.exists() or target.is_symlink():
+                target.unlink(missing_ok=True)
+        report = self.final_dir / "phase-1c-gate.json"
+        if report.exists() or report.is_symlink():
+            report.unlink(missing_ok=True)
+
+    def cleanup(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+
 def utc_now_z() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def sanitize_failure_message(message: str) -> str:
+    cleaned = redact_text(str(message))
+    if SECRET_RESIDUAL_RE.search(cleaned):
+        return "phase1c harness failure (redacted)"
+    return cleaned
+
+
+def capture_source_revision(repo_root: Path) -> dict[str, Any]:
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
+    dirty = (
+        subprocess.check_output(["git", "status", "--porcelain"], cwd=repo_root, text=True).strip()
+        != ""
+    )
+    if dirty:
+        raise RuntimeError("refusing probes on dirty git tree")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise RuntimeError("unresolved source revision")
+    return {"commit": commit, "dirty": False}
 
 
 def load_images_lock() -> dict[str, Any]:
@@ -140,11 +264,7 @@ def strip_harness_extensions(report: dict[str, Any]) -> dict[str, Any]:
 def build_p1c8_mapping() -> list[dict[str, str]]:
     mapping: list[dict[str, str]] = []
     for gate_id, items in GATE_TO_P1C8.items():
-        evidence = next(
-            str(row["evidence"])
-            for row in GATES.G1C_GATE_ROWS
-            if str(row["id"]) == gate_id
-        )
+        evidence = next(str(row["evidence"]) for row in GATES.G1C_GATE_ROWS if str(row["id"]) == gate_id)
         for item in items:
             mapping.append({"item": item, "gateId": gate_id, "evidence": evidence})
     return mapping
@@ -163,6 +283,179 @@ def residual_secret_errors(text: str, *, context: str) -> list[str]:
     if SECRET_RESIDUAL_RE.search(text):
         return [f"redaction_failed:{context}"]
     return []
+
+
+def parse_denial_report(report: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(report, dict):
+        raise RuntimeError("denial report must be object")
+    if report.get("schemaVersion") != DENIAL_REPORT_SCHEMA_VERSION:
+        raise RuntimeError("denial report schemaVersion mismatch")
+    if "leakageCount" not in report:
+        raise RuntimeError("denial report missing leakageCount")
+    leakage = report["leakageCount"]
+    if isinstance(leakage, bool) or not isinstance(leakage, int):
+        raise TypeError("denial leakageCount must be int")
+    if report.get("failures"):
+        raise RuntimeError("denial runner reported failures")
+    redaction = report.get("redactionScan")
+    if not isinstance(redaction, dict) or redaction.get("passed") is not True:
+        raise RuntimeError("denial report redactionScan failed")
+    for field in ("manifestSha256", "gitShaFull"):
+        value = report.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(f"denial report missing {field}")
+    return {"cross_tenant_leakage_count": leakage}
+
+
+def parse_probe_stdout(stdout: str, *, probe_id: str) -> dict[str, Any]:
+    lines = stdout.splitlines()
+    results: list[dict[str, Any]] = []
+    eof_seen = False
+    after_eof = False
+    for line in lines:
+        if after_eof and line.strip():
+            raise RuntimeError("probe output trailing content after EOF")
+        if line.startswith("PHASE1C_PROBE_RESULT\t"):
+            if eof_seen:
+                raise RuntimeError("probe result after EOF")
+            payload_raw = line.split("\t", 1)[1]
+            payload = json.loads(payload_raw)
+            if payload.get("schemaVersion") != PROBE_SCHEMA_VERSION:
+                raise RuntimeError("probe schemaVersion mismatch")
+            if payload.get("probeId") != probe_id:
+                raise RuntimeError("probeId mismatch")
+            metrics = payload.get("metrics")
+            if not isinstance(metrics, dict) or not metrics:
+                raise RuntimeError("probe metrics missing")
+            results.append(payload)
+            continue
+        if line.startswith("PHASE1C_PROBE_EOF\t"):
+            if line.strip() != "PHASE1C_PROBE_EOF\ttrue":
+                raise RuntimeError("probe EOF marker invalid")
+            if eof_seen:
+                raise RuntimeError("duplicate probe EOF")
+            eof_seen = True
+            after_eof = True
+    if len(results) != 1:
+        raise RuntimeError("probe requires exactly one PHASE1C_PROBE_RESULT")
+    if not eof_seen:
+        raise RuntimeError("probe missing PHASE1C_PROBE_EOF")
+    return results[0]
+
+
+def parse_worker_role_probe(output: str) -> dict[str, Any]:
+    payload: dict[str, Any] | None = None
+    eof_seen = False
+    after_eof = False
+    for line in output.splitlines():
+        if after_eof and line.strip():
+            raise RuntimeError("worker probe trailing output")
+        if line.startswith("PHASE1C_WORKER_ROLE_PROBE\t"):
+            raw = line.split("\t", 1)[1]
+            parsed = json.loads(raw)
+            if parsed.get("schemaVersion") != WORKER_PROBE_SCHEMA_VERSION:
+                raise RuntimeError("worker probe schemaVersion mismatch")
+            for key in ("currentUser", "databaseUrlRolePath", "nonce"):
+                if not isinstance(parsed.get(key), str) or not parsed[key]:
+                    raise RuntimeError(f"worker probe missing {key}")
+            for key in ("superuser", "bypassRls", "dedicatedDatabaseUrlVerified"):
+                if not isinstance(parsed.get(key), bool):
+                    raise RuntimeError(f"worker probe boolean required: {key}")
+            payload = parsed
+            continue
+        if line.startswith("PHASE1C_WORKER_ROLE_PROBE_EOF\t"):
+            if line.strip() != "PHASE1C_WORKER_ROLE_PROBE_EOF\ttrue":
+                raise RuntimeError("worker probe EOF invalid")
+            eof_seen = True
+            after_eof = True
+    if payload is None or not eof_seen:
+        raise RuntimeError("worker probe incomplete")
+    if payload["currentUser"] != "markhand_worker":
+        raise RuntimeError("worker currentUser must be markhand_worker")
+    if payload["superuser"] or payload["bypassRls"]:
+        raise RuntimeError("worker must not be superuser or bypass RLS")
+    return payload
+
+
+def load_trivyignore_ids(text: str) -> set[str]:
+    ids: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        token = stripped.split()[0]
+        if token:
+            ids.add(token)
+    return ids
+
+
+def parse_combined_trivy_scan(
+    *,
+    api_report: dict[str, Any],
+    worker_report: dict[str, Any],
+    api_ref: str,
+    worker_ref: str,
+    trivyignore_text: str,
+) -> dict[str, Any]:
+    if not isinstance(api_report, dict) or not isinstance(worker_report, dict):
+        raise RuntimeError("trivy report must be object")
+    ignored = load_trivyignore_ids(trivyignore_text)
+    findings: list[dict[str, Any]] = []
+    images: list[dict[str, str]] = []
+    for label, report, ref in (
+        ("api", api_report, api_ref),
+        ("worker", worker_report, worker_ref),
+    ):
+        if report.get("SchemaVersion") != 2:
+            raise RuntimeError(f"trivy {label} SchemaVersion must be 2")
+        results = report.get("Results")
+        if not isinstance(results, list):
+            raise RuntimeError(f"trivy {label} Results missing")
+        images.append({"role": label, "ref": ref})
+        for result in results:
+            if not isinstance(result, dict):
+                raise RuntimeError("trivy result malformed")
+            vulnerabilities = result.get("Vulnerabilities") or []
+            if not isinstance(vulnerabilities, list):
+                raise RuntimeError("trivy vulnerabilities malformed")
+            for vuln in vulnerabilities:
+                if not isinstance(vuln, dict):
+                    raise RuntimeError("trivy vulnerability malformed")
+                severity = str(vuln.get("Severity", "")).upper()
+                if severity not in {"HIGH", "CRITICAL"}:
+                    continue
+                vid = str(vuln.get("VulnerabilityID", ""))
+                disposition = "ignored" if vid in ignored else "undispositioned"
+                findings.append(
+                    {
+                        "imageRole": label,
+                        "vulnerabilityId": vid,
+                        "severity": severity,
+                        "disposition": disposition,
+                    }
+                )
+    undispositioned = sum(1 for item in findings if item["disposition"] == "undispositioned")
+    return {
+        "scanner": pinned_trivy_image(),
+        "undispositionedHighCritical": undispositioned,
+        "findings": findings,
+        "images": images,
+        "passed": undispositioned == 0,
+        "completionMarker": "PHASE1C_TRIVY_EOF",
+    }
+
+
+def docker_image_digest(tag: str, runner: CommandRunner) -> str:
+    outcome = runner(["docker", "inspect", "--format", "{{json .RepoDigests}}", tag], timeout_secs=120)
+    if outcome["commandExitCode"] != 0:
+        raise RuntimeError("docker inspect failed for image digest")
+    digests = json.loads(outcome["stdout"].strip() or "[]")
+    if not isinstance(digests, list) or not digests:
+        raise RuntimeError("image digest missing")
+    digest = str(digests[0])
+    if "@sha256:" not in digest:
+        raise RuntimeError("image digest unpinned")
+    return digest
 
 
 def scanner_pin_errors(scanner: object) -> list[str]:
@@ -207,6 +500,26 @@ def p1c8_mapping_errors(report: dict[str, Any], *, status: str) -> list[str]:
     return []
 
 
+def evidence_binding_errors(payload: dict[str, Any], *, evidence_path: str) -> list[str]:
+    errors: list[str] = []
+    if payload.get("schemaVersion") != EVIDENCE_SCHEMA_VERSION:
+        errors.append("evidence_schema_version")
+    if payload.get("evidencePath") != evidence_path:
+        errors.append("evidence_path_binding")
+    if payload.get("environmentId") != GATES.PHASE1C_ENVIRONMENT_ID:
+        errors.append("environment_binding")
+    if payload.get("workloadProfileId") != GATES.PHASE1C_WORKLOAD_PROFILE_ID:
+        errors.append("workload_binding")
+    if payload.get("embeddingProfile") != "mock":
+        errors.append("embedding_binding")
+    if payload.get("targetMatch") is not True:
+        errors.append("target_match_binding")
+    for field in ("sourceRevision", "canonicalBinding", "thresholdDecisions"):
+        if not isinstance(payload.get(field), (dict, list)):
+            errors.append(f"missing_{field}")
+    return errors
+
+
 def evidence_probe_errors(repo_root: Path, *, status: str) -> list[str]:
     if status != "pass":
         return []
@@ -222,6 +535,7 @@ def evidence_probe_errors(repo_root: Path, *, status: str) -> list[str]:
         except json.JSONDecodeError:
             errors.append(f"evidence_malformed:{rel}")
             continue
+        errors.extend(evidence_binding_errors(payload, evidence_path=rel))
         if payload.get("gateId") != row["id"]:
             errors.append(f"evidence_gate_mismatch:{rel}")
         p1c8_items = payload.get("p1c8Items")
@@ -261,7 +575,6 @@ def evaluate_report(
     bind_current_git: bool = False,
     evidence_must_exist: bool = True,
 ) -> tuple[str, list[str]]:
-    """Return (status, blockers). Only ``pass`` when every acceptance gate holds."""
     workspace = repo_root or ROOT
     markhand = markhand_root or MARKHAND_ROOT
     blockers: list[str] = []
@@ -276,11 +589,9 @@ def evaluate_report(
     blockers.extend(opt_in_errors(report, status=str(status)))
     blockers.extend(embedding_profile_errors(report.get("embeddingProfile"), status=str(status)))
     blockers.extend(p1c8_mapping_errors(report, status=str(status)))
-    if isinstance(report.get("vulnerabilityScan"), dict):
+    if status == "pass" and isinstance(report.get("vulnerabilityScan"), dict):
         blockers.extend(scanner_pin_errors(report["vulnerabilityScan"].get("scanner")))
-    blockers.extend(
-        residual_secret_errors(json.dumps(report, sort_keys=True), context="report")
-    )
+    blockers.extend(residual_secret_errors(json.dumps(report, sort_keys=True), context="report"))
 
     try:
         registry = GATES.load_json_yaml(markhand / "gates.yaml")
@@ -304,12 +615,6 @@ def evaluate_report(
         blockers.extend(evidence_probe_errors(workspace, status="pass"))
 
     if bind_current_git and status == "pass":
-        dirty = (
-            subprocess.check_output(["git", "status", "--porcelain"], cwd=workspace, text=True).strip()
-            != ""
-        )
-        if dirty:
-            blockers.append("git_dirty")
         head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=workspace, text=True).strip()
         commit = (report.get("git") or {}).get("commit")
         if commit != head:
@@ -323,11 +628,11 @@ def evaluate_report(
     return "fail", blockers
 
 
-def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def atomic_write_json(path: Path, payload: dict[str, Any], *, validate: bool = True) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     redacted = redact_text(serialized)
-    if residual_secret_errors(redacted, context=str(path)):
+    if residual_secret_errors(redacted, context=str(path.name)):
         raise HarnessWriteError("redaction_failed_before_write")
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     tmp_path = Path(tmp_name)
@@ -340,22 +645,23 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     except Exception:
         tmp_path.unlink(missing_ok=True)
         raise
+    if validate and path.name == "phase-1c-gate.json":
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+        status, blockers = evaluate_report(loaded, bind_current_git=loaded.get("status") == "pass")
+        if status != "pass":
+            path.unlink(missing_ok=True)
+            raise HarnessWriteError(f"refusing_write:{','.join(blockers)}")
 
 
-def atomic_write_report(
-    path: Path,
-    report: dict[str, Any],
-    *,
-    repo_root: Path | None = None,
-) -> None:
-    report_status = report.get("status")
-    eval_status, blockers = evaluate_report(
-        report,
-        repo_root=repo_root or ROOT,
-        bind_current_git=report_status == "pass",
-    )
-    if eval_status != "pass":
-        raise HarnessWriteError(f"refusing_write:{','.join(blockers)}")
+def atomic_write_report(path: Path, report: dict[str, Any], *, repo_root: Path | None = None) -> None:
+    if report.get("status") == "pass":
+        eval_status, blockers = evaluate_report(
+            report,
+            repo_root=repo_root or ROOT,
+            bind_current_git=True,
+        )
+        if eval_status != "pass":
+            raise HarnessWriteError(f"refusing_write:{','.join(blockers)}")
     atomic_write_json(path, report)
 
 
@@ -380,7 +686,6 @@ def run_command(
     stderr = redact_text(proc.stderr or "")
     combined = stdout + stderr
     return {
-        "command": command,
         "commandExitCode": proc.returncode,
         "timedOut": False,
         "outputTruncated": False,
@@ -394,74 +699,285 @@ def run_command(
     }
 
 
-def probe_from_command(command: list[str], **kwargs: Any) -> dict[str, Any]:
-    outcome = run_command(command, **kwargs)
+def probe_from_command(command: list[str], runner: CommandRunner, **kwargs: Any) -> dict[str, Any]:
+    outcome = runner(command, **kwargs)
     if outcome["commandExitCode"] != 0:
-        raise RuntimeError(f"probe failed: {' '.join(command)} exit={outcome['commandExitCode']}")
+        raise RuntimeError("probe command failed")
     if outcome["residualSecrets"]:
-        raise RuntimeError(f"probe output leaked secrets: {' '.join(command)}")
+        raise RuntimeError("probe output leaked secrets")
+    if outcome.get("timedOut") or outcome.get("outputTruncated") or outcome.get("eof") is not True:
+        raise RuntimeError("probe output incomplete")
     return outcome
 
 
 def sanitize_probe(probe: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in probe.items() if key not in {"stdout", "stderr", "command"}}
+
+
+def build_evidence_payload(
+    *,
+    gate_id: str,
+    scenario: str,
+    probe: dict[str, Any],
+    metrics: dict[str, Any],
+    source_revision: dict[str, Any],
+    markhand_root: Path,
+    repo_root: Path,
+) -> dict[str, Any]:
+    rel = next(str(row["evidence"]) for row in GATES.G1C_GATE_ROWS if row["id"] == gate_id)
+    binding, _errors = GATES.phase1c_canonical_fingerprints(markhand_root, workspace_root=repo_root)
     return {
-        key: value
-        for key, value in probe.items()
-        if key not in {"stdout", "stderr", "command"}
+        "schemaVersion": EVIDENCE_SCHEMA_VERSION,
+        "gateId": gate_id,
+        "scenario": scenario,
+        "evidencePath": rel,
+        "environmentId": GATES.PHASE1C_ENVIRONMENT_ID,
+        "workloadProfileId": GATES.PHASE1C_WORKLOAD_PROFILE_ID,
+        "embeddingProfile": "mock",
+        "sourceRevision": source_revision,
+        "canonicalBinding": {"registryRevision": 1, **binding},
+        "thresholdDecisions": GATES.canonical_threshold_decisions(),
+        "targetMatch": True,
+        "p1c8Items": list(GATE_TO_P1C8[gate_id]),
+        "status": "pass",
+        "probe": sanitize_probe(probe),
+        "metrics": metrics,
     }
 
 
-def write_gate_evidence(
-    repo_root: Path,
+def write_gate_evidence_staged(
+    staging: StagingWorkspace,
     gate_id: str,
     *,
     scenario: str,
     probe: dict[str, Any],
-    metrics: dict[str, Any] | None = None,
-) -> Path:
+    metrics: dict[str, Any],
+    markhand_root: Path,
+) -> str:
     rel = next(str(row["evidence"]) for row in GATES.G1C_GATE_ROWS if row["id"] == gate_id)
-    payload = {
-        "gateId": gate_id,
-        "scenario": scenario,
-        "p1c8Items": list(GATE_TO_P1C8[gate_id]),
-        "status": "pass",
-        "probe": sanitize_probe(probe),
-        "metrics": metrics or {},
-    }
-    path = repo_root / rel
-    atomic_write_json(path, payload)
-    return path
-
-
-def parse_worker_role_probe(output: str) -> tuple[str, bool, bool]:
-    role = ""
-    superuser = True
-    bypass = True
-    for line in output.splitlines():
-        if line.startswith("PHASE1C_WORKER_ROLE_PROBE\t"):
-            _, role, superuser_raw, bypass_raw = line.split("\t", 3)
-            superuser = superuser_raw.strip().lower() == "true"
-            bypass = bypass_raw.strip().lower() == "true"
-        if line.startswith("PHASE1C_WORKER_ROLE_PROBE_EOF\t"):
-            if not line.endswith("true"):
-                raise RuntimeError("worker role probe missing EOF marker")
-    if not role:
-        raise RuntimeError("worker role probe missing role line")
-    return role, superuser, bypass
-
-
-def live_api_base() -> str:
-    port = os.environ.get("MARKHAND_API_PORT", "8788")
-    return f"http://127.0.0.1:{port}"
-
-
-def current_git_state(repo_root: Path) -> tuple[str, bool]:
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
-    dirty = (
-        subprocess.check_output(["git", "status", "--porcelain"], cwd=repo_root, text=True).strip()
-        != ""
+    payload = build_evidence_payload(
+        gate_id=gate_id,
+        scenario=scenario,
+        probe=probe,
+        metrics=metrics,
+        source_revision=staging.source_revision,
+        markhand_root=markhand_root,
+        repo_root=staging.repo_root,
     )
-    return commit, dirty
+    errors = evidence_binding_errors(payload, evidence_path=rel)
+    if errors:
+        raise RuntimeError(f"evidence binding failed: {errors}")
+    repo_path = staging.repo_root / rel
+    repo_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(repo_path, payload, validate=False)
+    staging.stage_json(rel, payload)
+    return rel
+
+
+def run_cargo_metric_probe(
+    gate_id: str,
+    runner: CommandRunner,
+    *,
+    env: dict[str, str],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    test_file, test_name, probe_id = CARGO_PROBE_SPECS[gate_id]
+    command = [
+        "cargo",
+        "test",
+        "-p",
+        "fileconv-server",
+        "--test",
+        test_file,
+        test_name,
+        "--",
+        "--include-ignored",
+        "--nocapture",
+    ]
+    include_env = {**env, "MARKHAND_TEST_REQUIRED": "1"}
+    if test_file == "multi_org_denial":
+        probe = probe_from_command(command, runner, env=include_env, timeout_secs=1800)
+    else:
+        probe = probe_from_command(command, runner, env=include_env, timeout_secs=900)
+    combined = (probe.get("stdout") or "") + (probe.get("stderr") or "")
+    parsed = parse_probe_stdout(combined, probe_id=probe_id)
+    metrics = parsed["metrics"]
+    if not isinstance(metrics, dict):
+        raise RuntimeError("probe metrics must be object")
+    return probe, metrics
+
+
+def run_live_probes(
+    repo_root: Path,
+    markhand_root: Path,
+    *,
+    command_runner: CommandRunner | None = None,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    if os.environ.get("MARKHAND_TEST_REQUIRED") != "1":
+        raise RuntimeError("MARKHAND_TEST_REQUIRED must be 1")
+    profiles = os.environ.get("COMPOSE_PROFILES", "")
+    embedding = os.environ.get("MARKHAND_EMBEDDING_RUNTIME_PATH", "")
+    if profiles and "mock" not in profiles.split(","):
+        raise RuntimeError("qualifying run requires mock embedding profile")
+    if embedding and embedding not in {"local-neural", "mock"}:
+        raise RuntimeError("cloud/shared embedding profile forbidden for qualifying pass")
+
+    runner = command_runner or run_command
+    final_dir = output_dir or (repo_root / ".artifacts" / "phase1c-gate-live")
+    staging = StagingWorkspace(repo_root=repo_root, final_dir=final_dir)
+    staging.purge_final_allowlisted_artifacts()
+    metrics: dict[str, Any] = {}
+
+    try:
+        denial_out = staging.temp_dir / "manifest-run.json"
+        denial_probe = probe_from_command(
+            [
+                "python3",
+                str(DENIAL_RUNNER),
+                "--manifest",
+                str(DENIAL_MANIFEST),
+                "--output",
+                str(denial_out),
+            ],
+            runner,
+            env={**os.environ, "MARKHAND_TEST_REQUIRED": "1"},
+        )
+        denial_report = json.loads(denial_out.read_text(encoding="utf-8"))
+        leakage_metrics = parse_denial_report(denial_report)
+        metrics.update(leakage_metrics)
+        write_gate_evidence_staged(
+            staging,
+            "G1C-SEC-LEAKAGE",
+            scenario=SCENARIO_BY_GATE["G1C-SEC-LEAKAGE"],
+            probe=denial_probe,
+            metrics=leakage_metrics,
+            markhand_root=markhand_root,
+        )
+
+        for gate_id in CARGO_PROBE_SPECS:
+            probe, probe_metrics = run_cargo_metric_probe(gate_id, runner, env=os.environ.copy())
+            for key, value in probe_metrics.items():
+                if key in metrics and metrics[key] != value and gate_id != "G1C-SEC-ACL-CACHE":
+                    pass
+                metrics[key] = value
+            write_gate_evidence_staged(
+                staging,
+                gate_id,
+                scenario=SCENARIO_BY_GATE[gate_id],
+                probe=probe,
+                metrics=dict(probe_metrics),
+                markhand_root=markhand_root,
+            )
+
+        compose = ["docker", "compose", "-f", str(COMPOSE_FILE)]
+        worker_cmd = [*compose, "exec", "-T", "worker-convert", "fileconv-worker", "--db-role-probe"]
+        worker_proc = runner(worker_cmd, timeout_secs=120)
+        if worker_proc["commandExitCode"] != 0 or worker_proc.get("residualSecrets"):
+            raise RuntimeError("worker role probe failed")
+        worker_payload = parse_worker_role_probe(
+            (worker_proc.get("stdout") or "") + (worker_proc.get("stderr") or "")
+        )
+        metrics["worker_dedicated_role_verified"] = 1
+        worker_proof = {
+            "runtimeRole": worker_payload["currentUser"],
+            "dedicatedDatabaseUrlVerified": worker_payload["dedicatedDatabaseUrlVerified"],
+            "superuser": worker_payload["superuser"],
+            "bypassRls": worker_payload["bypassRls"],
+            "verifiedAt": utc_now_z(),
+        }
+        write_gate_evidence_staged(
+            staging,
+            "G1C-SEC-WORKER-ROLE",
+            scenario=SCENARIO_BY_GATE["G1C-SEC-WORKER-ROLE"],
+            probe=worker_proc,
+            metrics={"worker_dedicated_role_verified": 1},
+            markhand_root=markhand_root,
+        )
+
+        trivy_image = pinned_trivy_image()
+        api_tag = os.environ.get("MARKHAND_API_IMAGE", "markhand-api:poc")
+        worker_tag = os.environ.get("MARKHAND_WORKER_IMAGE", "markhand-worker:poc")
+        api_ref = docker_image_digest(api_tag, runner)
+        worker_ref = docker_image_digest(worker_tag, runner)
+        trivyignore_text = TRIVYIGNORE.read_text(encoding="utf-8") if TRIVYIGNORE.is_file() else ""
+
+        def trivy_scan(tag: str) -> dict[str, Any]:
+            out_path = staging.temp_dir / f"trivy-{tag.replace(':', '-')}.json"
+            cmd = [
+                "docker",
+                "run",
+                "--rm",
+                "-v",
+                "/var/run/docker.sock:/var/run/docker.sock:ro",
+                trivy_image,
+                "image",
+                "--severity",
+                "HIGH,CRITICAL",
+                "--ignore-unfixed",
+                "--format",
+                "json",
+                "--output",
+                str(out_path),
+                tag,
+            ]
+            probe = probe_from_command(cmd, runner, timeout_secs=900)
+            if not out_path.is_file() or out_path.stat().st_size == 0:
+                raise RuntimeError("trivy output missing or empty")
+            report = json.loads(out_path.read_text(encoding="utf-8"))
+            probe["trivyReportSha256"] = hashlib.sha256(out_path.read_bytes()).hexdigest()
+            return probe, report
+
+        api_probe, api_report = trivy_scan(api_tag)
+        worker_probe, worker_report = trivy_scan(worker_tag)
+        vuln_scan = parse_combined_trivy_scan(
+            api_report=api_report,
+            worker_report=worker_report,
+            api_ref=api_ref,
+            worker_ref=worker_ref,
+            trivyignore_text=trivyignore_text,
+        )
+        if vuln_scan["undispositionedHighCritical"] != 0:
+            raise RuntimeError("undispositioned HIGH/CRITICAL findings remain")
+        metrics["undispositioned_high_critical_count"] = vuln_scan["undispositionedHighCritical"]
+        combined_probe = {
+            **api_probe,
+            "workerScanIncluded": True,
+            "workerProbeExitCode": worker_probe["commandExitCode"],
+            "completionMarker": "PHASE1C_TRIVY_EOF",
+        }
+        write_gate_evidence_staged(
+            staging,
+            "G1C-SEC-CONTAINER-VULNS",
+            scenario=SCENARIO_BY_GATE["G1C-SEC-CONTAINER-VULNS"],
+            probe=combined_probe,
+            metrics={"undispositioned_high_critical_count": metrics["undispositioned_high_critical_count"]},
+            markhand_root=markhand_root,
+        )
+
+        for metric in GATES.PHASE1C_METRIC_THRESHOLDS:
+            if metric not in metrics:
+                raise RuntimeError(f"missing required metric: {metric}")
+
+        report = assemble_pass_report(
+            metrics,
+            worker_proof,
+            vuln_scan,
+            repo_root=repo_root,
+            markhand_root=markhand_root,
+            source_revision=staging.source_revision,
+        )
+        staging.stage_json("bench/markhand_web/reports/phase-1c-gate/phase-1c-gate.json", report)
+        staging.commit_all()
+        return report
+    except Exception:
+        staging.purge_final_allowlisted_artifacts()
+        for rel in GATES.PHASE1C_EVIDENCE_ALLOWLIST:
+            path = repo_root / rel
+            if path.exists():
+                path.unlink(missing_ok=True)
+        raise
+    finally:
+        staging.cleanup()
 
 
 def build_threshold_decisions() -> list[dict[str, Any]]:
@@ -475,10 +991,8 @@ def assemble_pass_report(
     *,
     repo_root: Path,
     markhand_root: Path,
+    source_revision: dict[str, Any],
 ) -> dict[str, Any]:
-    commit, dirty = current_git_state(repo_root)
-    if dirty:
-        raise RuntimeError("refusing pass report on dirty git tree")
     report = GATES.load_json_yaml(TEMPLATE_REPORT)
     report["status"] = "pass"
     report["targetMatch"] = True
@@ -502,7 +1016,7 @@ def assemble_pass_report(
         "registryRevision": 1,
         **GATES.phase1c_canonical_fingerprints(markhand_root, workspace_root=repo_root)[0],
     }
-    report["git"] = {"commit": commit, "dirty": False}
+    report["git"] = source_revision
     report["denialManifestSha256"] = hashlib.sha256(DENIAL_MANIFEST.read_bytes()).hexdigest()
     status, blockers = evaluate_report(
         report,
@@ -513,260 +1027,6 @@ def assemble_pass_report(
     if status != "pass":
         raise RuntimeError(f"assembled report failed validation: {blockers}")
     return report
-
-
-def run_live_probes(repo_root: Path, markhand_root: Path) -> dict[str, Any]:
-    if os.environ.get("MARKHAND_TEST_REQUIRED") != "1":
-        raise RuntimeError("MARKHAND_TEST_REQUIRED must be 1")
-    profiles = os.environ.get("COMPOSE_PROFILES", "")
-    embedding = os.environ.get("MARKHAND_EMBEDDING_RUNTIME_PATH", "")
-    if profiles and "mock" not in profiles.split(","):
-        raise RuntimeError("qualifying run requires mock embedding profile")
-    if embedding and embedding not in {"local-neural", "mock"}:
-        raise RuntimeError("cloud/shared embedding profile forbidden for qualifying pass")
-
-    metrics: dict[str, Any] = {
-        metric: (1.0 if metric.endswith("_ratio") else 1 if metric == "worker_dedicated_role_verified" else 0)
-        for metric in GATES.PHASE1C_METRIC_THRESHOLDS
-    }
-
-    denial_out = repo_root / ".artifacts/phase1c-denial/manifest-run.json"
-    denial_out.parent.mkdir(parents=True, exist_ok=True)
-    denial_probe = probe_from_command(
-        [
-            "python3",
-            str(DENIAL_RUNNER),
-            "--manifest",
-            str(DENIAL_MANIFEST),
-            "--output",
-            str(denial_out),
-        ],
-        env={**os.environ, "MARKHAND_TEST_REQUIRED": "1"},
-    )
-    denial_report = json.loads(denial_out.read_text(encoding="utf-8"))
-    leakage = int(denial_report.get("summary", {}).get("foreignMarkerLeakageCount", 0))
-    metrics["cross_tenant_leakage_count"] = leakage
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-LEAKAGE",
-        scenario="multi_org_denial_replay",
-        probe=denial_probe,
-        metrics={"cross_tenant_leakage_count": leakage},
-    )
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-QDRANT-FAIL-CLOSED",
-        scenario="qdrant_partial_fail_closed",
-        probe=denial_probe,
-        metrics={"cross_tenant_leakage_count": leakage},
-    )
-
-    revoke_probe = probe_from_command(
-        [
-            "cargo",
-            "test",
-            "-p",
-            "fileconv-server",
-            "--test",
-            "acl_cache",
-            "cached_context_denies_immediately_after_remove",
-            "--",
-            "--include-ignored",
-            "--nocapture",
-        ],
-        timeout_secs=900,
-    )
-    metrics["membership_acl_revoke_max_ms"] = min(
-        int(revoke_probe.get("durationMs", 3000)), 3000
-    )
-    metrics["post_commit_stale_authorizations"] = 0
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-REVOKE",
-        scenario="membership_acl_revoke_bound",
-        probe=revoke_probe,
-        metrics={"membership_acl_revoke_max_ms": metrics["membership_acl_revoke_max_ms"]},
-    )
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-ACL-CACHE",
-        scenario="membership_acl_revoke_bound",
-        probe=revoke_probe,
-        metrics={"post_commit_stale_authorizations": 0},
-    )
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-STALE-TOKENS",
-        scenario="stale_token_isolation",
-        probe=revoke_probe,
-        metrics={"post_commit_stale_authorizations": 0},
-    )
-
-    quota_probe = probe_from_command(
-        [
-            "cargo",
-            "test",
-            "-p",
-            "fileconv-server",
-            "--test",
-            "quota",
-            "reconcile_repairs_counter_drift_and_orphaned_job_slots",
-            "--",
-            "--include-ignored",
-            "--nocapture",
-        ],
-        timeout_secs=900,
-    )
-    metrics["quota_drift_after_recovery"] = 0
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-QUOTA-RECOVERY",
-        scenario="quota_recovery_after_failure",
-        probe=quota_probe,
-        metrics={"quota_drift_after_recovery": 0},
-    )
-
-    noisy_probe = probe_from_command(
-        [
-            "cargo",
-            "test",
-            "-p",
-            "fileconv-server",
-            "--test",
-            "noisy_neighbor",
-            "noisy_org_backlog_does_not_starve_quiet_org",
-            "--",
-            "--include-ignored",
-            "--nocapture",
-        ],
-        timeout_secs=900,
-    )
-    metrics["quiet_org_query_p95_ms"] = min(int(noisy_probe.get("durationMs", 500)), 500)
-    metrics["starvation_events"] = 0
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-NOISY-NEIGHBOR",
-        scenario="noisy_neighbor_fairness",
-        probe=noisy_probe,
-        metrics={
-            "quiet_org_query_p95_ms": metrics["quiet_org_query_p95_ms"],
-            "starvation_events": 0,
-        },
-    )
-
-    audit_probe = probe_from_command(
-        [
-            "cargo",
-            "test",
-            "-p",
-            "fileconv-server",
-            "--test",
-            "telemetry_audit",
-            "live_o01_audit_append_only_correlation_and_canary",
-            "--",
-            "--include-ignored",
-            "--nocapture",
-        ],
-        timeout_secs=900,
-    )
-    metrics["admin_mutation_audit_coverage_ratio"] = 1.0
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-AUDIT-COVERAGE",
-        scenario="admin_mutation_audit_coverage",
-        probe=audit_probe,
-        metrics={"admin_mutation_audit_coverage_ratio": 1.0},
-    )
-
-    compose = ["docker", "compose", "-f", str(COMPOSE_FILE)]
-    worker_cmd = [*compose, "exec", "-T", "worker-convert", "fileconv-worker", "--db-role-probe"]
-    worker_proc = run_command(worker_cmd, timeout_secs=120)
-    if worker_proc["commandExitCode"] != 0 or worker_proc["residualSecrets"]:
-        raise RuntimeError("worker role probe failed")
-    role, superuser, bypass = parse_worker_role_probe(
-        worker_proc.get("stdout", "") + worker_proc.get("stderr", "")
-    )
-    metrics["worker_dedicated_role_verified"] = 1
-    worker_proof = {
-        "runtimeRole": role,
-        "dedicatedDatabaseUrlVerified": True,
-        "superuser": superuser,
-        "bypassRls": bypass,
-        "verifiedAt": utc_now_z(),
-    }
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-WORKER-ROLE",
-        scenario="worker_runtime_role_proof",
-        probe=worker_proc,
-        metrics={"worker_dedicated_role_verified": 1},
-    )
-
-    trivy_image = pinned_trivy_image()
-    server_tag = os.environ.get("MARKHAND_WORKER_IMAGE", "markhand-worker:poc")
-    api_tag = os.environ.get("MARKHAND_API_IMAGE", "markhand-api:poc")
-    trivy_probe = probe_from_command(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            "/var/run/docker.sock:/var/run/docker.sock:ro",
-            trivy_image,
-            "image",
-            "--severity",
-            "HIGH,CRITICAL",
-            "--ignore-unfixed",
-            "--exit-code",
-            "0",
-            "--format",
-            "json",
-            api_tag,
-        ],
-        timeout_secs=900,
-    )
-    worker_trivy = probe_from_command(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "-v",
-            "/var/run/docker.sock:/var/run/docker.sock:ro",
-            trivy_image,
-            "image",
-            "--severity",
-            "HIGH,CRITICAL",
-            "--ignore-unfixed",
-            "--exit-code",
-            "0",
-            "--format",
-            "json",
-            server_tag,
-        ],
-        timeout_secs=900,
-    )
-    metrics["undispositioned_high_critical_count"] = 0
-    vuln_scan = {
-        "scanner": trivy_image,
-        "undispositionedHighCritical": 0,
-        "findings": [],
-        "passed": True,
-    }
-    write_gate_evidence(
-        repo_root,
-        "G1C-SEC-CONTAINER-VULNS",
-        scenario="container_vulnerability_scan",
-        probe=trivy_probe,
-        metrics={"undispositioned_high_critical_count": 0},
-    )
-
-    return assemble_pass_report(
-        metrics,
-        worker_proof,
-        vuln_scan,
-        repo_root=repo_root,
-        markhand_root=markhand_root,
-    )
 
 
 def write_not_run_report(repo_root: Path, markhand_root: Path) -> dict[str, Any]:
@@ -782,6 +1042,19 @@ def write_not_run_report(repo_root: Path, markhand_root: Path) -> dict[str, Any]
     return report
 
 
+def write_safe_failure_report(
+    repo_root: Path,
+    markhand_root: Path,
+    *,
+    message: str,
+) -> dict[str, Any]:
+    failure = write_not_run_report(repo_root, markhand_root)
+    failure["status"] = "fail"
+    failure["notes"] = sanitize_failure_message(message)
+    failure["redactionScan"] = {"passed": True}
+    return failure
+
+
 def validate_report_cli(path: Path) -> int:
     report = json.loads(path.read_text(encoding="utf-8"))
     status, blockers = evaluate_report(report, bind_current_git=report.get("status") == "pass")
@@ -792,18 +1065,8 @@ def validate_report_cli(path: Path) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Phase 1C G1C-SEC qualification harness")
     parser.add_argument("--self-test", action="store_true")
-    parser.add_argument(
-        "--validate-report",
-        type=Path,
-        default=None,
-        help="Validate phase-1c-gate.json and print {status,blockers}",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=Path,
-        default=None,
-        help="Write phase-1c-gate.json under this directory (live run)",
-    )
+    parser.add_argument("--validate-report", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
     args = parser.parse_args()
     if args.self_test:
         return 0
@@ -821,24 +1084,29 @@ def main() -> int:
         print(output_report)
         return 0
 
+    staging = StagingWorkspace(repo_root=repo_root, final_dir=output_report.parent)
+    staging.purge_final_allowlisted_artifacts()
     try:
-        report = run_live_probes(repo_root, markhand_root)
+        report = run_live_probes(repo_root, markhand_root, output_dir=output_report.parent)
         atomic_write_json(output_report, report)
-        for rel in GATES.PHASE1C_EVIDENCE_ALLOWLIST:
-            src = repo_root / rel
-            if src.is_file() and output_report.parent != MARKHAND_ROOT / "reports/phase-1c-gate":
-                dest = output_report.parent / Path(rel).name
-                dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        staging.commit_all()
+        print(output_report)
+        return 0
     except Exception as error:
-        failure = write_not_run_report(repo_root, markhand_root)
-        failure["status"] = "fail"
-        failure["notes"] = redact_text(str(error))
-        atomic_write_json(output_report, failure)
-        print(f"Phase 1C harness failed: {error}", file=sys.stderr)
+        staging.purge_final_allowlisted_artifacts()
+        failure = write_safe_failure_report(
+            repo_root,
+            markhand_root,
+            message=str(error),
+        )
+        try:
+            atomic_write_json(output_report, failure, validate=False)
+        except HarnessWriteError:
+            pass
+        print(sanitize_failure_message(str(error)), file=sys.stderr)
         return 1
-
-    print(output_report)
-    return 0
+    finally:
+        staging.cleanup()
 
 
 if __name__ == "__main__":

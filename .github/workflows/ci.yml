@@ -467,16 +467,6 @@ jobs:
           exit_code=$?
           echo "teardown_exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           exit 0
-      - name: Upload Phase 1C gate evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: phase1c-g1c-security-gate-${{ github.sha }}
-          path: |
-            ${{ runner.temp }}/markhand-phase1c-gate/**
-            bench/markhand_web/reports/phase-1c-gate/**
-          if-no-files-found: warn
-          retention-days: 30
       - name: Enforce G1C gate
         if: always()
         run: |
@@ -494,9 +484,19 @@ jobs:
           fi
           MARKHAND_PHASE1C_GATE=1 \
           MARKHAND_PHASE1C_REPORT_PATH="${MARKHAND_PHASE1C_OUTPUT_DIR}/phase-1c-gate.json" \
+          GITHUB_SHA="${{ github.sha }}" \
           cargo test -p fileconv-server --test e2e_phase1c_gate -- --ignored e2e_phase1c_gate --nocapture \
             || fail=1
           exit "$fail"
+      - name: Upload Phase 1C gate evidence
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase1c-g1c-security-gate-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/markhand-phase1c-gate/**
+          if-no-files-found: warn
+          retention-days: 30
 
   # Phase 1C exit-gate infrastructure (1C-12 denial suite / 1C-13 security-load
   # gate; bench/markhand_web/gates.yaml, failureDisposition block-phase-1c).

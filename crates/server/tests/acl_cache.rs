@@ -13,6 +13,7 @@ mod common;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use common::phase1c_probe::{elapsed_ms, emit_probe_result};
 use common::{
     acl_fixture::{
         boot_acl_pool, grant_group_access, insert_collection, resolver_allowed_collection_ids,
@@ -28,6 +29,7 @@ use fileconv_server::db::models::AccessLevel;
 use fileconv_server::db::pool::with_org_txn;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
+use std::time::Instant;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -189,6 +191,11 @@ async fn cached_context_denies_immediately_after_role_downgrade() {
         "cached context must not outlive a role downgrade that drops member.manage"
     );
 
+    emit_probe_result(
+        "acl_cache_invalidation",
+        json!({ "post_commit_stale_authorizations": 0 }),
+    );
+
     ephemeral.drop().await;
 }
 
@@ -266,6 +273,7 @@ async fn cached_context_denies_immediately_after_remove() {
     let status = send(&app, "GET", "/api/v1/members", &admin_token, None).await;
     assert_eq!(status, StatusCode::OK);
 
+    let revoke_started = Instant::now();
     let status = send(
         &app,
         "DELETE",
@@ -285,6 +293,14 @@ async fn cached_context_denies_immediately_after_remove() {
         status,
         StatusCode::FORBIDDEN,
         "cached context must not outlive a hard removal"
+    );
+
+    emit_probe_result(
+        "membership_revoke_bound",
+        json!({
+            "membership_acl_revoke_max_ms": elapsed_ms(revoke_started),
+            "post_commit_stale_authorizations": 0,
+        }),
     );
 
     ephemeral.drop().await;
