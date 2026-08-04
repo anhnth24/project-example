@@ -14,7 +14,8 @@ use std::process::Command;
 use serde_json::Value;
 
 const PHASE1C_REPORT: &str = "bench/markhand_web/reports/phase-1c-gate/phase-1c-gate.json";
-const PHASE1C_TEMPLATE: &str = "bench/markhand_web/reports/phase-1c-gate/phase-1c-gate.template.json";
+const PHASE1C_TEMPLATE: &str =
+    "bench/markhand_web/reports/phase-1c-gate/phase-1c-gate.template.json";
 const PHASE1C_HARNESS: &str = "bench/markhand_web/scripts/run_phase1c_gate.py";
 
 fn workspace_root() -> PathBuf {
@@ -109,7 +110,9 @@ fn e2e_phase1c_gate_default_is_not_run() {
         let (status, blockers, _code) = validate_report_via_python(&path);
         assert_eq!(status, "not_run");
         assert!(
-            blockers.iter().any(|b| b.contains("harness_not_implemented") || b.contains("template")),
+            blockers
+                .iter()
+                .any(|b| b.contains("harness_not_implemented") || b.contains("template")),
             "template validation blockers: {blockers:?}"
         );
         return;

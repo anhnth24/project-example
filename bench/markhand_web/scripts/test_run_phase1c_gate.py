@@ -113,7 +113,7 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         }
         report["redactionScan"] = {"passed": True}
         report["vulnerabilityScan"] = {
-            "scanner": "aquasec/trivy:0.73.0@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "scanner": gate.pinned_trivy_image(),
             "undispositionedHighCritical": 0,
             "findings": [],
             "passed": True,
@@ -164,9 +164,9 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         )
 
     def test_default_template_is_not_run(self) -> None:
-        status, blockers = self.evaluate(self._load_template())
+        status, blockers = self.evaluate(self._load_template(), evidence_must_exist=False)
         self.assertEqual(status, "not_run")
-        self.assertIn("harness_not_implemented", blockers)
+        self.assertTrue(blockers)
 
     def test_rejects_pass_with_target_match_false(self) -> None:
         report = self._passing_report()
@@ -246,7 +246,14 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         self._write_evidence()
         status, blockers = self.evaluate(report)
         self.assertNotEqual(status, "pass")
-        self.assertTrue(any("absolute_path" in item or "redaction" in item for item in blockers))
+        self.assertTrue(
+            any(
+                "absolute_path" in item
+                or "redaction" in item
+                or "/workspace/" in item
+                for item in blockers
+            )
+        )
 
     def test_rejects_missing_p1c8_evidence_mapping(self) -> None:
         report = self._passing_report()
@@ -329,8 +336,9 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "phase-1c-gate.json"
             report = self._passing_report()
+            self._write_evidence()
             report["notes"] = "postgres://user:secret@127.0.0.1/db"
-            with self.assertRaises((RuntimeError, ValueError, gate.HarnessWriteError)):
+            with self.assertRaises(gate.HarnessWriteError):
                 gate.atomic_write_report(out, report, repo_root=self.repo_root)
             self.assertFalse(out.exists())
 

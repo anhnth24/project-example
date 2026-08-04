@@ -38,7 +38,7 @@ async fn main() {
         .any(|argument| argument == "--help" || argument == "-h")
     {
         println!(
-            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nOptions:\n  --check-config                    Validate worker env/config and exit\n  --sandbox-preflight               Probe convert sandbox isolation and exit\n  --sandbox-convert-probe <file>    Convert one file through the production sandbox and exit"
+            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nOptions:\n  --check-config                    Validate worker env/config and exit\n  --db-role-probe                   Query pg_roles/current_user via worker DB URL and exit\n  --sandbox-preflight               Probe convert sandbox isolation and exit\n  --sandbox-convert-probe <file>    Convert one file through the production sandbox and exit"
         );
         return;
     }
@@ -60,6 +60,17 @@ async fn main() {
                 return;
             }
             Err(error) => exit_with_error(format!("sandbox preflight failed: {error}")),
+        }
+    }
+    if args.iter().any(|argument| argument == "--db-role-probe") {
+        match fileconv_server::config::ServerConfig::from_worker_env() {
+            Ok(config) => {
+                if let Err(error) = run_db_role_probe(&config).await {
+                    exit_with_error(error);
+                }
+                return;
+            }
+            Err(error) => exit_with_error(format!("invalid worker configuration: {error}")),
         }
     }
     match fileconv_server::config::ServerConfig::from_worker_env() {
@@ -88,6 +99,41 @@ async fn main() {
             exit_with_error(format!("invalid worker configuration: {error}"));
         }
     }
+}
+
+async fn run_db_role_probe(config: &fileconv_server::config::ServerConfig) -> Result<(), String> {
+    let endpoints = config
+        .runtime_endpoints()
+        .map_err(|error| error.to_string())?;
+    let database_url = endpoints.database_url.expose();
+    let pool = create_pool(database_url).map_err(|error| error.to_string())?;
+    let client = pool.get().await.map_err(|error| error.to_string())?;
+    let row = client
+        .query_one(
+            "SELECT current_user::text, rolsuper, rolbypassrls
+             FROM pg_roles
+             WHERE rolname = current_user",
+            &[],
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let current_user: String = row.get(0);
+    let rolsuper: bool = row.get(1);
+    let rolbypassrls: bool = row.get(2);
+    println!("PHASE1C_WORKER_ROLE_PROBE\t{current_user}\t{rolsuper}\t{rolbypassrls}");
+    println!("PHASE1C_WORKER_ROLE_PROBE_EOF\ttrue");
+    if current_user != "markhand_worker" {
+        return Err(format!(
+            "worker runtime role must be markhand_worker, got {current_user}"
+        ));
+    }
+    if rolsuper {
+        return Err("worker runtime role must not be superuser".to_string());
+    }
+    if rolbypassrls {
+        return Err("worker runtime role must not bypass RLS".to_string());
+    }
+    Ok(())
 }
 
 fn sandbox_convert_probe_arg(args: &[String]) -> Result<Option<&str>, String> {

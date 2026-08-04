@@ -819,6 +819,27 @@ services:
     pids_limit: ${MARKHAND_WORKER_PIDS_LIMIT:-512}
     restart: "no"
 
+  # Digest-pinned vulnerability scanner for G1C-SEC-CONTAINER-VULNS (Task 16).
+  # Harness invokes via `docker compose --profile scan run --rm trivy-scanner …`
+  # or direct `docker run` with the same image ref from deploy/poc/images.lock.json.
+  trivy-scanner:
+    profiles: ["scan"]
+    image: aquasec/trivy:0.73.0@sha256:4bbf3824d974b70f27631005e2e6194d4d8fbd6e72c4a9e04cf521e25c5cb07f
+    entrypoint: ["trivy"]
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    mem_limit: 512m
+    pids_limit: 128
+    restart: "no"
+
 networks:
   edge:
     driver: bridge
