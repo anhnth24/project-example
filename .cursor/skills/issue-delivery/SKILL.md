@@ -19,9 +19,10 @@ evidence, and status transitions.
 2. **Gate on readiness and authoritative scope.** Verify the authoritative issue,
    dependencies, owner, consumer boundaries, and security assessment. Treat the approved
    issue scope and exclusions as authoritative. If any Ready condition is absent, or code
-   reality contradicts the recorded scope, stop before implementation, retain or restore
-   `Backlog`/`Blocked`, and hand the record to `issue-creator` for revision and reapproval.
-   Do not infer approval, evidence, or permission to broaden the issue.
+   reality contradicts the recorded scope, stop before implementation and report the exact
+   gap without mutating files on the base branch. Hand the record to `issue-creator` to
+   revise status/scope on the proper branch and obtain reapproval. Do not infer approval,
+   evidence, or permission to broaden the issue.
 3. **Create or reuse the issue branch before file mutation.** Start from the required base
    branch and follow repository branch policy before creating the plan or changing catalog,
    roadmap, code, tests, or docs. Keep one issue per branch and logical PR.
@@ -35,11 +36,12 @@ evidence, and status transitions.
    cancellation/idempotency, security/migration/rollback, observability, docs, and tests.
    Escalate unclear product or destructive choices instead of guessing.
 6. **Start implementation explicitly.** After the complete plan is linked and immediately
-   before the first production-code change, set the plan and catalog to `In progress` and
-   regenerate affected roadmap metadata. The evidence for this transition is a revalidated
-   Ready issue plus the linked plan. Then implement only the mapped outcome; do not bundle
-   cleanup, depend on `vendor/markitdown-rs`, change intentional pins without issue-backed
-   justification, or omit lockfile updates.
+   before the first production-code change, set the plan to `In progress`. Implement only
+   the mapped outcome; do not bundle cleanup, depend on `vendor/markitdown-rs`, change
+   intentional pins without issue-backed justification, or omit lockfile updates. Once an
+   actual scoped code/test change proves implementation has begun, set the catalog to
+   `In progress` and regenerate affected roadmap metadata. Never change catalog/roadmap
+   status without the corresponding evidence required by `CONTRIBUTING.md`.
 7. **Apply mandatory security controls.** Trigger the required review for the areas named
    in `delivery.md`. Never self-approve exceptions or expose credentials, signed URLs,
    customer documents, model artifacts, prompts, PII, content, or secret-bearing logs.
@@ -59,10 +61,11 @@ evidence, and status transitions.
    dependencies, final PR/commit references, commands, environment, artifacts, and
    blockers in the same closure change. Merge alone is not `Done`; use `Blocked` when a
    required external gate cannot proceed.
-11. **Synchronize external state only when authorized.** Feature-branch Markdown may
-   temporarily lead the remote tracker; do not claim remote consistency before the
-   canonical change is merged and synchronization is verified. Then use the repository
-   synchronizer to update/close the GitHub issue from the catalog. Do not create
-   issues/milestones,
+11. **Synchronize external state only when authorized.** Initial issue creation or update
+   triggered by canonical draft approval belongs to `issue-creator`; do not repeat or
+   override it during delivery. For delivery lifecycle transitions, feature-branch
+   Markdown may temporarily lead the remote tracker. After the canonical change is merged,
+   use the repository synchronizer when authorized, verify the remote result, and only
+   then claim consistency. Do not create issues/milestones,
     deploy, release, or change remote tracking state unless the issue and user authorization
     require it. Report what is proven and what remains.
