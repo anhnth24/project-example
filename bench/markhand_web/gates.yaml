@@ -469,7 +469,7 @@
       "blocksIssues": [
         "1C-12"
       ],
-      "notes": "Multi-org denial suite: cross-org ACL/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/cache/audit/worker/reconcile, in-flight ACL revoke, and token/org-switch isolation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-12). CI half runs the canonical manifest runner inside rust-integration; the deployed half runs the same runner in deployed-1c-integration (.github/workflows/ci.yml) against deploy/compose.poc.yml with MARKHAND_TEST_REQUIRED=1. Export is N/A-until-surface-exists (na-export-route-absent in multi-org-denial.manifest.json; OpenAPI/guard inventory contain no export operation — any future export operation must enter guard inventory + denial manifest before release). Deployed half PASS on run 30849375921 (job 91805590040, 2026-08-03T20:16:04Z–20:49:11Z): 74 executable / 5 N/A / 0 deferred, 15 binaries, runner=0, teardown=0, failures=0, leakage=0, redaction pass — evidence plans/reports/gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.{json,md} (artifact gitShaFull 67d27b7ced3c04f25c62f299ed9a50be95009b47; branch head at run bae0f585c2a84d2222b966f8dc620101a68d72f9). MinIO root in the test harness is fixture-only for ephemeral buckets; runtime API/workers remain narrow — NOT MinIO IAM least-privilege evidence. 1C-12 remains In progress: same labeled run's rust-integration flaked while prior run 30843983333 passed; CI-half stability required before Done. Phase 1C exit gate still requires 1C-12 AND 1C-13 green on both CI and deployed environment; 1C-13 evidence not_run."
+      "notes": "Multi-org denial suite: cross-org ACL/FTS/vector/Q&A/citation/preview/download/export/jobs/SSE/cache/audit/worker/reconcile, in-flight ACL revoke, and token/org-switch isolation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-12). CI half runs the canonical manifest runner inside rust-integration; the deployed half runs the same runner in deployed-1c-integration (.github/workflows/ci.yml) against deploy/compose.poc.yml with MARKHAND_TEST_REQUIRED=1. Export is N/A-until-surface-exists (na-export-route-absent in multi-org-denial.manifest.json; OpenAPI/guard inventory contain no export operation \u2014 any future export operation must enter guard inventory + denial manifest before release). Deployed half PASS on run 30849375921 (job 91805590040, 2026-08-03T20:16:04Z\u201320:49:11Z): 74 executable / 5 N/A / 0 deferred, 15 binaries, runner=0, teardown=0, failures=0, leakage=0, redaction pass \u2014 evidence plans/reports/gate-run-260803-2049-markhand-web-phase1c-denial-suite-report.{json,md} (artifact gitShaFull 67d27b7ced3c04f25c62f299ed9a50be95009b47; branch head at run bae0f585c2a84d2222b966f8dc620101a68d72f9). MinIO root in the test harness is fixture-only for ephemeral buckets; runtime API/workers remain narrow \u2014 NOT MinIO IAM least-privilege evidence. 1C-12 remains In progress: same labeled run's rust-integration flaked while prior run 30843983333 passed; CI-half stability required before Done. Phase 1C exit gate still requires 1C-12 AND 1C-13 green on both CI and deployed environment; 1C-13 evidence not_run."
     },
     {
       "id": "1C-13",
@@ -495,7 +495,291 @@
       "blocksIssues": [
         "1C-13"
       ],
-      "notes": "Security/revoke/load gate: token/revoke/cache/Qdrant-partial/reconcile/quota/noisy-neighbor/supply-chain suite, threat review, external pentest, and load SLO validation (plans/markhand-web/backlog/phase-1c/issues/README.md, issue 1C-13; depends on 1C-10/11/12). [Unverified] whether a dedicated noisy-neighbor/pentest harness exists beyond prose today. Shares deployed-1c-integration boot/teardown with 1C-12 but remains explicitly not_run in the Markdown artifact until a dedicated suite lands; command and threshold are placeholders — this registry command is not executed by deployed-1c-integration today. Phase 1C exit gate requires 1C-12 AND 1C-13 green on both CI and deployed environment."
+      "notes": "Aggregate Phase 1C security/load exit gate (issue 1C-13). Qualifying metrics are decomposed into G1C-SEC-* rows on phase1c-multi-org-poc; this entry remains the rollup placeholder until Task 16 harness produces measured evidence. Command/threshold here are not executed by deployed-1c-integration today. Depends on 1C-10/11/12. Phase 1C exit requires 1C-12 AND all G1C-SEC-* gates green on CI and deployed environment with targetMatch=true. Evidence not_run."
+    },
+    {
+      "id": "G1C-SEC-LEAKAGE",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "cross_tenant_leakage_count",
+        "unit": "count",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 0
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "security-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/leakage.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Zero cross-tenant leakage under multi-org qualifying load on phase1c-multi-org-poc. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-REVOKE",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "membership_acl_revoke_max_ms",
+        "unit": "milliseconds",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "<=",
+        "value": 3000
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "operations-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/revoke.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Membership/ACL revoke bound <=3000 ms on deployed POC. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-ACL-CACHE",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "post_commit_stale_authorizations",
+        "unit": "count",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 0
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "security-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/acl-cache.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Zero stale authorizations after ACL cache invalidation. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-QUOTA-RECOVERY",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "quota_drift_after_recovery",
+        "unit": "count",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 0
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "operations-owner",
+      "approver": "operations-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/quota-recovery.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Zero quota drift after crash/retry/cancel recovery. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-NOISY-NEIGHBOR",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "quiet_org_query_p95_ms",
+        "unit": "milliseconds",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "<=",
+        "value": 500
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "operations-owner",
+      "approver": "operations-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/noisy-neighbor.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Quiet-org query P95 <=500 ms and zero starvation events under noisy-neighbor load. POC scope only; not Profile B scale. Evidence not_run until Task 16 harness.",
+      "metricContracts": [
+        {
+          "name": "quiet_org_query_p95_ms",
+          "unit": "milliseconds",
+          "statistic": "max",
+          "threshold": {
+            "operator": "<=",
+            "value": 500
+          },
+          "owner": "operations-owner",
+          "approver": "operations-owner"
+        },
+        {
+          "name": "starvation_events",
+          "unit": "count",
+          "statistic": "max",
+          "threshold": {
+            "operator": "==",
+            "value": 0
+          },
+          "owner": "operations-owner",
+          "approver": "operations-owner"
+        }
+      ]
+    },
+    {
+      "id": "G1C-SEC-AUDIT-COVERAGE",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "admin_mutation_audit_coverage_ratio",
+        "unit": "ratio",
+        "statistic": "min"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 1.0
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "security-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/audit-coverage.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Administrative mutation audit coverage ratio 1.0. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-WORKER-ROLE",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "worker_dedicated_role_verified",
+        "unit": "count",
+        "statistic": "min"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 1
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "operations-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/worker-role.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Deployed worker runtime role markhand_worker with dedicated DB URL. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-CONTAINER-VULNS",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "undispositioned_high_critical_count",
+        "unit": "count",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 0
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "security-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/container-vulns.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Zero undispositioned high/critical container findings. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-STALE-TOKENS",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "post_commit_stale_authorizations",
+        "unit": "count",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 0
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "security-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/stale-tokens.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Token rotation/reuse/revoke isolation; zero stale authorization after revoke. Evidence not_run until Task 16 harness."
+    },
+    {
+      "id": "G1C-SEC-QDRANT-FAIL-CLOSED",
+      "externalGate": "G1C-SEC",
+      "metric": {
+        "name": "cross_tenant_leakage_count",
+        "unit": "count",
+        "statistic": "max"
+      },
+      "workload": "workloads.phase1c-multi-org",
+      "corpus": null,
+      "threshold": {
+        "operator": "==",
+        "value": 0
+      },
+      "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+      "environmentId": "phase1c-multi-org-poc",
+      "owner": "security-owner",
+      "approver": "security-owner",
+      "status": "approved",
+      "failureDisposition": "block-phase-1c",
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/qdrant-fail-closed.json",
+      "blocksIssues": [
+        "1C-13"
+      ],
+      "notes": "Qdrant timeout/partial failure remains authz-safe with zero leakage. Evidence not_run until Task 16 harness."
     }
   ]
 }

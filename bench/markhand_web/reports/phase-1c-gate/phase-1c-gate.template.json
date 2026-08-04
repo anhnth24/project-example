@@ -1,0 +1,261 @@
+{
+  "canonicalBinding": {
+    "environmentSha256": "dad44433ef987c9b5ac507aa1d61495ada6c03a030f55e38c56243ca17e9f706",
+    "gatesSha256": "76864900dd979e7684c0f6ec8289fb220d94fe7642f845581e31dce2443f40a3",
+    "registryRevision": 1,
+    "slaSha256": "106df904febee51ebc196a69f441deb3a5a27b8d1e9e7c7c00265f7205251763",
+    "thresholdDecisionsSha256": "f1141bb59ada52b1c5c2019df91841556b00390f4c28f24a3f16cbcd68e6f4cd",
+    "workloadSha256": "2d109a0e61455cc4b196ad1c03f20bab344681f24ea4328a3d13613cf53e6d47"
+  },
+  "command": "python3 bench/markhand_web/scripts/run_phase1c_gate.py",
+  "denialManifestSha256": "3f429ecc1262a4696572eea854f0ec7c82b541a8f174884c613dc2a1974c1e48",
+  "environmentId": "phase1c-multi-org-poc",
+  "gateResults": [
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/leakage.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-LEAKAGE",
+      "metric": "cross_tenant_leakage_count",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/revoke.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-REVOKE",
+      "metric": "membership_acl_revoke_max_ms",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/acl-cache.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-ACL-CACHE",
+      "metric": "post_commit_stale_authorizations",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/quota-recovery.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-QUOTA-RECOVERY",
+      "metric": "quota_drift_after_recovery",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/noisy-neighbor.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-NOISY-NEIGHBOR",
+      "metric": "quiet_org_query_p95_ms",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/audit-coverage.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-AUDIT-COVERAGE",
+      "metric": "admin_mutation_audit_coverage_ratio",
+      "pass": false,
+      "value": 0.0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/worker-role.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-WORKER-ROLE",
+      "metric": "worker_dedicated_role_verified",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/container-vulns.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-CONTAINER-VULNS",
+      "metric": "undispositioned_high_critical_count",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/stale-tokens.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-STALE-TOKENS",
+      "metric": "post_commit_stale_authorizations",
+      "pass": false,
+      "value": 0
+    },
+    {
+      "evidence": "bench/markhand_web/reports/phase-1c-gate/qdrant-fail-closed.json",
+      "externalGate": "G1C-SEC",
+      "failureDisposition": "block-phase-1c",
+      "gateId": "G1C-SEC-QDRANT-FAIL-CLOSED",
+      "metric": "cross_tenant_leakage_count",
+      "pass": false,
+      "value": 0
+    }
+  ],
+  "generatedAt": "2026-08-04T00:00:00Z",
+  "git": {
+    "commit": "a3f01cba1924874e9e03c39b131a43dec5f2e990",
+    "dirty": false
+  },
+  "metrics": {
+    "admin_mutation_audit_coverage_ratio": 0.0,
+    "cross_tenant_leakage_count": 0,
+    "membership_acl_revoke_max_ms": 0,
+    "post_commit_stale_authorizations": 0,
+    "quiet_org_query_p95_ms": 0,
+    "quota_drift_after_recovery": 0,
+    "starvation_events": 0,
+    "undispositioned_high_critical_count": 0,
+    "worker_dedicated_role_verified": 0
+  },
+  "redactionScan": {
+    "passed": false
+  },
+  "reportId": "phase1c-gate-template-not-run",
+  "status": "not_run",
+  "targetMatch": false,
+  "thresholdDecisions": [
+    {
+      "approver": "security-owner",
+      "metric": "cross_tenant_leakage_count",
+      "operator": "==",
+      "owner": "security-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "max",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "approver": "security-owner",
+      "metric": "post_commit_stale_authorizations",
+      "operator": "==",
+      "owner": "security-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "max",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "approver": "operations-owner",
+      "metric": "membership_acl_revoke_max_ms",
+      "operator": "<=",
+      "owner": "security-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "max",
+      "unit": "milliseconds",
+      "value": 3000
+    },
+    {
+      "approver": "operations-owner",
+      "metric": "quota_drift_after_recovery",
+      "operator": "==",
+      "owner": "operations-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "max",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "approver": "operations-owner",
+      "metric": "quiet_org_query_p95_ms",
+      "operator": "<=",
+      "owner": "operations-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "max",
+      "unit": "milliseconds",
+      "value": 500
+    },
+    {
+      "approver": "operations-owner",
+      "metric": "starvation_events",
+      "operator": "==",
+      "owner": "operations-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "max",
+      "unit": "count",
+      "value": 0
+    },
+    {
+      "approver": "security-owner",
+      "metric": "admin_mutation_audit_coverage_ratio",
+      "operator": "==",
+      "owner": "security-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "min",
+      "unit": "ratio",
+      "value": 1.0
+    },
+    {
+      "approver": "operations-owner",
+      "metric": "worker_dedicated_role_verified",
+      "operator": "==",
+      "owner": "security-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "min",
+      "unit": "count",
+      "value": 1
+    },
+    {
+      "approver": "security-owner",
+      "metric": "undispositioned_high_critical_count",
+      "operator": "==",
+      "owner": "security-owner",
+      "provenance": "docs/superpowers/plans/2026-07-31-phase1c-closure.md",
+      "provenanceKind": "repository-design-decision",
+      "recordedAt": "2026-08-04T00:00:00Z",
+      "source": "docs/markhand-web-sla-targets.md",
+      "statistic": "max",
+      "unit": "count",
+      "value": 0
+    }
+  ],
+  "version": 1,
+  "vulnerabilityScan": {
+    "findings": [],
+    "passed": false,
+    "scanner": "trivy",
+    "undispositionedHighCritical": 0
+  },
+  "workerProof": {
+    "bypassRls": false,
+    "dedicatedDatabaseUrlVerified": false,
+    "runtimeRole": "markhand_worker",
+    "superuser": false,
+    "verifiedAt": "2026-08-04T00:00:00Z"
+  },
+  "workloadProfileId": "phase1c-multi-org"
+}

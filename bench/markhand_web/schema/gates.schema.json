@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
   "required": ["version", "registryStatus", "gates"],
   "properties": {
     "version": {"const": 1},
@@ -9,10 +10,110 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
-          "id", "externalGate", "metric", "workload", "threshold", "command",
-          "environmentId", "owner", "approver", "status", "failureDisposition"
-        ]
+          "id",
+          "externalGate",
+          "metric",
+          "workload",
+          "threshold",
+          "command",
+          "environmentId",
+          "owner",
+          "approver",
+          "status",
+          "failureDisposition"
+        ],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "externalGate": {
+            "enum": [
+              "G0-ARCH",
+              "G0-RET",
+              "G0-SEC",
+              "G0-CAP",
+              "G0-SLO",
+              "G0-LIC",
+              "G1C-SEC"
+            ]
+          },
+          "metric": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "unit", "statistic"],
+            "properties": {
+              "name": {"type": "string", "minLength": 1},
+              "unit": {"type": "string", "minLength": 1},
+              "statistic": {"type": "string", "minLength": 1}
+            }
+          },
+          "workload": {"type": "string", "minLength": 1},
+          "corpus": {"type": ["string", "null"]},
+          "threshold": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["operator", "value"],
+            "properties": {
+              "operator": {"enum": [">=", ">", "<=", "<", "=="]},
+              "value": {"type": ["number", "null"]}
+            }
+          },
+          "command": {"type": "string", "minLength": 1},
+          "environmentId": {"type": "string", "minLength": 1},
+          "owner": {"type": "string", "minLength": 1},
+          "approver": {"type": "string", "minLength": 1},
+          "status": {
+            "enum": ["proposed", "approved", "measured", "failed", "waived"]
+          },
+          "failureDisposition": {
+            "enum": [
+              "block-phase-1b",
+              "block-phase-1c",
+              "block-phase-4",
+              "block-issue",
+              "research-only",
+              "waive-with-adr"
+            ]
+          },
+          "evidence": {"type": ["string", "null"]},
+          "blocksIssues": {
+            "type": "array",
+            "items": {"type": "string", "minLength": 1}
+          },
+          "notes": {"type": "string"},
+          "metricContracts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "name",
+                "unit",
+                "statistic",
+                "threshold",
+                "owner",
+                "approver"
+              ],
+              "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "unit": {"type": "string", "minLength": 1},
+                "statistic": {"type": "string", "minLength": 1},
+                "threshold": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["operator", "value"],
+                  "properties": {
+                    "operator": {"enum": [">=", ">", "<=", "<", "=="]},
+                    "value": {"type": "number"}
+                  }
+                },
+                "owner": {"type": "string", "minLength": 1},
+                "approver": {"type": "string", "minLength": 1}
+              }
+            }
+          }
+        }
       }
     }
   }

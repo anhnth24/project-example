@@ -1,0 +1,22 @@
+{
+  "name": "phase1c-multi-org",
+  "profileId": "phase1c-multi-org",
+  "environmentId": "phase1c-multi-org-poc",
+  "orgCount": 2,
+  "embeddingProfile": "mock",
+  "requiresDedicatedWorkerRole": true,
+  "requiresWorkerDatabaseUrl": true,
+  "durationSeconds": 3600,
+  "scenarios": [
+    "multi_org_denial_replay",
+    "membership_acl_revoke_bound",
+    "quota_recovery_after_failure",
+    "noisy_neighbor_fairness",
+    "admin_mutation_audit_coverage",
+    "worker_runtime_role_proof",
+    "container_vulnerability_scan",
+    "stale_token_isolation",
+    "qdrant_partial_fail_closed"
+  ],
+  "notes": "Qualifying workload contract for Phase 1C G1C-SEC gates on phase1c-multi-org-poc. Harness execution and measured evidence are deferred to Task 16; this file defines the approved profile only."
+}

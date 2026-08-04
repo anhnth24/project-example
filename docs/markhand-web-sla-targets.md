@@ -33,6 +33,31 @@ These targets apply to the Markhand Web Phase 1B service envelope:
 | DR query-ready RTO | Query-ready recovery time | <= 60 minutes | `G0-DR-QUERY-READY-RTO` | P0-10 restore smoke only; `targetMatch=false`; not a pass | Blocked |
 | DR full-vector RTO | Full vector rebuild/recovery time | <= 240 minutes | `G0-DR-FULL-VECTOR-RTO` | P0-10 restore smoke only; `targetMatch=false`; not a pass | Blocked |
 
+## Phase 1C security/load qualification (G1C-SEC)
+
+Status: **Repository design decision only** — thresholds below are machine-validated
+in `bench/markhand_web/gates.yaml` and `scripts/check-markhand-gates.py` per
+`docs/superpowers/plans/2026-07-31-phase1c-closure.md` Task 15. They apply to the
+`phase1c-multi-org-poc` profile (2 orgs, mock embedding, dedicated worker DB URL).
+**No qualifying run or external owner sign-off is implied by this table.** Measured
+evidence remains `not_run` until Task 16 harness execution.
+
+| Area | Metric | Target | Gate | Owner | Approver | Evidence status |
+|---|---:|---:|---|---|---|---|
+| Cross-tenant isolation | `cross_tenant_leakage_count` | == 0 | `G1C-SEC-LEAKAGE`, `G1C-SEC-QDRANT-FAIL-CLOSED` | security-owner | security-owner | not_run |
+| ACL revoke latency | `membership_acl_revoke_max_ms` | <= 3000 ms | `G1C-SEC-REVOKE` | security-owner | operations-owner | not_run |
+| Stale authorization | `post_commit_stale_authorizations` | == 0 | `G1C-SEC-ACL-CACHE`, `G1C-SEC-STALE-TOKENS` | security-owner | security-owner | not_run |
+| Quota recovery | `quota_drift_after_recovery` | == 0 | `G1C-SEC-QUOTA-RECOVERY` | operations-owner | operations-owner | not_run |
+| Noisy-neighbor fairness | `quiet_org_query_p95_ms` | <= 500 ms | `G1C-SEC-NOISY-NEIGHBOR` | operations-owner | operations-owner | not_run |
+| Noisy-neighbor fairness | `starvation_events` | == 0 | `G1C-SEC-NOISY-NEIGHBOR` | operations-owner | operations-owner | not_run |
+| Audit coverage | `admin_mutation_audit_coverage_ratio` | == 1.0 | `G1C-SEC-AUDIT-COVERAGE` | security-owner | security-owner | not_run |
+| Worker least privilege | `worker_dedicated_role_verified` | == 1 | `G1C-SEC-WORKER-ROLE` | security-owner | operations-owner | not_run |
+| Supply chain | `undispositioned_high_critical_count` | == 0 | `G1C-SEC-CONTAINER-VULNS` | security-owner | security-owner | not_run |
+
+Phase 1C rollup gate `1C-13` remains a placeholder until all `G1C-SEC-*` rows pass with
+`targetMatch=true` on the approved POC profile. This section does **not** claim Profile B
+production scale, peak-tier capacity, or on-prem-reference SLO proof.
+
 ## Measurement rules
 
 - Gate-valid SLO, capacity and DR measurements require `environmentId` =

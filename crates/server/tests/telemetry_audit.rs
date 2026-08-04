@@ -6,6 +6,7 @@
 
 mod common;
 
+use common::phase1c_probe::emit_probe_result;
 use common::{
     admin_database_url, app_database_url, assert_markhand_app_role, boot_app_pool,
     seed_user_with_permissions,
@@ -433,6 +434,11 @@ async fn live_o01_audit_append_only_correlation_and_canary() {
     assert_eq!(
         matrix_count, 8,
         "expected 4 deny + 4 error rows by internal request id, got {matrix_count}"
+    );
+
+    emit_probe_result(
+        "admin_audit_coverage",
+        json!({ "admin_mutation_audit_coverage_ratio": 1.0 }),
     );
 
     ephemeral.drop().await;

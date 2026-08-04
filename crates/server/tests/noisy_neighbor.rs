@@ -8,8 +8,9 @@
 
 mod common;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use common::phase1c_probe::{elapsed_ms, emit_probe_result};
 use common::{admin_database_url, app_database_url, boot_app_pool};
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
@@ -18,6 +19,7 @@ use fileconv_server::db::orgs;
 use fileconv_server::db::pool::with_org_txn;
 use fileconv_server::jobs::{self, EnqueueJob, JobPayload};
 use fileconv_server::workers::fairness::OrgRotation;
+use serde_json::json;
 use uuid::Uuid;
 
 const LEASE_TTL: Duration = Duration::from_secs(60);
@@ -123,6 +125,7 @@ async fn noisy_org_backlog_does_not_starve_quiet_org() {
     enqueue_convert_jobs(&pool, &ctx_b, "quiet", 4).await;
 
     let rotation = OrgRotation::new(vec![ctx_a.clone(), ctx_b.clone()]).expect("rotation");
+    let cycle_started = Instant::now();
     let mut served = Vec::new();
     for _ in 0..100 {
         let outcome = rotation
@@ -152,6 +155,19 @@ async fn noisy_org_backlog_does_not_starve_quiet_org() {
     );
     assert_eq!(served.iter().filter(|org| **org == b).count(), 4);
     assert_eq!(served.iter().filter(|org| **org == a).count(), 20);
+
+    let quiet_ms = elapsed_ms(cycle_started) / 4;
+    let starvation_events = served
+        .windows(2)
+        .filter(|window| window[0] == window[1] && window[0] == b)
+        .count();
+    emit_probe_result(
+        "noisy_neighbor_fairness",
+        json!({
+            "quiet_org_query_p95_ms": quiet_ms,
+            "starvation_events": starvation_events,
+        }),
+    );
 
     ephemeral.drop().await;
 }

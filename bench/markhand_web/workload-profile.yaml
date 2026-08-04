@@ -120,6 +120,11 @@
     "recovery": {
       "scenario": "post-outage catch-up",
       "loadRef": "loads.normal"
+    },
+    "phase1c-multi-org": {
+      "profileId": "phase1c-multi-org",
+      "environmentId": "phase1c-multi-org-poc",
+      "sourcePath": "workloads/phase1c-multi-org.yaml"
     }
   },
   "serviceTargets": {

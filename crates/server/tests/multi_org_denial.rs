@@ -14,6 +14,7 @@ use common::multi_org_denial_world::{
     ask_token_sequences_after, await_ask_stream_pre_revoke_evidence, await_ask_stream_terminal,
     BootedOrg, IndexedDenialRuntime,
 };
+use common::phase1c_probe::{elapsed_ms, emit_probe_result};
 use common::{
     admin_database_url, app_database_url, login_tokens, seed_user_with_permissions,
     test_minio_client, test_qdrant_url,
@@ -1141,6 +1142,11 @@ async fn pre_revoke_tokens_fail_after_downgrade_suspend_and_remove() {
     );
     assert_access_rejected(app, &remove_access).await;
     assert_refresh_rejected(app, &remove_refresh).await;
+
+    emit_probe_result(
+        "stale_token_isolation",
+        json!({ "post_commit_stale_authorizations": 0 }),
+    );
 
     world.cleanup().await.expect("cleanup");
 }

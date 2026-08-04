@@ -11,6 +11,10 @@
     "role": {"enum": ["benchmark-target", "spike", "ci-smoke"]},
     "status": {"enum": ["proposed", "approved"]},
     "approver": {"type": "string", "minLength": 1},
+    "orgCount": {"type": "integer", "minimum": 1},
+    "embeddingProfile": {"type": "string", "minLength": 1},
+    "requiresDedicatedWorkerRole": {"type": "boolean"},
+    "requiresWorkerDatabaseUrl": {"type": "boolean"},
     "fingerprintRequiredFields": {"type": "array", "minItems": 1}
   }
 }

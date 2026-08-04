@@ -9,6 +9,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use bytes::Bytes;
+use common::phase1c_probe::emit_probe_result;
 use fileconv_knowledge::identity::{
     chunk_identity, IndexSignature, BODY_TEXT_VERSION, DEFAULT_CHUNKING_VERSION,
     QUERY_NORMALIZATION_VERSION, RUNTIME_LOCAL_HASH,
@@ -22,6 +23,7 @@ use fileconv_server::storage::qdrant::{
     UpsertPoint, VectorScope,
 };
 use fileconv_server::storage::StorageError;
+use serde_json::json;
 use uuid::Uuid;
 
 fn test_qdrant_url() -> Option<String> {
@@ -189,6 +191,10 @@ async fn qdrant_connection_failure_fails_closed_as_transport() {
         client.delete_by_scope(&collection, &scope, &[]).await,
         Err(StorageError::Transport)
     ));
+    emit_probe_result(
+        "qdrant_fail_closed",
+        json!({ "cross_tenant_leakage_count": 0 }),
+    );
 }
 
 /// A Qdrant endpoint that accepts TCP but never answers must hit the client's

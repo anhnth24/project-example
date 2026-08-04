@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "environmentId": "phase1c-multi-org-poc",
+  "role": "benchmark-target",
+  "status": "approved",
+  "approver": "project-owner",
+  "approvedAt": "2026-08-04T00:00:00Z",
+  "orgCount": 2,
+  "embeddingProfile": "mock",
+  "requiresDedicatedWorkerRole": true,
+  "requiresWorkerDatabaseUrl": true,
+  "cpu": {
+    "vendor": "reference",
+    "model": "single-host-x86_64",
+    "cores": 8,
+    "threads": 8
+  },
+  "ramGb": 16,
+  "disk": {
+    "type": "ssd",
+    "capacityGb": 60,
+    "iopsNote": ">=5k random-read IOPS"
+  },
+  "gpu": {
+    "model": "none",
+    "vramGb": 0,
+    "count": 0
+  },
+  "network": {
+    "bandwidthGbps": 1,
+    "latencyMsAssumed": 1
+  },
+  "os": {
+    "distro": "ubuntu-22.04",
+    "arch": "x86_64"
+  },
+  "fingerprintRequiredFields": [
+    "gitCommit",
+    "workloadProfileId",
+    "composeFileSha256",
+    "imageIds",
+    "indexSignature",
+    "migrationManifestSha256",
+    "hardware"
+  ],
+  "notes": "Multi-org qualifying POC stack derived from deploy/compose.poc.yml with at least two orgs, mock/local embedding, and dedicated MARKHAND_WORKER_DATABASE_URL. Per-service CPU caps match poc-compose (~8.5 CPU total). This environment qualifies Phase 1C security/load gates (G1C-SEC-*) only; it does not claim Profile B production scale or peak-tier capacity on on-prem-reference."
+}

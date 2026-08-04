@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use common::phase1c_probe::emit_probe_result;
 use common::{admin_database_url, app_database_url, boot_app_pool, DualRoleEphemeralDb};
 use deadpool_postgres::Pool;
 use fileconv_server::auth::context::OrgContext;
@@ -20,6 +21,7 @@ use fileconv_server::db::quota as db_quota;
 use fileconv_server::services::quota::{
     self, apply_quota_headers, QuotaDenial, QuotaError, QuotaSettlement, QuotaSnapshot,
 };
+use serde_json::json;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -1284,6 +1286,14 @@ async fn reconcile_repairs_counter_drift_and_orphaned_job_slots() {
     })
     .await
     .expect("audit rows");
+
+    let drift = counter_value(&pool, &context, "storage_bytes").await
+        + counter_value(&pool, &context, "documents").await
+        + active_reserved(&pool, &context, ResourceKind::ConcurrentJobs).await;
+    emit_probe_result(
+        "quota_recovery",
+        json!({ "quota_drift_after_recovery": drift }),
+    );
 
     ephemeral.drop().await;
 }
