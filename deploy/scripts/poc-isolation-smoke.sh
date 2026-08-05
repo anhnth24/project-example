@@ -9,6 +9,7 @@ COMPOSE_FILE="$ROOT/deploy/compose.poc.yml"
 ENV_EXAMPLE="$ROOT/deploy/.env.example"
 DOCKERFILE_SERVER="$ROOT/deploy/Dockerfile.server"
 DOCKERFILE_WORKER="$ROOT/deploy/Dockerfile.worker"
+EMBEDDING_REQUIREMENTS="$ROOT/deploy/dev/requirements-embedding-server.txt"
 IMAGES_LOCK="$ROOT/deploy/poc/images.lock.json"
 WORKER_SECCOMP="$ROOT/deploy/poc/worker-sandbox-seccomp.json"
 FAIL=0
@@ -84,6 +85,7 @@ require_file "$ROOT/deploy/poc/minio-app-policy.json.tmpl"
 require_file "$ROOT/deploy/poc/postgres-init.sh"
 require_file "$IMAGES_LOCK"
 require_file "$ROOT/deploy/poc/Dockerfile.embedding-cpu"
+require_file "$EMBEDDING_REQUIREMENTS"
 require_file "$ROOT/deploy/README.md"
 
 # Separate API / worker images
@@ -179,6 +181,13 @@ require_regex "$DOCKERFILE_WORKER" 'tesseract-ocr=5\.3\.0-2' "worker pins tesser
 require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" \
   'python:3\.12\.12-slim-bookworm@sha256:' \
   "embedding-cpu base digest pinned"
+require_regex "$EMBEDDING_REQUIREMENTS" \
+  '^--extra-index-url https://download\.pytorch\.org/whl/cpu$' \
+  "embedding-cpu uses the official PyTorch CPU wheel index"
+require_regex "$EMBEDDING_REQUIREMENTS" '^torch==2\.13\.0\+cpu$' \
+  "embedding-cpu pins the CPU-only torch build"
+require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" 'torch\.version\.cuda is None' \
+  "embedding-cpu build rejects CUDA-enabled torch"
 require_regex "$IMAGES_LOCK" 'rust-bookworm' "images.lock records rust base"
 require_regex "$IMAGES_LOCK" 'node-bookworm-slim' "images.lock records node base"
 require_regex "$IMAGES_LOCK" 'debian-bookworm-slim' "images.lock records debian base"
