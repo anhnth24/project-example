@@ -45,4 +45,5 @@ done
 }
 
 "$ROOT/deploy/scripts/poc-health.sh"
+"$ROOT/deploy/scripts/poc-set-quota.sh"
 echo "POC stack is up"

@@ -168,8 +168,11 @@ forbid_regex "$DOCKERFILE_WORKER" 'releases/latest' "worker Dockerfile must not 
 require_regex "$DOCKERFILE_WORKER" "$PDFIUM_SHA" "worker Dockerfile pins PDFium sha256"
 require_regex "$DOCKERFILE_WORKER" 'chromium%2F7906|chromium/7906' "worker Dockerfile pins PDFium tag"
 require_regex "$IMAGES_LOCK" "$PDFIUM_SHA" "images.lock records PDFium sha256"
+require_regex "$DOCKERFILE_SERVER" 'node:22-bookworm-slim@sha256:' \
+  "server web builder base digest pinned"
 require_regex "$DOCKERFILE_SERVER" 'rust:1\.88\.0-bookworm@sha256:' "server builder base digest pinned"
 require_regex "$DOCKERFILE_SERVER" 'debian:bookworm-slim@sha256:' "server runtime base digest pinned"
+require_regex "$DOCKERFILE_SERVER" 'MARKHAND_WEB_DIST_DIR' "server image enables bundled SPA"
 require_regex "$DOCKERFILE_WORKER" 'rust:1\.88\.0-bookworm@sha256:' "worker builder base digest pinned"
 require_regex "$DOCKERFILE_WORKER" 'debian:bookworm-slim@sha256:' "worker runtime base digest pinned"
 require_regex "$DOCKERFILE_WORKER" 'tesseract-ocr=5\.3\.0-2' "worker pins tesseract-ocr apt version"
@@ -177,6 +180,7 @@ require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" \
   'python:3\.12\.12-slim-bookworm@sha256:' \
   "embedding-cpu base digest pinned"
 require_regex "$IMAGES_LOCK" 'rust-bookworm' "images.lock records rust base"
+require_regex "$IMAGES_LOCK" 'node-bookworm-slim' "images.lock records node base"
 require_regex "$IMAGES_LOCK" 'debian-bookworm-slim' "images.lock records debian base"
 require_regex "$IMAGES_LOCK" 'python-slim-bookworm' "images.lock records python base"
 require_regex "$IMAGES_LOCK" 'tesseract_apt' "images.lock records tesseract apt pins"
@@ -187,6 +191,18 @@ require_regex "$ENV_EXAMPLE" "$AITEAMVN_SIG" ".env.example documents AITeamVN in
 require_regex "$COMPOSE_FILE" "$MOCK_SIG" "compose defaults to mock index signature"
 require_regex "$IMAGES_LOCK" "$MOCK_SIG" "images.lock records mock signature"
 require_regex "$IMAGES_LOCK" "$AITEAMVN_SIG" "images.lock records AITeamVN signature"
+require_regex "$ROOT/deploy/scripts/poc-up.sh" 'poc-set-quota\.sh' \
+  "poc-up applies optional post-migration quota"
+require_regex "$ROOT/deploy/scripts/poc-set-quota.sh" 'org_quotas' \
+  "quota override updates the canonical quota table"
+require_regex "$ROOT/deploy/scripts/poc-set-quota.sh" 'unsigned integer' \
+  "quota override validates bytes before SQL"
+require_regex "$ROOT/deploy/scripts/poc-set-admin-password.sh" 'Argon2id PHC hash' \
+  "admin bootstrap accepts only a pre-hashed password"
+forbid_regex "$ROOT/deploy/scripts/poc-set-admin-password.sh" 'markhand-dev' \
+  "admin bootstrap must not embed the development password"
+require_regex "$ROOT/.dockerignore" 'web/\.env\*' \
+  "server build excludes local Vite environment files"
 
 if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
   PYTHON_BIN="$(command -v python3 || command -v python)"

@@ -33,6 +33,7 @@ native, security/egress và migration strategy.
 | [0013](0013-intelligence-durable-ids.md) | Accepted | Durable intelligence IDs (`sha256-v1`) and desktop rebuild |
 | [0014](0014-vietnamese-word-segmentation-fts.md) | Proposed | Vietnamese word segmentation for FTS lexical retrieval (P1B-R01) |
 | [0015](0015-purge-content-retention-semantics.md) | Proposed | Immutable-content retention semantics for document purge (P1B-I07) |
+| [0016](0016-spa-api-image-delivery.md) | Proposed | Bundle the matching web SPA in the API image |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.

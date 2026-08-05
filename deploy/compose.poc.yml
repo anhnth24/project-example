@@ -415,7 +415,7 @@ services:
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
     ports:
-      - "127.0.0.1:${MARKHAND_API_PORT:-8788}:8787"
+      - "${MARKHAND_API_BIND_HOST:-127.0.0.1}:${MARKHAND_API_PORT:-8788}:8787"
     networks: [edge, private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
