@@ -1654,3 +1654,85 @@ Composer reviews the final diff and report; coordinator runs the full required p
 ## Execution Handoff
 
 This plan is intended for subagent-driven execution: one fresh implementer per task, the assigned independent reviewer after each task, and a whole-PR review before CI evidence/status updates. Start only after this design/plan PR merges to `master`; create PR 1 from that updated `master`.
+
+## 2026-08-05 Continuation Plan
+
+The original five-PR implementation has reached the existing PR #381
+(`cursor/phase1c-gate-semantics-06b6`). Continue without rewriting completed history:
+
+### C1: Finish PR #381 as the qualification prerequisite
+
+**Worktree:** detached worktree of the existing PR branch; do not create a duplicate PR.
+
+**Implementer:** Cursor Grok 4.5 High.
+
+**Review/fix loop:** independent GPT-5.6 Sol reviewer → separate GPT-5.6 Sol fixer for
+verified Critical/Important findings → fresh GPT-5.6 Sol re-review until `APPROVED`.
+
+**Scope:**
+
+- audit the current branch against Task 17, production handlers, migrations, gate schema,
+  and the approved environment profile;
+- run the hermetic gate suites and all matching dependency/static checks;
+- run the real POC qualification when the environment matches the approved profile;
+- commit only sanitized evidence and corrections required to prevent false PASS;
+- keep 1C-08, 1C-12, and 1C-13 open on this PR.
+
+**Exit:**
+
+- no unresolved Critical/Important review finding;
+- branch checks and focused local gates pass;
+- a qualifying run either produces validated, sanitized evidence or records the exact
+  external blocker without fabricating PASS;
+- PR #381 is updated in place.
+
+### C2: Close 1C-08 in its own PR
+
+Create `cursor/1c-08-rls-pool-evidence-e9d6` from the latest merged `master`. Reuse the
+single canonical plan if one is linked; otherwise create it under `plans/reports/` before
+status changes. Map the PR #381 qualification artifact to the deployed worker-role,
+non-owner/non-BYPASSRLS, pool reset, and exact-permission acceptance criteria. Change
+only 1C-08 status/evidence and generated roadmap state. If the artifact does not prove
+every criterion, leave the issue `In progress` and implement only the missing proof.
+
+### C3: Close 1C-12 in its own PR
+
+Create `cursor/1c-12-denial-evidence-e9d6` only after C2 merges. Require both stable CI
+and deployed denial evidence, zero content/metadata/existence leakage, direct-service
+coverage, and sanitized artifacts. Change only 1C-12 status/evidence and generated
+roadmap state.
+
+### C4: Deliver 1C-13 in its own PR
+
+Create `cursor/1c-13-security-load-gate-e9d6` only after C3 merges and the catalog meets
+Definition of Ready. Implement or prove the remaining revoke bound, quota recovery,
+noisy-neighbor fairness/SLO, audit coverage, vulnerability disposition, and live OWASP
+requirements. This is a mandatory security review. Change only 1C-13 and Phase 1C exit
+state after all evidence passes.
+
+### C5: Deliver P2-15, then P2-16
+
+After Phase 1C is closed, use separate fresh branches and PRs:
+
+```text
+cursor/p2-15-real-e2e-security-e9d6
+cursor/p2-16-production-spa-gate-e9d6
+```
+
+P2-15 owns real-deployment E2E and security scan qualification. P2-16 owns packaging,
+static serving, final SLO/scan evidence, and the Phase 2 exit gate. Neither PR may absorb
+Help-page, intelligence, or unrelated UX backlog.
+
+### Coordinator gates for every continuation PR
+
+- one issue/outcome per branch and PR;
+- persist and link the canonical issue plan before production changes;
+- Grok implements in an isolated worktree;
+- GPT-5.6 Sol reviews and fixes through fresh-agent re-review until `APPROVED`;
+- run focused acceptance tests and all applicable repository preflight;
+- for Rust changes, run `cargo fmt --all -- --check`,
+  `cargo metadata --locked --format-version 1 --no-deps`, and
+  `python3 scripts/check-dependency-policy.py` before every push;
+- commit, push with upstream, and create/update the PR before reporting completion;
+- do not mark `Done` or start a dependent PR until required external evidence exists;
+- do not merge without explicit owner instruction.
