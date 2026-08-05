@@ -70,7 +70,7 @@ skipped or unavailable integration test.
 | Graph API returns bounded visible nodes plus conflict/co-citation edges and deterministic communities | `routes/graph.rs`, `services/graph.rs`, `db/graph.rs` | focused unit tests and `tests/graph.rs` | hermetic unit; PostgreSQL integration | current command output plus PR #327 `rust-integration` |
 | Graph access is org/ACL scoped and requires `qa.query` | route/service/repository graph path | permission, org-isolation, private-ACL integration cases | PostgreSQL integration | zero foreign node/edge assertions |
 | Similarity edges use Qdrant recommend-by-point with mandatory org/collection filters, bounded fan-out, threshold, and cap | `storage/qdrant.rs`, `services/graph.rs` | aggregate/threshold/cap unit tests and `graph_similarity_edges_from_qdrant_recommend` | hermetic unit; Qdrant + PostgreSQL integration | PR #331 `rust` and `rust-integration` success on implementation SHA |
-| Missing vector dependencies or Qdrant failure do not remove conflict/co-citation graph data | `routes/graph.rs`, `services/graph.rs` | `graph_qdrant_failure_preserves_acl_scoped_conflict_graph` plus service unit assertions | PostgreSQL fixture; Qdrant port 0 forces a bounded transport failure without a live Qdrant dependency | graph returns only the two ACL-visible nodes and their conflict edge; no error, similarity edge, private node, or foreign edge |
+| Missing vector dependencies or Qdrant failure do not remove conflict/co-citation graph data | `routes/graph.rs`, `services/graph.rs` | `graph_qdrant_failure_preserves_acl_scoped_conflict_graph` plus service unit assertions | PostgreSQL fixture; test-local TCP peer responds to representative-point scroll, records the real recommend request, then closes without a response | listener observes `/points/query` with recommend-by-point body; graph returns only two ACL-visible nodes plus their conflict and co-citation edges; no error, similarity edge, same-org private node/edge, or foreign-org node/edge |
 | Web graph supports communities, collection filtering, table fallback, keyboard navigation, and node-to-document deep link | `GraphPage.tsx`, graph components, `forceLayout.ts` | Vitest and Playwright graph specs | mock web harness | current focused web tests plus PR #327/#374 web evidence |
 | Public contract and generated client stay aligned | `openapi.yaml`, generated TypeScript contract | API drift checks | repository toolchain | `pnpm --dir web api:check` |
 
@@ -88,8 +88,11 @@ python3 scripts/sync-github-issues.py --dry-run
 ```
 
 The fail-soft regression requires configured PostgreSQL but deliberately does not require
-Qdrant; TCP port 0 forces the vector request to fail. The live-similarity test requires
-both PostgreSQL and Qdrant:
+Qdrant. A listener bound before the service call performs enough Qdrant HTTP protocol to
+return the representative point, records the subsequent recommend-by-point request, then
+closes the connection without a response. Listener accept/read/join and the service call
+all have explicit timeouts; skipping/removing similarity leaves the listener unobserved
+and fails the test. The live-similarity test requires both PostgreSQL and Qdrant:
 
 ```bash
 cargo test -p fileconv-server --test graph -- --include-ignored --test-threads=1
@@ -98,11 +101,10 @@ cargo test -p fileconv-server --test graph -- --include-ignored --test-threads=1
 When PostgreSQL is unavailable locally, compile with `--no-run` and record the limitation;
 do not count the suite's missing-environment early return as a pass. CI `rust-integration`
 must execute the new PostgreSQL regression for the closure-branch SHA. This occurred for
-`6031a81d6eff7ffc0f7f2060fab770bb0a5de163` in run
-[31020855871](https://github.com/anhnth24/project-example/actions/runs/31020855871),
-where the DB-backed integration step and exact graph regression passed; see Delivery
-evidence for the unrelated later job failure. Historical PR #331 evidence remains the
-live-Qdrant proof for commit
+`50ef793e78f6ab21be5b87e14707d6f9d6c48376` in successful run
+[31023634736](https://github.com/anhnth24/project-example/actions/runs/31023634736),
+where the DB-backed integration step and exact graph regression passed. Historical PR
+#331 evidence remains the live-Qdrant proof for commit
 `0ae8105972f510a9a8d247fbd5fa3996ddcf60cc`.
 Before any push containing Rust changes, also run the three mandatory Rust preflight
 commands from `CLAUDE.md`.
@@ -166,9 +168,13 @@ planned; if audit finds one necessary, stop and revise this plan before implemen
   `similarity`. No production-code change required for this closure.
 - Independent finding remediation adds the PostgreSQL-backed
   `graph_qdrant_failure_preserves_acl_scoped_conflict_graph` regression. It seeds an
-  active matching index generation, an ACL-visible conflict pair, and a private document,
-  then passes `SimilarityDeps` with Qdrant at reserved TCP port 0. The expected result is
-  the visible conflict graph with no similarity/private edge and no service error.
+  active matching index generation; an ACL-visible pair carrying both conflict and
+  co-citation edges; a same-org private document with an excluded co-citation candidate;
+  and two foreign-org documents with their own co-citation edge candidate. A test-local
+  TCP peer returns one valid scroll point, records the real scoped
+  `/collections/markhand_chunks_…/points/query` recommend-by-point request, then closes
+  without a response. The expected result is exactly the two visible nodes and their two
+  PostgreSQL edges, with no similarity/private/foreign edge and no service error.
   Production behavior was already correct, so no production-code change was made.
 - Local environment: Docker, PostgreSQL binaries, Qdrant, and
   `MARKHAND_TEST_DATABASE_URL` / `MARKHAND_TEST_APP_DATABASE_URL` are unavailable.
@@ -187,6 +193,7 @@ planned; if audit finds one necessary, stop and revise this plan before implemen
 | `cargo test -p fileconv-server --test graph --no-run` | **pass** — integration binary compiled; no local execution claimed |
 | `cargo test -p fileconv-server --test graph graph_qdrant_failure_preserves_acl_scoped_conflict_graph -- --exact --test-threads=1` | **not run locally** — PostgreSQL variables/binaries unavailable; CI execution required |
 | `cargo test -p fileconv-server --test graph -- --include-ignored --test-threads=1` | **not run locally** (no Docker/Postgres/Qdrant); live-Qdrant behavior verified via PR #331 CI job above |
+| `cargo clippy --no-deps -p fileconv-server --test graph -- -D warnings` | **blocked by pre-existing unrelated** `common/fts_visibility_diagnostic.rs` `uninlined_format_args`; rerun with only that lint allowed passed, so the changed graph target had no additional warning |
 | `python3 scripts/build-roadmap.py` | **pass** — 116 issues, status `{done:79, in_progress:7, review:1, backlog:29}` |
 | `python3 scripts/build-roadmap.py --check` | **pass** — roadmap up to date, source `14e2121602531a1f` |
 | `python3 scripts/sync-github-issues.py --export-json plans/markhand-web/backlog/github-issues.json` | **pass** — P2-17 `status: review` only |
@@ -195,34 +202,35 @@ planned; if audit finds one necessary, stop and revise this plan before implemen
 | `python3 scripts/check-dependency-policy.py` | **pass** |
 | `cargo metadata --locked --format-version 1 --no-deps` | **pass** |
 
-The first test commit `3c7d4a1421e60ffa3db53d1ec87309d6981c4676` intentionally
-preceded reliance on CI, but its `rust` job found a real `rustfmt` failure before the
-integration run completed; run
-[31020567492](https://github.com/anhnth24/project-example/actions/runs/31020567492)
-was then cancelled by the formatting follow-up. Commit
-`6031a81d6eff7ffc0f7f2060fab770bb0a5de163` contains only canonical formatting and is
-the tested SHA. Run
-[31020855871](https://github.com/anhnth24/project-example/actions/runs/31020855871)
-provided:
+Strengthened sensitivity evidence is commit
+`50ef793e78f6ab21be5b87e14707d6f9d6c48376`. Run
+[31023634736](https://github.com/anhnth24/project-example/actions/runs/31023634736)
+completed **success**:
 
-- [rust job 92357304785](https://github.com/anhnth24/project-example/actions/runs/31020855871/job/92357304785):
+- [rust job 92366635571](https://github.com/anhnth24/project-example/actions/runs/31023634736/job/92366635571):
   **success**.
-- [rust-integration job 92357304660](https://github.com/anhnth24/project-example/actions/runs/31020855871/job/92357304660):
-  the `Rust DB-backed integration tests (fileconv-server, --include-ignored)` step ran
-  with required PostgreSQL variables and was **success**; its log contains
+- [rust-integration job 92366635226](https://github.com/anhnth24/project-example/actions/runs/31023634736/job/92366635226):
+  **success**; the DB-backed step log contains
   `test graph_qdrant_failure_preserves_acl_scoped_conflict_graph ... ok`.
-- The `rust-integration` job/run is overall **failure** only because the later, unrelated
-  Phase 1C denial step failed
-  `indexed_fts_and_ask_never_return_foreign_marker`. P2-17 claims only the exact graph
-  test and successful DB-backed step, not overall job/run success.
+- The assertion is self-sensitizing without a production test hook: the TCP peer must
+  observe the scroll handshake and recommend query. If similarity computation is
+  skipped/removed, its bounded accept/join path fails with
+  `similarity path did not reach the Qdrant test peer`; if the existing fail-soft merge
+  is disabled, the graph-result `expect` fails after the peer closes the recommend
+  connection.
 
-Sensitivity limitation: local PostgreSQL is absent, so a temporary production mutation
-that turns the `compute_similarity_edges` error branch into a returned `DbError` could
-not be executed here without fabricating a RED result. The regression is structurally
-sensitive—the service result is unwrapped with
-`expect("Qdrant failure must not fail the document graph")` after seeding a compatible
-active generation and forcing Qdrant transport failure at reserved TCP port 0—but an
-observed mutation RED remains unavailable locally and is reported, not claimed.
+### Generated tracker drift disposition
+
+Whole-branch comparison against base `f1f3434` changes generated issue objects P2-10,
+P2-17, and P2-18, but only P2-17 changes status (`in_progress` → `review`). P2-10 and
+P2-18 source catalog text already contained the #374 updates on base while the checked-in
+`github-issues.json` still rendered their older text (`chưa làm` for P2-10 and the
+pre-#374 P2-18 evidence). The deterministic full-catalog command
+`python3 scripts/sync-github-issues.py --export-json
+plans/markhand-web/backlog/github-issues.json` atomically reconciles all 116 issue
+bodies. Partially reverting only P2-10/P2-18 would make the artifact noncanonical and the
+next export dirty again, so the generated reconciliation is retained. Their catalog
+sources and statuses were not edited by this closure.
 
 ### Lifecycle note
 
@@ -243,6 +251,8 @@ the authoritative catalog/evidence. History is preserved; no status commit was r
 - Fail-soft integration regression:
   `3c7d4a1421e60ffa3db53d1ec87309d6981c4676`; formatting-only follow-up:
   `6031a81d6eff7ffc0f7f2060fab770bb0a5de163`.
+- Listener-observed fail-soft regression:
+  `50ef793e78f6ab21be5b87e14707d6f9d6c48376`.
 - Canonical catalog/final evidence fix: this change set on
   `cursor/p2-17-document-graph-e9d6`.
 - Independent review: pending (plan stays `In progress`; catalog → `Review`, not `Done`).

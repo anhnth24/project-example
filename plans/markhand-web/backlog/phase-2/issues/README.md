@@ -450,8 +450,9 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   bỏ riêng similarity edges, giữ graph PostgreSQL. 4. Prune node/edge theo cap và tạo
   connected components deterministic; web render force layout, community/filter/table
   fallback/keyboard và deep-link `/library/:collectionId?doc=`. 5. Regression integration
-  dùng PostgreSQL thật, active generation thật và Qdrant URL cổng 0 để chứng minh degraded
-  behavior bounded.
+  dùng PostgreSQL thật, active generation thật và test-local TCP listener: listener trả
+  scroll response hợp lệ, bắt buộc quan sát recommend-by-point request rồi đóng kết nối
+  để tạo transport error deterministic và chứng minh degraded behavior bounded.
 - **Files/modules:** Server owner: `crates/server/src/routes/graph.rs`,
   `crates/server/src/services/graph.rs`, `crates/server/src/db/graph.rs`,
   `crates/server/src/storage/qdrant.rs`, `crates/server/tests/graph.rs`, OpenAPI graph
@@ -481,16 +482,16 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   services::graph --lib` = 18 pass; focused Vitest graph suite = 17 pass;
   `pnpm --dir web api:check` pass; `cargo test -p fileconv-server --test graph --no-run`
   compile pass. Regression `graph_qdrant_failure_preserves_acl_scoped_conflict_graph` ở
-  commit `3c7d4a1421e60ffa3db53d1ec87309d6981c4676` (format follow-up
-  `6031a81d6eff7ffc0f7f2060fab770bb0a5de163`) chạy `... ok` với PostgreSQL variables
-  bắt buộc trong run
-  [31020855871](https://github.com/anhnth24/project-example/actions/runs/31020855871),
-  [rust-integration job 92357304660](https://github.com/anhnth24/project-example/actions/runs/31020855871/job/92357304660).
-  DB-backed integration step success; job overall failure xảy ra sau đó ở unrelated Phase
-  1C denial test `indexed_fts_and_ask_never_return_foreign_marker`, nên chỉ exact graph
-  test + DB step được dùng làm P2-17 evidence. Cùng run,
-  [rust job 92357304785](https://github.com/anhnth24/project-example/actions/runs/31020855871/job/92357304785)
-  success.
+  commit `50ef793e78f6ab21be5b87e14707d6f9d6c48376` bắt buộc listener quan sát
+  `/points/scroll` rồi `/points/query` với `query.recommend.positive`; bỏ/skip similarity
+  path làm listener timeout và test fail. PostgreSQL fixture seed visible conflict +
+  co-citation, same-org private edge candidate và foreign-org co-citation candidate; kết
+  quả chỉ giữ hai visible nodes cùng hai relation edges. Exact test chạy `... ok` trong
+  [rust-integration job 92366635226](https://github.com/anhnth24/project-example/actions/runs/31023634736/job/92366635226);
+  [rust job 92366635571](https://github.com/anhnth24/project-example/actions/runs/31023634736/job/92366635571)
+  và parent run
+  [31023634736](https://github.com/anhnth24/project-example/actions/runs/31023634736)
+  đều success.
   Graph MVP evidence: SHA `abb392099cfdd2df8427d26fee5ffb6ebc07ebd4`, run
   [30435638525](https://github.com/anhnth24/project-example/actions/runs/30435638525),
   jobs [rust-integration 90522758925](https://github.com/anhnth24/project-example/actions/runs/30435638525/job/90522758925),
