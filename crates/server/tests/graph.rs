@@ -691,10 +691,22 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
         CollectionVisibility::Org,
     )
     .await;
-    let visible_a =
-        seed_document(&pool, org, viewer, visible_collection, "Tài liệu hiển thị A").await;
-    let visible_b =
-        seed_document(&pool, org, viewer, visible_collection, "Tài liệu hiển thị B").await;
+    let visible_a = seed_document(
+        &pool,
+        org,
+        viewer,
+        visible_collection,
+        "Tài liệu hiển thị A",
+    )
+    .await;
+    let visible_b = seed_document(
+        &pool,
+        org,
+        viewer,
+        visible_collection,
+        "Tài liệu hiển thị B",
+    )
+    .await;
     let version_a = seed_version(&pool, org, viewer, visible_a).await;
     let version_b = seed_version(&pool, org, viewer, visible_b).await;
     seed_conflict(
@@ -710,8 +722,14 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
         CollectionVisibility::Private,
     )
     .await;
-    let hidden =
-        seed_document(&pool, org, private_owner, private_collection, "Tài liệu bị ẩn").await;
+    let hidden = seed_document(
+        &pool,
+        org,
+        private_owner,
+        private_collection,
+        "Tài liệu bị ẩn",
+    )
+    .await;
 
     let embedder = ApprovedEmbeddingRuntime::new(
         "http://embedding.invalid/v1".into(),
@@ -727,22 +745,14 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
     )
     .expect("embedder");
     let signature = embedder.plan().index_signature(8).expect("signature");
-    seed_active_generation(
-        &pool,
-        org,
-        viewer,
-        visible_collection,
-        &signature,
-    )
-    .await;
+    seed_active_generation(&pool, org, viewer, visible_collection, &signature).await;
 
     // TCP port zero is reserved and cannot host Qdrant. The client also has
     // one-second connect / two-second request timeouts; the outer timeout
     // keeps this negative-path regression bounded even if transport behavior
     // changes.
     let qdrant = QdrantClient::new("http://127.0.0.1:0").expect("Qdrant client");
-    let ctx =
-        OrgContext::try_new(org, viewer, [] as [&str; 0], [visible_collection]).unwrap();
+    let ctx = OrgContext::try_new(org, viewer, [] as [&str; 0], [visible_collection]).unwrap();
     let graph = tokio::time::timeout(
         Duration::from_secs(3),
         build_org_graph(
@@ -761,7 +771,10 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
 
     let node_ids: BTreeSet<_> = graph.nodes.iter().map(|node| node.id).collect();
     assert_eq!(node_ids, BTreeSet::from([visible_a, visible_b]));
-    assert!(!node_ids.contains(&hidden), "private ACL node leaked: {node_ids:?}");
+    assert!(
+        !node_ids.contains(&hidden),
+        "private ACL node leaked: {node_ids:?}"
+    );
 
     assert_eq!(graph.edges.len(), 1, "unexpected edges: {:?}", graph.edges);
     let conflict = &graph.edges[0];
