@@ -4,19 +4,20 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-08-03).** MVP xây trên mock server đã merge vào
+**Trạng thái tổng quan (cập nhật 2026-08-05).** MVP xây trên mock server đã merge vào
 `master`: **13/19 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
-+ serve). **4 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có;
-**#374** đóng nốt gap conflict-warning demo cho as-of/compare/history — xem chi tiết bên
-dưới), P2-15 (E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed
-và lần chạy live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa
-chạy live), **P2-17** (Document graph — owner request mới
-2026-07-29, MVP server+web+mock xong, `similarity` đã landed 2026-07-29 (recommend-by-id, org-filter bắt buộc, threshold 0.5 const, cap 500 cạnh/200 node — test tích hợp `graph_similarity_edges_from_qdrant_recommend` gated `MARKHAND_TEST_QDRANT_URL`, evidence đầu tiên trên CI `rust-integration`; follow-up: batch recommend + tune threshold trên corpus thật); **#374** đóng deep-link "click node → mở đúng tài liệu"
-(`?doc=`) — xem chi tiết bên dưới), **P2-18** (Project grouping — owner request mới
-2026-07-29, org → project → collection → document, MVP server+web+mock xong; **#374**
-bổ sung 409 `name_taken` cho `PATCH /projects/{projectId}` vào spec + regenerate
-contract — xem chi tiết bên dưới). P2-11/P2-12
-rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice) landed ở #317.
++ serve). **5 In progress + 1 Review**: P2-10 (Q&A — UI/mock/stream xây xong trên contract
+hiện có; **#374** đóng nốt gap conflict-warning demo cho as-of/compare/history — xem chi
+tiết bên dưới), P2-15 (E2E — mock-based xong; **#374** landed nửa real-deployment
+upload→indexed và lần chạy live đầu tiên của `security-deps`/`security-image`; còn ZAP
+baseline chưa chạy live), **P2-17 Review** (Document graph — MVP + Qdrant
+`similarity` recommend-by-id + deep-link `?doc=` đã landed; catalog body đã reconcile với
+code; chờ independent review — xem chi tiết bên dưới), **P2-18** (Project grouping —
+owner request mới 2026-07-29, org → project → collection → document, MVP server+web+mock
+xong; **#374** bổ sung 409 `name_taken` cho `PATCH /projects/{projectId}` vào spec +
+regenerate contract — xem chi tiết bên dưới), P2-16 (serve SPA / final gate), P2-19
+(chat history). P2-11/P2-12 rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice)
+landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
 > mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
@@ -435,44 +436,49 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
 
 ## P2-17 — Document graph
 
-- **Status:** In progress — owner yêu cầu mới 2026-07-29 (force-directed graph + sidebar
-  "Communities" checkbox, có ảnh mẫu). MVP: `GET /api/v1/graph` (org/ACL-scoped như
-  `/collections`/`/documents`, gate `qa.query` cùng tiền lệ `/conflicts`) trả `conflict`
-  edges thật từ `claims`/`conflicts` (PG, đã test DB-gated: org isolation, ACL riêng tư,
-  bounded cap 500 node/2000 edge) và `co_citation` edges từ
-  `ask_stream_sessions.cited_document_ids` (bảng thật duy nhất lưu "tài liệu nào được
-  trích dẫn theo answer nào" — không có bảng lịch sử QA riêng). Communities = connected
-  components thuần Rust (không thêm crate graph). Web: trang "Đồ thị" (rail icon
-  `Network`), force-directed layout tự viết (~150 dòng, `lib/forceLayout.ts`, seeded
-  deterministic — không thêm `d3-force`), sidebar cộng đồng + filter bộ sưu tập + chế độ
-  xem bảng (a11y fallback) + danh sách node điều hướng bàn phím, mock fixture 13
-  node/3 cụm/3 loại cạnh cho org A + graph nhỏ riêng cho org B, unit/component/e2e test.
-  **`similarity` (Qdrant) là chỗ gắn sẵn (stub), CHƯA có truy vấn vector thật** —
-  sandbox không có Qdrant để kiểm chứng, và API `storage/qdrant.rs` hiện tại
-  (`scroll_points`) hard-code `with_vector: false` nên cần một vòng riêng (thêm biến
-  thể lấy vector thật + kiểm thử với Qdrant thật) trước khi bật edge này; graph vẫn
-  trả đủ `conflict`/`co_citation` khi không có Qdrant, không lỗi.
+- **Status:** Review — implementation + evidence sẵn sàng independent review (closure
+  2026-08-05). Owner yêu cầu 2026-07-29 (force-directed graph + sidebar Communities).
+  **Landed (không còn stub):** `GET /api/v1/graph` (org/ACL-scoped, gate `qa.query`) trả
+  `conflict` / `co_citation` / opt-in `similarity` edges + communities (connected
+  components thuần Rust). Similarity (#331): `QdrantClient::recommend` (recommend-by-point,
+  mandatory `VectorScope` org/collection filter, fail-closed scope; vectors không rời
+  store); `services::graph::compute_similarity_edges` (top-k 5, threshold `0.5`, node cap
+  200, edge cap 500); route chỉ gắn `SimilarityDeps` khi có vector index + embedder —
+  thiếu deps hoặc lỗi Qdrant → fail-soft, vẫn trả conflict/co_citation. Deep-link (#374):
+  `GraphPage.handleActivateNode` → `buildLibraryDocPath` → `/library/:collectionId?doc=`.
+  Web: force layout seeded (`forceLayout.ts`), communities sidebar, collection filter,
+  table a11y fallback, keyboard node list. OpenAPI `GraphEdge.kind` enum gồm `similarity`.
+  **Evidence:** hermetic `cargo test -p fileconv-server services::graph --lib` 18/18;
+  Vitest `forceLayout`+`GraphPage` 17/17; `pnpm --dir web api:check` pass. Integration
+  (không soft-pass): merge SHA `0ae8105972f510a9a8d247fbd5fa3996ddcf60cc` CI
+  `rust-integration` run [30446846876](https://github.com/anhnth24/project-example/actions/runs/30446846876)
+  log `graph_similarity_edges_from_qdrant_recommend ... ok` với
+  `MARKHAND_TEST_QDRANT_URL`; PG cases permission/org/ACL/cap/conflict/co_citation ok trên
+  cùng job + MVP SHA `abb392099cfdd2df8427d26fee5ffb6ebc07ebd4` (#327); deep-link E2E trên
+  SHA `2a8d7c053b0ca2288b0280511b0488cc2996db8a` (#374) `web-e2e` run
+  [30814514369](https://github.com/anhnth24/project-example/actions/runs/30814514369).
+  Plan: [P2-17 closure](../../../../reports/plan-2026-08-05-p2-17-document-graph-closure.md).
+  **Chưa Done:** independent security/code review còn mở. **Out of scope follow-up:**
+  Qdrant batch recommend; tune threshold `0.5` trên corpus thật; clustering ngoài
+  connected components; Phase 2 exit gate.
 
 - **Plan file:** [P2-17 detailed implementation plan](../../../../reports/plan-2026-08-05-p2-17-document-graph-closure.md)
-- **Plan/files:** `crates/server/src/routes/graph.rs`, `db/graph.rs`, `services/graph.rs`
-  (thuật toán thuần); OpenAPI path/schemas (`GraphNode`/`GraphEdge`/`GraphCommunity`/
-  `GraphResponse`) + `ROUTE_INVENTORY`; `web/src/pages/GraphPage.tsx`,
-  `components/graph/**`, `lib/forceLayout.ts`, `mocks/handlers/graph.ts`.
-- **Depends:** P2-07 (điều hướng khi click node — **deep-link đã đóng, #374**:
-  `GraphPage.handleActivateNode` giờ build `buildLibraryDocPath(collectionId, nodeId)`
-  → `/library/:collectionId?doc=:documentId`, mở thẳng preview tài liệu đó qua đúng
-  route param P2-07/P2-10 đang dùng; mock fixture tái dùng document id thật
-  "Onboarding Guide.pdf" cho một node để deep-link test được end-to-end, unit + E2E
-  cập nhật theo) + backend 1B
-  claims/conflicts + P1B-R05 ask-stream.
-- **Acceptance/tests:** `services::graph` unit test (components/pruning, xác định);
-  `tests/graph.rs` DB-gated (permission, conflict edge, co_citation edge, org isolation,
-  ACL riêng tư, bounded cap — chạy thật trên PG local, 6/6 pass); web unit
-  (`forceLayout.test.ts`, `GraphPage.test.tsx` 7 kịch bản) + `e2e/graph.spec.ts` (3 kịch
-  bản: cụm + sidebar, tắt cụm ẩn node, click node → preview thật qua library).
-- **Security:** Cùng ACL/permission với `/conflicts`; không thêm quyền mới chưa seed
-  role. **Out:** batch recommend + tune threshold `similarity` trên corpus thật
-  (deep-link preview từ đồ thị đã đóng ở #374 — xem Depends).
+- **Plan/files:** `crates/server/src/routes/graph.rs`, `db/graph.rs`, `services/graph.rs`,
+  `storage/qdrant.rs` (`recommend` / `recommend_legacy`); OpenAPI path/schemas
+  (`GraphNode`/`GraphEdge`/`GraphCommunity`/`GraphResponse`) + `ROUTE_INVENTORY`;
+  `web/src/pages/GraphPage.tsx`, `components/graph/**`, `lib/forceLayout.ts`,
+  `mocks/handlers/graph.ts`.
+- **Depends:** P2-07 (Done — `?doc=` library preview) + backend 1B claims/conflicts +
+  P1B-R05 ask-stream. Delivery PRs: #327 (MVP), #331 (similarity), #374 (deep-link).
+- **Acceptance/tests:** `services::graph` unit (components/pruning/similarity
+  aggregate/threshold/cap — 18 hermetic); `tests/graph.rs` DB/Qdrant-gated (permission,
+  conflict, co_citation, org isolation, private ACL, node cap, `graph_similarity_edges_from_qdrant_recommend`);
+  web unit (`forceLayout.test.ts` + `GraphPage.test.tsx` = 17) + `e2e/graph.spec.ts` (3:
+  communities, hide community, click → `?doc=` preview).
+- **Security:** Cùng ACL/permission với `/conflicts`; mọi recommend mang `VectorScope`;
+  foreign-org points không thành node/edge; fail-soft không nới scope. Independent
+  security review bắt buộc trước `Done`. **Out:** batch recommend + tune threshold trên
+  corpus thật.
 
 ## P2-18 — Project grouping (org → project → collection → document)
 

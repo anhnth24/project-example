@@ -4,7 +4,7 @@ Created: 2026-08-05
 Source issue: catalog synchronization pending
 Catalog: [Phase 2 issue catalog](../markhand-web/backlog/phase-2/issues/README.md#p2-17--document-graph)
 Phase plan: [Phase 2 Web SPA](../markhand-web/phase-2-web-spa.md)
-Status: Planned
+Status: In progress
 
 ## Objective
 
@@ -118,21 +118,63 @@ planned; if audit finds one necessary, stop and revise this plan before implemen
 ### Implementation PRs
 
 - [PR #327](https://github.com/anhnth24/project-example/pull/327) — graph MVP.
+  Merge SHA `abb392099cfdd2df8427d26fee5ffb6ebc07ebd4` (2026-07-29).
+  CI on merge SHA: `rust`, `rust-integration`, `web`, `web-e2e` SUCCESS
+  (run [30435638525](https://github.com/anhnth24/project-example/actions/runs/30435638525)).
 - [PR #331](https://github.com/anhnth24/project-example/pull/331) — similarity edges.
+  Merge SHA `0ae8105972f510a9a8d247fbd5fa3996ddcf60cc` (2026-07-29).
+  CI on merge SHA: `rust`, `rust-integration`, `web`, `web-e2e` SUCCESS
+  (run [30446846876](https://github.com/anhnth24/project-example/actions/runs/30446846876)).
+  `rust-integration` job started Postgres+Qdrant (`MARKHAND_TEST_QDRANT_URL=http://127.0.0.1:6333`)
+  and logged `graph_similarity_edges_from_qdrant_recommend ... ok` (not skipped).
 - [PR #374](https://github.com/anhnth24/project-example/pull/374) — document deep link.
+  Merge SHA `2a8d7c053b0ca2288b0280511b0488cc2996db8a` (2026-08-03).
+  CI on merge SHA: `rust`, `rust-integration`, `web`, `web-e2e` SUCCESS
+  (run [30814514369](https://github.com/anhnth24/project-example/actions/runs/30814514369));
+  `web-e2e` logged all three `e2e/graph.spec.ts` cases including `?doc=` deep-link.
+
+### Audit outcome (closure branch)
+
+- Base / worktree SHA at audit start: `019c2fe2070f9441e92e4dcf8b4f5fcf19fc9da0`
+  (`docs(p2-17): add document graph closure plan`); working tree clean.
+- Code reality: similarity is **not** a stub. `QdrantClient::recommend` +
+  `services::graph::compute_similarity_edges` are live; route passes
+  `SimilarityDeps` when vector index + embedder are configured; fail-soft on Qdrant
+  error preserves conflict/co_citation; OpenAPI `GraphEdge.kind` enum includes
+  `similarity`. No production-code change required for this closure.
+- Local environment: Docker unavailable → PostgreSQL/Qdrant integration suite not
+  re-run here; exact-SHA CI evidence above substitutes (not soft-passed).
+
+### Local / hermetic commands (closure branch `cursor/p2-17-document-graph-e9d6`)
+
+| Command | Result |
+|---|---|
+| `cargo test -p fileconv-server services::graph --lib` | **18 passed**, 0 failed |
+| `pnpm --dir web exec vitest run src/lib/forceLayout.test.ts src/pages/GraphPage.test.tsx` | **2 files / 17 passed**, 0 failed |
+| `pnpm --dir web api:check` | **pass** (no contract drift) |
+| `cargo test -p fileconv-server storage::qdrant --lib` | **10 passed**, 0 failed (scope fail-closed helpers) |
+| `cargo test -p fileconv-server --test graph -- --include-ignored --test-threads=1` | **not run locally** (no Docker/Postgres/Qdrant); verified via PR #331 CI log above |
+| `python3 scripts/build-roadmap.py` | **pass** — 116 issues, status `{done:79, in_progress:7, review:1, backlog:29}` |
+| `python3 scripts/build-roadmap.py --check` | **pass** — roadmap up to date, source `14e2121602531a1f` |
+| `python3 scripts/sync-github-issues.py --export-json plans/markhand-web/backlog/github-issues.json` | **pass** — P2-17 `status: review` only |
+| `python3 scripts/sync-github-issues.py --dry-run` | **pass** — `[2] P2-17 — Document graph (review)` |
+| `python3 scripts/check-dependency-policy.py` | **pass** (no Rust source edits) |
+| `cargo metadata --locked --format-version 1 --no-deps` | **pass** |
 
 ### Recorded commit/SHA references
 
 - Graph MVP merge: `abb392099cfdd2df8427d26fee5ffb6ebc07ebd4`.
 - Similarity merge: `0ae8105972f510a9a8d247fbd5fa3996ddcf60cc`.
 - Deep-link merge: `2a8d7c053b0ca2288b0280511b0488cc2996db8a`.
-- Closure branch commands, current SHA, review result, and final PR are pending execution.
+- Closure plan commit: `019c2fe2070f9441e92e4dcf8b4f5fcf19fc9da0`.
+- Closure evidence/catalog commit: this change set on `cursor/p2-17-document-graph-e9d6`.
+- Independent review: pending (plan stays `In progress`; catalog → `Review`, not `Done`).
 
 ## Definition of done
 
-- [ ] Every acceptance row has current or exact-SHA reviewable evidence.
-- [ ] Focused server/web/API checks pass.
-- [ ] Qdrant integration evidence is verified and not a skipped/soft pass.
+- [x] Every acceptance row has current or exact-SHA reviewable evidence.
+- [x] Focused server/web/API checks pass.
+- [x] Qdrant integration evidence is verified and not a skipped/soft pass.
 - [ ] Independent review finds no unresolved Critical/Important issue.
-- [ ] Catalog text, status, roadmap, and tracker export are consistent.
+- [x] Catalog text, status, roadmap, and tracker export are consistent.
 - [ ] Plan and P2-17 are `Done` only after the preceding items pass.
