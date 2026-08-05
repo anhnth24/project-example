@@ -8,16 +8,20 @@
 //! `similarity` (Qdrant) HTTP-route coverage is still out of scope here:
 //! `common::build_app_state` never configures `MARKHAND_EMBEDDING_*`, so
 //! `AppState::embedder()` is always `None` in this binary's router and the
-//! route never takes the similarity path. What *is* covered, gated behind
-//! `MARKHAND_TEST_QDRANT_URL` (unset in this sandbox — see the report for why
-//! it could not be run here), is `services::graph::build_org_graph` called
-//! directly with a real `QdrantClient` + a directly-constructed
-//! `ApprovedEmbeddingRuntime` (never calls `.embed()`, so no live embedding
-//! provider is needed) — the same "service takes plain dependencies, not
-//! AppState" shape the route uses, exercised the way `tests/storage.rs`
-//! already exercises `QdrantClient` against a live instance.
+//! route never takes the similarity path. What *is* covered is
+//! `services::graph::build_org_graph` called directly with a real
+//! `QdrantClient` + a directly-constructed `ApprovedEmbeddingRuntime` (never
+//! calls `.embed()`, so no live embedding provider is needed): one
+//! PostgreSQL-backed regression forces the Qdrant client to fail against the
+//! reserved port zero, and one `MARKHAND_TEST_QDRANT_URL`-gated test exercises
+//! a live Qdrant instance. This is the same "service takes plain dependencies,
+//! not AppState" shape the route uses, exercised the way `tests/storage.rs`
+//! already exercises `QdrantClient`.
 
 mod common;
+
+use std::collections::BTreeSet;
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -650,6 +654,135 @@ async fn seed_similarity_point(
         .upsert_points(collection_name, &scope, &[point])
         .await
         .expect("upsert similarity fixture point");
+}
+
+#[tokio::test]
+async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
+    let Some((_db, pool)) = boot_pool().await else {
+        return;
+    };
+    let org = Uuid::new_v4();
+    let viewer = Uuid::new_v4();
+    let private_owner = Uuid::new_v4();
+    common::seed_user_with_permissions(
+        &pool,
+        org,
+        viewer,
+        "graph-qdrant-failure@example.com",
+        PASSWORD,
+        &["qa.query"],
+    )
+    .await;
+    common::seed_user_with_permissions(
+        &pool,
+        org,
+        private_owner,
+        "graph-qdrant-failure-private@example.com",
+        PASSWORD,
+        &[],
+    )
+    .await;
+
+    let visible_collection = seed_collection(
+        &pool,
+        org,
+        viewer,
+        "Đồ thị fail-soft",
+        CollectionVisibility::Org,
+    )
+    .await;
+    let visible_a =
+        seed_document(&pool, org, viewer, visible_collection, "Tài liệu hiển thị A").await;
+    let visible_b =
+        seed_document(&pool, org, viewer, visible_collection, "Tài liệu hiển thị B").await;
+    let version_a = seed_version(&pool, org, viewer, visible_a).await;
+    let version_b = seed_version(&pool, org, viewer, visible_b).await;
+    seed_conflict(
+        &pool, org, viewer, visible_a, version_a, visible_b, version_b,
+    )
+    .await;
+
+    let private_collection = seed_collection(
+        &pool,
+        org,
+        private_owner,
+        "Đồ thị riêng tư",
+        CollectionVisibility::Private,
+    )
+    .await;
+    let hidden =
+        seed_document(&pool, org, private_owner, private_collection, "Tài liệu bị ẩn").await;
+
+    let embedder = ApprovedEmbeddingRuntime::new(
+        "http://embedding.invalid/v1".into(),
+        "test-key".into(),
+        "mock".into(),
+        format!("graph-fail-soft-{}", Uuid::new_v4().simple()),
+        "r1".into(),
+        8,
+        RUNTIME_VLLM_LOCAL.into(),
+        Profile::Test,
+        false,
+        None,
+    )
+    .expect("embedder");
+    let signature = embedder.plan().index_signature(8).expect("signature");
+    seed_active_generation(
+        &pool,
+        org,
+        viewer,
+        visible_collection,
+        &signature,
+    )
+    .await;
+
+    // TCP port zero is reserved and cannot host Qdrant. The client also has
+    // one-second connect / two-second request timeouts; the outer timeout
+    // keeps this negative-path regression bounded even if transport behavior
+    // changes.
+    let qdrant = QdrantClient::new("http://127.0.0.1:0").expect("Qdrant client");
+    let ctx =
+        OrgContext::try_new(org, viewer, [] as [&str; 0], [visible_collection]).unwrap();
+    let graph = tokio::time::timeout(
+        Duration::from_secs(3),
+        build_org_graph(
+            &pool,
+            &ctx,
+            None,
+            Some(SimilarityDeps {
+                vector_index: &qdrant,
+                embedder: &embedder,
+            }),
+        ),
+    )
+    .await
+    .expect("Qdrant failure path must stay bounded")
+    .expect("Qdrant failure must not fail the document graph");
+
+    let node_ids: BTreeSet<_> = graph.nodes.iter().map(|node| node.id).collect();
+    assert_eq!(node_ids, BTreeSet::from([visible_a, visible_b]));
+    assert!(!node_ids.contains(&hidden), "private ACL node leaked: {node_ids:?}");
+
+    assert_eq!(graph.edges.len(), 1, "unexpected edges: {:?}", graph.edges);
+    let conflict = &graph.edges[0];
+    assert_eq!(conflict.kind, "conflict");
+    assert_eq!(
+        BTreeSet::from([conflict.source, conflict.target]),
+        BTreeSet::from([visible_a, visible_b])
+    );
+    assert!(
+        graph.edges.iter().all(|edge| edge.kind != "similarity"),
+        "failed Qdrant call must not fabricate similarity edges: {:?}",
+        graph.edges
+    );
+    assert!(
+        graph
+            .edges
+            .iter()
+            .all(|edge| edge.source != hidden && edge.target != hidden),
+        "private ACL edge leaked: {:?}",
+        graph.edges
+    );
 }
 
 #[tokio::test]
