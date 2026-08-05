@@ -5,7 +5,9 @@ Start with:
 1. [`CLAUDE.md`](CLAUDE.md) for project priorities/native dependencies.
 2. [`docs/adr/0001-web-boundaries.md`](docs/adr/0001-web-boundaries.md).
 3. [`docs/conventions/delivery.md`](docs/conventions/delivery.md) for Ready/Done.
-4. [`docs/runbooks/contributor-setup.md`](docs/runbooks/contributor-setup.md).
+4. [`docs/conventions/issues-and-plans.md`](docs/conventions/issues-and-plans.md) for the
+   canonical issue and implementation-plan formats.
+5. [`docs/runbooks/contributor-setup.md`](docs/runbooks/contributor-setup.md).
 
 ## Workflow
 

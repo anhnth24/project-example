@@ -22,6 +22,8 @@ P1A-01 ──────────> P0-03
 
 - **Status:** Done — approved Profile B, numeric targets and fail-closed validators
   merged to `master`.
+
+- **Plan file:** [P0-01 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-01-khoa-workload-hardware-va-gate-registry.md)
 - **Objective:** Thay giả định scale/SLA bằng workload envelope, hardware profile và
   gate schema được duyệt.
 - **Plan:** Ghi org/collection/document/vector, ingest/query/recovery load; CPU/RAM/
@@ -41,6 +43,8 @@ P1A-01 ──────────> P0-03
 
 - **Status:** Done — deterministic version/conflict corpus, dual adjudication and
   strict reproducibility gates passed.
+
+- **Plan file:** [P0-02 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-02-golden-corpus-tieng-viet-va-adversarial-corpus.md)
 - **Objective:** Dataset tái lập cho conversion, retrieval, citation và upload attack.
 - **Plan:** Thêm mọi format; 200–500 query với expected document/source span/
   relevance/no-answer; multi-document và immutable multi-version citations
@@ -62,6 +66,8 @@ P1A-01 ──────────> P0-03
 
 - **Status:** Done — real release conversion/local-RAG baseline and independently
   recomputed evidence accepted as the current-state reference.
+
+- **Plan file:** [P0-03 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-03-mo-rong-desktop-baseline-tren-corpus-phase-0.md)
 - **Objective:** Mở rộng parity baseline P1A-01 lên corpus/metrics Phase 0; P1A-01 là
   baseline authoritative để việc extraction không phải đợi toàn bộ corpus.
 - **Plan:** Tái dùng fixtures/harness P1A-01; chạy release conversion; snapshot top-k,
@@ -82,6 +88,8 @@ P1A-01 ──────────> P0-03
 
 - **Status:** Done — reproducible stack, pinned images, three-store lifecycle and bound
   CPU-smoke evidence passed; Profile B GPU/IOPS measurements remain downstream gates.
+
+- **Plan file:** [P0-04 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-04-spike-infrastructure-tai-lap.md)
 - **Objective:** Stack disposable PG/Qdrant/MinIO/vLLM/telemetry cho benchmark.
 - **Plan:** Tái dùng compose/services/scripts base từ F-08; thêm benchmark-specific
   override với isolated volumes/data, vLLM/GPU profile, workload sizing, image digest
@@ -104,6 +112,8 @@ P1A-01 ──────────> P0-03
   `local-cpu-quality`. GLM cloud embedding path (ADR 0004) superseded — GLM
   retained for Q&A only. GPU/vLLM capacity deferred (`G0-RET-VLLM-CUTOVER`,
   không chặn Phase 1B).
+
+- **Plan file:** [P0-05 detailed implementation plan](../../../../reports/plan-2026-07-20-p0-05-danh-gia-embedding-tieng-viet.md)
 - **Objective:** Chốt provider/model/revision/dimension/normalization đủ để lập
   trình Phase 0→1B; giữ đường cắt sang on-prem vLLM.
 - **Plan:** So hai family local trên golden corpus: `AITeamVN/Vietnamese_Embedding`
@@ -135,6 +145,8 @@ P1A-01 ──────────> P0-03
   temporal/change/conflict gates via deterministic offline rules. Closes on P0-05
   CPU quality evidence (ADR 0005 may remain Proposed until product model acceptance);
   does not require Profile B / vLLM cutover.
+
+- **Plan file:** [P0-06 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-06-chunking-hybrid-tuning-va-index-signature.md)
 - **Objective:** Chốt chunking/hybrid parameters và canonical signature.
 - **Plan:** So chunk sizes; FTS/vector/hybrid; tune RRF; định nghĩa length-delimited
   signature gồm model/revision/dim/normalize/chunk/text-normalization version;
@@ -158,6 +170,8 @@ P1A-01 ──────────> P0-03
   Qdrant shared collection with mandatory `org_id` filter and PG no-partition
   for the single-org POC. Profile B `G0-SLO-QUERY-P99` / 20M mixed-load
   evidence still blocks production aggregate scale.
+
+- **Plan file:** [P0-07 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-07-pg-qdrant-target-scale-topology.md)
 - **Objective:** Chọn Qdrant topology và PG partition strategy bằng mixed-load evidence.
 - **Plan:** Generate realistic tenants; compare shared/cohort collection and
   PG no-partition/bounded hash offline with query+ingest+delete+snapshot
@@ -180,6 +194,8 @@ P1A-01 ──────────> P0-03
 - **Status:** Done — interim local-cpu sizing harness/report closes P0-08
   deliverables with `targetMatch=false`; Profile B `G0-CAP-INGEST-THROUGHPUT`
   and production headroom remain blocked until measured on `on-prem-reference`.
+
+- **Plan file:** [P0-08 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-08-sizing-converter-va-ingest-backpressure.md)
 - **Objective:** Chốt worker count, limits, timeout, queue và recovery headroom.
 - **Plan:** Benchmark từng format native/scan/audio; single/concurrent; CPU/RAM/temp;
   PDFium serialization; converter-vs-GPU bottleneck.
@@ -201,6 +217,8 @@ P1A-01 ──────────> P0-03
 - **Status:** Done — local-cpu policy/sandbox smoke evidence closes upload
   threat model, adversarial disposition, and runtime license inventory. This
   does not claim Profile B malware scanner coverage.
+
+- **Plan file:** [P0-09 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-09-upload-threat-model-sandbox-va-license-inventory.md)
 - **Objective:** Security policy thực thi được trước khi nhận upload.
 - **Plan:** Threat model spoof/bomb/parser/SSRF/exhaustion/traversal/injection/token/
   quota/tenant/compromised worker; chốt allowlist/limits/quarantine/sandbox; inventory
@@ -225,6 +243,8 @@ P1A-01 ──────────> P0-03
   (`phase0-decisions.json`); SLA/risk register + restore/query-load smoke recorded.
   Not a production Phase 0 numeric exit: Profile B gates (query P95/P99, ingest
   capacity, DR RPO/RTO, vLLM cutover) remain open (`productionPhase0ExitBlocked=true`).
+
+- **Plan file:** [P0-10 detailed implementation plan](../../../../reports/plan-2026-07-18-p0-10-adr-slo-rpo-rto-va-phase-0-gate.md)
 - **Objective:** Chuyển evidence thành quyết định và restore/query-load smoke proof.
 - **Plan:** ADR document/artifact, tenancy/RLS, partition, Qdrant, auth/session,
   index migration, backup order; chốt SLO; offline restore smoke; close decision

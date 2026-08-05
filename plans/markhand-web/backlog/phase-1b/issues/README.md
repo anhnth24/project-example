@@ -34,6 +34,8 @@ ghi trong issue đã `Done`.
 ### P1B-F01 — Extend server skeleton với runtime POC
 
 - **Status:** done
+
+- **Plan file:** [P1B-F01 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-f01-extend-server-skeleton-voi-runtime-poc.md)
 - **Plan:** Mở rộng `crates/server` API/worker skeleton từ F-02/F-07 với runtime
   dependencies, application state, graceful shutdown và các config fields đã được
   Phase 0 phê duyệt. Không tạo lại workspace/config conventions.
@@ -56,6 +58,8 @@ ghi trong issue đã `Done`.
   The run wrote its evidence outside the tree so the gate could bind to a clean
   worktree; the accepted run was then copied in, with only the recorded raw
   directory paths rewritten to repository-relative form.
+
+- **Plan file:** [P1B-F02 detailed implementation plan](../../../../reports/plan-2026-07-26-p1b-f02-poc-deployment-va-isolation-scaffold.md)
 - **Plan:** Pinned API/converter/index images, compose services, health/init, non-root,
   read-only, tmpfs, dropped caps, converter no-egress, resource/secret limits.
 - **Files:** `deploy/{Dockerfile.server,Dockerfile.worker,compose.poc.yml,.env.example}`,
@@ -70,6 +74,8 @@ ghi trong issue đã `Done`.
 ### P1B-F03 — Multi-org-ready schema và immutable migrations
 
 - **Status:** done
+
+- **Plan file:** [P1B-F03 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-f03-multi-org-ready-schema-va-immutable-migrations.md)
 - **Plan:** Migrations org/auth/RBAC/groups/collections, immutable versions/artifacts,
   atomic current-published pointer, parent/version/effective lineage, chunks/FTS,
   normalized claims, conflict/evidence lifecycle, jobs/outbox, quota/audit/index;
@@ -84,6 +90,8 @@ ghi trong issue đã `Done`.
 ### P1B-F04 — OrgContext, repositories và state machine
 
 - **Status:** done
+
+- **Plan file:** [P1B-F04 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-f04-orgcontext-repositories-va-state-machine.md)
 - **Plan:** Tenant-scoped repos, transaction helpers, legal document transitions;
   transaction-local RLS context nếu chọn.
 - **Files:** `src/auth/context.rs`, `src/db/{orgs,collections,documents,chunks}.rs`,
@@ -96,6 +104,8 @@ ghi trong issue đã `Done`.
 ### P1B-F05 — Password auth, rotating sessions và browser refresh transport
 
 - **Status:** done
+
+- **Plan file:** [P1B-F05 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-f05-password-auth-rotating-sessions-va-browser-refresh-t.md)
 - **Plan:** Argon2; pinned JWT issuer/audience/alg/KID; short access; hashed rotating
   refresh family; provider interface; POC guards/audit; chốt transport theo auth ADR.
   Nếu dùng browser cookie: issue/rotate/clear `HttpOnly Secure SameSite`, CSRF token
@@ -112,6 +122,8 @@ ghi trong issue đã `Done`.
 ### P1B-F06 — Fail-closed PG/Qdrant/MinIO adapters
 
 - **Status:** done
+
+- **Plan file:** [P1B-F06 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-f06-fail-closed-pg-qdrant-minio-adapters.md)
 - **Plan:** Pools, opaque key builder, quarantine/trusted namespace, deterministic
   points, versioned collection, mandatory org/collection filters, typed errors.
 - **Files:** `src/storage/{keys,minio,qdrant}.rs`, `src/db/pool.rs`,
@@ -126,6 +138,8 @@ ghi trong issue đã `Done`.
 ### P1B-I01 — Streaming quarantine upload validation
 
 - **Status:** done
+
+- **Plan file:** [P1B-I01 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-i01-streaming-quarantine-upload-validation.md)
 - **Plan:** Multipart stream+hash; magic/extension canonical format; OOXML limits;
   PDF/audio limits; retention disposition.
 - **Files:** `routes/uploads.rs`, `services/upload/{stream,sniff,archive,limits}.rs`.
@@ -137,6 +151,8 @@ ghi trong issue đã `Done`.
 ### P1B-I02 — Atomic quota admission
 
 - **Status:** done
+
+- **Plan file:** [P1B-I02 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-i02-atomic-quota-admission.md)
 - **Plan:** Transactional reserve/finalize/refund, expiry, concurrent-job admission,
   quota headers/errors.
 - **Files:** `src/db/quota.rs`, `services/quota.rs`, quota middleware.
@@ -148,6 +164,8 @@ ghi trong issue đã `Done`.
 ### P1B-I03 — Durable jobs, outbox và event log
 
 - **Status:** done
+
+- **Plan file:** [P1B-I03 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-i03-durable-jobs-outbox-va-event-log.md)
 - **Plan:** Versioned payload, transactional outbox, leased SKIP LOCKED claims,
   heartbeat/retry/checkpoint/cancel/dead-letter/idempotency/sequenced events.
 - **Files:** `src/jobs/**`, `src/db/jobs.rs`.
@@ -160,6 +178,8 @@ ghi trong issue đã `Done`.
 ### P1B-I04 — Isolated converter worker
 
 - **Status:** done
+
+- **Plan file:** [P1B-I04 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-i04-isolated-converter-worker.md)
 - **Plan:** Download quarantine; materialize server-derived canonical extension;
   process/cgroup limits and kill descendants; ephemeral cleanup/heartbeat/cancel.
 - **Files:** `src/workers/{convert,sandbox,limits}.rs`, worker image/config.
@@ -171,6 +191,8 @@ ghi trong issue đã `Done`.
 ### P1B-I05 — Idempotent conversion promotion saga
 
 - **Status:** done — merged to `master` via PR #244 (2026-07-20).
+
+- **Plan file:** [P1B-I05 detailed implementation plan](../../../../reports/plan-2026-07-19-p1b-i05-idempotent-conversion-promotion-saga.md)
 - **Plan:** Checkpoint download/convert/stage/promote/DB/cleanup; immutable version;
   publish/current pointer riêng với draft/latest upload; index outbox;
   compensation/refund.
@@ -192,6 +214,8 @@ ghi trong issue đã `Done`.
   `cargo test -p fileconv-server --test index_worker -- --include-ignored`
   → 10 ok (natural A→B, multi-gen demote + idempotent replay, fairness ≤2
   `run_once`, mixed-scope, race, retry).
+
+- **Plan file:** [P1B-I06 detailed implementation plan](../../../../reports/plan-2026-07-20-p1b-i06-chunk-embedding-index-worker.md)
 - **Plan:** Core chunking + knowledge identity/signature chứa `version_id`; PG
   chunks/FTS; separate embedding batches; Qdrant payload version/effective/current;
   extract typed claim key/value/unit/scope; incremental conflict candidate outbox;
@@ -212,6 +236,8 @@ ghi trong issue đã `Done`.
   `live_reconcile_dead_letter_staging_gc` pass under rust-integration. ADR 0015
   (purge retention semantics) remains Proposed — wording follow-up only, not a
   blocker for the delete/reconcile acceptance matrix already covered by live tests.
+
+- **Plan file:** [P1B-I07 detailed implementation plan](../../../../reports/plan-2026-07-21-p1b-i07-tombstone-delete-va-reconcile.md)
 - **Plan:** PG tombstone first; idempotent vector/object cleanup; dry-run/repair
   missing/orphan/stale across three stores.
 - **Files:** `workers/{delete,reconcile}.rs`, `services/{deletion,reconciliation}.rs`.
@@ -226,6 +252,8 @@ ghi trong issue đã `Done`.
 
 - **Status:** done — PR #252 + authorization hardening PR #254 merged; hermetic
   unit acceptance in `services/retrieval` and gated PG tests in `tests/retrieval.rs`.
+
+- **Plan file:** [P1B-R01 detailed implementation plan](../../../../reports/plan-2026-07-21-p1b-r01-tenant-scoped-hybrid-retrieval.md)
 - **Plan:** Resolve scope + current/as-of/compare/history mode; query embed; parallel
   Qdrant/FTS với version filter; knowledge merge/rerank; PG hydration/recheck
   state/ACL/version; hydrate only conflict evidence whose both sides remain authorized.
@@ -247,6 +275,8 @@ ghi trong issue đã `Done`.
   `live_upload_convert_index_citation_vertical_slice` covers all
   `phase1b-mixed.yaml` ingest formats via HTTP upload → ConvertWorker/`fileconv`
   → IndexWorker → citation resolve on worker-produced IDs/artifacts/chunks.
+
+- **Plan file:** [P1B-R02 detailed implementation plan](../../../../reports/plan-2026-07-31-p1b-r02-citation-preview-va-download-authorization.md)
 - **Plan:** Stable anchor pin logical document/version number/version ID/content hash/
   effective time/current flag; fresh auth per resolve; trusted Markdown fetch; short
   single-purpose download capability.
@@ -277,6 +307,8 @@ ghi trong issue đã `Done`.
   `STRUCTURED_ENTAILMENT_AVAILABLE = false` / `force_extractive_only()` stay
   hardcoded; opt-in `MARKHAND_QA_ALLOW_UNVERIFIED_LLM` (default OFF) may emit
   `llm_unverified` with fixed warning, never grounded.
+
+- **Plan file:** [P1B-R03 detailed implementation plan](../../../../reports/plan-2026-07-31-p1b-r03-grounded-q-a-stream-va-fallback.md)
 - **Plan:** Policy-separated prompt, untrusted passage framing, GLM, version-aware
   citation validation, current answer + history/change note, token stream,
   current unresolved-conflict warnings + resolved-history note, token stream,
@@ -306,6 +338,8 @@ ghi trong issue đã `Done`.
   `live_http_collection_document_job_contract_matrix` asserts reindex same
   `jobId` with `created=false` on idempotent replay. Business API mutations
   gated by central `mutation_write_gate` middleware (see O03).
+
+- **Plan file:** [P1B-R04 detailed implementation plan](../../../../reports/plan-2026-07-31-p1b-r04-collection-document-job-rest-api.md)
 - **Plan:** `/api/v1` collection POC; upload/list/get/preview/delete/reindex; immutable
   version list/get/diff/current publish; conflict list/detail/triage + evidence routes;
   job status; pagination/idempotency/error schema.
@@ -332,6 +366,8 @@ ghi trong issue đã `Done`.
   (`live_ask_stream_maintenance_converges_under_bounded_load`) evidence.
   Production ask remains fail-closed extractive when entailment is unavailable
   (by design — see P1B-R03; not a Done blocker).
+
+- **Plan file:** [P1B-R05 detailed implementation plan](../../../../reports/plan-2026-07-31-p1b-r05-search-ask-resumable-sse-api.md)
 - **Plan:** Search/ask/stream routes; versioned sequence; Last-Event-ID replay;
   heartbeat/bounded buffering; auth expiry/revoke close.
 - **Files:** `routes/{search,ask,events}.rs`, `api/{sse,last_event_id}.rs`,
@@ -357,6 +393,8 @@ ghi trong issue đã `Done`.
   restore/recovery. Hermetic router/readiness/unit coverage unchanged (Sol R2).
   Harness fix: post-pause `wait_for_hung_ready` excludes pool-drain transition
   samples before the sustain window (see `bench/markhand_web/hanging_soak/`).
+
+- **Plan file:** [P1B-R06 detailed implementation plan](../../../../reports/plan-2026-07-31-p1b-r06-openapi-rate-limit-va-readiness.md)
 - **Plan:** Complete OpenAPI/fixtures; request IDs; CORS; IP auth/user limits; quota
   metadata; live/ready/start checks.
 - **Files:** `api/openapi.rs`, OpenAPI YAML, `middleware/**`, `routes/health.rs`,
@@ -381,6 +419,8 @@ ghi trong issue đã `Done`.
   Cargo telemetry suite, OTLP capture unit tests, live app-role audit test and
   the negative proof fixtures all passed. Report sha256 prefix
   `e8efc7b6975fdb4b`.
+
+- **Plan file:** [P1B-O01 detailed implementation plan](../../../../reports/plan-2026-07-26-p1b-o01-end-to-end-telemetry-va-safe-audit.md)
 - **Plan:** Traces API→jobs→convert/embed/retrieval/GLM; latency/queue/conversion/
   embedding/retrieval/drift/quota/backup metrics; append-only audit.
 - **Files:** `src/telemetry/**`, `services/audit.rs`, `db/audit.rs`,
@@ -402,6 +442,8 @@ ghi trong issue đã `Done`.
   dry-run→repair→idempotent plus the `worker-reconcile-oneshot` compose job, and
   a clean provenance + broad secret scan. Report sha256 prefix
   `56f0475a26fd174d`.
+
+- **Plan file:** [P1B-O02 detailed implementation plan](../../../../reports/plan-2026-07-26-p1b-o02-dashboards-alerts-va-runbooks.md)
 - **Plan:** SLO/queue/disk/dependency alerts; runbooks jobs/parser/outage/rebuild/disk/
   GLM/key rotation.
 - **Files / scope:** `deploy/observability/**`, `docs/runbooks/phase-1b/**`,
@@ -443,6 +485,8 @@ ghi trong issue đã `Done`.
   ask/stream no session init) and
   `live_write_gate_advisory_lock_concurrency_contract` (shared blocks exclusive;
   exclusive fail-closed; no pool leak).
+
+- **Plan file:** [P1B-O03 detailed implementation plan](../../../../reports/plan-2026-07-26-p1b-o03-backup-restore-va-migration-safety.md)
 - **Plan:** PG PITR, MinIO version inventory, Qdrant snapshot, consistency fence/
   manifest, restore order, reconcile-before-ready, vector rebuild.
 - **Files:** `deploy/backup/**`, `deploy/scripts/o03-bluegreen-restore-drill.sh`,
@@ -466,6 +510,8 @@ ghi trong issue đã `Done`.
   structured external worker kill → lease expiry → reclaim → replay → DB
   verification. Provenance binds the F02 project, container ids and image ids.
   Report sha256 prefix `949e14202849cf8b`.
+
+- **Plan file:** [P1B-O04 detailed implementation plan](../../../../reports/plan-2026-07-26-p1b-o04-vertical-slice-security-release-suite.md)
 - **Plan:** Clean stack, seed org/accounts; every format upload→citation; suspend/
   membership remove/delete; adversarial + fault injection.
 - **Files:** `bench/markhand_web/scripts/run_o04_release_suite.py`,
@@ -487,6 +533,7 @@ ghi trong issue đã `Done`.
   `markhand-poc-f02-20260726t121843z-1815269-17292`, with F02/O01/O02/O03/O04
   passing on that same commit and project. `o05-soak.json` is `status=pass` with
   no blockers; report sha256 prefix `a1a6d0e6ee57df4d`.
+
 - **Measured 1800s run (host: 24-core Ubuntu 22.04, Docker capped at 10 CPU):**
   - Capacity: ingest 356 documents/hour (178 of 180 uploads reached terminal
     indexed; gate ≥ 300), query p95 302 ms (≤ 500), p99 418 ms (≤ 1000).
@@ -527,6 +574,8 @@ ghi trong issue đã `Done`.
   resolves through the drill's external probe, which requires the pipeline to
   drain before the in-run restore; that only became possible once the delete and
   reconcile queues had consumers.
+
+- **Plan file:** [P1B-O05 detailed implementation plan](../../../../reports/plan-2026-07-26-p1b-o05-mixed-load-soak-va-poc-qualification.md)
 - **Plan:** Concurrent ingest/query/delete/reconcile against POC API per
   `phase1b-mixed.yaml`; opt-in worker-kill/dependency blip; Docker/API/PG sampling;
   evaluate binding thresholds from profile/gates/SLA; post-restore retrieval check.
