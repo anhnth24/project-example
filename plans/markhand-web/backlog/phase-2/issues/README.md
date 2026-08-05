@@ -453,6 +453,7 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   thể lấy vector thật + kiểm thử với Qdrant thật) trước khi bật edge này; graph vẫn
   trả đủ `conflict`/`co_citation` khi không có Qdrant, không lỗi.
 
+- **Plan file:** [P2-17 detailed implementation plan](../../../../reports/plan-2026-08-05-p2-17-document-graph-closure.md)
 - **Plan/files:** `crates/server/src/routes/graph.rs`, `db/graph.rs`, `services/graph.rs`
   (thuật toán thuần); OpenAPI path/schemas (`GraphNode`/`GraphEdge`/`GraphCommunity`/
   `GraphResponse`) + `ROUTE_INVENTORY`; `web/src/pages/GraphPage.tsx`,
