@@ -51,7 +51,7 @@ không bị local override cũ che mất.
 
 ## Tiến độ milestone (2026-08-05)
 
-Tổng **116 issue** trong catalog: **79 Done**, **7 In progress**, **1 Review**, **29 Backlog**.
+Tổng **116 issue** trong catalog: **80 Done**, **7 In progress**, **0 Review**, **29 Backlog**.
 Nguồn sự thật là `**Status:**` trong từng issue catalog; bảng dưới tóm tắt theo phase.
 GitHub milestone progress được đồng bộ bởi workflow
 [`Sync Markhand Web issues`](../../.github/workflows/sync-markhand-issues.yml) khi
@@ -64,16 +64,16 @@ GitHub milestone progress được đồng bộ bởi workflow
 | 1A | 10/10 | 0 | 0 | Extraction gate đạt |
 | 1B | 24/24 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
 | 1C | 10/13 | 2 | 1 | 1C-04/07/09/10/11 Done (CI `6833f57`, run 30678318560); 1C-08 CI half / deployed → PR 5; exit gate 1C-12/1C-13 còn mở |
-| 2 | 13/19 | 6 | 0 | MVP mock/CI xanh; P2-17 → Review (chờ independent review); exit gate chờ 1C + E2E deploy thật |
+| 2 | 14/19 | 5 | 0 | MVP mock/CI xanh; P2-17 Done sau independent final review; exit gate chờ 1C + E2E deploy thật |
 | 3 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
 | 4 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 3 |
 
 **Critical path hiện tại:** hoàn thiện 1C denial suite (1C-12/1C-13) + deployed
 1C-08 half → Phase 2 completion gate (P2-15/P2-16 trên backend thật).
 
-Issue Phase 2 gần đây (owner request 2026-07-29): **P2-17 Document graph → Review**
-(MVP + similarity + deep-link evidence đã ghi); P2-18 Project grouping và P2-19 Chat
-history vẫn In progress.
+Issue Phase 2 gần đây (owner request 2026-07-29): **P2-17 Document graph → Done**
+(MVP + similarity + deep-link + fail-soft evidence đã qua independent final review);
+P2-18 Project grouping và P2-19 Chat history vẫn In progress.
 
 ## Dependency và đường găng
 

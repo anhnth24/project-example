@@ -5,19 +5,17 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 <!-- roadmap-default-status: backlog -->
 
 **Trạng thái tổng quan (cập nhật 2026-08-05).** MVP xây trên mock server đã merge vào
-`master`: **13/19 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
-+ serve). **5 In progress + 1 Review**: P2-10 (Q&A — UI/mock/stream xây xong trên contract
-hiện có; **#374** đóng nốt gap conflict-warning demo cho as-of/compare/history — xem chi
-tiết bên dưới), P2-15 (E2E — mock-based xong; **#374** landed nửa real-deployment
-upload→indexed và lần chạy live đầu tiên của `security-deps`/`security-image`; còn ZAP
-baseline chưa chạy live), **P2-17 Review** (Document graph — MVP + Qdrant
-`similarity` recommend-by-id + deep-link `?doc=` đã landed; catalog body đã reconcile với
-code; chờ independent review — xem chi tiết bên dưới), **P2-18** (Project grouping —
-owner request mới 2026-07-29, org → project → collection → document, MVP server+web+mock
-xong; **#374** bổ sung 409 `name_taken` cho `PATCH /projects/{projectId}` vào spec +
-regenerate contract — xem chi tiết bên dưới), P2-16 (serve SPA / final gate), P2-19
-(chat history). P2-11/P2-12 rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice)
-landed ở #317.
+`master`: **14/19 issue Done** (P2-01…09, P2-11…14, P2-17). **5 active, đều In
+progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có; **#374** đóng nốt
+gap conflict-warning demo cho as-of/compare/history — xem chi tiết bên dưới), P2-15
+(E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed và lần chạy
+live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa chạy live),
+P2-18 (Project grouping — owner request mới 2026-07-29, org → project → collection →
+document, MVP server+web+mock xong; **#374** bổ sung 409 `name_taken` cho
+`PATCH /projects/{projectId}` vào spec + regenerate contract — xem chi tiết bên dưới),
+P2-16 (serve SPA / final gate), và P2-19 (chat history). P2-17 Document graph đã qua
+independent final review và chuyển `Done`; P2-11/P2-12 rời khỏi Blocked nhờ lát
+membership API (1C-02/1C-11 slice) landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
 > mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
@@ -436,8 +434,10 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
 
 ## P2-17 — Document graph
 
-- **Status:** Review — implementation và acceptance evidence đang chờ independent
-  security/code review; chưa `Done`.
+- **Status:** Done — independent final review trên range
+  `f1f3434..05b51436eb9402025c955a98563e241557e48163` kết luận spec và
+  code/evidence `APPROVED`, không có Critical/Important finding; acceptance và evidence
+  bên dưới đã đầy đủ.
 - **Plan file:** [P2-17 detailed implementation plan](../../../../reports/plan-2026-08-05-p2-17-document-graph-closure.md)
 - **Objective:** Cung cấp graph tài liệu bounded và review độc lập được: node chỉ từ tài
   liệu caller được phép thấy; edge `conflict`, `co_citation`, và opt-in `similarity`;
@@ -466,10 +466,12 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   [PR #331](https://github.com/anhnth24/project-example/pull/331) SHA
   `0ae8105972f510a9a8d247fbd5fa3996ddcf60cc`, và
   [PR #374](https://github.com/anhnth24/project-example/pull/374) SHA
-  `2a8d7c053b0ca2288b0280511b0488cc2996db8a`. Blocker đóng issue: independent
-  security/code review. Local hiện không có Docker/PostgreSQL/Qdrant hay
-  `MARKHAND_TEST_*_DATABASE_URL`, nên regression PG chỉ compile local; execution thật đã
-  được chứng minh trên CI PostgreSQL fixture và không tính missing-env skip là pass.
+  `2a8d7c053b0ca2288b0280511b0488cc2996db8a`. Independent final review đã hoàn tất
+  trên [PR #392](https://github.com/anhnth24/project-example/pull/392), reviewed head
+  `05b51436eb9402025c955a98563e241557e48163`; không còn blocker trong scope P2-17.
+  Local hiện không có Docker/PostgreSQL/Qdrant hay `MARKHAND_TEST_*_DATABASE_URL`, nên
+  regression PG chỉ compile local; execution thật đã được chứng minh trên CI PostgreSQL
+  fixture và không tính missing-env skip là pass.
 - **Acceptance criteria:** `GET /api/v1/graph` trả tối đa 500 visible nodes, tối đa 2.000
   edges và communities deterministic; thiếu `qa.query` bị 403; collection ngoài ACL bị
   404; foreign-org/private node hoặc edge không xuất hiện. Conflict/co-citation lấy từ
@@ -491,7 +493,11 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   [rust job 92366635571](https://github.com/anhnth24/project-example/actions/runs/31023634736/job/92366635571)
   và parent run
   [31023634736](https://github.com/anhnth24/project-example/actions/runs/31023634736)
-  đều success.
+  đều success. Final closure thuộc
+  [PR #392](https://github.com/anhnth24/project-example/pull/392); independent review
+  `f1f3434..05b51436eb9402025c955a98563e241557e48163` kết luận
+  `Spec compliance: APPROVED`, `Code/evidence quality: APPROVED`, không
+  Critical/Important.
   Graph MVP evidence: SHA `abb392099cfdd2df8427d26fee5ffb6ebc07ebd4`, run
   [30435638525](https://github.com/anhnth24/project-example/actions/runs/30435638525),
   jobs [rust-integration 90522758925](https://github.com/anhnth24/project-example/actions/runs/30435638525/job/90522758925),
@@ -509,11 +515,12 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   overall failure do unrelated
   [dev-stack job 91689028310](https://github.com/anhnth24/project-example/actions/runs/30814514369/job/91689028310),
   nên overall run không dùng làm graph evidence.
-- **Security/migration:** Tenant/ACL và Qdrant storage boundary bắt buộc independent
-  security review. PostgreSQL RLS + collection allow-list là authority; mỗi Qdrant read
-  mang org/collection `VectorScope`, re-check payload scope, không trả vector về app; mọi
-  failure phải không broaden scope và không log content/secret. Không đổi schema,
-  migration, dependency hoặc public API trong closure này; rollback là revert test/docs.
+- **Security/migration:** Independent final security/code review đã hoàn tất, không có
+  Critical/Important finding. PostgreSQL RLS + collection allow-list là authority; mỗi
+  Qdrant read mang org/collection `VectorScope`, re-check payload scope, không trả vector
+  về app; mọi failure phải không broaden scope và không log content/secret. Không đổi
+  schema, migration, dependency hoặc public API trong closure này; rollback là revert
+  test/docs.
 - **Out of scope:** Qdrant batch recommend; tuning threshold `0.5` trên corpus thật;
   clustering ngoài deterministic connected components; production deployment/Phase 2
   exit gate; batch/tuning và issue khác.

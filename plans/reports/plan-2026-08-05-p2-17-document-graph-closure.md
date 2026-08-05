@@ -4,7 +4,7 @@ Created: 2026-08-05
 Source issue: catalog synchronization pending
 Catalog: [Phase 2 issue catalog](../markhand-web/backlog/phase-2/issues/README.md#p2-17--document-graph)
 Phase plan: [Phase 2 Web SPA](../markhand-web/phase-2-web-spa.md)
-Status: In progress
+Status: Done
 
 ## Objective
 
@@ -112,10 +112,10 @@ commands from `CLAUDE.md`.
 ## Security and migration notes
 
 This issue crosses the tenant/ACL and Qdrant storage boundary, so independent security
-review is mandatory. Review must confirm every recommend request carries mandatory
-`VectorScope`, foreign-org points cannot become nodes/edges, vectors are not returned to
-the application, and failures do not broaden scope. No migration or dependency change is
-planned; if audit finds one necessary, stop and revise this plan before implementation.
+review was mandatory and is now complete with no Critical/Important finding. Evidence
+confirms every recommend request carries mandatory `VectorScope`, foreign-org points
+cannot become nodes/edges, vectors are not returned to the application, and failures do
+not broaden scope. No migration or dependency change was made.
 
 ## Out of scope
 
@@ -194,10 +194,10 @@ planned; if audit finds one necessary, stop and revise this plan before implemen
 | `cargo test -p fileconv-server --test graph graph_qdrant_failure_preserves_acl_scoped_conflict_graph -- --exact --test-threads=1` | **not run locally** — PostgreSQL variables/binaries unavailable; CI execution required |
 | `cargo test -p fileconv-server --test graph -- --include-ignored --test-threads=1` | **not run locally** (no Docker/Postgres/Qdrant); live-Qdrant behavior verified via PR #331 CI job above |
 | `cargo clippy --no-deps -p fileconv-server --test graph -- -D warnings` | **blocked by pre-existing unrelated** `common/fts_visibility_diagnostic.rs` `uninlined_format_args`; rerun with only that lint allowed passed, so the changed graph target had no additional warning |
-| `python3 scripts/build-roadmap.py` | **pass** — 116 issues, status `{done:79, in_progress:7, review:1, backlog:29}` |
-| `python3 scripts/build-roadmap.py --check` | **pass** — roadmap up to date, source `14e2121602531a1f` |
-| `python3 scripts/sync-github-issues.py --export-json plans/markhand-web/backlog/github-issues.json` | **pass** — P2-17 `status: review` only |
-| `python3 scripts/sync-github-issues.py --dry-run` | **pass** — `[2] P2-17 — Document graph (review)` |
+| `python3 scripts/build-roadmap.py` | **pass** — 116 issues, status `{done:80, in_progress:7, review:0, backlog:29}` |
+| `python3 scripts/build-roadmap.py --check` | **pass** — roadmap up to date, source `f67a9b275753e031` |
+| `python3 scripts/sync-github-issues.py --export-json plans/markhand-web/backlog/github-issues.json` | **pass** — P2-17 is the only issue whose **status** changes in this closure (`review` → `done`; across delivery `in_progress` → `review` → `done`); deterministic full export also retains the reconciled P2-10/P2-18 body-only base drift while both statuses remain `in_progress` |
+| `python3 scripts/sync-github-issues.py --dry-run` | **pass** — `[2] P2-17 — Document graph (done)` |
 | `cargo fmt --all -- --check` | **pass** after formatting follow-up |
 | `python3 scripts/check-dependency-policy.py` | **pass** |
 | `cargo metadata --locked --format-version 1 --no-deps` | **pass** |
@@ -222,15 +222,31 @@ completed **success**:
 ### Generated tracker drift disposition
 
 Whole-branch comparison against base `f1f3434` changes generated issue objects P2-10,
-P2-17, and P2-18, but only P2-17 changes status (`in_progress` → `review`). P2-10 and
-P2-18 source catalog text already contained the #374 updates on base while the checked-in
-`github-issues.json` still rendered their older text (`chưa làm` for P2-10 and the
-pre-#374 P2-18 evidence). The deterministic full-catalog command
+P2-17, and P2-18, but only P2-17 changes status (`in_progress` → `review` → `done`);
+the final closure delta is `review` → `done`. P2-10 and P2-18 source catalog text already
+contained the #374 updates on base while the checked-in `github-issues.json` still
+rendered their older text (`chưa làm` for P2-10 and the pre-#374 P2-18 evidence). The
+deterministic full-catalog command
 `python3 scripts/sync-github-issues.py --export-json
 plans/markhand-web/backlog/github-issues.json` atomically reconciles all 116 issue
 bodies. Partially reverting only P2-10/P2-18 would make the artifact noncanonical and the
 next export dirty again, so the generated reconciliation is retained. Their catalog
 sources and statuses were not edited by this closure.
+
+### Independent final review
+
+- Final delivery PR:
+  [PR #392](https://github.com/anhnth24/project-example/pull/392), branch
+  `cursor/p2-17-document-graph-e9d6`.
+- Independent review covered range
+  `f1f3434..05b51436eb9402025c955a98563e241557e48163`.
+- Reviewer verdict supplied by the coordinator on 2026-08-05:
+  `Spec compliance: APPROVED`; `Code/evidence quality: APPROVED`; no
+  Critical/Important findings. No review URL was supplied, so none is invented here.
+- The two remaining Minor documentation findings were corrected in the final closure:
+  generated P2-10/P2-18 body reconciliation is distinguished from P2-17's sole status
+  transition, and the scratch report's superseded three-second/conflict-only description
+  is replaced with the tested five-second/conflict+co-citation behavior.
 
 ### Lifecycle note
 
@@ -253,9 +269,11 @@ the authoritative catalog/evidence. History is preserved; no status commit was r
   `6031a81d6eff7ffc0f7f2060fab770bb0a5de163`.
 - Listener-observed fail-soft regression:
   `50ef793e78f6ab21be5b87e14707d6f9d6c48376`.
-- Canonical catalog/final evidence fix: this change set on
-  `cursor/p2-17-document-graph-e9d6`.
-- Independent review: pending (plan stays `In progress`; catalog → `Review`, not `Done`).
+- Canonical catalog/evidence head reviewed independently:
+  `05b51436eb9402025c955a98563e241557e48163`.
+- Final delivery: [PR #392](https://github.com/anhnth24/project-example/pull/392);
+  plan and catalog move to `Done` only in this documentation closure after the preceding
+  independent approval.
 
 ## Definition of done
 
@@ -263,6 +281,15 @@ the authoritative catalog/evidence. History is preserved; no status commit was r
   DB-backed integration step logged the new fail-soft regression `... ok`.
 - [x] Focused server/web/API checks pass.
 - [x] Qdrant integration evidence is verified and not a skipped/soft pass.
-- [ ] Independent review finds no unresolved Critical/Important issue.
+- [x] No migration, dependency, public-contract, production-code, deployment, benchmark,
+  or additional performance gate applies to this documentation/test closure; rollback is
+  the scoped test/docs revert already recorded.
+- [x] The changed test/docs do not log document content, prompt, PII, token, key, signed
+  URL, customer corpus, or secret-bearing output.
+- [x] Relevant docs/evidence are current; OpenAPI/runbook/ADR changes are not applicable
+  because no public contract or architecture changed.
+- [x] Independent review on `f1f3434..05b51436eb9402025c955a98563e241557e48163`
+  reports both spec and code/evidence `APPROVED`, with no Critical/Important finding.
 - [x] Catalog text, status, roadmap, and tracker export are consistent.
-- [ ] Plan and P2-17 are `Done` only after the preceding items pass.
+- [x] Dependencies/blockers and phase/aggregate roadmap counts are updated.
+- [x] Plan and P2-17 are `Done` only after the preceding items pass.
