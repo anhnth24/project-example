@@ -16,6 +16,7 @@
 | `pdf-extract` | `=0.8.2` | 0.12 **panic** trên một số PDF mà 0.8.2 xử lý được |
 | `symphonia` | `0.5` | 0.6 cấu trúc lại module, đổi API |
 | `time` (app) | `=0.3.51` | tương thích cookie 0.18.1 |
+| `sha2` (workspace, `sha2 = "=0.11.0"`) | `=0.11.0` | contract durable intelligence ID `sha256-v1` (ADR 0013): `DefaultHasher` không ổn định qua version Rust nên ID SQLite/HNSW/handoff sẽ trôi; pin để cùng họ crate với ADR 0006 (server digest) — đừng nâng ngoài quy trình ADR |
 
 Crate chính (không pin cứng nhưng cố ý giữ ổn định): `pdfium-render 0.9.2`, `pdf-inspector 0.1.3`,
 `docx-rust 0.1.11`, `whisper-rs 0.16`, `htmd 0.5`, `calamine 0.35`, `quick-xml 0.37`, `zip 2.2`,
@@ -25,7 +26,7 @@ Crate chính (không pin cứng nhưng cố ý giữ ổn định): `pdfium-rend
 
 PDF và whisper **đắt** → phải giữ pattern cache. Đừng "dọn" thành gọi thẳng mỗi lần.
 
-- **PDFium thread_local + PDFIUM_CALL lock** (`crates/core/src/conv/pdf.rs`): `thread_local! { static PDFIUM: Option<Pdfium> = load_pdfium() }`.
+- **PDFium thread_local + PDFIUM_CALL lock** (`crates/core/src/conv/pdf/pdfium.rs`): `thread_local! { static PDFIUM: Option<Pdfium> = load_pdfium() }`.
   Mỗi thread 1 instance, init 1 lần/tiến trình. Chỉ load khi thực sự cần OCR (`need_pdfium` gate).
   **libpdfium KHÔNG thread-safe**: mỗi region dùng PDFium (cả render+OCR) phải acquire `PDFIUM_CALL: Mutex<()>` trước.
   Concurrent scanned-PDF conversions sẽ queue tại lock (trade-off vs throughput).
@@ -39,7 +40,8 @@ PDF và whisper **đắt** → phải giữ pattern cache. Đừng "dọn" thàn
   (`audio_threads`, `audio_no_speech_threshold`) stay on `AudioEngine` and are **not** part of the
   cache key. Resample to 16 kHz uses `rubato` FFT with partial/flush + `output_delay` trim;
   returns `Result` (never invents silence on failure). Trả `Unsupported` nếu chưa có model.
-- **Tesseract**: spawn mỗi lần qua `crate::proc::background_command()` (không cache process). Temp PNG dùng bộ đếm `AtomicU64`.
+- **Tesseract**: spawn mỗi lần qua `crate::proc::background_command()` (không cache process). Temp PNG ghi qua
+  `tempfile::NamedTempFile` (exclusive `O_EXCL`/tên random) — tránh path đoán được trong `/tmp`.
 
 ## Subprocess spawning — MUST dùng `crate::proc::background_command`
 
@@ -74,7 +76,7 @@ và cách app/CLI gom file.
 
 ## Khi đổi OCR / PDF — MUST đo lại
 
-Sau bất kỳ thay đổi nào ở `image_ocr.rs`, `audio.rs`, `conv/pdf.rs`: **đo lại** bằng CLI trên corpus
+Sau bất kỳ thay đổi nào ở `image_ocr.rs`, `audio.rs`, `conv/pdf/`: **đo lại** bằng CLI trên corpus
 (tái tạo qua `bench/*.sh`):
 
 ```bash
@@ -100,8 +102,14 @@ Không đo lại = không claims "nhanh/đúng hơn". Quy tắc Fail loud: báo 
 ## Tính năng (feature gates)
 
 - `default = []` — core build tinh gọn, offline.
-- `cuda` / `metal` / `vulkan` / `hipblas` / `openblas` / `openmp` → proxy sang `whisper-rs` để tăng tốc GPU.
-- `llm` → `reqwest` (blocking, rustls-tls) + `base64`, mở `pub mod llm`. **MCP crate luôn build với `llm`.**
+- feature `audio` (opt-in) → `whisper-rs`/`symphonia`/`rubato`, mở transcribe. TẮT mặc định: whisper.cpp
+  phải compile C++ qua cmake (~1–2 phút), chỉ CLI/desktop/MCP cần — server/knowledge dùng lõi text-only
+  không gánh chi phí này.
+- `cuda` / `metal` / `vulkan` / `hipblas` / `openblas` / `openmp` → **kéo theo feature `audio`** (proxy
+  sang `whisper-rs` để tăng tốc GPU/BLAS), không bật độc lập được.
+- `llm` → `reqwest` (blocking, rustls-tls) + `httpdate`, mở `pub mod llm`. `base64` là dependency
+  **không điều kiện** (dùng cả ngoài `llm`, ví dụ `pptx_preview.rs`), không phải feature dep của `llm`.
+  **MCP crate luôn build với `llm`.**
 
 ## Build native (yêu cầu môi trường)
 
@@ -117,7 +125,6 @@ Override đường dẫn qua env: `FILECONV_PDFIUM_LIB`, `FILECONV_TESSDATA`, `F
 
 - `pdf-extract` và `pdf-inspector` đều bọc `catch_unwind(AssertUnwindSafe)` — lopdf/pdf-extract panic trên PDF malformed. Giữ wrapper.
 - `tables.rs` CSV path dùng `String::from_utf8_lossy` và **không** decode TCVN3 như `csv_conv.rs` — bất nhất đã biết.
-- CLI `count_pages` cho PPTX shell ra `python3` trong khi `probe.rs` đếm native Rust — logic trùng, 2 implementation.
 
 ## Tham chiếu chéo
 - Map code: [`codebase-summary.md`](codebase-summary.md)
