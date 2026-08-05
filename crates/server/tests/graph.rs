@@ -12,11 +12,13 @@
 //! `services::graph::build_org_graph` called directly with a real
 //! `QdrantClient` + a directly-constructed `ApprovedEmbeddingRuntime` (never
 //! calls `.embed()`, so no live embedding provider is needed): one
-//! PostgreSQL-backed regression forces the Qdrant client to fail against the
-//! reserved port zero, and one `MARKHAND_TEST_QDRANT_URL`-gated test exercises
-//! a live Qdrant instance. This is the same "service takes plain dependencies,
-//! not AppState" shape the route uses, exercised the way `tests/storage.rs`
-//! already exercises `QdrantClient`.
+//! PostgreSQL-backed regression uses a test-local TCP peer to complete the
+//! representative-point scroll handshake, observe the real recommend query,
+//! then close the connection so the Qdrant client fails; one
+//! `MARKHAND_TEST_QDRANT_URL`-gated test exercises a live Qdrant instance.
+//! This is the same "service takes plain dependencies, not AppState" shape the
+//! route uses, exercised the way `tests/storage.rs` already exercises
+//! `QdrantClient`.
 
 mod common;
 
@@ -47,6 +49,8 @@ use fileconv_server::storage::qdrant::{
 };
 use http_body_util::BodyExt;
 use serde_json::Value;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -656,6 +660,153 @@ async fn seed_similarity_point(
         .expect("upsert similarity fixture point");
 }
 
+const MAX_QDRANT_TEST_REQUEST_BYTES: usize = 64 * 1024;
+
+#[derive(Debug)]
+struct RecordedQdrantRequest {
+    method: String,
+    path: String,
+    body: Value,
+}
+
+#[derive(Debug)]
+struct RecordedQdrantTraffic {
+    scroll: RecordedQdrantRequest,
+    recommend: RecordedQdrantRequest,
+}
+
+async fn read_qdrant_test_request(stream: &mut TcpStream) -> RecordedQdrantRequest {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    let header_end = loop {
+        let read = stream.read(&mut buffer).await.expect("read Qdrant request");
+        assert!(read > 0, "Qdrant test peer received EOF before headers");
+        request.extend_from_slice(&buffer[..read]);
+        assert!(
+            request.len() <= MAX_QDRANT_TEST_REQUEST_BYTES,
+            "Qdrant test request exceeded byte bound"
+        );
+        if let Some(index) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            break index + 4;
+        }
+    };
+
+    let headers = std::str::from_utf8(&request[..header_end]).expect("HTTP headers are UTF-8");
+    let mut lines = headers.split("\r\n");
+    let request_line = lines.next().expect("HTTP request line");
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().expect("HTTP method").to_string();
+    let path = request_parts.next().expect("HTTP path").to_string();
+    assert_eq!(
+        request_parts.next(),
+        Some("HTTP/1.1"),
+        "expected HTTP/1.1 request"
+    );
+    assert!(
+        request_parts.next().is_none(),
+        "unexpected request-line fields: {request_line}"
+    );
+
+    let content_length = lines
+        .filter_map(|line| line.split_once(':'))
+        .find_map(|(name, value)| {
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().expect("valid Content-Length"))
+        })
+        .expect("Qdrant JSON request must have Content-Length");
+    assert!(
+        header_end + content_length <= MAX_QDRANT_TEST_REQUEST_BYTES,
+        "Qdrant test request body exceeded byte bound"
+    );
+    while request.len() < header_end + content_length {
+        let read = stream.read(&mut buffer).await.expect("read Qdrant body");
+        assert!(read > 0, "Qdrant test peer received EOF before body");
+        request.extend_from_slice(&buffer[..read]);
+        assert!(
+            request.len() <= MAX_QDRANT_TEST_REQUEST_BYTES,
+            "Qdrant test request exceeded byte bound"
+        );
+    }
+    let body = serde_json::from_slice(&request[header_end..header_end + content_length])
+        .expect("Qdrant request body is JSON");
+    RecordedQdrantRequest { method, path, body }
+}
+
+async fn accept_qdrant_test_request(listener: &TcpListener) -> (TcpStream, RecordedQdrantRequest) {
+    let (mut stream, _) = tokio::time::timeout(Duration::from_secs(3), listener.accept())
+        .await
+        .expect("Qdrant test peer accept must stay bounded")
+        .expect("accept Qdrant test connection");
+    let request = tokio::time::timeout(
+        Duration::from_secs(3),
+        read_qdrant_test_request(&mut stream),
+    )
+    .await
+    .expect("Qdrant test request read must stay bounded");
+    (stream, request)
+}
+
+async fn start_failing_qdrant_test_peer(
+    org: Uuid,
+    collection_id: Uuid,
+    document_id: Uuid,
+    version_id: Uuid,
+) -> (String, tokio::task::JoinHandle<RecordedQdrantTraffic>, Uuid) {
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind Qdrant test peer");
+    let address = listener.local_addr().expect("Qdrant test peer address");
+    let representative_point_id = Uuid::new_v4();
+    let task = tokio::spawn(async move {
+        let (mut scroll_stream, scroll) = accept_qdrant_test_request(&listener).await;
+        let scroll_response = serde_json::json!({
+            "result": {
+                "points": [{
+                    "id": representative_point_id.to_string(),
+                    "payload": {
+                        "org_id": org.to_string(),
+                        "collection_id": collection_id.to_string(),
+                        "document_id": document_id.to_string(),
+                        "version_id": version_id.to_string(),
+                        "chunk_id": "a".repeat(64),
+                        "ordinal": 0,
+                        "is_current": true,
+                        "is_effective": true,
+                        "index_generation": 1
+                    }
+                }],
+                "next_page_offset": null
+            },
+            "status": "ok",
+            "time": 0.0
+        })
+        .to_string();
+        let content_length = scroll_response.len();
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {content_length}\r\nconnection: close\r\n\r\n{scroll_response}"
+        );
+        scroll_stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("write Qdrant scroll response");
+        scroll_stream
+            .shutdown()
+            .await
+            .expect("close Qdrant scroll response");
+
+        let (mut recommend_stream, recommend) = accept_qdrant_test_request(&listener).await;
+        // The real Qdrant recommend request has now reached the test peer. Close
+        // without an HTTP response so reqwest deterministically reports a
+        // transport error to `compute_similarity_edges`.
+        recommend_stream
+            .shutdown()
+            .await
+            .expect("close Qdrant recommend connection");
+        RecordedQdrantTraffic { scroll, recommend }
+    });
+    (format!("http://{address}"), task, representative_point_id)
+}
+
 #[tokio::test]
 async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
     let Some((_db, pool)) = boot_pool().await else {
@@ -713,6 +864,7 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
         &pool, org, viewer, visible_a, version_a, visible_b, version_b,
     )
     .await;
+    seed_co_citation(&pool, org, viewer, visible_a, visible_b).await;
 
     let private_collection = seed_collection(
         &pool,
@@ -730,6 +882,44 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
         "Tài liệu bị ẩn",
     )
     .await;
+    seed_co_citation(&pool, org, private_owner, visible_a, hidden).await;
+
+    let foreign_org = Uuid::new_v4();
+    let foreign_owner = Uuid::new_v4();
+    common::seed_user_with_permissions(
+        &pool,
+        foreign_org,
+        foreign_owner,
+        "graph-qdrant-failure-foreign@example.com",
+        PASSWORD,
+        &["qa.query"],
+    )
+    .await;
+    let foreign_collection = seed_collection(
+        &pool,
+        foreign_org,
+        foreign_owner,
+        "Đồ thị tenant khác",
+        CollectionVisibility::Org,
+    )
+    .await;
+    let foreign_a = seed_document(
+        &pool,
+        foreign_org,
+        foreign_owner,
+        foreign_collection,
+        "Tài liệu tenant khác A",
+    )
+    .await;
+    let foreign_b = seed_document(
+        &pool,
+        foreign_org,
+        foreign_owner,
+        foreign_collection,
+        "Tài liệu tenant khác B",
+    )
+    .await;
+    seed_co_citation(&pool, foreign_org, foreign_owner, foreign_a, foreign_b).await;
 
     let embedder = ApprovedEmbeddingRuntime::new(
         "http://embedding.invalid/v1".into(),
@@ -747,14 +937,12 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
     let signature = embedder.plan().index_signature(8).expect("signature");
     seed_active_generation(&pool, org, viewer, visible_collection, &signature).await;
 
-    // TCP port zero is reserved and cannot host Qdrant. The client also has
-    // one-second connect / two-second request timeouts; the outer timeout
-    // keeps this negative-path regression bounded even if transport behavior
-    // changes.
-    let qdrant = QdrantClient::new("http://127.0.0.1:0").expect("Qdrant client");
+    let (qdrant_url, mut qdrant_peer, representative_point_id) =
+        start_failing_qdrant_test_peer(org, visible_collection, visible_a, version_a).await;
+    let qdrant = QdrantClient::new(qdrant_url).expect("Qdrant client");
     let ctx = OrgContext::try_new(org, viewer, [] as [&str; 0], [visible_collection]).unwrap();
-    let graph = tokio::time::timeout(
-        Duration::from_secs(3),
+    let graph_result = tokio::time::timeout(
+        Duration::from_secs(5),
         build_org_graph(
             &pool,
             &ctx,
@@ -765,35 +953,82 @@ async fn graph_qdrant_failure_preserves_acl_scoped_conflict_graph() {
             }),
         ),
     )
-    .await
-    .expect("Qdrant failure path must stay bounded")
-    .expect("Qdrant failure must not fail the document graph");
+    .await;
+    let traffic = match tokio::time::timeout(Duration::from_secs(4), &mut qdrant_peer).await {
+        Ok(result) => result.expect("Qdrant test peer task"),
+        Err(_) => {
+            qdrant_peer.abort();
+            let _ = qdrant_peer.await;
+            panic!("similarity path did not reach the Qdrant test peer");
+        }
+    };
+    let graph = graph_result
+        .expect("Qdrant failure path must stay bounded")
+        .expect("Qdrant failure must not fail the document graph");
+
+    assert_eq!(traffic.scroll.method, "POST");
+    assert!(
+        traffic
+            .scroll
+            .path
+            .starts_with("/collections/markhand_chunks_")
+            && traffic.scroll.path.ends_with("/points/scroll"),
+        "unexpected representative-point request path: {}",
+        traffic.scroll.path
+    );
+    assert_eq!(traffic.scroll.body["with_vector"], false);
+    assert_eq!(traffic.recommend.method, "POST");
+    assert!(
+        traffic
+            .recommend
+            .path
+            .starts_with("/collections/markhand_chunks_")
+            && traffic.recommend.path.ends_with("/points/query"),
+        "unexpected recommend request path: {}",
+        traffic.recommend.path
+    );
+    assert_eq!(
+        traffic.recommend.body["query"]["recommend"]["positive"],
+        serde_json::json!([representative_point_id.to_string()]),
+        "Qdrant query must be recommend-by-point"
+    );
+    assert!(
+        traffic.recommend.body["filter"]["must"]
+            .as_array()
+            .is_some_and(|clauses| {
+                clauses.iter().any(|clause| clause["key"] == "org_id")
+                    && clauses
+                        .iter()
+                        .any(|clause| clause["key"] == "collection_id")
+            }),
+        "recommend request must carry mandatory tenant scope: {}",
+        traffic.recommend.body
+    );
 
     let node_ids: BTreeSet<_> = graph.nodes.iter().map(|node| node.id).collect();
     assert_eq!(node_ids, BTreeSet::from([visible_a, visible_b]));
+    let excluded_ids = BTreeSet::from([hidden, foreign_a, foreign_b]);
     assert!(
-        !node_ids.contains(&hidden),
-        "private ACL node leaked: {node_ids:?}"
+        node_ids.is_disjoint(&excluded_ids),
+        "private/foreign ACL node leaked: {node_ids:?}"
     );
 
-    assert_eq!(graph.edges.len(), 1, "unexpected edges: {:?}", graph.edges);
-    let conflict = &graph.edges[0];
-    assert_eq!(conflict.kind, "conflict");
-    assert_eq!(
-        BTreeSet::from([conflict.source, conflict.target]),
-        BTreeSet::from([visible_a, visible_b])
-    );
+    assert_eq!(graph.edges.len(), 2, "unexpected edges: {:?}", graph.edges);
+    let edge_kinds: BTreeSet<_> = graph.edges.iter().map(|edge| edge.kind.as_str()).collect();
+    assert_eq!(edge_kinds, BTreeSet::from(["co_citation", "conflict"]));
+    assert!(graph.edges.iter().all(|edge| {
+        BTreeSet::from([edge.source, edge.target]) == BTreeSet::from([visible_a, visible_b])
+    }));
     assert!(
         graph.edges.iter().all(|edge| edge.kind != "similarity"),
         "failed Qdrant call must not fabricate similarity edges: {:?}",
         graph.edges
     );
     assert!(
-        graph
-            .edges
-            .iter()
-            .all(|edge| edge.source != hidden && edge.target != hidden),
-        "private ACL edge leaked: {:?}",
+        graph.edges.iter().all(
+            |edge| !excluded_ids.contains(&edge.source) && !excluded_ids.contains(&edge.target)
+        ),
+        "private/foreign ACL edge leaked: {:?}",
         graph.edges
     );
 }
