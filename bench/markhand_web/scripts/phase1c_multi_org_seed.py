@@ -32,6 +32,7 @@ COMPOSE_FILE = ROOT / "deploy/compose.poc.yml"
 MULTIPART_BOUNDARY = "----markhandPhase1cSeedBoundary"
 IDENTITY_FIXTURE_BOUNDARY = "phase1c-identity-fixture-boundary"
 RESOURCE_FIXTURE_BOUNDARY = "phase1c-resource-fixture-boundary"
+DUPLICATE_COLLECTION_NAME = "Shared Contract Collection"
 BETA_USER_ID = "33333333-3333-3333-3333-333333333301"
 BETA_EMAIL = "phase1c-beta@poc.example"
 DISPOSABLE_USER_ID = "44444444-4444-4444-4444-444444444401"
@@ -160,6 +161,12 @@ def _bootstrap_identity_users(password_hash_sql: str, *, challenge: str) -> str:
         INSERT INTO users (id, email, display_name, password_hash)
         VALUES ('{DELETE_MEMBER_USER_ID}', '{DELETE_MEMBER_EMAIL}', 'Phase 1C Delete Member', '{password_hash_sql}')
         ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, password_hash = EXCLUDED.password_hash;
+        INSERT INTO org_memberships (org_id, user_id, role, state)
+        VALUES
+            ('{ALPHA_ORG_ID}', '{DISPOSABLE_USER_ID}', 'viewer', 'active'),
+            ('{ALPHA_ORG_ID}', '{ACCEPT_USER_ID}', 'viewer', 'active'),
+            ('{ALPHA_ORG_ID}', '{DELETE_MEMBER_USER_ID}', 'viewer', 'active')
+        ON CONFLICT (org_id, user_id) DO UPDATE SET state = 'active';
         COMMIT;
         """
     )
@@ -493,6 +500,21 @@ def _wait_for_citation_index(
     raise RuntimeError("citation fixture indexing timeout")
 
 
+def _wait_for_markdown_artifact(*, org_id: str, version_id: str, timeout_ms: int = 120_000) -> None:
+    deadline = time.monotonic() + (timeout_ms / 1000.0)
+    while time.monotonic() <= deadline:
+        markdown_sha = _psql(
+            f"""
+            SELECT content_sha256 FROM derived_artifacts
+            WHERE org_id = '{org_id}' AND version_id = '{version_id}' AND artifact_kind = 'markdown'
+            """
+        )
+        if markdown_sha.strip():
+            return
+        time.sleep(0.5)
+    raise RuntimeError("markdown artifact readiness timeout")
+
+
 def _load_citation_fixture(
     *,
     api_base: str,
@@ -585,7 +607,6 @@ def run_seed() -> int:
         raise RuntimeError("password hash generation failed")
     password_hash = hash_proc.stdout.strip().replace("'", "''")
     _reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID], challenge=challenge)
-    disposable_email = _bootstrap_identity_users(password_hash, challenge=challenge)
 
     alpha_login = _login(api_base, alpha_email, password)
     alpha_access = alpha_login.get("accessToken") or alpha_login.get("access_token")
@@ -610,8 +631,9 @@ def run_seed() -> int:
         raise RuntimeError("beta org response missing id/slug")
     org_beta_id = validate_uuid(org_beta_id, field="orgBetaId")
     _reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID, org_beta_id], challenge=challenge)
+    disposable_email = _bootstrap_identity_users(password_hash, challenge=challenge)
 
-    alpha_beta_access, alpha_beta_refresh, _ = _switch_org(api_base, alpha_access, org_beta_id)
+    alpha_beta_access, alpha_beta_refresh, _alpha_beta_session_id = _switch_org(api_base, alpha_access, org_beta_id)
 
     beta_org_invite_body = {"email": BETA_EMAIL, "role": "editor"}
     beta_org_invite_status, _, beta_org_invite_raw = _http(
@@ -662,6 +684,18 @@ def run_seed() -> int:
         token=beta_org_access,
         marker=marker_beta,
         slug_prefix="phase1c-beta",
+    )
+    alpha_duplicate_collection_id = _create_collection(
+        api_base=api_base,
+        token=alpha_access,
+        marker=DUPLICATE_COLLECTION_NAME,
+        slug_prefix="phase1c-alpha-dup",
+    )
+    beta_duplicate_collection_id = _create_collection(
+        api_base=api_base,
+        token=beta_org_access,
+        marker=DUPLICATE_COLLECTION_NAME,
+        slug_prefix="phase1c-beta-dup",
     )
     beta_denial_disposable_collection_id = _create_collection(
         api_base=api_base,
@@ -824,6 +858,19 @@ def run_seed() -> int:
         document_id=beta_denial_disposable_document_id,
         version_id=validate_uuid(disposable_upload["versionId"], field="betaDenialDisposableVersionId"),
     )
+    quarantine_upload = _multipart_upload(
+        api_base=api_base,
+        token=beta_org_access,
+        collection_id=beta_collection_id,
+        filename="phase1c-quarantine.csv",
+        content=b"=1+1\r\n",
+    )
+    beta_denial_quarantined_document_id = validate_uuid(
+        quarantine_upload["documentId"], field="betaDenialQuarantinedDocumentId"
+    )
+    beta_denial_quarantined_collection_id = beta_collection_id
+    _wait_for_markdown_artifact(org_id=org_beta_id, version_id=beta_version_id)
+    _wait_for_markdown_artifact(org_id=ALPHA_ORG_ID, version_id=alpha_version_id)
     alpha_download_capability = _issue_download_capability(
         api_base=api_base,
         token=alpha_access,
@@ -906,7 +953,46 @@ def run_seed() -> int:
         api_base, email=disposable_email, password=password
     )
 
-    beta_denial_negative_invite_token = f"mhinv1.{secrets.token_hex(32)}"
+    patch_disposable_status, _, _ = _http(
+        api_base=api_base,
+        method="PATCH",
+        path=f"/api/v1/members/{DISPOSABLE_USER_ID}",
+        token=beta_org_access,
+        body={"role": "viewer"},
+    )
+    if patch_disposable_status // 100 != 2:
+        raise RuntimeError("disposable downgrade for stale token fixture failed")
+    beta_denial_stale_after_downgrade_token = _capture_stale_access_token(
+        api_base, email=disposable_email, password=password
+    )
+
+    delete_member_status, _, _ = _http(
+        api_base=api_base,
+        method="DELETE",
+        path=f"/api/v1/members/{DELETE_MEMBER_USER_ID}",
+        token=beta_org_access,
+    )
+    if delete_member_status // 100 != 2:
+        raise RuntimeError("delete-member removal for stale token fixture failed")
+    beta_denial_stale_after_remove_token = _capture_stale_access_token(
+        api_base, email=DELETE_MEMBER_EMAIL, password=password
+    )
+
+    already_member_invite_status, _, already_member_invite_raw = _http(
+        api_base=api_base,
+        method="POST",
+        path="/api/v1/members/invites",
+        token=beta_org_access,
+        body={"email": BETA_EMAIL, "role": "viewer"},
+    )
+    if already_member_invite_status not in {200, 201}:
+        raise RuntimeError("already-member invite fixture failed")
+    already_member_payload = json.loads(already_member_invite_raw)
+    beta_denial_already_member_invite_token = already_member_payload.get("token")
+    if not isinstance(beta_denial_already_member_invite_token, str):
+        raise RuntimeError("already-member invite response missing token")
+
+    beta_denial_negative_invite_token = f"mhinv1.{org_beta_id}.{secrets.token_hex(16)}"
 
     seed_raw: dict[str, Any] = {
         "schemaVersion": 1,
@@ -923,6 +1009,8 @@ def run_seed() -> int:
         "markerBeta": marker_beta,
         "alphaCollectionId": alpha_collection_id,
         "betaCollectionId": beta_collection_id,
+        "alphaDuplicateCollectionId": alpha_duplicate_collection_id,
+        "betaDuplicateCollectionId": beta_duplicate_collection_id,
         "alphaDocumentId": alpha_document_id,
         "betaDocumentId": beta_document_id,
         "alphaJobId": alpha_job_id,
@@ -977,6 +1065,12 @@ def run_seed() -> int:
         "betaDenialNegativeInviteToken": beta_denial_negative_invite_token,
         "betaDenialWrongDownloadCapability": beta_denial_wrong_download_capability,
         "betaDenialStaleAccessToken": beta_denial_stale_access_token,
+        "betaDenialStaleAfterDowngradeToken": beta_denial_stale_after_downgrade_token,
+        "betaDenialStaleAfterRemoveToken": beta_denial_stale_after_remove_token,
+        "betaDenialQuarantinedDocumentId": beta_denial_quarantined_document_id,
+        "betaDenialQuarantinedCollectionId": beta_denial_quarantined_collection_id,
+        "betaDenialAlreadyMemberInviteToken": beta_denial_already_member_invite_token,
+        "betaCitationExpiredVersionId": alpha_version_id,
         **citation_fixture,
     }
     _atomic_write(out, evidence, mode=0o644)

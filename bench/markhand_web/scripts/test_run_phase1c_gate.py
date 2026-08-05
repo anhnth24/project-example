@@ -88,6 +88,7 @@ def evidence_payload(gate_id: str, *, scenario: str, repo_root: Path, markhand_r
         source_revision={"commit": git_commit, "dirty": False},
         markhand_root=markhand_root,
         repo_root=repo_root,
+        metrics_observed=True,
     )
     if extra:
         payload.update(extra)
@@ -152,6 +153,8 @@ class Phase1cHarnessContractTests(unittest.TestCase):
             metric = result["metric"]
             result["value"] = report["metrics"][metric]
             result["pass"] = True
+            result["metricsObserved"] = True
+            result["coverageLimited"] = False
         report["canonicalBinding"] = {
             "registryRevision": 1,
             **GATES.phase1c_canonical_fingerprints(
@@ -159,6 +162,7 @@ class Phase1cHarnessContractTests(unittest.TestCase):
             )[0],
         }
         report["git"] = {"commit": self.git_commit, "dirty": False}
+        report["coverageLimited"] = []
         return report
 
     def _write_evidence(self, *, include_p1c8: bool = True) -> None:
@@ -374,6 +378,357 @@ class Phase1cHarnessContractTests(unittest.TestCase):
         self.assertEqual(status, "pass", msg=f"unexpected blockers: {blockers}")
         self.assertEqual(blockers, [])
 
+    def test_rejects_pass_when_evidence_coverage_limited(self) -> None:
+        report = self._passing_report()
+        self._write_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["coverageLimited"] = True
+        payload["coverageLimitedReasons"] = ["denial:denial-resolveCitation-citation:citation_repeat"]
+        payload["status"] = "fail"
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        status, blockers = self.evaluate(report)
+        self.assertNotEqual(status, "pass")
+        self.assertTrue(any("coverage_limited" in item for item in blockers))
+
+    def test_rejects_pass_when_metrics_not_observed(self) -> None:
+        report = self._passing_report()
+        self._write_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/noisy-neighbor.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metricsObserved"] = False
+        payload["status"] = "fail"
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        status, blockers = self.evaluate(report)
+        self.assertNotEqual(status, "pass")
+        self.assertTrue(any("metrics_not_observed" in item for item in blockers))
+
+    def test_rejects_pass_when_report_declares_coverage_limited(self) -> None:
+        report = self._passing_report()
+        report["coverageLimited"] = ["denial:approveIntake"]
+        self._write_evidence()
+        status, blockers = self.evaluate(report)
+        self.assertNotEqual(status, "pass")
+        self.assertTrue(any("report_coverage_limited" in item for item in blockers))
+
+    def test_build_evidence_payload_marks_coverage_limited_non_pass(self) -> None:
+        payload = gate.build_evidence_payload(
+            gate_id="G1C-SEC-LEAKAGE",
+            scenario="cross_tenant_denial",
+            probe={"commandExitCode": 0, "timedOut": False, "outputTruncated": False, "eof": True},
+            metrics={"cross_tenant_leakage_count": 0},
+            source_revision={"commit": self.git_commit, "dirty": False},
+            markhand_root=self.markhand_root,
+            repo_root=self.repo_root,
+            coverage_limited=True,
+            coverage_limited_reasons=["denial:citation_repeat"],
+            metrics_observed=False,
+        )
+        self.assertTrue(payload["coverageLimited"])
+        self.assertNotEqual(payload["status"], "pass")
+        self.assertFalse(payload["metricsObserved"])
+
+    def test_deployed_probe_to_command_probe_propagates_coverage_limited(self) -> None:
+        probes_mod = gate._DEPLOYED
+        result = probes_mod.DeployedProbeResult(
+            gate_id="G1C-SEC-QUOTA-RECOVERY",
+            probe={"deployedApi": True, "eof": True},
+            metrics={},
+            coverage_limited=True,
+            coverage_limited_reasons=["quota:docker_unavailable"],
+            metrics_observed=False,
+        )
+        command_probe = probes_mod.deployed_probe_to_command_probe(result)
+        self.assertTrue(command_probe.get("coverageLimited"))
+        self.assertIn("quota:docker_unavailable", command_probe.get("coverageLimitedReasons", []))
+        self.assertFalse(command_probe.get("metricsObserved", True))
+
+
+class Phase1cBackboneEndToEndTests(unittest.TestCase):
+    """End-to-end no-false-PASS backbone: runner + check-markhand-gates + assembly."""
+
+    def setUp(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self._temp.name)
+        self.markhand_root, self.repo_root = GATES.prepare_phase1c_fixture(self.repo_root)
+        self.git_commit = init_git_repo(self.repo_root)
+
+    def tearDown(self) -> None:
+        self._temp.cleanup()
+
+    def _write_qualifying_evidence(self, *, coverage_on_leakage: bool = False) -> None:
+        scenario_by_gate = {
+            row["id"]: GATES.PHASE1C_WORKLOAD_SCENARIOS[index % len(GATES.PHASE1C_WORKLOAD_SCENARIOS)]
+            for index, row in enumerate(GATES.G1C_GATE_ROWS)
+        }
+        for row in GATES.G1C_GATE_ROWS:
+            gate_id = str(row["id"])
+            payload = gate.build_evidence_payload(
+                gate_id=gate_id,
+                scenario=scenario_by_gate[gate_id],
+                probe={"commandExitCode": 0, "timedOut": False, "outputTruncated": False, "eof": True},
+                metrics={
+                    metric: (1.0 if metric == "admin_mutation_audit_coverage_ratio" else 100 if "ms" in metric else 0 if metric != "worker_dedicated_role_verified" else 1)
+                    for metric in row["metrics"]  # type: ignore[index]
+                },
+                source_revision={"commit": self.git_commit, "dirty": False},
+                markhand_root=self.markhand_root,
+                repo_root=self.repo_root,
+                metrics_observed=True,
+                coverage_limited=coverage_on_leakage and gate_id == "G1C-SEC-LEAKAGE",
+                coverage_limited_reasons=["denial:test"] if coverage_on_leakage and gate_id == "G1C-SEC-LEAKAGE" else None,
+            )
+            path = self.repo_root / str(row["evidence"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    def _passing_report(self) -> dict:
+        report = GATES.load_json_yaml(
+            self.markhand_root / "reports/phase-1c-gate/phase-1c-gate.template.json"
+        )
+        report["status"] = "pass"
+        report["targetMatch"] = True
+        report["metrics"] = {
+            metric: (1.0 if metric.endswith("_ratio") else 1 if metric == "worker_dedicated_role_verified" else 100 if "ms" in metric else 0)
+            for metric in GATES.PHASE1C_METRIC_THRESHOLDS
+        }
+        report["workerProof"] = {
+            "runtimeRole": "markhand_worker",
+            "dedicatedDatabaseUrlVerified": True,
+            "superuser": False,
+            "bypassRls": False,
+            "verifiedAt": "2026-08-04T00:00:00Z",
+        }
+        report["redactionScan"] = {"passed": True}
+        report["vulnerabilityScan"]["passed"] = True
+        report["vulnerabilityScan"]["undispositionedHighCritical"] = 0
+        report["git"] = {"commit": self.git_commit, "dirty": False}
+        report["coverageLimited"] = []
+        for result in report["gateResults"]:
+            metric = result["metric"]
+            result["value"] = report["metrics"][metric]
+            result["pass"] = True
+            result["metricsObserved"] = True
+            result["coverageLimited"] = False
+        report["canonicalBinding"] = {
+            "registryRevision": 1,
+            **GATES.phase1c_canonical_fingerprints(self.markhand_root, workspace_root=self.repo_root)[0],
+        }
+        return report
+
+    def test_rejects_pass_when_metrics_observed_missing(self) -> None:
+        report = self._passing_report()
+        self._write_qualifying_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("metricsObserved", None)
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        status, blockers = gate.evaluate_report(
+            report,
+            repo_root=self.repo_root,
+            markhand_root=self.markhand_root,
+        )
+        self.assertNotEqual(status, "pass")
+        self.assertTrue(any("metrics_not_observed" in item for item in blockers))
+
+    def test_build_evidence_default_is_not_observed(self) -> None:
+        payload = gate.build_evidence_payload(
+            gate_id="G1C-SEC-LEAKAGE",
+            scenario="cross_tenant_denial",
+            probe={"commandExitCode": 0, "timedOut": False, "outputTruncated": False, "eof": True},
+            metrics={"cross_tenant_leakage_count": 0},
+            source_revision={"commit": self.git_commit, "dirty": False},
+            markhand_root=self.markhand_root,
+            repo_root=self.repo_root,
+        )
+        self.assertFalse(payload.get("metricsObserved"))
+
+    def test_assemble_report_rejects_coverage_limited_evidence(self) -> None:
+        self._write_qualifying_evidence(coverage_on_leakage=True)
+        metrics = {metric: (1.0 if metric.endswith("_ratio") else 1 if metric == "worker_dedicated_role_verified" else 100 if "ms" in metric else 0) for metric in GATES.PHASE1C_METRIC_THRESHOLDS}
+        with self.assertRaises(RuntimeError):
+            gate.assemble_pass_report(
+                metrics,
+                {"runtimeRole": "markhand_worker", "dedicatedDatabaseUrlVerified": True, "superuser": False, "bypassRls": False, "verifiedAt": "2026-08-04T00:00:00Z"},
+                {"scanner": gate.pinned_trivy_image(), "undispositionedHighCritical": 0, "findings": [], "passed": True},
+                repo_root=self.repo_root,
+                markhand_root=self.markhand_root,
+                source_revision={"commit": self.git_commit, "dirty": False},
+            )
+
+    def test_fully_observed_evidence_assembles_schema_valid_pass(self) -> None:
+        self._write_qualifying_evidence()
+        metrics = {metric: (1.0 if metric.endswith("_ratio") else 1 if metric == "worker_dedicated_role_verified" else 100 if "ms" in metric else 0) for metric in GATES.PHASE1C_METRIC_THRESHOLDS}
+        report = gate.assemble_pass_report(
+            metrics,
+            {"runtimeRole": "markhand_worker", "dedicatedDatabaseUrlVerified": True, "superuser": False, "bypassRls": False, "verifiedAt": "2026-08-04T00:00:00Z"},
+            {"scanner": gate.pinned_trivy_image(), "undispositionedHighCritical": 0, "findings": [], "passed": True},
+            repo_root=self.repo_root,
+            markhand_root=self.markhand_root,
+            source_revision={"commit": self.git_commit, "dirty": False},
+        )
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report.get("coverageLimited"), [])
+        for result in report["gateResults"]:
+            self.assertTrue(result.get("metricsObserved"))
+            self.assertFalse(result.get("coverageLimited"))
+            self.assertTrue(result["pass"])
+        registry = GATES.load_json_yaml(self.markhand_root / "gates.yaml")
+        report_errors = GATES.phase1c_gate_report_errors(
+            report,
+            registry=registry,
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertEqual(report_errors, [], msg=f"report errors: {report_errors}")
+        schema = GATES.load_json_yaml(self.markhand_root / "schema/phase1c-gate-report.schema.json")
+        schema_report = gate.strip_harness_extensions(report)
+        schema_errors = GATES.schema_errors(schema_report, schema, "assembled-report")
+        self.assertEqual(schema_errors, [], msg=f"schema errors: {schema_errors}")
+
+    def test_check_markhand_gates_rejects_pass_with_coverage_limited_evidence(self) -> None:
+        self._write_qualifying_evidence(coverage_on_leakage=True)
+        report = self._passing_report()
+        errors = GATES.phase1c_gate_report_errors(
+            report,
+            registry=GATES.load_json_yaml(self.markhand_root / "gates.yaml"),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("coverageLimited" in err for err in errors))
+
+    def test_check_markhand_gates_rejects_pass_without_metrics_observed(self) -> None:
+        self._write_qualifying_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/noisy-neighbor.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("metricsObserved", None)
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = GATES.phase1c_gate_report_errors(
+            report,
+            registry=GATES.load_json_yaml(self.markhand_root / "gates.yaml"),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metricsObserved" in err for err in errors))
+
+    def _assemble_metrics(self) -> dict:
+        return {
+            metric: (
+                1.0
+                if metric.endswith("_ratio")
+                else 1
+                if metric == "worker_dedicated_role_verified"
+                else 100
+                if "ms" in metric
+                else 0
+            )
+            for metric in GATES.PHASE1C_METRIC_THRESHOLDS
+        }
+
+    def _worker_proof(self) -> dict:
+        return {
+            "runtimeRole": "markhand_worker",
+            "dedicatedDatabaseUrlVerified": True,
+            "superuser": False,
+            "bypassRls": False,
+            "verifiedAt": "2026-08-04T00:00:00Z",
+        }
+
+    def _vuln_scan(self) -> dict:
+        return {
+            "scanner": gate.pinned_trivy_image(),
+            "undispositionedHighCritical": 0,
+            "findings": [],
+            "passed": True,
+        }
+
+    def test_assemble_report_rejects_empty_evidence_metrics(self) -> None:
+        self._write_qualifying_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"] = {}
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        with self.assertRaises(RuntimeError) as ctx:
+            gate.assemble_pass_report(
+                self._assemble_metrics(),
+                self._worker_proof(),
+                self._vuln_scan(),
+                repo_root=self.repo_root,
+                markhand_root=self.markhand_root,
+                source_revision={"commit": self.git_commit, "dirty": False},
+            )
+        self.assertTrue(
+            any(token in str(ctx.exception).lower() for token in ("metric", "evidence", "missing"))
+        )
+
+    def test_check_markhand_gates_rejects_pass_with_empty_evidence_metrics(self) -> None:
+        self._write_qualifying_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"] = {}
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = GATES.phase1c_gate_report_errors(
+            report,
+            registry=GATES.load_json_yaml(self.markhand_root / "gates.yaml"),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metric" in err.lower() for err in errors))
+
+    def test_assemble_report_rejects_mismatched_evidence_metric(self) -> None:
+        self._write_qualifying_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["cross_tenant_leakage_count"] = 99
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        with self.assertRaises(RuntimeError) as ctx:
+            gate.assemble_pass_report(
+                self._assemble_metrics(),
+                self._worker_proof(),
+                self._vuln_scan(),
+                repo_root=self.repo_root,
+                markhand_root=self.markhand_root,
+                source_revision={"commit": self.git_commit, "dirty": False},
+            )
+        self.assertTrue(
+            any(token in str(ctx.exception).lower() for token in ("match", "metric", "mismatch"))
+        )
+
+    def test_check_markhand_gates_rejects_threshold_violating_evidence_metric(self) -> None:
+        self._write_qualifying_evidence()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["cross_tenant_leakage_count"] = 5
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = GATES.phase1c_gate_report_errors(
+            report,
+            registry=GATES.load_json_yaml(self.markhand_root / "gates.yaml"),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("threshold" in err.lower() or "violat" in err.lower() for err in errors))
+
+    def test_check_markhand_gates_rejects_pass_when_gate_result_missing_metrics_observed(self) -> None:
+        self._write_qualifying_evidence()
+        report = self._passing_report()
+        report["gateResults"][0].pop("metricsObserved", None)
+        errors = GATES.phase1c_gate_report_errors(
+            report,
+            registry=GATES.load_json_yaml(self.markhand_root / "gates.yaml"),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metricsObserved" in err for err in errors))
+
 
 class Phase1cReviewFixContractTests(unittest.TestCase):
     """Review-fix RED tests (Commit C): must fail until harness implementation lands."""
@@ -450,6 +805,23 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
         self.assertIs(parsed["bypassRls"], False)
         self.assertEqual(parsed["nonce"], nonce)
 
+    def test_parse_worker_role_probe_rejects_preamble_lines(self) -> None:
+        line = json.dumps(
+            {
+                "schemaVersion": 1,
+                "currentUser": "markhand_worker",
+                "superuser": False,
+                "bypassRls": False,
+                "dedicatedDatabaseUrlVerified": True,
+                "databaseUrlRolePath": "markhand_worker",
+                "nonce": "n1",
+            },
+            sort_keys=True,
+        )
+        stdout = f"noise before probe\nPHASE1C_WORKER_ROLE_PROBE\t{line}\nPHASE1C_WORKER_ROLE_PROBE_EOF\ttrue\n"
+        with self.assertRaises(RuntimeError):
+            gate.parse_worker_role_probe(stdout)
+
     def test_parse_worker_role_probe_rejects_string_booleans(self) -> None:
         line = json.dumps(
             {
@@ -466,13 +838,34 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             gate.parse_worker_role_probe(stdout)
 
+    def test_parse_worker_role_probe_rejects_multiple_payloads(self) -> None:
+        line = json.dumps(
+            {
+                "schemaVersion": 1,
+                "currentUser": "markhand_worker",
+                "superuser": False,
+                "bypassRls": False,
+                "dedicatedDatabaseUrlVerified": True,
+                "databaseUrlRolePath": "markhand_worker",
+                "nonce": "n1",
+            },
+            sort_keys=True,
+        )
+        stdout = (
+            f"PHASE1C_WORKER_ROLE_PROBE\t{line}\n"
+            f"PHASE1C_WORKER_ROLE_PROBE\t{line}\n"
+            f"PHASE1C_WORKER_ROLE_PROBE_EOF\ttrue\n"
+        )
+        with self.assertRaises(RuntimeError):
+            gate.parse_worker_role_probe(stdout)
+
     def test_parse_trivy_reports_combines_both_images(self) -> None:
         self.assertTrue(hasattr(gate, "parse_combined_trivy_scan"))
         digest_a = "sha256:" + "a" * 64
         digest_b = "sha256:" + "b" * 64
         api_report = {
             "SchemaVersion": 2,
-            "ArtifactName": f"markhand-api:poc@{digest_a}",
+            "ArtifactName": digest_a,
             "Results": [
                 {
                     "Target": f"markhand-api:poc ({digest_a})",
@@ -484,14 +877,14 @@ class Phase1cReviewFixContractTests(unittest.TestCase):
         }
         worker_report = {
             "SchemaVersion": 2,
-            "ArtifactName": f"markhand-worker:poc@{digest_b}",
+            "ArtifactName": digest_b,
             "Results": [{"Target": f"markhand-worker:poc ({digest_b})", "Vulnerabilities": []}],
         }
         outcome = gate.parse_combined_trivy_scan(
             api_report=api_report,
             worker_report=worker_report,
-            api_ref="markhand-api:poc@" + digest_a,
-            worker_ref="markhand-worker:poc@" + digest_b,
+            api_ref=digest_a,
+            worker_ref=digest_b,
             trivyignore_text="# empty\n",
         )
         self.assertEqual(outcome["undispositionedHighCritical"], 1)

@@ -142,7 +142,9 @@
           "value": {"type": "number"},
           "pass": {"type": "boolean"},
           "failureDisposition": {"const": "block-phase-1c"},
-          "evidence": {"type": "string", "minLength": 1}
+          "evidence": {"type": "string", "minLength": 1},
+          "coverageLimited": {"type": "boolean"},
+          "metricsObserved": {"type": "boolean"}
         }
       }
     },
@@ -184,6 +186,46 @@
         "slaSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
         "thresholdDecisionsSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
+    },
+    "coverageLimited": {
+      "type": "array",
+      "items": {"type": "string"}
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "pass"}},
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["coverageLimited"],
+        "properties": {
+          "coverageLimited": {
+            "type": "array",
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "pass"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "gateResults": {
+            "items": {
+              "required": ["metricsObserved"],
+              "properties": {
+                "metricsObserved": {"const": true},
+                "coverageLimited": {"not": {"const": true}}
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

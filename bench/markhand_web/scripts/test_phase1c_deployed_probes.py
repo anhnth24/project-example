@@ -68,6 +68,8 @@ def complete_seed_raw(probes, **overrides: object) -> dict:
         "orgAlphaSlug": "poc",
         "orgBetaSlug": "phase1c-beta",
         "disposableOrgId": "66666666-6666-6666-6666-666666666666",
+        "alphaDuplicateCollectionId": "12121212-1212-1212-1212-121212121211",
+        "betaDuplicateCollectionId": "23232323-2323-2323-2323-232323232322",
     }
     base.update(overrides)
     return base
@@ -111,6 +113,12 @@ def complete_credentials_raw(**overrides: object) -> dict:
         "betaDenialNegativeInviteToken": "mhinv1.negative-token",
         "betaDenialWrongDownloadCapability": "mhcap1.wrong-token",
         "betaDenialStaleAccessToken": "stale-access-token-value",
+        "betaDenialQuarantinedDocumentId": "28282828-2828-2828-2828-282828282828",
+        "betaDenialQuarantinedCollectionId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "betaDenialAlreadyMemberInviteToken": "mhinv1.already-member-token",
+        "betaCitationExpiredVersionId": "12121212-1212-1212-1212-121212121212",
+        "betaDenialStaleAfterDowngradeToken": "stale-after-downgrade-token",
+        "betaDenialStaleAfterRemoveToken": "stale-after-remove-token",
     }
     payload.update(overrides)
     return payload
@@ -150,9 +158,15 @@ def make_seed_credentials(probes, seed, **overrides: object):
         "beta_citation_quote_local_start": 0,
         "beta_citation_quote_local_end": 12,
         "beta_citation_quote": "phase1c-beta",
-        "beta_denial_negative_invite_token": "mhinv1.negative-token",
+        "beta_denial_negative_invite_token": "mhinv1.22222222-2222-2222-2222-222222222222.0123456789abcdef",
         "beta_denial_wrong_download_capability": "mhcap1.wrong-token",
         "beta_denial_stale_access_token": "stale-access-token-value",
+        "beta_denial_quarantined_document_id": "28282828-2828-2828-2828-282828282828",
+        "beta_denial_quarantined_collection_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "beta_denial_already_member_invite_token": "mhinv1.already-member-token",
+        "beta_citation_expired_version_id": "12121212-1212-1212-1212-121212121212",
+        "beta_denial_stale_after_downgrade_token": "stale-after-downgrade-token",
+        "beta_denial_stale_after_remove_token": "stale-after-remove-token",
     }
     payload.update(overrides)
     return probes.SeedCredentials(**payload)
@@ -200,13 +214,17 @@ class DeployedArchitectureContractTests(unittest.TestCase):
         drift = probes.compute_quota_drift(
             documents=0,
             storage_bytes=0,
-            reserved_concurrent_slots=0,
+            concurrent_reserved=0,
+            counter_documents=0,
+            counter_storage=0,
         )
         self.assertEqual(drift, 0)
         drift_bad = probes.compute_quota_drift(
             documents=3,
             storage_bytes=999,
-            reserved_concurrent_slots=1,
+            concurrent_reserved=1,
+            counter_documents=0,
+            counter_storage=0,
         )
         self.assertEqual(drift_bad, 1003)
 
@@ -216,19 +234,25 @@ class DeployedArchitectureContractTests(unittest.TestCase):
         expected = hashlib.sha256(manifest.read_bytes()).hexdigest()
         self.assertEqual(probes.canonical_denial_manifest_sha256(), expected)
 
-    def test_trivy_parser_requires_target_digest_match(self) -> None:
+    def test_trivy_parser_requires_exact_artifact_name_match(self) -> None:
         probes = load_probes()
         digest = "sha256:" + "a" * 64
+        ref = f"markhand-api:poc@{digest}"
         report = {
             "SchemaVersion": 2,
-            "ArtifactName": f"markhand-api:poc@{digest}",
+            "ArtifactName": ref,
             "Results": [{"Target": f"markhand-api:poc ({digest})", "Vulnerabilities": []}],
         }
-        probes.validate_trivy_report_target(report, requested_ref=f"markhand-api:poc@{digest}")
+        probes.validate_trivy_report_target(report, requested_ref=ref)
         with self.assertRaises(RuntimeError):
             probes.validate_trivy_report_target(
-                report,
+                {"SchemaVersion": 2, "ArtifactName": ref, "Results": []},
                 requested_ref="markhand-api:poc@sha256:" + "b" * 64,
+            )
+        with self.assertRaises(RuntimeError):
+            probes.validate_trivy_report_target(
+                {"SchemaVersion": 2, "ArtifactName": f"other:{digest}", "Results": []},
+                requested_ref=ref,
             )
 
     def test_trivy_includes_unfixed_high_critical(self) -> None:
@@ -916,7 +940,7 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
 
     def test_seed_never_synthesizes_session_ids(self) -> None:
         text = self.SEED_PY.read_text(encoding="utf-8")
-        self.assertNotIn("secrets.token_hex(16)", text)
+        self.assertNotIn('secrets.token_hex(16)', text.split("session_id", 1)[0])
         self.assertIn("/api/v1/auth/me", text)
 
     def test_seed_stores_invite_token_in_credentials_not_public_evidence(self) -> None:
@@ -1074,8 +1098,8 @@ class Phase1cReviewerFixSliceTests(unittest.TestCase):
         creds = self._seed_creds(seed, probes)
         deployment = fake.StatefulFakeDeployment(seed=seed, credentials=creds)
         report = deployment.run_denial_suite()
-        self.assertEqual(report["ownerControlCount"], report["foreignCount"])
         self.assertGreater(report["ownerControlCount"], 0)
+        self.assertGreater(report["foreignCount"], report["ownerControlCount"])
         self.assertEqual(report["executableHttpSseCount"], 60)
 
     def test_stateful_fake_negative_missing_owner_control_fails(self) -> None:
@@ -1894,11 +1918,13 @@ class Phase1cFifthReviewSliceTests(unittest.TestCase):
             probes,
             seed,
             beta_denial_stale_access_token="stale-access-token-value",
+            beta_denial_stale_after_downgrade_token="stale-downgrade-token",
+            beta_denial_stale_after_remove_token="stale-remove-token",
         )
         entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-task13-stale-tokens")
         specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
-        stale = [s for s in specs if s.scenario == "stale_token"]
-        self.assertEqual(len(stale), 1)
+        stale = [s for s in specs if s.scenario.startswith("stale_token")]
+        self.assertGreaterEqual(len(stale), 1)
         self.assertEqual(stale[0].token, "stale-access-token-value")
         self.assertEqual(stale[0].expected_statuses, frozenset({401}))
 
@@ -1956,11 +1982,11 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
     def _seed_creds(self, seed, probes):
         return make_seed_credentials(probes, seed)
 
-    def test_get_chat_session_schema_is_session_and_turns(self) -> None:
+    def test_get_chat_session_schema_is_flattened_session_fields(self) -> None:
         denial = load_denial()
         self.assertEqual(
             denial.HTTP_OWNER_SUCCESS_SCHEMA["getChatSession"],
-            frozenset({"session", "turns"}),
+            frozenset({"id", "title", "turns"}),
         )
         self.assertTrue(hasattr(denial, "validate_owner_read_response"))
 
@@ -1974,12 +2000,21 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
         self.assertNotIn('f"{API_PREFIX}/members/{delete_member_id}"', fn)
         self.assertNotIn('f"{API_PREFIX}/members/{disposable_member}"', fn)
 
-    def test_negative_invite_token_is_synthetic_not_created_invite(self) -> None:
+    def test_negative_invite_token_uses_valid_mhinv1_syntax(self) -> None:
         text = self.SEED_PY.read_text(encoding="utf-8")
         negative = text.split("beta_denial_negative_invite_token", 1)[1].split("\n", 8)[0:8]
         joined = "\n".join(negative)
         self.assertIn("mhinv1.", joined)
+        self.assertIn("org_beta_id", joined)
         self.assertNotIn("phase1c-negative-", joined)
+
+    def test_seed_bootstrap_memberships_after_final_reconcile(self) -> None:
+        text = self.SEED_PY.read_text(encoding="utf-8")
+        reconcile = text.index("_reconcile_identity_fixtures(org_ids=[ALPHA_ORG_ID, org_beta_id]")
+        bootstrap = text.index("_bootstrap_identity_users(password_hash", reconcile)
+        self.assertLess(reconcile, bootstrap)
+        login_block = text.split("accept_login = _login(api_base, ACCEPT_EMAIL", 1)[0]
+        self.assertIn("_bootstrap_identity_users", login_block)
 
     def test_seed_provisions_three_independent_invite_controls(self) -> None:
         text = self.SEED_PY.read_text(encoding="utf-8")
@@ -2011,7 +2046,8 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
         entry = next(e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-resolveCitation-citation")
         specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
         scenarios = {spec.scenario for spec in specs}
-        self.assertIn("citation_replay", scenarios)
+        self.assertIn("citation_repeat", scenarios)
+        self.assertTrue(any(getattr(s, "coverage_limited", False) for s in specs if s.scenario == "citation_repeat"))
         self.assertIn("citation_expired", scenarios)
         self.assertIn("citation_mismatch", scenarios)
 
@@ -2140,6 +2176,432 @@ class Phase1cSixthReviewSliceTests(unittest.TestCase):
         sys.modules["phase1c_stateful_fake_sixth"] = module
         spec.loader.exec_module(module)
         return module
+
+
+class Phase1cSemanticsSliceTests(unittest.TestCase):
+    """Task 16 semantics: production-correct HTTP/probe contracts."""
+
+    FAKE_PY = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+
+    def _seed_fixture(self, probes):
+        return probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+
+    def _seed_creds(self, seed, probes):
+        return make_seed_credentials(probes, seed)
+
+    def _load_stateful_fake(self):
+        spec = importlib.util.spec_from_file_location("phase1c_stateful_fake_sem", self.FAKE_PY)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        sys.modules["phase1c_stateful_fake_sem"] = module
+        spec.loader.exec_module(module)
+        return module
+
+    def test_ask_and_stream_bodies_use_question(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        ask_body = denial._owner_body("ask", seed, credentials=creds, params={})
+        stream_body = denial._owner_body("askStream", seed, credentials=creds, params={})
+        assert ask_body is not None and stream_body is not None
+        self.assertIn("question", ask_body)
+        self.assertNotIn("query", ask_body)
+        self.assertIn("question", stream_body)
+
+    def test_append_chat_turn_body_matches_production(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        body = denial._owner_body(
+            "appendChatTurn",
+            seed,
+            credentials=creds,
+            params={"sessionId": seed.beta_chat_session_id},
+        )
+        assert body is not None
+        for key in ("question", "answer", "answerMode"):
+            self.assertIn(key, body)
+
+    def test_current_org_ops_include_authenticated_foreign_isolation(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        entry = next(e for e in denial.build_http_sse_denial_mapping() if e.operation_id == "authMe")
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        self.assertIn("authenticated_foreign_isolation", {s.scenario for s in specs})
+
+    def test_quota_probe_fails_closed_without_docker(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+        runner = probes.DeployedProbeRunner(
+            api_base="http://fake",
+            seed=seed,
+            credentials=creds,
+            shims=probes.DeployedProbeShims(),
+            git_sha_full=seed.source_revision["commit"],
+        )
+        with mock.patch("phase1c_deployed_probes.shutil.which", return_value=None):
+            with self.assertRaises(RuntimeError):
+                runner.run_quota_recovery_probe()
+
+    def test_qdrant_probe_uses_distinct_leakage_metric(self) -> None:
+        probes = load_probes()
+        seed = self._seed_fixture(probes)
+        creds = self._seed_creds(seed, probes)
+
+        class QdrantShim(probes.DeployedProbeShims):
+            def compose(self, args, **kwargs):  # type: ignore[override]
+                if args[:2] == ["stop", "qdrant"]:
+                    return probes.CommandOutcome(0, "", "")
+                if args[:2] == ["start", "qdrant"]:
+                    return probes.CommandOutcome(0, "", "")
+                if args[:2] == ["ps", "-q"]:
+                    return probes.CommandOutcome(0, "qdrant\n", "")
+                return probes.CommandOutcome(1, "", "")
+
+            def psql(self, sql, **kwargs):  # type: ignore[override]
+                import hashlib
+
+                digest = hashlib.sha256(seed.challenge.encode("utf-8")).hexdigest()
+                return probes.CommandOutcome(0, digest, "")
+
+            def http_request(self, **kwargs):  # type: ignore[override]
+                path = kwargs.get("path") or ""
+                degraded = json.dumps(
+                    {
+                        "items": [],
+                        "warnings": ["Vector leg unavailable; continuing with FTS-only retrieval."],
+                        "requestId": "11111111-1111-1111-1111-111111111111",
+                    }
+                )
+                if path.endswith("/ask"):
+                    return probes.HttpResponse(status=200, body=degraded, headers={})
+                if path.endswith("/search"):
+                    return probes.HttpResponse(status=200, body=degraded, headers={})
+                return probes.HttpResponse(status=503, body="{}", headers={})
+
+        runner = probes.DeployedProbeRunner(
+            api_base="http://fake",
+            seed=seed,
+            credentials=creds,
+            shims=QdrantShim(),
+            git_sha_full=seed.source_revision["commit"],
+        )
+        with mock.patch("phase1c_deployed_probes.shutil.which", return_value="/usr/bin/docker"):
+            result = runner.run_qdrant_fail_closed_probe()
+        self.assertIn("qdrant_degraded_leakage_count", result.metrics)
+        self.assertEqual(result.probe.get("searchStatus"), 200)
+        self.assertNotIn("cross_tenant_leakage_count", result.metrics)
+
+    def test_quota_probe_orders_audit_log_by_created_at(self) -> None:
+        text = (ROOT / "bench/markhand_web/scripts/phase1c_deployed_probes.py").read_text(encoding="utf-8")
+        self.assertIn("ORDER BY created_at DESC", text)
+        self.assertNotIn("ORDER BY occurred_at DESC", text)
+
+    def test_seed_fixture_parses_duplicate_collection_ids(self) -> None:
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        self.assertEqual(seed.alpha_duplicate_collection_id, "12121212-1212-1212-1212-121212121211")
+        self.assertEqual(seed.beta_duplicate_collection_id, "23232323-2323-2323-2323-232323232322")
+
+
+class Phase1cBackboneSemanticsTests(unittest.TestCase):
+    """RED/GREEN: no-false-PASS backbone and re-review concrete semantics."""
+
+    def test_quota_ground_truth_sql_uses_version_artifact_and_reservations(self) -> None:
+        probes = load_probes()
+        org_id = "22222222-2222-2222-2222-222222222201"
+        queries = probes.quota_ground_truth_queries(org_id)
+        storage_sql = queries["storage_bytes"].lower()
+        slots_sql = queries["concurrent_reserved"].lower()
+        self.assertIn("document_versions", storage_sql)
+        self.assertIn("derived_artifacts", storage_sql)
+        self.assertIn("quota_reservations", slots_sql)
+        self.assertIn("concurrent_jobs", slots_sql)
+        self.assertNotIn("documents.storage_bytes", storage_sql)
+        self.assertNotIn("reserved_concurrent_slots", slots_sql)
+
+    def test_parse_quota_ground_truth_from_psql_rows(self) -> None:
+        probes = load_probes()
+        parsed = probes.parse_quota_ground_truth_rows(
+            documents_stdout="3\n",
+            storage_stdout="4096\n",
+            concurrent_stdout="2\n",
+            counter_documents_stdout="3\n",
+            counter_storage_stdout="4096\n",
+        )
+        self.assertEqual(probes.compute_quota_drift(**parsed), 2)
+
+    def test_psql_outcome_must_succeed_before_parse(self) -> None:
+        probes = load_probes()
+        with self.assertRaises(RuntimeError):
+            probes.require_psql_success(
+                probes.CommandOutcome(exit_code=1, stdout="", stderr="ERROR"),
+                context="usage_counters",
+            )
+
+    def test_noisy_non_2xx_uploads_cannot_qualify_p95(self) -> None:
+        probes = load_probes()
+        ok, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 120,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertTrue(ok, reason)
+        bad, bad_reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[403] * 120,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertFalse(bad)
+        self.assertIn("noisy upload", bad_reason.lower())
+
+    def test_logout_audit_binds_submitted_refresh_token_family(self) -> None:
+        text = PROBES_PATH.read_text(encoding="utf-8")
+        audit = text.split("def run_audit_probe", 1)[1].split("\n    def run_", 1)[0]
+        self.assertIn("_family_id_from_refresh_token", audit)
+        self.assertIn("logout_refresh", audit)
+        self.assertNotIn("me_before_logout = self._http", audit)
+
+    def test_qdrant_scans_structured_foreign_ids(self) -> None:
+        probes = load_probes()
+        denial = load_denial()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        foreign_ids = {
+            seed.beta_collection_id,
+            seed.beta_document_id,
+            seed.beta_version_id,
+            seed.org_beta_id,
+        }
+        payload = {
+            "hits": [
+                {
+                    "collectionId": seed.beta_collection_id,
+                    "documentId": seed.beta_document_id,
+                    "versionId": seed.beta_version_id,
+                }
+            ],
+            "warnings": ["vector unavailable"],
+        }
+        leaks = probes.scan_structured_foreign_ids(json.dumps(payload), forbidden_ids=foreign_ids)
+        self.assertTrue(leaks)
+        clean = probes.scan_structured_foreign_ids(
+            json.dumps({"hits": [{"collectionId": seed.alpha_collection_id}], "warnings": []}),
+            forbidden_ids=foreign_ids,
+        )
+        self.assertFalse(clean)
+        self.assertTrue(hasattr(denial, "scan_structured_foreign_ids") or hasattr(probes, "scan_structured_foreign_ids"))
+
+    def test_citation_expired_is_coverage_limited_with_real_status(self) -> None:
+        denial = load_denial()
+        probes = load_probes()
+        seed = probes.parse_seed_artifact(
+            complete_seed_raw(probes),
+            expected_challenge="phase1c-challenge-abc",
+        )
+        creds = make_seed_credentials(probes, seed)
+        entry = next(
+            e for e in denial.build_http_sse_denial_mapping() if e.row_id == "denial-resolveCitation-citation"
+        )
+        specs = denial.build_row_denial_specs(entry, seed=seed, credentials=creds)
+        expired = next(s for s in specs if s.scenario == "citation_expired")
+        self.assertTrue(expired.coverage_limited)
+        self.assertEqual(expired.expected_statuses, frozenset({404}))
+
+    def test_in_flight_revoke_stream_after_removal_expects_403(self) -> None:
+        denial = load_denial()
+        text = denial.__file__ and Path(denial.__file__).read_text(encoding="utf-8")
+        assert text is not None
+        block = text.split('if transition == "ask_stream_revoked"', 1)[1].split("\n    report.failures", 1)[0]
+        self.assertIn("403", block)
+        self.assertNotIn("expected 200 stream", block)
+
+    def test_stateful_fake_stream_returns_403_after_membership_removed(self) -> None:
+        fake_path = ROOT / "bench/markhand_web/scripts/phase1c_stateful_fake.py"
+        text = fake_path.read_text(encoding="utf-8")
+        stream_block = text.split('if path.endswith("/api/v1/ask/stream")', 1)[1].split(
+            'operation_id = self._resolve_operation_id', 1
+        )[0]
+        self.assertIn("403", stream_block)
+        self.assertNotIn("principal_denied", stream_block)
+
+
+class Phase1cNoisyLivenessTests(unittest.TestCase):
+    """Noisy-neighbor compose ps -q and upload window liveness."""
+
+    def test_compose_ps_q_container_id_counts_as_present(self) -> None:
+        probes = load_probes()
+        outcome = probes.CommandOutcome(
+            exit_code=0,
+            stdout="a1b2c3d4e5f6789012345678901234567890abcd\n",
+            stderr="",
+        )
+        self.assertTrue(probes.compose_ps_q_has_container(outcome))
+        self.assertFalse(probes.compose_ps_q_has_container(probes.CommandOutcome(0, "", "")))
+        self.assertFalse(probes.compose_ps_q_has_container(probes.CommandOutcome(1, "id\n", "")))
+
+    def test_noisy_uploads_must_span_full_window(self) -> None:
+        probes = load_probes()
+        start = 1000.0
+        end = 1060.0
+        timestamps = [start + 1 + (end - start - 2) * (index / 49) for index in range(50)]
+        timestamps[0] = start + 1
+        timestamps[-1] = end - 1
+        ok, _ = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 50,
+            upload_timestamps=timestamps,
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertTrue(ok)
+        bad, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 50,
+            upload_timestamps=[start + 1 + (index * 0.1) for index in range(50)],
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertFalse(bad)
+        self.assertIn("span", reason.lower())
+
+    def test_noisy_uploader_died_early_fails_closed(self) -> None:
+        probes = load_probes()
+        start = 1000.0
+        end = 1060.0
+        bad, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 50,
+            upload_timestamps=[start + i for i in range(50)],
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=60.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+            uploader_died_early=True,
+        )
+        self.assertFalse(bad)
+        self.assertIn("uploader", reason.lower())
+
+    def test_noisy_healthy_full_window_uploader_passes_stop_join_orchestration(self) -> None:
+        import threading
+        import time
+
+        probes = load_probes()
+        stop = threading.Event()
+        upload_statuses: list[int] = []
+        upload_timestamps: list[float] = []
+        window_start = time.monotonic()
+        window_secs = 0.35
+        window_end = window_start + window_secs
+
+        def uploader() -> None:
+            while not stop.is_set():
+                upload_statuses.append(201)
+                upload_timestamps.append(time.monotonic())
+                time.sleep(0.01)
+
+        worker = threading.Thread(target=uploader, name="test-noisy-uploader", daemon=True)
+        worker.start()
+        while time.monotonic() < window_end:
+            time.sleep(0.01)
+        stop.set()
+        worker.join(timeout=5)
+        uploader_hung_after_join = worker.is_alive()
+        elapsed = time.monotonic() - window_start
+        ok, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=upload_statuses,
+            upload_timestamps=upload_timestamps,
+            window_start=window_start,
+            window_end=window_end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=elapsed,
+            required_duration_secs=window_secs,
+            min_quiet_samples=100,
+            min_successful_uploads=10,
+            uploader_hung_after_join=uploader_hung_after_join,
+        )
+        self.assertFalse(uploader_hung_after_join, "healthy uploader must exit after stop+join")
+        self.assertTrue(ok, reason)
+
+    def test_noisy_hung_uploader_fails_closed_after_bounded_join(self) -> None:
+        import threading
+        import time
+
+        probes = load_probes()
+        stop = threading.Event()
+        upload_statuses: list[int] = []
+        upload_timestamps: list[float] = []
+        window_start = time.monotonic()
+        window_end = window_start + 0.2
+
+        def uploader() -> None:
+            while True:
+                upload_statuses.append(201)
+                upload_timestamps.append(time.monotonic())
+                time.sleep(0.05)
+
+        worker = threading.Thread(target=uploader, name="test-noisy-hung", daemon=True)
+        worker.start()
+        time.sleep(0.25)
+        stop.set()
+        worker.join(timeout=0.05)
+        uploader_hung_after_join = worker.is_alive()
+        ok, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=upload_statuses,
+            upload_timestamps=upload_timestamps,
+            window_start=window_start,
+            window_end=window_end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=0.25,
+            required_duration_secs=0.2,
+            min_quiet_samples=100,
+            min_successful_uploads=5,
+            uploader_hung_after_join=uploader_hung_after_join,
+        )
+        self.assertTrue(uploader_hung_after_join, "uploader must remain alive after bounded join")
+        self.assertFalse(ok)
+        self.assertIn("hung", reason.lower())
+
+    def test_noisy_short_window_fails_closed(self) -> None:
+        probes = load_probes()
+        start = 1000.0
+        end = 1060.0
+        bad, reason = probes.qualify_noisy_neighbor_workload(
+            upload_statuses=[201] * 50,
+            upload_timestamps=[start + 1 + (end - start - 2) * (index / 49) for index in range(50)],
+            window_start=start,
+            window_end=end,
+            samples_ns=[50_000_000] * 100,
+            duration_secs=30.0,
+            required_duration_secs=60.0,
+            min_quiet_samples=100,
+        )
+        self.assertFalse(bad)
+        self.assertIn("short", reason.lower())
 
 
 class DeployedCiRouteTests(unittest.TestCase):

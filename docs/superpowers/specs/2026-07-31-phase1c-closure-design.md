@@ -374,6 +374,42 @@ Exit:
 
 ## 5. Luồng implement/review
 
+### 5.1 Addendum điều phối từ 2026-08-05
+
+Owner đã duyệt tiếp tục từ PR #381 theo mô hình một issue/một PR. PR #381 là ngoại lệ
+đã tồn tại: nó chỉ hoàn thiện harness và tạo evidence qualification đã sanitize, không
+gộp thay đổi trạng thái `Done` của 1C-08, 1C-12 và 1C-13. Sau khi PR #381 merge, các
+issue được đóng tuần tự bằng branch mới từ `master` mới nhất:
+
+```text
+PR #381 prerequisite
+→ 1C-08 evidence/status PR
+→ 1C-12 evidence/status PR
+→ 1C-13 implementation/evidence/status PR
+→ P2-15 PR
+→ P2-16 PR
+```
+
+Mỗi branch mới dùng suffix được cấp cho phiên điều phối hiện tại (`-e9d6`). Không tạo
+stacked PR trên dependency chưa merge và không tạo PR trùng với PR #381.
+
+Vai trò cố định cho mỗi vòng:
+
+1. Cursor Grok 4.5 High implement theo task brief trong worktree riêng, chạy test và
+   commit.
+2. Một GPT-5.6 Sol độc lập review issue, plan, diff, negative paths, security trigger
+   và evidence.
+3. Một GPT-5.6 Sol khác sửa các finding Critical/Important đã được xác minh và chạy lại
+   test phủ thay đổi.
+4. Một reviewer GPT-5.6 Sol mới re-review. Lặp bước 2–4 tới `APPROVED`; không dùng
+   self-review của fixer thay cho independent review.
+5. Coordinator kiểm quality gate, commit/push phần điều phối, tạo hoặc cập nhật đúng một
+   PR cho issue và ghi evidence thực tế. Coordinator không merge nếu owner chưa chỉ định
+   rõ.
+
+Finding Minor được ghi disposition; finding High/Critical không được để mở. Status chỉ
+đổi theo evidence và Definition of Done, không theo việc code đã merge.
+
 Mỗi PR dùng vòng lặp:
 
 ```text

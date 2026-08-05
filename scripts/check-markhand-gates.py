@@ -350,6 +350,71 @@ def git_commit_resolves(repo_root: Path, commit: str) -> tuple[bool, str | None]
     return True, None
 
 
+PHASE1C_HARNESS_EXTENSION_KEYS = frozenset(
+    {"markhandPhase1cGate", "embeddingProfile", "p1c8EvidenceMapping", "notes"}
+)
+
+
+def strip_phase1c_harness_extensions(report: dict) -> dict:
+    return {key: value for key, value in report.items() if key not in PHASE1C_HARNESS_EXTENSION_KEYS}
+
+
+def phase1c_evidence_qualification_errors(payload: object, *, context: str) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        errors.append(f"{context}: evidence must be an object")
+        return errors
+    if payload.get("coverageLimited") is True or payload.get("coverageLimited"):
+        errors.append(f"{context}: evidence coverageLimited blocks pass")
+    if payload.get("metricsObserved") is not True:
+        errors.append(f"{context}: evidence metricsObserved must be true for pass")
+    return errors
+
+
+def phase1c_evidence_metric_binding_errors(
+    payload: object,
+    *,
+    context: str,
+    report_metrics: dict[str, object] | None = None,
+    gate_row: dict[str, object] | None = None,
+) -> list[str]:
+    errors: list[str] = []
+    if not isinstance(payload, dict):
+        return errors
+    evidence_metrics = payload.get("metrics")
+    if not isinstance(evidence_metrics, dict):
+        errors.append(f"{context}: evidence metrics must be an object")
+        return errors
+    if gate_row is None:
+        gate_id = payload.get("gateId")
+        if isinstance(gate_id, str):
+            gate_row = g1c_row_for_gate(gate_id)
+    if gate_row is None:
+        errors.append(f"{context}: unknown gate for evidence metric binding")
+        return errors
+    required_metrics = g1c_gate_metrics(gate_row)
+    if not required_metrics:
+        errors.append(f"{context}: gate has no qualifying metrics")
+        return errors
+    for metric in required_metrics:
+        if metric not in evidence_metrics:
+            errors.append(f"{context}: evidence missing metric {metric}")
+            continue
+        value = evidence_metrics[metric]
+        if metric in PHASE1C_METRIC_THRESHOLDS:
+            operator, limit = PHASE1C_METRIC_THRESHOLDS[metric]
+            if not threshold_satisfied(value, operator, limit):
+                errors.append(
+                    f"{context}: evidence metric {metric}={value!r} violates threshold"
+                )
+        if isinstance(report_metrics, dict) and metric in report_metrics:
+            if value != report_metrics[metric]:
+                errors.append(
+                    f"{context}: evidence metric {metric} must match report metrics.{metric}"
+                )
+    return errors
+
+
 def phase1c_evidence_path_errors(
     repo_root: Path,
     evidence_path: object,
@@ -1288,7 +1353,7 @@ def phase1c_gate_report_errors(
         schema = load_json_yaml(PHASE1C_GATE_REPORT_SCHEMA)
     except (OSError, ValueError) as error:
         return [f"phase1c report schema: {error}"]
-    errors.extend(schema_errors(report, schema, "phase1c-report"))
+    errors.extend(schema_errors(strip_phase1c_harness_extensions(report), schema, "phase1c-report"))
 
     status = report.get("status")
     target_match = report.get("targetMatch")
@@ -1296,6 +1361,14 @@ def phase1c_gate_report_errors(
         errors.append("phase1c-report: status pass requires targetMatch=true")
     if status == "pass" and template_mode:
         errors.append("phase1c-report: template/report must not claim status pass")
+    coverage = report.get("coverageLimited")
+    if status == "pass":
+        if coverage:
+            errors.append("phase1c-report: status pass forbidden when coverageLimited is set")
+        elif not isinstance(coverage, list):
+            errors.append("phase1c-report: status pass requires coverageLimited array")
+    elif coverage:
+        errors.append("phase1c-report: status pass forbidden when coverageLimited is set")
     if status == "not_run" and target_match is True:
         errors.append("phase1c-report: status not_run requires targetMatch=false")
 
@@ -1475,11 +1548,38 @@ def phase1c_gate_report_errors(
             if result.get("evidence") != reg_gate.get("evidence"):
                 errors.append(f"{path}: evidence must match registry evidence path")
             elif status == "pass" and not template_mode:
+                evidence_rel = result.get("evidence")
                 errors += phase1c_evidence_path_errors(
                     evidence_root,
-                    result.get("evidence"),
+                    evidence_rel,
                     context=path,
                 )
+                if isinstance(evidence_rel, str):
+                    evidence_file = evidence_root / evidence_rel
+                    if evidence_file.is_file():
+                        try:
+                            evidence_payload = json.loads(evidence_file.read_text(encoding="utf-8"))
+                        except json.JSONDecodeError:
+                            errors.append(f"{path}: evidence malformed at {evidence_rel}")
+                        else:
+                            errors += phase1c_evidence_qualification_errors(
+                                evidence_payload,
+                                context=f"{path}:{evidence_rel}",
+                            )
+                            row = g1c_row_for_gate(str(gate_id))
+                            errors += phase1c_evidence_metric_binding_errors(
+                                evidence_payload,
+                                context=f"{path}:{evidence_rel}",
+                                report_metrics=metrics if isinstance(metrics, dict) else None,
+                                gate_row=row,
+                            )
+                            gate_id = result.get("gateId")
+                            if evidence_payload.get("gateId") != gate_id:
+                                errors.append(f"{path}: evidence gateId mismatch for {evidence_rel}")
+                            if result.get("coverageLimited") is True:
+                                errors.append(f"{path}: gateResult coverageLimited blocks pass")
+                            if result.get("metricsObserved") is not True:
+                                errors.append(f"{path}: gateResult metricsObserved must be true for pass")
             threshold = reg_gate.get("threshold") or {}
             value = result.get("value")
             if status == "pass":
@@ -2012,14 +2112,43 @@ class Phase1cGateContractTests(unittest.TestCase):
             ).strip(),
             "dirty": False,
         }
+        report["coverageLimited"] = []
+        for result in report["gateResults"]:
+            result["metricsObserved"] = True
+            result["coverageLimited"] = False
         return report
+
+    def _qualifying_metric_value(self, metric: str) -> int | float:
+        if metric == "admin_mutation_audit_coverage_ratio":
+            return 1.0
+        if metric == "worker_dedicated_role_verified":
+            return 1
+        if metric in {"membership_acl_revoke_max_ms", "quiet_org_query_p95_ms"}:
+            return 100
+        return 0
 
     def _create_evidence_files(self, repo_root: Path | None = None) -> None:
         root = repo_root or self.repo_root
-        for evidence_path in PHASE1C_EVIDENCE_ALLOWLIST:
-            path = root / evidence_path
+        for row in G1C_GATE_ROWS:
+            path = root / str(row["evidence"])
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('{"status":"pass","note":"test fixture"}\n', encoding="utf-8")
+            metrics = {
+                metric: self._qualifying_metric_value(metric)
+                for metric in row["metrics"]  # type: ignore[index]
+            }
+            path.write_text(
+                json.dumps(
+                    {
+                        "gateId": row["id"],
+                        "status": "pass",
+                        "metricsObserved": True,
+                        "coverageLimited": False,
+                        "metrics": metrics,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
     def _remove_evidence_files(self, repo_root: Path | None = None) -> None:
         root = repo_root or self.repo_root
@@ -2046,6 +2175,121 @@ class Phase1cGateContractTests(unittest.TestCase):
             template_mode=True,
         )
         self.assertEqual(template_errors, [])
+
+    def test_rejects_pass_when_evidence_coverage_limited_content(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["coverageLimited"] = True
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("coverageLimited" in err for err in errors))
+
+    def test_rejects_pass_when_evidence_lacks_metrics_observed(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/quota-recovery.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.pop("metricsObserved", None)
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metricsObserved" in err for err in errors))
+
+    def test_rejects_pass_when_evidence_metrics_empty(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"] = {}
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metric" in err.lower() for err in errors))
+
+    def test_rejects_pass_when_evidence_metric_mismatches_report(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["cross_tenant_leakage_count"] = 99
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("match" in err.lower() or "metric" in err.lower() for err in errors))
+
+    def test_rejects_pass_when_evidence_metric_violates_threshold(self) -> None:
+        self._create_qualifying_evidence_files()
+        path = self.repo_root / "bench/markhand_web/reports/phase-1c-gate/leakage.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["metrics"]["cross_tenant_leakage_count"] = 5
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+        report = self._passing_report()
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("threshold" in err.lower() or "violat" in err.lower() for err in errors))
+
+    def test_rejects_pass_when_gate_result_missing_metrics_observed(self) -> None:
+        self._create_qualifying_evidence_files()
+        report = self._passing_report()
+        report["gateResults"][0].pop("metricsObserved", None)
+        errors = phase1c_gate_report_errors(
+            report,
+            registry=self._load_registry(),
+            root=self.markhand_root,
+            repo_root=self.repo_root,
+            workspace_root=self.repo_root,
+        )
+        self.assertTrue(any("metricsObserved" in err for err in errors))
+
+    def _create_qualifying_evidence_files(self) -> None:
+        for row in G1C_GATE_ROWS:
+            path = self.repo_root / str(row["evidence"])
+            path.parent.mkdir(parents=True, exist_ok=True)
+            metrics = {
+                metric: self._qualifying_metric_value(metric)
+                for metric in row["metrics"]  # type: ignore[index]
+            }
+            path.write_text(
+                json.dumps(
+                    {
+                        "gateId": row["id"],
+                        "status": "pass",
+                        "metricsObserved": True,
+                        "coverageLimited": False,
+                        "metrics": metrics,
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
 
     def test_registry_requires_starvation_events_in_noisy_neighbor_contracts(self) -> None:
         registry = self._load_registry()

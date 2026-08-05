@@ -10,6 +10,7 @@ import math
 import os
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import sys
@@ -86,6 +87,8 @@ SEED_REQUIRED_FIELDS: tuple[str, ...] = (
     "orgAlphaSlug",
     "orgBetaSlug",
     "disposableOrgId",
+    "alphaDuplicateCollectionId",
+    "betaDuplicateCollectionId",
 )
 
 CREDENTIAL_REQUIRED_FIELDS: tuple[str, ...] = (
@@ -270,6 +273,8 @@ class SeedFixture:
     org_alpha_slug: str
     org_beta_slug: str
     disposable_org_id: str
+    alpha_duplicate_collection_id: str
+    beta_duplicate_collection_id: str
 
 
 @dataclass
@@ -309,6 +314,12 @@ class SeedCredentials:
     beta_denial_negative_invite_token: str
     beta_denial_wrong_download_capability: str
     beta_denial_stale_access_token: str
+    beta_denial_quarantined_document_id: str
+    beta_denial_quarantined_collection_id: str
+    beta_denial_already_member_invite_token: str = ""
+    beta_citation_expired_version_id: str = ""
+    beta_denial_stale_after_downgrade_token: str = ""
+    beta_denial_stale_after_remove_token: str = ""
 
 
 @dataclass
@@ -317,6 +328,9 @@ class DeployedProbeResult:
     probe: dict[str, Any]
     metrics: dict[str, Any]
     detail: dict[str, Any] = field(default_factory=dict)
+    coverage_limited: bool = False
+    coverage_limited_reasons: list[str] = field(default_factory=list)
+    metrics_observed: bool = False
 
 
 class DeployedProbeShims:
@@ -416,8 +430,158 @@ def nearest_rank_p95_ms(samples_ns: list[int]) -> int:
     return int(ordered[rank - 1] / 1_000_000)
 
 
-def compute_quota_drift(*, documents: int, storage_bytes: int, reserved_concurrent_slots: int) -> int:
-    return int(documents) + int(storage_bytes) + int(reserved_concurrent_slots)
+def compute_quota_drift(
+    *,
+    documents: int,
+    storage_bytes: int,
+    concurrent_reserved: int,
+    counter_documents: int,
+    counter_storage: int,
+) -> int:
+    return (
+        abs(int(documents) - int(counter_documents))
+        + abs(int(storage_bytes) - int(counter_storage))
+        + int(concurrent_reserved)
+    )
+
+
+def quota_ground_truth_queries(org_id: str) -> dict[str, str]:
+    return {
+        "documents": f"""
+            SELECT COUNT(*)::bigint FROM documents
+            WHERE org_id = '{org_id}'
+              AND deleted_at IS NULL
+              AND state <> 'purged'
+            """,
+        "storage_bytes": f"""
+            SELECT
+                COALESCE((
+                    SELECT SUM(dv.byte_size)::bigint
+                    FROM document_versions dv
+                    JOIN documents d ON d.org_id = dv.org_id AND d.id = dv.document_id
+                    WHERE dv.org_id = '{org_id}'
+                      AND d.deleted_at IS NULL
+                      AND d.state <> 'purged'
+                ), 0)
+              + COALESCE((
+                    SELECT SUM(da.byte_size)::bigint
+                    FROM derived_artifacts da
+                    JOIN documents d ON d.org_id = da.org_id AND d.id = da.document_id
+                    WHERE da.org_id = '{org_id}'
+                      AND d.deleted_at IS NULL
+                      AND d.state <> 'purged'
+                ), 0)
+            """,
+        "concurrent_reserved": f"""
+            SELECT COALESCE(SUM(amount), 0)::bigint
+            FROM quota_reservations
+            WHERE org_id = '{org_id}'
+              AND resource_kind = 'concurrent_jobs'
+              AND status = 'reserved'
+            """,
+    }
+
+
+def require_psql_success(outcome: CommandOutcome, *, context: str) -> str:
+    if outcome.exit_code != 0:
+        detail = (outcome.stderr or outcome.stdout or "unknown").strip()
+        raise RuntimeError(f"{context} query failed: {detail}")
+    return outcome.stdout or ""
+
+
+def parse_quota_ground_truth_rows(
+    *,
+    documents_stdout: str,
+    storage_stdout: str,
+    concurrent_stdout: str,
+    counter_documents_stdout: str,
+    counter_storage_stdout: str,
+) -> dict[str, int]:
+    return {
+        "documents": int((documents_stdout or "0").strip() or "0"),
+        "storage_bytes": int((storage_stdout or "0").strip() or "0"),
+        "concurrent_reserved": int((concurrent_stdout or "0").strip() or "0"),
+        "counter_documents": int((counter_documents_stdout or "0").strip() or "0"),
+        "counter_storage": int((counter_storage_stdout or "0").strip() or "0"),
+    }
+
+
+def hash_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def qualify_noisy_neighbor_workload(
+    *,
+    upload_statuses: list[int],
+    samples_ns: list[int],
+    duration_secs: float,
+    required_duration_secs: float,
+    min_quiet_samples: int,
+    min_successful_uploads: int = 50,
+    upload_timestamps: list[float] | None = None,
+    window_start: float | None = None,
+    window_end: float | None = None,
+    uploader_hung_after_join: bool = False,
+    uploader_died_early: bool = False,
+) -> tuple[bool, str]:
+    if uploader_died_early:
+        return False, "noisy uploader thread died before window completed"
+    if uploader_hung_after_join:
+        return False, "noisy uploader thread hung after join timeout"
+    if duration_secs < required_duration_secs:
+        return False, f"noisy window too short: {duration_secs:.2f}s < {required_duration_secs}s"
+    if len(samples_ns) < min_quiet_samples:
+        return False, f"quiet samples {len(samples_ns)} < {min_quiet_samples}"
+    if not upload_statuses:
+        return False, "no noisy upload attempts observed"
+    successful = sum(1 for status in upload_statuses if status // 100 == 2)
+    if successful < min_successful_uploads:
+        return False, f"noisy upload success count {successful} < {min_successful_uploads}"
+    if any(status // 100 != 2 for status in upload_statuses):
+        return False, "noisy uploads must sustain 2xx across full window"
+    if upload_timestamps is not None and window_start is not None and window_end is not None:
+        success_times = [
+            timestamp
+            for timestamp, status in zip(upload_timestamps, upload_statuses, strict=False)
+            if status // 100 == 2
+        ]
+        if not success_times:
+            return False, "no successful noisy uploads in window"
+        span_required = (window_end - window_start) * 0.95
+        if max(success_times) - min(success_times) < span_required:
+            return False, "successful noisy uploads did not span full window"
+    return True, ""
+
+
+def compose_ps_q_has_container(outcome: CommandOutcome) -> bool:
+    if outcome.exit_code != 0:
+        return False
+    return bool((outcome.stdout or "").strip())
+
+
+def scan_structured_foreign_ids(body: str, *, forbidden_ids: set[str]) -> list[str]:
+    leaks: list[str] = []
+    if not body.strip():
+        return leaks
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return leaks
+
+    def walk(node: Any, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                child_path = f"{path}.{key}" if path else key
+                if key in {"collectionId", "documentId", "versionId", "orgId"} and isinstance(value, str):
+                    if value in forbidden_ids:
+                        leaks.append(f"{child_path}={value}")
+                walk(value, child_path)
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{path}[{index}]")
+
+    walk(payload, "")
+    return sorted(dict.fromkeys(leaks))
 
 
 def _require_string(raw: dict[str, Any], key: str) -> str:
@@ -502,6 +666,8 @@ def parse_seed_artifact(raw: dict[str, Any], *, expected_challenge: str) -> Seed
         org_alpha_slug=_require_string(raw, "orgAlphaSlug"),
         org_beta_slug=_require_string(raw, "orgBetaSlug"),
         disposable_org_id=validate_uuid(_require_string(raw, "disposableOrgId"), field="disposableOrgId"),
+        alpha_duplicate_collection_id=_require_string(raw, "alphaDuplicateCollectionId"),
+        beta_duplicate_collection_id=_require_string(raw, "betaDuplicateCollectionId"),
     )
 
 
@@ -568,6 +734,8 @@ def validate_fixture_credentials(credentials: SeedCredentials) -> None:
         "beta_denial_negative_invite_token",
         "beta_denial_wrong_download_capability",
         "beta_denial_stale_access_token",
+        "beta_denial_quarantined_document_id",
+        "beta_denial_quarantined_collection_id",
     ):
         value = getattr(credentials, field_name, None)
         if isinstance(value, str):
@@ -649,6 +817,16 @@ def _parse_seed_credentials_raw(raw: dict[str, Any], *, expected_challenge: str)
         beta_denial_negative_invite_token=_require_string(raw, "betaDenialNegativeInviteToken"),
         beta_denial_wrong_download_capability=_require_string(raw, "betaDenialWrongDownloadCapability"),
         beta_denial_stale_access_token=_require_string(raw, "betaDenialStaleAccessToken"),
+        beta_denial_quarantined_document_id=validate_uuid(
+            _require_string(raw, "betaDenialQuarantinedDocumentId"), field="betaDenialQuarantinedDocumentId"
+        ),
+        beta_denial_quarantined_collection_id=validate_uuid(
+            _require_string(raw, "betaDenialQuarantinedCollectionId"), field="betaDenialQuarantinedCollectionId"
+        ),
+        beta_denial_already_member_invite_token=str(raw.get("betaDenialAlreadyMemberInviteToken") or ""),
+        beta_citation_expired_version_id=str(raw.get("betaCitationExpiredVersionId") or ""),
+        beta_denial_stale_after_downgrade_token=str(raw.get("betaDenialStaleAfterDowngradeToken") or ""),
+        beta_denial_stale_after_remove_token=str(raw.get("betaDenialStaleAfterRemoveToken") or ""),
     )
     validate_fixture_credentials(credentials)
     return credentials
@@ -718,10 +896,11 @@ def load_seed_artifact(path: Path, *, expected_challenge: str) -> SeedFixture:
 def validate_trivy_report_target(report: dict[str, Any], *, requested_ref: str) -> None:
     if report.get("SchemaVersion") != 2:
         raise RuntimeError("trivy SchemaVersion must be 2")
-    requested_digest = requested_ref.split("@", 1)[-1]
-    blob = json.dumps(report)
-    if requested_digest not in blob:
-        raise RuntimeError("trivy report target/digest mismatch")
+    artifact_name = str(report.get("ArtifactName") or "")
+    if artifact_name != requested_ref:
+        raise RuntimeError(
+            f"trivy report ArtifactName mismatch: expected {requested_ref!r}, got {artifact_name!r}"
+        )
 
 
 def extract_high_critical_findings(report: dict[str, Any]) -> list[dict[str, str]]:
@@ -1025,6 +1204,45 @@ class DeployedProbeRunner:
             raise RuntimeError("auth/me missing sessionId")
         return access, refresh, session_id
 
+    def _session_id_from_refresh_token(self, refresh_token: str) -> str:
+        refresh = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": refresh_token})
+        if refresh.status // 100 != 2:
+            raise RuntimeError(f"refresh for session family lookup failed: {refresh.status}")
+        payload = json.loads(refresh.body)
+        access = payload.get("accessToken") or payload.get("access_token")
+        if not isinstance(access, str):
+            raise RuntimeError("refresh response missing access token")
+        me = self._http("GET", "/api/v1/auth/me", token=access)
+        if me.status != 200:
+            raise RuntimeError("auth/me failed for refresh-derived access token")
+        me_payload = json.loads(me.body)
+        session_id = me_payload.get("sessionId") or me_payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id.strip():
+            raise RuntimeError("refresh-derived auth/me missing sessionId")
+        return validate_uuid(session_id, field="sessionId")
+
+    def _family_id_from_refresh_token(self, refresh_token: str) -> str:
+        token_hash = hash_refresh_token(refresh_token)
+        row = self._psql(
+            f"SELECT family_id::text FROM refresh_tokens WHERE token_hash = '{token_hash}' LIMIT 1"
+        )
+        if row.exit_code == 0:
+            family = (row.stdout or "").strip()
+            if family:
+                try:
+                    return validate_uuid(family, field="familyId")
+                except RuntimeError:
+                    pass
+        if refresh_token == self.credentials.alpha_refresh_token:
+            return validate_uuid(self.credentials.alpha_session_id, field="familyId")
+        if refresh_token == self.credentials.beta_refresh_token:
+            return validate_uuid(self.credentials.beta_session_id, field="familyId")
+        if refresh_token == self.credentials.beta_alpha_refresh_token:
+            return validate_uuid(self.credentials.beta_session_id, field="familyId")
+        if refresh_token == self.credentials.alpha_beta_refresh_token:
+            return validate_uuid(self.credentials.alpha_session_id, field="familyId")
+        raise RuntimeError("refresh token family not found for submitted token")
+
     def _switch_org(self, token: str, org_id: str) -> HttpResponse:
         return self._http("POST", "/api/v1/orgs/switch", token=token, body={"orgId": org_id})
 
@@ -1135,6 +1353,9 @@ class DeployedProbeRunner:
         if report.failures:
             raise RuntimeError("; ".join(report.failures))
         self._require_correlated_transitions(minimum=1)
+        detail = report.as_dict()
+        coverage_items = detail.get("coverageLimited") or []
+        coverage_reasons = [f"denial:{item}" for item in coverage_items]
         return DeployedProbeResult(
             gate_id="G1C-SEC-LEAKAGE",
             probe={
@@ -1143,10 +1364,14 @@ class DeployedProbeRunner:
                 "gitShaFull": report.git_sha_full,
                 "executableHttpSseCount": report.executable_http_sse_count,
                 "observationCount": len(report.observations),
+                "coverageLimited": coverage_items,
                 "eof": True,
             },
             metrics={"cross_tenant_leakage_count": report.leakage_count},
-            detail={"report": report.as_dict()},
+            detail={"report": detail},
+            coverage_limited=bool(coverage_reasons),
+            coverage_limited_reasons=coverage_reasons,
+            metrics_observed=True,
         )
 
     def run_revoke_probe(self) -> DeployedProbeResult:
@@ -1188,6 +1413,7 @@ class DeployedProbeRunner:
                 "membership_acl_revoke_max_ms": elapsed_ms,
                 "post_commit_stale_authorizations": stale,
             },
+            metrics_observed=True,
         )
 
     def run_acl_cache_probe(self) -> DeployedProbeResult:
@@ -1232,6 +1458,7 @@ class DeployedProbeRunner:
                 "membership_acl_revoke_max_ms": elapsed_ms,
                 "post_commit_stale_authorizations": stale,
             },
+            metrics_observed=True,
         )
 
     def run_stale_tokens_probe(self) -> DeployedProbeResult:
@@ -1271,7 +1498,7 @@ class DeployedProbeRunner:
         if reuse.status // 100 == 5:
             raise RuntimeError(f"stale refresh reuse must not return 5xx, got {reuse.status}")
         self._discard_revoked_token_family(access_token=new_access, refresh_token=new_refresh)
-        fresh_access, fresh_refresh, fresh_session = self._login_tokens(self._beta_email, "")
+        fresh_access, fresh_refresh, _ = self._login_tokens(self._beta_email, "")
         switch = self._switch_org(fresh_access, self.seed.org_beta_id)
         if switch.status // 100 != 2:
             raise RuntimeError("fresh beta org switch failed after token family discard")
@@ -1280,7 +1507,7 @@ class DeployedProbeRunner:
         fresh_refresh = switch_payload.get("refreshToken") or switch_payload.get("refresh_token") or fresh_refresh
         self.credentials.beta_access_token = fresh_access
         self.credentials.beta_refresh_token = fresh_refresh
-        self.credentials.beta_session_id = validate_uuid(fresh_session, field="betaSessionId")
+        self.credentials.beta_session_id = self._session_id_from_switch_access_token(switch)
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-STALE-TOKENS",
@@ -1294,34 +1521,135 @@ class DeployedProbeRunner:
                 "eof": True,
             },
             metrics={"post_commit_stale_authorizations": 0},
+            metrics_observed=True,
         )
 
     def run_quota_recovery_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
-        before = self._psql(
-            "SELECT documents, storage_bytes, reserved_concurrent_slots FROM usage_counters LIMIT 1"
+        if not shutil.which("docker"):
+            raise RuntimeError("quota recovery requires live docker deployment; unavailable in hermetic VM")
+        org_id = self.seed.org_beta_id
+        boundary = "----phase1cQuotaProbe"
+        upload_body = (
+            f'--{boundary}\r\nContent-Disposition: form-data; name="collectionId"\r\n\r\n'
+            f"{self.seed.beta_collection_id}\r\n"
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="quota-probe.txt"\r\n'
+            f"Content-Type: text/plain\r\n\r\nphase1c-quota-{self.seed.challenge}\n"
+            f"\r\n--{boundary}--\r\n"
+        ).encode("utf-8")
+        upload = self.shims.http_request(
+            method="POST",
+            url=self._url("/api/v1/uploads"),
+            token=self.credentials.beta_access_token,
+            multipart_body=upload_body,
+            path="/api/v1/uploads",
+            content_type=f"multipart/form-data; boundary={boundary}",
         )
-        self._compose(["stop", "worker-convert"], timeout_secs=120)
-        self._compose(["start", "worker-convert"], timeout_secs=120)
-        after = self._psql(
-            "SELECT documents, storage_bytes, reserved_concurrent_slots FROM usage_counters LIMIT 1"
+        if upload.status // 100 == 2:
+            upload_payload = json.loads(upload.body)
+            document_id = upload_payload.get("documentId")
+            if isinstance(document_id, str):
+                self._http(
+                    "DELETE",
+                    f"/api/v1/documents/{document_id}",
+                    token=self.credentials.beta_access_token,
+                )
+        org_quota = self._psql(
+            f"SELECT COUNT(*) FROM org_quotas WHERE org_id = '{org_id}'"
         )
-        reconcile = self._psql(
-            "SELECT action FROM audit_events WHERE action='quota.reconcile' ORDER BY id DESC LIMIT 1"
+        if require_psql_success(org_quota, context="org_quotas").strip() != "1":
+            raise RuntimeError(
+                "quota recovery requires org_quotas row for target org; provision qualification org first"
+            )
+        counter_rows = self._psql(
+            f"""
+            SELECT counter_key, value FROM usage_counters
+            WHERE org_id = '{org_id}'
+            ORDER BY counter_key, period_start
+            """
         )
-        if reconcile.exit_code != 0:
-            raise RuntimeError("quota reconcile audit missing")
-        drift = 0
+        require_psql_success(counter_rows, context="usage_counters")
+        bump = self._psql(
+            f"""
+            UPDATE usage_counters SET value = value + 1
+            WHERE org_id = '{org_id}' AND counter_key = 'documents'
+            """
+        )
+        require_psql_success(bump, context="usage_counters bump")
+        stop_worker = self._compose(["stop", "worker-convert"], timeout_secs=120)
+        if stop_worker.exit_code != 0:
+            raise RuntimeError("worker stop failed for quota recovery probe")
+        reconcile_before = self._psql(
+            f"""
+            SELECT action FROM audit_log
+            WHERE org_id = '{org_id}' AND action = 'quota.reconcile'
+            ORDER BY created_at DESC LIMIT 1
+            """
+        )
+        require_psql_success(reconcile_before, context="audit_log before reconcile")
+        start_worker = self._compose(["start", "worker-convert"], timeout_secs=120)
+        if start_worker.exit_code != 0:
+            raise RuntimeError("worker start failed for quota recovery probe")
+        deadline = time.monotonic() + 90
+        saw_reconcile = False
+        while time.monotonic() < deadline:
+            reconcile = self._psql(
+                f"""
+                SELECT action FROM audit_log
+                WHERE org_id = '{org_id}' AND action = 'quota.reconcile'
+                ORDER BY created_at DESC LIMIT 1
+                """
+            )
+            reconcile_stdout = require_psql_success(reconcile, context="audit_log reconcile poll")
+            if reconcile_stdout.strip() and reconcile_stdout != reconcile_before.stdout:
+                saw_reconcile = True
+                break
+            time.sleep(2)
+        if not saw_reconcile:
+            raise RuntimeError("quota reconcile audit missing after recovery window")
+        queries = quota_ground_truth_queries(org_id)
+        ground_truth_docs = self._psql(queries["documents"])
+        ground_truth_storage = self._psql(queries["storage_bytes"])
+        ground_truth_concurrent = self._psql(queries["concurrent_reserved"])
+        counter_docs = self._psql(
+            f"""
+            SELECT value FROM usage_counters
+            WHERE org_id = '{org_id}' AND counter_key = 'documents'
+            ORDER BY period_start DESC LIMIT 1
+            """
+        )
+        counter_storage = self._psql(
+            f"""
+            SELECT value FROM usage_counters
+            WHERE org_id = '{org_id}' AND counter_key = 'storage_bytes'
+            ORDER BY period_start DESC LIMIT 1
+            """
+        )
+        try:
+            parsed = parse_quota_ground_truth_rows(
+                documents_stdout=require_psql_success(ground_truth_docs, context="ground truth documents"),
+                storage_stdout=require_psql_success(ground_truth_storage, context="ground truth storage"),
+                concurrent_stdout=require_psql_success(ground_truth_concurrent, context="ground truth concurrent"),
+                counter_documents_stdout=require_psql_success(counter_docs, context="counter documents"),
+                counter_storage_stdout=require_psql_success(counter_storage, context="counter storage"),
+            )
+            drift = compute_quota_drift(**parsed)
+        except ValueError as error:
+            raise RuntimeError(f"quota drift parse failed: {error}") from error
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-QUOTA-RECOVERY",
             probe={
                 "deployedApi": True,
-                "beforeSha256": _sha256_text(before.stdout),
-                "afterSha256": _sha256_text(after.stdout),
+                "groundTruthDocuments": parsed["documents"],
+                "counterDocuments": parsed["counter_documents"],
+                "groundTruthStorageBytes": parsed["storage_bytes"],
+                "counterStorageBytes": parsed["counter_storage"],
+                "groundTruthConcurrentReserved": parsed["concurrent_reserved"],
                 "eof": True,
             },
             metrics={"quota_drift_after_recovery": drift},
+            metrics_observed=True,
         )
 
     def run_noisy_neighbor_probe(self) -> DeployedProbeResult:
@@ -1329,40 +1657,101 @@ class DeployedProbeRunner:
             raise RuntimeError(
                 f"qualifying noisy duration must be {CANONICAL_NOISY_UPLOAD_DURATION_SECS}s"
             )
+        if not shutil.which("docker"):
+            raise RuntimeError("noisy-neighbor probe requires live docker deployment; unavailable in hermetic VM")
+        import threading
+
+        noisy_stop = threading.Event()
+        noisy_errors: list[str] = []
+        noisy_upload_statuses: list[int] = []
+        noisy_upload_timestamps: list[float] = []
+
+        def noisy_uploader() -> None:
+            noisy_token = self.credentials.alpha_access_token
+            noisy_collection = self.seed.alpha_collection_id
+            while not noisy_stop.is_set():
+                try:
+                    boundary = "----phase1cNoisy"
+                    body = (
+                        f'--{boundary}\r\nContent-Disposition: form-data; name="collectionId"\r\n\r\n'
+                        f"{noisy_collection}\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+                        f'filename="noisy.txt"\r\nContent-Type: text/plain\r\n\r\nphase1c-noisy\n'
+                        f"\r\n--{boundary}--\r\n"
+                    ).encode("utf-8")
+                    response = self.shims.http_request(
+                        method="POST",
+                        url=self._url("/api/v1/uploads"),
+                        token=noisy_token,
+                        multipart_body=body,
+                        path="/api/v1/uploads",
+                        content_type=f"multipart/form-data; boundary={boundary}",
+                    )
+                    noisy_upload_statuses.append(response.status)
+                    noisy_upload_timestamps.append(time.monotonic())
+                except Exception as error:  # noqa: BLE001
+                    noisy_errors.append(str(error))
+                time.sleep(0.05)
+
+        worker = threading.Thread(target=noisy_uploader, name="phase1c-noisy-uploader", daemon=True)
+        worker.start()
         samples_ns: list[int] = []
         starvation = 0
         token = self.credentials.beta_access_token
-        deadline = time.monotonic() + min(self.noisy_duration_secs, 5)
+        started_at = time.monotonic()
+        deadline = started_at + self.noisy_duration_secs
         while time.monotonic() < deadline:
-            started = time.perf_counter_ns()
+            sample_started = time.perf_counter_ns()
             response = self._http(
                 "POST",
                 "/api/v1/search",
                 token=token,
                 body={"query": "phase1c-quiet-probe"},
             )
-            elapsed_ns = time.perf_counter_ns() - started
+            elapsed_ns = time.perf_counter_ns() - sample_started
             samples_ns.append(elapsed_ns)
             if response.status != 200:
                 starvation += 1
             if elapsed_ns / 1_000_000 > STARVATION_SLOW_MS:
                 starvation += 1
-        while len(samples_ns) < self.quiet_search_samples:
-            started = time.perf_counter_ns()
-            response = self._http(
-                "POST",
-                "/api/v1/search",
-                token=token,
-                body={"query": "phase1c-quiet-probe"},
+        elapsed = time.monotonic() - started_at
+        noisy_stop.set()
+        worker.join(timeout=5)
+        uploader_hung_after_join = worker.is_alive()
+        if noisy_errors:
+            raise RuntimeError(f"noisy workload errors: {noisy_errors[0]}")
+        qualified, qualify_reason = qualify_noisy_neighbor_workload(
+            upload_statuses=noisy_upload_statuses,
+            upload_timestamps=noisy_upload_timestamps,
+            window_start=started_at,
+            window_end=started_at + self.noisy_duration_secs,
+            samples_ns=samples_ns,
+            duration_secs=elapsed,
+            required_duration_secs=float(self.noisy_duration_secs),
+            min_quiet_samples=self.quiet_search_samples,
+            uploader_hung_after_join=uploader_hung_after_join,
+        )
+        if not qualified:
+            return DeployedProbeResult(
+                gate_id="G1C-SEC-NOISY-NEIGHBOR",
+                probe={
+                    "deployedApi": True,
+                    "sampleCount": len(samples_ns),
+                    "noisyUploadAttempts": len(noisy_upload_statuses),
+                    "qualificationFailure": qualify_reason,
+                    "eof": True,
+                },
+                metrics={},
+                coverage_limited=True,
+                coverage_limited_reasons=[f"noisy-neighbor:{qualify_reason}"],
+                metrics_observed=False,
             )
-            samples_ns.append(time.perf_counter_ns() - started)
-            if response.status != 200:
-                starvation += 1
+        ps = self._compose(["ps", "-q", "worker-convert"], timeout_secs=120)
+        if not compose_ps_q_has_container(ps):
+            raise RuntimeError("worker-convert must remain observable during noisy-neighbor probe")
         forbidden = {self.seed.marker_alpha, self.seed.marker_beta}
         for marker in forbidden:
             if marker and marker in json.dumps(samples_ns):
                 starvation += 1
-        self._compose(["ps", "-q", "worker-convert"])
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-NOISY-NEIGHBOR",
@@ -1371,6 +1760,7 @@ class DeployedProbeRunner:
                 "quiet_org_query_p95_ms": nearest_rank_p95_ms(samples_ns),
                 "starvation_events": starvation,
             },
+            metrics_observed=True,
         )
 
     def run_audit_probe(self) -> DeployedProbeResult:
@@ -1528,7 +1918,7 @@ class DeployedProbeRunner:
             "PATCH",
             f"/api/v1/members/{accept_user_id}",
             token=token,
-            body={"role": "viewer"},
+            body={"role": "editor"},
         )
         patch_request_id = validate_server_request_id(body=patch.body, headers=patch.headers)
         expected.append(
@@ -1564,10 +1954,15 @@ class DeployedProbeRunner:
         )
 
         captured_refresh = self.credentials.beta_refresh_token
-        refresh = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": captured_refresh})
+        switch_for_audit = self._switch_org(self.credentials.beta_access_token, self.seed.org_beta_id)
+        switch_payload = json.loads(switch_for_audit.body) if switch_for_audit.body else {}
+        switched_refresh = switch_payload.get("refreshToken") or switch_payload.get("refresh_token")
+        switched_session = self._session_id_from_switch_access_token(switch_for_audit)
+        refresh_token_for_reuse = switched_refresh if isinstance(switched_refresh, str) else captured_refresh
+        refresh = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": refresh_token_for_reuse})
         refresh_payload = json.loads(refresh.body) if refresh.body else {}
         new_refresh = refresh_payload.get("refreshToken") or refresh_payload.get("refresh_token")
-        reuse = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": captured_refresh})
+        reuse = self._http("POST", "/api/v1/auth/refresh", body={"refreshToken": refresh_token_for_reuse})
         reuse_request_id = extract_server_request_id(reuse.body, reuse.headers) or ""
         expected.append(
             {
@@ -1575,7 +1970,7 @@ class DeployedProbeRunner:
                 "action": audit_action_map["auth.refresh.reuse"],
                 "actorId": self.seed.beta_user_id,
                 "targetType": "session",
-                "targetId": self.credentials.beta_session_id,
+                "targetId": switched_session,
                 "requestId": reuse_request_id,
                 "outcome": "deny" if reuse.status == 401 else "success",
                 "attemptStatus": reuse.status,
@@ -1584,11 +1979,13 @@ class DeployedProbeRunner:
         if isinstance(new_refresh, str):
             self.credentials.beta_refresh_token = new_refresh
 
+        logout_refresh = self.credentials.alpha_refresh_token
+        logout_session_id = self._family_id_from_refresh_token(logout_refresh)
         logout = self._http(
             "POST",
             "/api/v1/auth/logout",
             token=token,
-            body={"refreshToken": self.credentials.alpha_refresh_token},
+            body={"refreshToken": logout_refresh},
         )
         logout_request_id = extract_server_request_id(logout.body, logout.headers) or ""
         expected.append(
@@ -1597,7 +1994,7 @@ class DeployedProbeRunner:
                 "action": audit_action_map["auth.token.revoke"],
                 "actorId": self.seed.alpha_user_id,
                 "targetType": "session",
-                "targetId": self.credentials.alpha_session_id,
+                "targetId": logout_session_id,
                 "requestId": logout_request_id,
                 "outcome": "success" if logout.status // 100 == 2 else "failure",
                 "attemptStatus": logout.status,
@@ -1672,45 +2069,85 @@ class DeployedProbeRunner:
                 "eof": True,
             },
             metrics={"admin_mutation_audit_coverage_ratio": ratio},
+            metrics_observed=True,
         )
 
     def run_qdrant_fail_closed_probe(self) -> DeployedProbeResult:
         self._validate_manifest_binding()
+        if not shutil.which("docker"):
+            raise RuntimeError("qdrant fail-closed probe requires live docker deployment; unavailable in hermetic VM")
         token = self.credentials.alpha_access_token
         stop = self._compose(["stop", "qdrant"], timeout_secs=120)
         if stop.exit_code != 0:
             raise RuntimeError("qdrant stop failed")
-        search = self._http(
-            "POST",
-            "/api/v1/search",
-            token=token,
-            body={"query": "phase1c-qdrant-down"},
-        )
-        ask = self._http(
-            "POST",
-            "/api/v1/ask",
-            token=token,
-            body={"query": "phase1c-qdrant-down"},
-        )
-        leakage = _DENIAL.scan_marker_leakage(
-            search.body + ask.body,
-            forbidden_markers={self.seed.marker_beta},
-        )
-        if search.status == 200 and ask.status == 200:
-            raise RuntimeError("qdrant unavailable must not return 200 success")
-        self._compose(["start", "qdrant"], timeout_secs=120)
-        self._compose(["ps", "-q", "qdrant"], timeout_secs=120)
+        search_status = 0
+        ask_status = 0
+        leakage_count = 0
+        degraded_warnings: list[str] = []
+        try:
+            search = self._http(
+                "POST",
+                "/api/v1/search",
+                token=token,
+                body={"query": "phase1c-qdrant-down"},
+            )
+            search_status = search.status
+            ask = self._http(
+                "POST",
+                "/api/v1/ask",
+                token=token,
+                body={"question": "phase1c-qdrant-down?"},
+            )
+            ask_status = ask.status
+            for label, response in (("search", search), ("ask", ask)):
+                if response.status != 200:
+                    raise RuntimeError(
+                        f"{label} must degrade gracefully (200 with warnings) when qdrant unavailable, got {response.status}"
+                    )
+                payload = json.loads(response.body) if response.body else {}
+                warnings = payload.get("warnings")
+                if not isinstance(warnings, list) or not warnings:
+                    raise RuntimeError(f"{label} degraded response missing warnings array")
+                degraded_warnings.extend(str(item) for item in warnings)
+            if not any("vector" in item.lower() or "fts" in item.lower() for item in degraded_warnings):
+                raise RuntimeError("degraded response missing vector/fts availability warning")
+            forbidden_ids = {
+                self.seed.org_beta_id,
+                self.seed.beta_collection_id,
+                self.seed.beta_document_id,
+                self.seed.beta_version_id,
+            }
+            forbidden_markers = {self.seed.marker_beta}
+            for label, response in (("search", search), ("ask", ask)):
+                marker_leaks = _DENIAL.scan_marker_leakage(response.body, forbidden_markers=forbidden_markers)
+                structured_leaks = scan_structured_foreign_ids(response.body, forbidden_ids=forbidden_ids)
+                if marker_leaks or structured_leaks:
+                    leakage_count += len(marker_leaks) + len(structured_leaks)
+                    raise RuntimeError(
+                        f"{label} leaked foreign tenant data during qdrant degradation: "
+                        f"markers={marker_leaks} ids={structured_leaks}"
+                    )
+        finally:
+            start = self._compose(["start", "qdrant"], timeout_secs=120)
+            if start.exit_code != 0:
+                raise RuntimeError("qdrant start failed")
+            health = self._compose(["ps", "-q", "qdrant"], timeout_secs=120)
+            if health.exit_code != 0:
+                raise RuntimeError("qdrant recovery health check failed")
         self._require_correlated_transitions(minimum=3)
         return DeployedProbeResult(
             gate_id="G1C-SEC-QDRANT-FAIL-CLOSED",
             probe={
                 "deployedApi": True,
                 "singleNodeUnavailable": True,
-                "searchStatus": search.status,
-                "askStatus": ask.status,
+                "searchStatus": search_status,
+                "askStatus": ask_status,
+                "degradedWarnings": degraded_warnings,
+                "coverageLimited": [],
                 "eof": True,
             },
-            metrics={"cross_tenant_leakage_count": len(leakage)},
+            metrics={"qdrant_degraded_leakage_count": leakage_count},
+            metrics_observed=True,
         )
 
     def run_gate(self, gate_id: str) -> DeployedProbeResult:
@@ -1743,7 +2180,7 @@ def bootstrap_seed_via_api(
 
 
 def deployed_probe_to_command_probe(result: DeployedProbeResult) -> dict[str, Any]:
-    return {
+    probe = {
         "commandExitCode": 0,
         "timedOut": False,
         "outputTruncated": False,
@@ -1753,3 +2190,13 @@ def deployed_probe_to_command_probe(result: DeployedProbeResult) -> dict[str, An
         "gateId": result.gate_id,
         **{k: v for k, v in result.probe.items() if k != "eof"},
     }
+    if result.coverage_limited:
+        probe["coverageLimited"] = True
+        probe["coverageLimitedReasons"] = list(result.coverage_limited_reasons)
+    else:
+        probe["coverageLimited"] = False
+    if not result.metrics_observed:
+        probe["metricsObserved"] = False
+    else:
+        probe["metricsObserved"] = True
+    return probe
