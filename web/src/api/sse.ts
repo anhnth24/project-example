@@ -411,7 +411,10 @@ export class SseConnection implements AsyncIterable<SseMessage> {
     private readonly options: SseConnectionOptions,
   ) {
     this.cursor = createCursor(options.initialLastEventId);
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // `run()` calls this stored function as `this.fetchImpl(...)`; native
+    // Window.fetch rejects the resulting SseConnection receiver as an
+    // "Illegal invocation", so preserve the Fetch API's global receiver.
+    this.fetchImpl = (options.fetchImpl ?? globalThis.fetch).bind(globalThis);
     this.backoff = options.backoff ?? defaultBackoff;
     this.maxTransientAttempts = options.maxTransientAttempts ?? 6;
     if (options.signal) {
