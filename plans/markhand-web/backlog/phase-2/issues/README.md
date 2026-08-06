@@ -4,19 +4,18 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-08-03).** MVP xây trên mock server đã merge vào
-`master`: **13/19 issue Done** (P2-01…09, P2-11, P2-12, P2-13, P2-14, P2-16 phần build
-+ serve). **4 In progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có;
-**#374** đóng nốt gap conflict-warning demo cho as-of/compare/history — xem chi tiết bên
-dưới), P2-15 (E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed
-và lần chạy live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa
-chạy live), **P2-17** (Document graph — owner request mới
-2026-07-29, MVP server+web+mock xong, `similarity` đã landed 2026-07-29 (recommend-by-id, org-filter bắt buộc, threshold 0.5 const, cap 500 cạnh/200 node — test tích hợp `graph_similarity_edges_from_qdrant_recommend` gated `MARKHAND_TEST_QDRANT_URL`, evidence đầu tiên trên CI `rust-integration`; follow-up: batch recommend + tune threshold trên corpus thật); **#374** đóng deep-link "click node → mở đúng tài liệu"
-(`?doc=`) — xem chi tiết bên dưới), **P2-18** (Project grouping — owner request mới
-2026-07-29, org → project → collection → document, MVP server+web+mock xong; **#374**
-bổ sung 409 `name_taken` cho `PATCH /projects/{projectId}` vào spec + regenerate
-contract — xem chi tiết bên dưới). P2-11/P2-12
-rời khỏi Blocked nhờ lát membership API (1C-02/1C-11 slice) landed ở #317.
+**Trạng thái tổng quan (cập nhật 2026-08-05).** MVP xây trên mock server đã merge vào
+`master`: **14/19 issue Done** (P2-01…09, P2-11…14, P2-17). **5 active, đều In
+progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có; **#374** đóng nốt
+gap conflict-warning demo cho as-of/compare/history — xem chi tiết bên dưới), P2-15
+(E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed và lần chạy
+live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa chạy live),
+P2-18 (Project grouping — owner request mới 2026-07-29, org → project → collection →
+document, MVP server+web+mock xong; **#374** bổ sung 409 `name_taken` cho
+`PATCH /projects/{projectId}` vào spec + regenerate contract — xem chi tiết bên dưới),
+P2-16 (serve SPA / final gate), và P2-19 (chat history). P2-17 Document graph đã qua
+independent final review và chuyển `Done`; P2-11/P2-12 rời khỏi Blocked nhờ lát
+membership API (1C-02/1C-11 slice) landed ở #317.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
 > mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
@@ -435,43 +434,96 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
 
 ## P2-17 — Document graph
 
-- **Status:** In progress — owner yêu cầu mới 2026-07-29 (force-directed graph + sidebar
-  "Communities" checkbox, có ảnh mẫu). MVP: `GET /api/v1/graph` (org/ACL-scoped như
-  `/collections`/`/documents`, gate `qa.query` cùng tiền lệ `/conflicts`) trả `conflict`
-  edges thật từ `claims`/`conflicts` (PG, đã test DB-gated: org isolation, ACL riêng tư,
-  bounded cap 500 node/2000 edge) và `co_citation` edges từ
-  `ask_stream_sessions.cited_document_ids` (bảng thật duy nhất lưu "tài liệu nào được
-  trích dẫn theo answer nào" — không có bảng lịch sử QA riêng). Communities = connected
-  components thuần Rust (không thêm crate graph). Web: trang "Đồ thị" (rail icon
-  `Network`), force-directed layout tự viết (~150 dòng, `lib/forceLayout.ts`, seeded
-  deterministic — không thêm `d3-force`), sidebar cộng đồng + filter bộ sưu tập + chế độ
-  xem bảng (a11y fallback) + danh sách node điều hướng bàn phím, mock fixture 13
-  node/3 cụm/3 loại cạnh cho org A + graph nhỏ riêng cho org B, unit/component/e2e test.
-  **`similarity` (Qdrant) là chỗ gắn sẵn (stub), CHƯA có truy vấn vector thật** —
-  sandbox không có Qdrant để kiểm chứng, và API `storage/qdrant.rs` hiện tại
-  (`scroll_points`) hard-code `with_vector: false` nên cần một vòng riêng (thêm biến
-  thể lấy vector thật + kiểm thử với Qdrant thật) trước khi bật edge này; graph vẫn
-  trả đủ `conflict`/`co_citation` khi không có Qdrant, không lỗi.
-
-- **Plan/files:** `crates/server/src/routes/graph.rs`, `db/graph.rs`, `services/graph.rs`
-  (thuật toán thuần); OpenAPI path/schemas (`GraphNode`/`GraphEdge`/`GraphCommunity`/
-  `GraphResponse`) + `ROUTE_INVENTORY`; `web/src/pages/GraphPage.tsx`,
-  `components/graph/**`, `lib/forceLayout.ts`, `mocks/handlers/graph.ts`.
-- **Depends:** P2-07 (điều hướng khi click node — **deep-link đã đóng, #374**:
-  `GraphPage.handleActivateNode` giờ build `buildLibraryDocPath(collectionId, nodeId)`
-  → `/library/:collectionId?doc=:documentId`, mở thẳng preview tài liệu đó qua đúng
-  route param P2-07/P2-10 đang dùng; mock fixture tái dùng document id thật
-  "Onboarding Guide.pdf" cho một node để deep-link test được end-to-end, unit + E2E
-  cập nhật theo) + backend 1B
-  claims/conflicts + P1B-R05 ask-stream.
-- **Acceptance/tests:** `services::graph` unit test (components/pruning, xác định);
-  `tests/graph.rs` DB-gated (permission, conflict edge, co_citation edge, org isolation,
-  ACL riêng tư, bounded cap — chạy thật trên PG local, 6/6 pass); web unit
-  (`forceLayout.test.ts`, `GraphPage.test.tsx` 7 kịch bản) + `e2e/graph.spec.ts` (3 kịch
-  bản: cụm + sidebar, tắt cụm ẩn node, click node → preview thật qua library).
-- **Security:** Cùng ACL/permission với `/conflicts`; không thêm quyền mới chưa seed
-  role. **Out:** batch recommend + tune threshold `similarity` trên corpus thật
-  (deep-link preview từ đồ thị đã đóng ở #374 — xem Depends).
+- **Status:** Done — independent final review trên range
+  `f1f3434..05b51436eb9402025c955a98563e241557e48163` kết luận spec và
+  code/evidence `APPROVED`, không có Critical/Important finding; acceptance và evidence
+  bên dưới đã đầy đủ.
+- **Plan file:** [P2-17 detailed implementation plan](../../../../reports/plan-2026-08-05-p2-17-document-graph-closure.md)
+- **Objective:** Cung cấp graph tài liệu bounded và review độc lập được: node chỉ từ tài
+  liệu caller được phép thấy; edge `conflict`, `co_citation`, và opt-in `similarity`;
+  community deterministic; UI graph mở đúng document preview. Qdrant không khả dụng phải
+  degrade về graph PostgreSQL mà không lỗi hoặc nới ACL.
+- **Implementation plan:** 1. Route gate `qa.query` và truyền collection allow-list vào
+  service. 2. Service lấy visible documents cùng conflict/co-citation từ PostgreSQL, chỉ
+  gọi Qdrant recommend-by-point khi có cả vector index và approved embedder. 3. Mọi
+  recommend mang `VectorScope` org/collection fail-closed; lỗi Qdrant fail-soft bằng cách
+  bỏ riêng similarity edges, giữ graph PostgreSQL. 4. Prune node/edge theo cap và tạo
+  connected components deterministic; web render force layout, community/filter/table
+  fallback/keyboard và deep-link `/library/:collectionId?doc=`. 5. Regression integration
+  dùng PostgreSQL thật, active generation thật và test-local TCP listener: listener trả
+  scroll response hợp lệ, bắt buộc quan sát recommend-by-point request rồi đóng kết nối
+  để tạo transport error deterministic và chứng minh degraded behavior bounded.
+- **Files/modules:** Server owner: `crates/server/src/routes/graph.rs`,
+  `crates/server/src/services/graph.rs`, `crates/server/src/db/graph.rs`,
+  `crates/server/src/storage/qdrant.rs`, `crates/server/tests/graph.rs`, OpenAPI graph
+  path/schemas và `ROUTE_INVENTORY`. Web owner: `web/src/pages/GraphPage.tsx`,
+  `web/src/components/graph/**`, `web/src/lib/forceLayout.ts`,
+  `web/src/mocks/handlers/graph.ts`, graph unit/E2E specs.
+- **Dependencies/blocks:** P2-07 `Done` cung cấp route preview `?doc=`; backend 1B
+  claims/conflicts và P1B-R05 ask-stream cung cấp edge data. Delivery đã merge qua
+  [PR #327](https://github.com/anhnth24/project-example/pull/327) SHA
+  `abb392099cfdd2df8427d26fee5ffb6ebc07ebd4`,
+  [PR #331](https://github.com/anhnth24/project-example/pull/331) SHA
+  `0ae8105972f510a9a8d247fbd5fa3996ddcf60cc`, và
+  [PR #374](https://github.com/anhnth24/project-example/pull/374) SHA
+  `2a8d7c053b0ca2288b0280511b0488cc2996db8a`. Independent final review đã hoàn tất
+  trên [PR #392](https://github.com/anhnth24/project-example/pull/392), reviewed head
+  `05b51436eb9402025c955a98563e241557e48163`; không còn blocker trong scope P2-17.
+  Local hiện không có Docker/PostgreSQL/Qdrant hay `MARKHAND_TEST_*_DATABASE_URL`, nên
+  regression PG chỉ compile local; execution thật đã được chứng minh trên CI PostgreSQL
+  fixture và không tính missing-env skip là pass.
+- **Acceptance criteria:** `GET /api/v1/graph` trả tối đa 500 visible nodes, tối đa 2.000
+  edges và communities deterministic; thiếu `qa.query` bị 403; collection ngoài ACL bị
+  404; foreign-org/private node hoặc edge không xuất hiện. Conflict/co-citation lấy từ
+  PostgreSQL. Similarity dùng Qdrant recommend-by-point với mandatory scope, top-k 5,
+  threshold `0.5`, similarity-node cap 200 và similarity-edge cap 500. Khi Qdrant lỗi,
+  service không trả error, vẫn trả đúng ACL-scoped conflict/co-citation nodes/edges và
+  không tạo similarity/foreign edge. Web hỗ trợ community/filter/table fallback/keyboard
+  và click node mở `/library/:collectionId?doc=<documentId>`; generated API không drift.
+- **Required tests/evidence:** Local closure: `cargo test -p fileconv-server
+  services::graph --lib` = 18 pass; focused Vitest graph suite = 17 pass;
+  `pnpm --dir web api:check` pass; `cargo test -p fileconv-server --test graph --no-run`
+  compile pass. Regression `graph_qdrant_failure_preserves_acl_scoped_conflict_graph` ở
+  commit `50ef793e78f6ab21be5b87e14707d6f9d6c48376` bắt buộc listener quan sát
+  `/points/scroll` rồi `/points/query` với `query.recommend.positive`; bỏ/skip similarity
+  path làm listener timeout và test fail. PostgreSQL fixture seed visible conflict +
+  co-citation, same-org private edge candidate và foreign-org co-citation candidate; kết
+  quả chỉ giữ hai visible nodes cùng hai relation edges. Exact test chạy `... ok` trong
+  [rust-integration job 92366635226](https://github.com/anhnth24/project-example/actions/runs/31023634736/job/92366635226);
+  [rust job 92366635571](https://github.com/anhnth24/project-example/actions/runs/31023634736/job/92366635571)
+  và parent run
+  [31023634736](https://github.com/anhnth24/project-example/actions/runs/31023634736)
+  đều success. Final closure thuộc
+  [PR #392](https://github.com/anhnth24/project-example/pull/392); independent review
+  `f1f3434..05b51436eb9402025c955a98563e241557e48163` kết luận
+  `Spec compliance: APPROVED`, `Code/evidence quality: APPROVED`, không
+  Critical/Important.
+  Graph MVP evidence: SHA `abb392099cfdd2df8427d26fee5ffb6ebc07ebd4`, run
+  [30435638525](https://github.com/anhnth24/project-example/actions/runs/30435638525),
+  jobs [rust-integration 90522758925](https://github.com/anhnth24/project-example/actions/runs/30435638525/job/90522758925),
+  [web 90522758960](https://github.com/anhnth24/project-example/actions/runs/30435638525/job/90522758960),
+  [web-e2e 90522759000](https://github.com/anhnth24/project-example/actions/runs/30435638525/job/90522759000)
+  đều success. Similarity evidence: SHA
+  `0ae8105972f510a9a8d247fbd5fa3996ddcf60cc`, run
+  [30446846876](https://github.com/anhnth24/project-example/actions/runs/30446846876),
+  jobs [rust 90559397129](https://github.com/anhnth24/project-example/actions/runs/30446846876/job/90559397129)
+  và [rust-integration 90559397215](https://github.com/anhnth24/project-example/actions/runs/30446846876/job/90559397215)
+  success; integration log chạy `graph_similarity_edges_from_qdrant_recommend ... ok`.
+  Deep-link evidence chỉ dùng [web-e2e job 91689028325](https://github.com/anhnth24/project-example/actions/runs/30814514369/job/91689028325)
+  success trên SHA `2a8d7c053b0ca2288b0280511b0488cc2996db8a`; parent run
+  [30814514369](https://github.com/anhnth24/project-example/actions/runs/30814514369)
+  overall failure do unrelated
+  [dev-stack job 91689028310](https://github.com/anhnth24/project-example/actions/runs/30814514369/job/91689028310),
+  nên overall run không dùng làm graph evidence.
+- **Security/migration:** Independent final security/code review đã hoàn tất, không có
+  Critical/Important finding. PostgreSQL RLS + collection allow-list là authority; mỗi
+  Qdrant read mang org/collection `VectorScope`, re-check payload scope, không trả vector
+  về app; mọi failure phải không broaden scope và không log content/secret. Không đổi
+  schema, migration, dependency hoặc public API trong closure này; rollback là revert
+  test/docs.
+- **Out of scope:** Qdrant batch recommend; tuning threshold `0.5` trên corpus thật;
+  clustering ngoài deterministic connected components; production deployment/Phase 2
+  exit gate; batch/tuning và issue khác.
 
 ## P2-18 — Project grouping (org → project → collection → document)
 
