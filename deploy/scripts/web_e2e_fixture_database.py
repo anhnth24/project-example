@@ -503,7 +503,9 @@ DELETE FROM event_log WHERE org_id = {org_id};
 DELETE FROM jobs WHERE org_id = {org_id};
 DELETE FROM quota_reservations WHERE org_id = {org_id};
 DELETE FROM usage_counters WHERE org_id = {org_id};
+ALTER TABLE audit_log DISABLE TRIGGER USER;
 DELETE FROM audit_log WHERE org_id = {org_id};
+ALTER TABLE audit_log ENABLE TRIGGER USER;
 
 UPDATE documents SET current_version_id = NULL WHERE org_id = {org_id};
 ALTER TABLE document_versions DISABLE TRIGGER USER;

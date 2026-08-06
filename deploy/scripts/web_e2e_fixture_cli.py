@@ -124,20 +124,24 @@ def _storage_leaks(
     inventory: RunInventory,
     config: EffectiveConfig,
     deadline: Deadline,
-    remembered_objects: dict[str, str] | None = None,
+    remembered_objects: dict[str, set[str]] | None = None,
     remembered_collections: set[str] | None = None,
-) -> tuple[dict[str, list[str]], dict[str, str], set[str]]:
-    objects = dict(remembered_objects or {})
+) -> tuple[dict[str, list[str]], dict[str, set[str]], set[str]]:
+    objects = {
+        key: set(resource_ids)
+        for key, resource_ids in (remembered_objects or {}).items()
+    }
     for object_id in ids["objectIds"]:
-        objects[object_id] = quarantine_object_key(ids["orgId"], object_id)
+        key = quarantine_object_key(ids["orgId"], object_id)
+        objects.setdefault(key, set()).add(object_id)
     for resource in inventory.objects:
-        objects[resource.resource_id] = resource.key
+        objects.setdefault(resource.key, set()).add(resource.resource_id)
     collections = _derived_collections(inventory, config, remembered_collections)
 
     object_leaks: list[str] = []
-    for resource_id, key in sorted(objects.items()):
+    for key, resource_ids in sorted(objects.items()):
         if commands.object_exists(key, timeout=deadline.remaining()):
-            object_leaks.append(resource_id)
+            object_leaks.extend(resource_ids)
     vector_ids = commands.qdrant_point_ids(
         sorted(collections),
         ids["orgId"],
@@ -158,9 +162,9 @@ def collect_leaks(
     config: EffectiveConfig,
     deadline: Deadline,
     inventory: RunInventory | None = None,
-    remembered_objects: dict[str, str] | None = None,
+    remembered_objects: dict[str, set[str]] | None = None,
     remembered_collections: set[str] | None = None,
-) -> tuple[dict[str, Any], RunInventory, dict[str, str], set[str]]:
+) -> tuple[dict[str, Any], RunInventory, dict[str, set[str]], set[str]]:
     current = inventory or load_inventory(
         commands=commands,
         org_id=ids["orgId"],
@@ -244,80 +248,91 @@ def cmd_setup(
         "contentSha": hashlib.sha256(f"e2e-failed:{run_id}".encode("utf-8")).hexdigest(),
         "objectKey": object_key,
     }
-    created = setup_fixture_rows(
-        commands=commands,
-        deadline=deadline,
-        values=values,
-        admin_hash=admin_hash,
-        viewer_hash=viewer_hash,
-    )
-    checksum = fixture_checksum(
-        [
-            created["orgId"],
-            created["adminUserId"],
-            created["viewerUserId"],
-            created["collectionId"],
-            created["failedDocumentId"],
-            created["failedVersionId"],
-            created["objectId"],
-            created["vectorPointId"],
-        ]
-    )
-    manifest = {
+    compensation_ids = {
         "runId": run_id,
-        "orgId": created["orgId"],
-        "adminUserId": created["adminUserId"],
-        "viewerUserId": created["viewerUserId"],
-        "collectionId": created["collectionId"],
+        "orgId": ids["orgId"],
+        "adminUserId": ids["adminUserId"],
+        "viewerUserId": ids["viewerUserId"],
+        "collectionId": ids["collectionId"],
         "collectionName": collection_name,
-        "failedDocumentId": created["failedDocumentId"],
-        "failedVersionId": created["failedVersionId"],
-        "objectIds": [created["objectId"]],
-        "vectorPointIds": [created["vectorPointId"]],
-        "checksum": checksum,
+        "failedDocumentId": ids["failedDocumentId"],
+        "failedVersionId": ids["failedVersionId"],
+        "objectIds": [ids["objectId"]],
+        "vectorPointIds": [ids["vectorPointId"]],
     }
-    _assert_manifest_public(manifest)
-    credentials = {
-        "runId": run_id,
-        "adminEmail": admin_email,
-        "adminPassword": admin_password,
-        "viewerEmail": viewer_email,
-        "viewerPassword": viewer_password,
-        "objectKeys": [object_key],
-        "vectorPointIds": [created["vectorPointId"]],
-    }
-    compensation_ids = _manifest_ids(manifest)
     try:
+        created = setup_fixture_rows(
+            commands=commands,
+            deadline=deadline,
+            values=values,
+            admin_hash=admin_hash,
+            viewer_hash=viewer_hash,
+        )
+        if any(created[field] != ids[field] for field in ids):
+            raise FixtureError("fixture setup returned mismatched identifiers")
+        checksum = fixture_checksum(
+            [
+                created["orgId"],
+                created["adminUserId"],
+                created["viewerUserId"],
+                created["collectionId"],
+                created["failedDocumentId"],
+                created["failedVersionId"],
+                created["objectId"],
+                created["vectorPointId"],
+            ]
+        )
+        manifest = {
+            **compensation_ids,
+            "checksum": checksum,
+        }
+        _assert_manifest_public(manifest)
+        credentials = {
+            "runId": run_id,
+            "adminEmail": admin_email,
+            "adminPassword": admin_password,
+            "viewerEmail": viewer_email,
+            "viewerPassword": viewer_password,
+            "objectKeys": [object_key],
+            "vectorPointIds": [created["vectorPointId"]],
+        }
         deadline.remaining()
         _atomic_write_json(credentials_out, credentials, mode=0o600)
         deadline.remaining()
         _atomic_write_json(manifest_out, manifest, mode=0o644)
         if credentials_out.stat().st_mode & 0o777 != 0o600:
             raise FixtureError("credentials file mode must be 0600")
-    except Exception as staging_error:
-        _remove_credentials(credentials_out)
-        manifest_out.unlink(missing_ok=True)
+    except Exception as setup_error:
+        output_cleanup_error: OSError | FixtureError | None = None
+        try:
+            _remove_credentials(credentials_out)
+            manifest_out.unlink(missing_ok=True)
+        except (OSError, FixtureError) as error:
+            output_cleanup_error = error
+        compensation_deadline = _deadline(DEFAULT_OPERATION_TIMEOUT_SECS)
         try:
             hard_delete_run_rows(
                 commands=commands,
                 ids=compensation_ids,
-                deadline=deadline,
+                deadline=compensation_deadline,
             )
             remaining = inspect_database_leaks(
                 commands=commands,
                 ids=compensation_ids,
-                deadline=deadline,
+                deadline=compensation_deadline,
             )
         except FixtureError as compensation_error:
-            raise FixtureError("fixture output failed and database compensation failed") from compensation_error
+            raise FixtureError("fixture setup failed and database compensation failed") from compensation_error
         if remaining:
             raise FixtureLeakError(
-                "fixture output failed and database compensation left rows",
+                "fixture setup failed and database compensation left rows",
                 {"database_rows": remaining},
-            ) from staging_error
-        if isinstance(staging_error, FixtureError):
-            raise staging_error
-        raise FixtureError("fixture output staging failed") from staging_error
+            ) from setup_error
+        if output_cleanup_error is not None:
+            raise FixtureError("fixture setup failed and output cleanup failed") from output_cleanup_error
+        if isinstance(setup_error, FixtureError):
+            raise setup_error
+        raise FixtureError("fixture setup post-commit step failed") from setup_error
 
 
 def _load_credentials(path: Path, run_id: str) -> dict[str, Any] | None:
@@ -338,9 +353,9 @@ def _wait_for_worker_cleanup(
     token: str,
     deadline: Deadline,
     initial_inventory: RunInventory,
-    remembered_objects: dict[str, str],
+    remembered_objects: dict[str, set[str]],
     remembered_collections: set[str],
-) -> tuple[dict[str, str], set[str]]:
+) -> tuple[dict[str, set[str]], set[str]]:
     requested: set[str] = set()
     inventory = initial_inventory
     while True:

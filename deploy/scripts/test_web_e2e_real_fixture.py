@@ -167,7 +167,7 @@ def _write_json(path: Path, payload: dict[str, Any], mode: int = 0o600) -> None:
 
 
 def _sample_ids(run_id: str) -> dict[str, str]:
-    base = uuid.uuid5(uuid.NAMESPACE_URL, f"markhand-e2e:{run_id}")
+    base = uuid.uuid5(uuid.NAMESPACE_URL, f"markhand-e2e-fixture:{run_id}")
     org_id = str(uuid.uuid5(base, "org"))
     object_id = str(uuid.uuid5(base, "object"))
     return {

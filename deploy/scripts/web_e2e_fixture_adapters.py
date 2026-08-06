@@ -387,10 +387,23 @@ class LiveCommands:
         except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
             raise FixtureProbeError("qdrant probe returned invalid data") from error
 
-        point_ids: list[str] = []
-        for collection in sorted(set(collections)):
-            if collection not in listed:
+        # PostgreSQL/config hints can disappear before a retry or verify-clean run.
+        # Scan every server-owned collection whose full signature validates; the
+        # mandatory org_id filter below keeps the probe run-scoped.
+        _ = collections
+        validated_collections: set[str] = set()
+        for name in listed:
+            if not name.startswith(QDRANT_COLLECTION_PREFIX):
                 continue
+            digest = name[len(QDRANT_COLLECTION_PREFIX) :]
+            try:
+                expected = collection_name_for_signature(digest)
+            except FixtureError:
+                continue
+            if name == expected:
+                validated_collections.add(name)
+        point_ids: list[str] = []
+        for collection in sorted(validated_collections):
             offset: str | None = None
             while True:
                 request_payload: dict[str, Any] = {
