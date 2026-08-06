@@ -94,7 +94,7 @@ test('provider fallback still answers (extractive), labelled honestly, with a wa
   await page.getByRole('textbox', { name: 'Câu hỏi' }).fill(`${ASK_QUESTION} ${FALLBACK_MARKER}`);
   await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
-  await expect(page.getByText('Trả lời trích xuất (không qua LLM)')).toBeVisible();
+  await expect(page.getByText('Dùng đoạn nguồn (câu mô hình không đạt kiểm chứng)')).toBeVisible();
   await expect(page.getByText(/Nhà cung cấp LLM tạm thời không khả dụng/)).toBeVisible();
   await expect(page.getByTestId('qa-answer').first()).toContainText(
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',

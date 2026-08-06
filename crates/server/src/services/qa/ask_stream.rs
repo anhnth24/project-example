@@ -26,11 +26,12 @@ use crate::db::ask_streams::{
 use crate::db::pool::{apply_org_context, with_org_txn};
 use crate::services::citation::{pins_from_hits, CitationPin};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
+use crate::services::qa::chitchat::{assistant_fallback_reply, is_assistant_chitchat};
 use crate::services::qa::grounding::{
     conflict_resolution_notes_for_history, conflict_warnings_for_current, version_context_note,
     VersionContext,
 };
-use crate::services::qa::prompt::build_grounded_messages;
+use crate::services::qa::prompt::{build_assistant_messages, build_grounded_messages};
 use crate::services::qa::provider::{ChatProvider, ProviderError, StreamCancel};
 use crate::services::qa::stream::{tokenize_answer, HEARTBEAT_INTERVAL, SSE_ENVELOPE_VERSION};
 use crate::services::qa::{
@@ -92,80 +93,138 @@ pub async fn start_ask_stream(
             "question exceeds max length",
         ));
     }
-    let retrieval = hybrid_search(
-        pool,
-        qdrant,
-        embedder,
-        ctx,
-        RetrievalRequest {
-            query: question.clone(),
-            collection_ids: collection_ids.clone(),
-            mode: mode.clone(),
-            limit: limit.clamp(1, 20),
-            conflict_ids: conflict_ids.clone(),
-        },
-    )
-    .await
-    .map_err(AskStreamPrepareError::Retrieval)?;
 
-    let citations = pins_from_hits(ctx.org_id(), &retrieval.hits);
-    let cited_document_ids: Vec<Uuid> = citations
-        .iter()
-        .map(|pin| pin.logical_document_id)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let cited_version_ids: Vec<Uuid> = citations
-        .iter()
-        .map(|pin| pin.version_id)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    let collection_list: Vec<Uuid> = collection_ids
-        .clone()
-        .unwrap_or_else(|| ctx.allowed_collection_ids().iter().copied().collect())
-        .into_iter()
-        .collect();
-    let version_context = version_context_note(&mode, &citations, &retrieval.hits);
-    let mut warnings = retrieval.warnings;
-    warnings.extend(conflict_warnings_for_current(
-        &mode,
-        &retrieval.conflict_evidence,
-    ));
-    warnings.extend(conflict_resolution_notes_for_history(
-        &mode,
-        &retrieval.conflict_evidence,
-    ));
-
-    let hybrid = hits_to_hybrid(&retrieval.hits);
-    let extractive = extractive_answer(&question, &hybrid);
-
-    // Token quota (1C-09 a): reserve before creating any durable session state
-    // — a denial is a clean 429 with zero side effects. Only reserved when the
-    // producer will really call the provider (same predicate as run_producer):
-    // incremental streaming, or the buffered dev-gate path.
-    let extractive_forced = force_extractive_only_runtime();
-    let will_call_provider = !retrieval.hits.is_empty()
-        && provider.as_ref().is_some_and(|chat| {
-            (chat.supports_incremental_stream() && !extractive_forced)
-                || (extractive_forced && allow_unverified_llm_runtime())
-        });
-    let token_lease = if will_call_provider {
-        let messages = build_grounded_messages(&question, &hybrid, &mode);
-        Some(
-            reserve_ask_tokens(pool, ctx, &messages)
-                .await
-                .map_err(AskStreamPrepareError::Quota)?,
+    let assistant_turn = is_assistant_chitchat(&question);
+    let (
+        citations,
+        cited_document_ids,
+        cited_version_ids,
+        collection_list,
+        version_context,
+        warnings,
+        extractive,
+        embedding_mode,
+        hits,
+        token_lease,
+    ) = if assistant_turn {
+        let extractive = assistant_fallback_reply(&question);
+        let version_context = version_context_note(&mode, &[], &[]);
+        let will_call_provider = provider.is_some();
+        let token_lease = if will_call_provider {
+            let messages = build_assistant_messages(&question);
+            Some(
+                reserve_ask_tokens(pool, ctx, &messages)
+                    .await
+                    .map_err(AskStreamPrepareError::Quota)?,
+            )
+        } else {
+            None
+        };
+        let collection_list: Vec<Uuid> = collection_ids
+            .clone()
+            .unwrap_or_else(|| ctx.allowed_collection_ids().iter().copied().collect())
+            .into_iter()
+            .collect();
+        (
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            collection_list,
+            version_context,
+            Vec::new(),
+            extractive,
+            "assistant".to_string(),
+            Vec::new(),
+            token_lease,
         )
     } else {
-        None
+        let retrieval = hybrid_search(
+            pool,
+            qdrant,
+            embedder,
+            ctx,
+            RetrievalRequest {
+                query: question.clone(),
+                collection_ids: collection_ids.clone(),
+                mode: mode.clone(),
+                limit: limit.clamp(1, 20),
+                conflict_ids: conflict_ids.clone(),
+            },
+        )
+        .await
+        .map_err(AskStreamPrepareError::Retrieval)?;
+
+        let citations = pins_from_hits(ctx.org_id(), &retrieval.hits);
+        let cited_document_ids: Vec<Uuid> = citations
+            .iter()
+            .map(|pin| pin.logical_document_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let cited_version_ids: Vec<Uuid> = citations
+            .iter()
+            .map(|pin| pin.version_id)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let collection_list: Vec<Uuid> = collection_ids
+            .clone()
+            .unwrap_or_else(|| ctx.allowed_collection_ids().iter().copied().collect())
+            .into_iter()
+            .collect();
+        let version_context = version_context_note(&mode, &citations, &retrieval.hits);
+        let mut warnings = retrieval.warnings;
+        warnings.extend(conflict_warnings_for_current(
+            &mode,
+            &retrieval.conflict_evidence,
+        ));
+        warnings.extend(conflict_resolution_notes_for_history(
+            &mode,
+            &retrieval.conflict_evidence,
+        ));
+
+        let hybrid = hits_to_hybrid(&retrieval.hits);
+        let extractive = extractive_answer(&question, &hybrid);
+
+        // Token quota (1C-09 a): reserve before creating any durable session state
+        // — a denial is a clean 429 with zero side effects. Only reserved when the
+        // producer will really call the provider (same predicate as run_producer):
+        // incremental streaming, or the buffered dev-gate path.
+        let extractive_forced = force_extractive_only_runtime();
+        let will_call_provider = !retrieval.hits.is_empty()
+            && provider.as_ref().is_some_and(|chat| {
+                (chat.supports_incremental_stream() && !extractive_forced)
+                    || (extractive_forced && allow_unverified_llm_runtime())
+            });
+        let token_lease = if will_call_provider {
+            let messages = build_grounded_messages(&question, &hybrid, &mode);
+            Some(
+                reserve_ask_tokens(pool, ctx, &messages)
+                    .await
+                    .map_err(AskStreamPrepareError::Quota)?,
+            )
+        } else {
+            None
+        };
+        (
+            citations,
+            cited_document_ids,
+            cited_version_ids,
+            collection_list,
+            version_context,
+            warnings,
+            extractive,
+            retrieval.embedding_mode,
+            retrieval.hits,
+            token_lease,
+        )
     };
 
     let session_id = Uuid::new_v4();
     // Retention-safe snapshot: IDs/hashes only — never question/answer/quote body.
     let pinned_snapshot = json!({
-        "embeddingMode": retrieval.embedding_mode,
-        "hitIds": retrieval.hits.iter().map(hit_id_summary).collect::<Vec<_>>(),
+        "embeddingMode": embedding_mode,
+        "hitIds": hits.iter().map(hit_id_summary).collect::<Vec<_>>(),
         "citationIds": citations.iter().map(|pin| json!({
             "documentId": pin.logical_document_id,
             "versionId": pin.version_id,
@@ -175,6 +234,7 @@ pub async fn start_ask_stream(
         "warningCount": warnings.len(),
         "extractiveChars": extractive.chars().count(),
         "questionSha256": sha256_hex(question.as_bytes()),
+        "assistantTurn": assistant_turn,
     });
 
     let version_mode = mode_wire(&mode);
@@ -236,13 +296,14 @@ pub async fn start_ask_stream(
             version_context,
             warnings,
             extractive,
-            retrieval.embedding_mode,
-            retrieval.hits,
+            embedding_mode,
+            hits,
             question,
             mode,
             producer_provider,
             producer_cancel,
             token_lease,
+            assistant_turn,
         )
         .await;
     });
@@ -273,6 +334,7 @@ async fn run_producer(
     provider: Option<ChatProvider>,
     cancel: StreamCancel,
     token_lease: Option<TokenLease>,
+    assistant_turn: bool,
 ) {
     let mut token_lease = token_lease;
     // Measured provider consumption for token settlement (1C-09 a):
@@ -348,11 +410,16 @@ async fn run_producer(
         }
     };
 
+    let started_mode = if assistant_turn {
+        AnswerMode::Assistant
+    } else {
+        AnswerMode::OfflineExtractive
+    };
     if let Err(error) = append(
         "ask.started",
         json!({
             "streamSessionId": session_id,
-            "mode": AnswerMode::OfflineExtractive.as_str(),
+            "mode": started_mode.as_str(),
             "embeddingMode": embedding_mode,
             "citationCount": citations.len(),
         }),
@@ -365,12 +432,7 @@ async fn run_producer(
         return;
     }
 
-    let extractive_forced = force_extractive_only_runtime();
-    let use_provider_stream = provider
-        .as_ref()
-        .is_some_and(|p| p.supports_incremental_stream() && !extractive_forced);
-
-    let mut answer_mode = AnswerMode::OfflineExtractive;
+    let mut answer_mode = started_mode;
     let mut streamed_any = false;
     // Dev-gate path (default OFF): buffer the full LLM answer so citation/claim
     // validation (which needs the whole text) can run before anything is
@@ -380,119 +442,165 @@ async fn run_producer(
     let mut unverified_answer: Option<String> = None;
     let mut dev_gate_attempted_and_failed = false;
 
-    if use_provider_stream {
+    if assistant_turn {
         if let Some(chat) = provider.as_ref() {
-            let hybrid = hits_to_hybrid(&hits);
-            let messages = build_grounded_messages(&question, &hybrid, &mode);
-            match chat.stream_tokens(&messages, cancel.clone()).await {
-                Ok(mut rx) => {
-                    answer_mode = chat.answer_mode();
-                    // Request reached the provider: prompt tokens are spent
-                    // from here on, even if zero answer tokens arrive.
+            let messages = build_assistant_messages(&question);
+            match chat.complete(&messages).await {
+                Ok(llm_answer) => {
+                    provider_usage = Some(llm_answer.chars().count());
+                    let trimmed = llm_answer.trim();
+                    if trimmed.is_empty() {
+                        warnings
+                            .push("Assistant provider returned empty; using offline reply.".into());
+                        unverified_answer = Some(extractive.clone());
+                    } else {
+                        unverified_answer = Some(trimmed.to_string());
+                    }
+                    answer_mode = AnswerMode::Assistant;
+                }
+                Err(ProviderError::Timeout) => {
                     provider_usage = Some(0);
-                    while let Some(item) = rx.recv().await {
-                        if cancel.is_cancelled() {
-                            settle_lease(&pool, &ctx, &mut token_lease, provider_usage).await;
-                            close(AskStreamStatus::Error, "cancelled").await;
-                            return;
-                        }
-                        match item {
-                            Ok(token) => {
-                                streamed_any = true;
-                                provider_usage = Some(
-                                    provider_usage
-                                        .unwrap_or(0)
-                                        .saturating_add(token.chars().count()),
-                                );
-                                if let Err(error) =
-                                    append("ask.token", json!({ "text": token })).await
-                                {
-                                    // Includes mid-stream citation_revoked:
-                                    // tokens already streamed by the provider
-                                    // stay committed, never refunded.
-                                    settle_lease(&pool, &ctx, &mut token_lease, provider_usage)
-                                        .await;
-                                    let reason = config_reason(&error).unwrap_or("stream_error");
-                                    cancel.cancel();
-                                    close(AskStreamStatus::Error, reason).await;
-                                    return;
-                                }
-                            }
-                            Err(ProviderError::Cancelled) => {
+                    warnings.push("LLM provider timed out; using offline assistant reply.".into());
+                    unverified_answer = Some(extractive.clone());
+                    answer_mode = AnswerMode::Assistant;
+                }
+                Err(_) => {
+                    warnings
+                        .push("LLM provider unavailable; using offline assistant reply.".into());
+                    unverified_answer = Some(extractive.clone());
+                    answer_mode = AnswerMode::Assistant;
+                }
+            }
+        } else {
+            warnings.push("No chat provider configured; using offline assistant reply.".into());
+            unverified_answer = Some(extractive.clone());
+            answer_mode = AnswerMode::Assistant;
+        }
+    } else {
+        let extractive_forced = force_extractive_only_runtime();
+        let use_provider_stream = provider
+            .as_ref()
+            .is_some_and(|p| p.supports_incremental_stream() && !extractive_forced);
+
+        if use_provider_stream {
+            if let Some(chat) = provider.as_ref() {
+                let hybrid = hits_to_hybrid(&hits);
+                let messages = build_grounded_messages(&question, &hybrid, &mode);
+                match chat.stream_tokens(&messages, cancel.clone()).await {
+                    Ok(mut rx) => {
+                        answer_mode = chat.answer_mode();
+                        // Request reached the provider: prompt tokens are spent
+                        // from here on, even if zero answer tokens arrive.
+                        provider_usage = Some(0);
+                        while let Some(item) = rx.recv().await {
+                            if cancel.is_cancelled() {
                                 settle_lease(&pool, &ctx, &mut token_lease, provider_usage).await;
                                 close(AskStreamStatus::Error, "cancelled").await;
                                 return;
                             }
-                            Err(ProviderError::Timeout) => {
-                                warnings.push(
-                                    "LLM provider timed out; using extractive fallback.".into(),
-                                );
-                                answer_mode = AnswerMode::FallbackExtractive;
-                                break;
-                            }
-                            Err(_) => {
-                                warnings.push(
-                                    "LLM provider unavailable; using extractive fallback.".into(),
-                                );
-                                answer_mode = AnswerMode::FallbackExtractive;
-                                break;
+                            match item {
+                                Ok(token) => {
+                                    streamed_any = true;
+                                    provider_usage = Some(
+                                        provider_usage
+                                            .unwrap_or(0)
+                                            .saturating_add(token.chars().count()),
+                                    );
+                                    if let Err(error) =
+                                        append("ask.token", json!({ "text": token })).await
+                                    {
+                                        // Includes mid-stream citation_revoked:
+                                        // tokens already streamed by the provider
+                                        // stay committed, never refunded.
+                                        settle_lease(&pool, &ctx, &mut token_lease, provider_usage)
+                                            .await;
+                                        let reason =
+                                            config_reason(&error).unwrap_or("stream_error");
+                                        cancel.cancel();
+                                        close(AskStreamStatus::Error, reason).await;
+                                        return;
+                                    }
+                                }
+                                Err(ProviderError::Cancelled) => {
+                                    settle_lease(&pool, &ctx, &mut token_lease, provider_usage)
+                                        .await;
+                                    close(AskStreamStatus::Error, "cancelled").await;
+                                    return;
+                                }
+                                Err(ProviderError::Timeout) => {
+                                    warnings.push(
+                                        "LLM provider timed out; using extractive fallback.".into(),
+                                    );
+                                    answer_mode = AnswerMode::FallbackExtractive;
+                                    break;
+                                }
+                                Err(_) => {
+                                    warnings.push(
+                                        "LLM provider unavailable; using extractive fallback."
+                                            .into(),
+                                    );
+                                    answer_mode = AnswerMode::FallbackExtractive;
+                                    break;
+                                }
                             }
                         }
                     }
-                }
-                Err(ProviderError::Timeout) => {
-                    // Request was sent; assume the prompt was billed.
-                    provider_usage = Some(0);
-                    warnings.push("LLM provider timed out; using extractive fallback.".into());
-                    answer_mode = AnswerMode::FallbackExtractive;
-                }
-                Err(_) => {
-                    warnings.push("LLM provider unavailable; using extractive fallback.".into());
-                    answer_mode = AnswerMode::FallbackExtractive;
-                }
-            }
-        }
-    } else if extractive_forced && allow_unverified_llm_runtime() && !hits.is_empty() {
-        if let Some(chat) = provider.as_ref() {
-            let hybrid = hits_to_hybrid(&hits);
-            let messages = build_grounded_messages(&question, &hybrid, &mode);
-            match chat.complete(&messages).await {
-                Ok(llm_answer) => {
-                    // Consumed even when validation later discards the answer.
-                    provider_usage = Some(llm_answer.chars().count());
-                    let valid_ids = valid_citation_ids(hybrid.len());
-                    // Same policy helper as the JSON ask() route — identical
-                    // fail-closed / dev-gate / validation semantics.
-                    let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
-                        llm_answer,
-                        &extractive,
-                        &valid_ids,
-                        &citations,
-                        &mode,
-                        chat.answer_mode(),
-                    );
-                    warnings.extend(extra_warnings);
-                    answer_mode = resolved_mode;
-                    match resolved_mode {
-                        AnswerMode::LlmUnverified => unverified_answer = Some(answer),
-                        AnswerMode::FallbackExtractive => dev_gate_attempted_and_failed = true,
-                        _ => {}
+                    Err(ProviderError::Timeout) => {
+                        // Request was sent; assume the prompt was billed.
+                        provider_usage = Some(0);
+                        warnings.push("LLM provider timed out; using extractive fallback.".into());
+                        answer_mode = AnswerMode::FallbackExtractive;
+                    }
+                    Err(_) => {
+                        warnings
+                            .push("LLM provider unavailable; using extractive fallback.".into());
+                        answer_mode = AnswerMode::FallbackExtractive;
                     }
                 }
-                Err(ProviderError::Timeout) => {
-                    provider_usage = Some(0);
-                    warnings.push("LLM provider timed out; using extractive fallback.".into());
-                    answer_mode = AnswerMode::FallbackExtractive;
-                    dev_gate_attempted_and_failed = true;
-                }
-                Err(_) => {
-                    warnings.push("LLM provider unavailable; using extractive fallback.".into());
-                    answer_mode = AnswerMode::FallbackExtractive;
-                    dev_gate_attempted_and_failed = true;
+            }
+        } else if extractive_forced && allow_unverified_llm_runtime() && !hits.is_empty() {
+            if let Some(chat) = provider.as_ref() {
+                let hybrid = hits_to_hybrid(&hits);
+                let messages = build_grounded_messages(&question, &hybrid, &mode);
+                match chat.complete(&messages).await {
+                    Ok(llm_answer) => {
+                        // Consumed even when validation later discards the answer.
+                        provider_usage = Some(llm_answer.chars().count());
+                        let valid_ids = valid_citation_ids(hybrid.len());
+                        // Same policy helper as the JSON ask() route — identical
+                        // fail-closed / dev-gate / validation semantics.
+                        let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
+                            llm_answer,
+                            &extractive,
+                            &valid_ids,
+                            &citations,
+                            &mode,
+                            chat.answer_mode(),
+                        );
+                        warnings.extend(extra_warnings);
+                        answer_mode = resolved_mode;
+                        match resolved_mode {
+                            AnswerMode::LlmUnverified => unverified_answer = Some(answer),
+                            AnswerMode::FallbackExtractive => dev_gate_attempted_and_failed = true,
+                            _ => {}
+                        }
+                    }
+                    Err(ProviderError::Timeout) => {
+                        provider_usage = Some(0);
+                        warnings.push("LLM provider timed out; using extractive fallback.".into());
+                        answer_mode = AnswerMode::FallbackExtractive;
+                        dev_gate_attempted_and_failed = true;
+                    }
+                    Err(_) => {
+                        warnings
+                            .push("LLM provider unavailable; using extractive fallback.".into());
+                        answer_mode = AnswerMode::FallbackExtractive;
+                        dev_gate_attempted_and_failed = true;
+                    }
                 }
             }
         }
-    }
+    } // end !assistant_turn
 
     // Provider interaction is over on every remaining path — settle exactly
     // once here (later returns only emit already-persisted/extractive data).
@@ -512,13 +620,15 @@ async fn run_producer(
             }
         }
     } else if !streamed_any || matches!(answer_mode, AnswerMode::FallbackExtractive) {
-        if extractive_forced && !dev_gate_attempted_and_failed {
+        if !assistant_turn && force_extractive_only_runtime() && !dev_gate_attempted_and_failed {
             warnings.push(
                 "Structured entailment unavailable; fail-closed extractive-only grounding.".into(),
             );
         }
         answer_mode = if matches!(answer_mode, AnswerMode::FallbackExtractive) {
             AnswerMode::FallbackExtractive
+        } else if assistant_turn {
+            AnswerMode::Assistant
         } else {
             AnswerMode::OfflineExtractive
         };

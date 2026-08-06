@@ -12,3 +12,8 @@ export { useChatHistory, type UseChatHistoryResult, type RecordableTurn } from '
 export { createAskStreamSource, buildAskStreamUrl } from './askStreamSource';
 export { ChatHistorySidebar } from './ChatHistorySidebar';
 export { ProjectPicker, type ProjectOption } from './ProjectPicker';
+export {
+  presentWarnings,
+  DISCARDED_LLM_DRAFT_PREFIX,
+  type WarningPresentation,
+} from './warningPresentation';

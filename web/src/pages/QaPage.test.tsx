@@ -109,9 +109,11 @@ describe('QaPage', () => {
       expect(within(chatLog()).getByTestId('qa-answer')).toHaveTextContent('[1]');
       expect(within(chatLog()).queryByText('CITE-0001')).not.toBeInTheDocument();
       expect(await screen.findByText('Nguồn trích dẫn')).toBeVisible();
-      // This question's tokens ("quý") also match the unrelated compare-doc
-      // fixture's budget quote (same overlap `qa.spec.ts`'s own module doc
-      // notes), so more than one footnote source item can render here.
+      // Quotes stay collapsed by default; expanding one confirms the footnote
+      // still carries the passage text for deep inspection.
+      const expandButtons = screen.getAllByRole('button', { name: 'Hiện đoạn trích' });
+      expect(expandButtons.length).toBeGreaterThan(0);
+      fireEvent.click(expandButtons[0]);
       expect(screen.getAllByTestId('qa-footnote-quote').length).toBeGreaterThan(0);
     });
 
@@ -140,7 +142,9 @@ describe('QaPage', () => {
       await askQuestion(`Câu hỏi dùng fallback ${QA_STREAM_MARKERS.providerFallback}`);
 
       await waitFor(() => {
-        expect(screen.getByText('Trả lời trích xuất (không qua LLM)')).toBeVisible();
+        expect(
+          screen.getByText('Dùng đoạn nguồn (câu mô hình không đạt kiểm chứng)'),
+        ).toBeVisible();
       });
       await waitFor(() => {
         expect(

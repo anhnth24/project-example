@@ -31,6 +31,7 @@ const ALLOWED_ANSWER_MODES = new Set<string>([
   'cloud_llm',
   'subscription_cli',
   'llm_unverified',
+  'assistant',
 ]);
 const FALLBACK_ANSWER_MODE: AnswerMode = 'offline_extractive';
 
