@@ -44,14 +44,23 @@ class FakeCommands:
     http_calls: list[dict[str, Any]] = field(default_factory=list)
     fail_psql: bool = False
     sleep_calls: list[float] = field(default_factory=list)
+    timeout_calls: list[float] = field(default_factory=list)
 
-    def hash_password(self, password: str) -> str:
-        self.subprocess_calls.append(["dev-hash-password", "<redacted>"])
+    def hash_password(self, password: str, *, timeout: float = 30.0) -> str:
+        self.timeout_calls.append(timeout)
+        self.subprocess_calls.append(["native-argon2", "<redacted>"])
         if not password:
             raise RuntimeError("empty password")
         return self.hash_password_result
 
-    def psql(self, sql: str, *, redact: list[str] | None = None) -> str:
+    def psql(
+        self,
+        sql: str,
+        *,
+        timeout: float = 30.0,
+        redact: list[str] | None = None,
+    ) -> str:
+        self.timeout_calls.append(timeout)
         recorded = sql
         for secret in redact or []:
             if secret:
@@ -83,23 +92,32 @@ class FakeCommands:
                 "method": method,
                 "url": url,
                 "headers": safe_headers,
-                "body": body,
+                "body": (
+                    b"<redacted>"
+                    if method == "POST" and url.rstrip("/").endswith("/api/v1/auth/login")
+                    else body
+                ),
                 "timeout": timeout,
             }
         )
-        if method == "DELETE" and "/api/v1/documents/" in url:
-            # Simulate delete-worker object/vector cleanup after API tombstone.
-            self.object_keys.clear()
-            self.vector_ids.clear()
         if self.http_handler is not None:
             return self.http_handler(method, url, headers=headers, body=body, timeout=timeout)
         return FakeHttpResponse(status=204)
 
-    def object_exists(self, key: str) -> bool:
+    def object_exists(self, key: str, *, timeout: float = 30.0) -> bool:
+        self.timeout_calls.append(timeout)
         return key in self.object_keys
 
-    def vector_exists(self, point_id: str) -> bool:
-        return point_id in self.vector_ids
+    def qdrant_point_ids(
+        self,
+        collections: list[str],
+        org_id: str,
+        *,
+        timeout: float = 30.0,
+    ) -> list[str]:
+        _ = collections, org_id
+        self.timeout_calls.append(timeout)
+        return sorted(self.vector_ids)
 
     def sleep(self, seconds: float) -> None:
         self.sleep_calls.append(seconds)
@@ -179,7 +197,7 @@ class ProductionRefuseTests(unittest.TestCase):
                 [
                     "setup",
                     "--run-id",
-                    "e2e-deadbeef-1",
+                    "e2e-deadbeef0001-1",
                     "--manifest-out",
                     str(manifest),
                     "--credentials-out",
@@ -198,7 +216,7 @@ class ProductionRefuseTests(unittest.TestCase):
     def test_cleanup_and_verify_clean_refuse_prod_before_io(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fixture-refuse-clean-") as tmp:
             tmp_path = Path(tmp)
-            ids = _sample_ids("e2e-cafe0001-2")
+            ids = _sample_ids("e2e-cafe00010002-2")
             manifest = tmp_path / "manifest.json"
             credentials = tmp_path / "credentials.json"
             _write_json(manifest, _manifest_payload(ids), mode=0o644)
@@ -245,7 +263,7 @@ class CredentialsModeTests(unittest.TestCase):
             tmp_path = Path(tmp)
             manifest = tmp_path / "manifest.json"
             credentials = tmp_path / "credentials.json"
-            run_id = "e2e-abcd1234-3"
+            run_id = "e2e-abcd12340003-3"
             ids = _sample_ids(run_id)
 
             def psql_handler(sql: str) -> str:
@@ -323,20 +341,36 @@ class CleanupLeakTests(unittest.TestCase):
     def test_verify_clean_detects_db_object_and_vector_leaks(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fixture-leaks-") as tmp:
             tmp_path = Path(tmp)
-            run_id = "e2e-a11e0001-4"
+            run_id = "e2e-a11e00010004-4"
             manifest, _credentials, ids = self._paths(tmp_path, run_id)
 
             def psql_handler(sql: str) -> str:
                 lowered = sql.lower()
-                if "from orgs" in lowered and "count" in lowered:
-                    return "1"
-                if "from documents" in lowered and "count" in lowered:
-                    return "1"
-                if "from users" in lowered and "count" in lowered:
-                    return "1"
-                if "from collections" in lowered and "count" in lowered:
-                    return "1"
-                return "0"
+                if "fixture_resource_inventory" in lowered:
+                    return json.dumps(
+                        {
+                            "documents": [
+                                {"id": ids["failedDocumentId"], "state": "failed"}
+                            ],
+                            "objects": [
+                                {
+                                    "resourceId": ids["objectId"],
+                                    "key": ids["objectKey"],
+                                }
+                            ],
+                            "signatures": [],
+                        }
+                    )
+                if "fixture_org_table_leaks" in lowered:
+                    return json.dumps(
+                        {
+                            "orgs": [ids["orgId"]],
+                            "documents": [ids["failedDocumentId"]],
+                            "users": [ids["adminUserId"], ids["viewerUserId"]],
+                            "collections": [ids["collectionId"]],
+                        }
+                    )
+                return ""
 
             commands = FakeCommands(
                 psql_handler=psql_handler,
@@ -359,7 +393,7 @@ class CleanupLeakTests(unittest.TestCase):
     def test_cleanup_timeout_is_nonzero_when_api_delete_never_finishes(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fixture-timeout-") as tmp:
             tmp_path = Path(tmp)
-            run_id = "e2e-dead0005-5"
+            run_id = "e2e-dead00050005-5"
             manifest, credentials, ids = self._paths(tmp_path, run_id)
 
             def http_handler(method: str, url: str, **_kwargs: Any) -> FakeHttpResponse:
@@ -379,11 +413,26 @@ class CleanupLeakTests(unittest.TestCase):
 
             def psql_handler(sql: str) -> str:
                 lowered = sql.lower()
-                if "from documents" in lowered and "count" in lowered:
-                    return "1"
-                if "select state" in lowered:
-                    return "tombstoned"
-                return "0"
+                if "fixture_resource_inventory" in lowered:
+                    return json.dumps(
+                        {
+                            "documents": [
+                                {"id": ids["failedDocumentId"], "state": "tombstoned"}
+                            ],
+                            "objects": [
+                                {
+                                    "resourceId": ids["objectId"],
+                                    "key": ids["objectKey"],
+                                }
+                            ],
+                            "signatures": [],
+                        }
+                    )
+                if "fixture_org_table_leaks" in lowered:
+                    return json.dumps(
+                        {"documents": [ids["failedDocumentId"]], "orgs": [ids["orgId"]]}
+                    )
+                return ""
 
             commands = FakeCommands(
                 http_handler=http_handler,
@@ -391,8 +440,15 @@ class CleanupLeakTests(unittest.TestCase):
                 object_keys={ids["objectKey"]},
                 vector_ids={ids["vectorPointId"]},
             )
-            times = iter([0.0, 0.25, 0.5, 0.75, 1.1, 1.2])
-            with mock.patch.object(fixture, "monotonic", side_effect=lambda: next(times)):
+            tick = {"value": -0.1}
+
+            def advancing_clock() -> float:
+                tick["value"] += 0.1
+                return tick["value"]
+
+            with mock.patch.object(
+                fixture.fixture_cli, "monotonic", side_effect=advancing_clock
+            ):
                 code = fixture.main(
                     [
                         "cleanup",
@@ -417,7 +473,7 @@ class CleanupLeakTests(unittest.TestCase):
     def test_cleanup_idempotent_when_already_clean(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fixture-idempotent-") as tmp:
             tmp_path = Path(tmp)
-            run_id = "e2e-c1ea0001-6"
+            run_id = "e2e-c1ea00010006-6"
             manifest, credentials, _ids = self._paths(tmp_path, run_id)
 
             def http_handler(method: str, url: str, **_kwargs: Any) -> FakeHttpResponse:
@@ -435,10 +491,14 @@ class CleanupLeakTests(unittest.TestCase):
                     return FakeHttpResponse(status=404, body=b'{"code":"not_found"}')
                 return FakeHttpResponse(status=200, body=b"{}")
 
-            commands = FakeCommands(
-                http_handler=http_handler,
-                psql_handler=lambda _sql: "0",
-            )
+            def clean_psql(sql: str) -> str:
+                if "fixture_resource_inventory" in sql.lower():
+                    return '{"documents":[],"objects":[],"signatures":[]}'
+                if "fixture_org_table_leaks" in sql.lower():
+                    return "{}"
+                return ""
+
+            commands = FakeCommands(http_handler=http_handler, psql_handler=clean_psql)
             code = fixture.main(
                 [
                     "cleanup",
@@ -492,77 +552,61 @@ class CleanupLeakTests(unittest.TestCase):
     def test_partial_cleanup_reports_leak_ids_only(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fixture-partial-") as tmp:
             tmp_path = Path(tmp)
-            run_id = "e2e-ab270001-7"
+            run_id = "e2e-ab2700010007-7"
             manifest, credentials, ids = self._paths(tmp_path, run_id)
-            report_path = tmp_path / "leak-report.json"
-
-            def http_handler(method: str, url: str, **_kwargs: Any) -> FakeHttpResponse:
-                if method == "POST" and url.rstrip("/").endswith("/api/v1/auth/login"):
-                    return FakeHttpResponse(
-                        status=200,
-                        body=json.dumps(
-                            {
-                                "accessToken": "access-token-value",
-                                "refreshToken": "refresh-token-value",
-                            }
-                        ).encode("utf-8"),
-                    )
-                if method == "DELETE":
-                    return FakeHttpResponse(status=204)
-                return FakeHttpResponse(status=200, body=b"{}")
 
             def psql_handler(sql: str) -> str:
                 lowered = sql.lower()
-                if "delete from" in lowered or "session_replication_role" in lowered:
-                    return ""
-                if "from orgs" in lowered and "count" in lowered:
-                    return "1"
-                if "from documents" in lowered and "count" in lowered:
-                    return "0"
-                if "from users" in lowered and "count" in lowered:
-                    return "0"
-                if "from collections" in lowered and "count" in lowered:
-                    return "0"
-                if "select state" in lowered:
-                    return "purged"
-                return "0"
+                if "fixture_resource_inventory" in lowered:
+                    return json.dumps(
+                        {
+                            "documents": [],
+                            "objects": [
+                                {
+                                    "resourceId": ids["objectId"],
+                                    "key": ids["objectKey"],
+                                }
+                            ],
+                            "signatures": [],
+                        }
+                    )
+                if "fixture_org_table_leaks" in lowered:
+                    return json.dumps({"orgs": [ids["orgId"]]})
+                return ""
 
             commands = FakeCommands(
-                http_handler=http_handler,
                 psql_handler=psql_handler,
                 object_keys={ids["objectKey"]},
                 vector_ids=set(),
             )
-            code = fixture.main(
-                [
-                    "cleanup",
-                    "--run-id",
-                    run_id,
-                    "--manifest",
-                    str(manifest),
-                    "--credentials",
-                    str(credentials),
-                    "--api-base",
-                    "http://127.0.0.1:8787",
-                    "--timeout-secs",
-                    "5",
-                    "--leak-report-out",
-                    str(report_path),
-                ],
-                commands=commands,
-                environ={"MARKHAND_PROFILE": "dev"},
-            )
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                code = fixture.main(
+                    [
+                        "cleanup",
+                        "--run-id",
+                        run_id,
+                        "--manifest",
+                        str(manifest),
+                        "--credentials",
+                        str(credentials),
+                        "--api-base",
+                        "http://127.0.0.1:8787",
+                        "--timeout-secs",
+                        "5",
+                    ],
+                    commands=commands,
+                    environ={"MARKHAND_PROFILE": "dev"},
+                )
             self.assertNotEqual(code, 0)
-            self.assertTrue(report_path.exists())
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-            blob = json.dumps(report)
+            blob = stderr.getvalue()
             self.assertNotIn("admin-secret-value", blob)
             self.assertNotIn("viewer-secret-value", blob)
             self.assertNotIn("access-token-value", blob)
             self.assertIn(ids["orgId"], blob)
             # Object keys must never appear; IDs are allowed when objects leak.
             self.assertNotIn(ids["objectKey"], blob)
-            self.assertIn("orgIds", report["leaks"])
+            self.assertIn("database_rows", blob)
 
     def test_missing_compose_db_fails_closed_on_setup(self) -> None:
         with tempfile.TemporaryDirectory(prefix="fixture-missing-db-") as tmp:
@@ -574,7 +618,7 @@ class CleanupLeakTests(unittest.TestCase):
                 [
                     "setup",
                     "--run-id",
-                    "e2e-00db0001-8",
+                    "e2e-00db00010008-8",
                     "--manifest-out",
                     str(manifest),
                     "--credentials-out",
@@ -760,11 +804,17 @@ class ReviewFixRedTests(unittest.TestCase):
             _write_json(manifest, _manifest_payload(ids), mode=0o644)
 
             class BrokenProbeCommands(FakeCommands):
-                def object_exists(self, key: str) -> bool:
-                    raise fixture.FixtureError("minio probe unavailable")
+                def object_exists(self, key: str, *, timeout: float = 30.0) -> bool:
+                    raise fixture.FixtureProbeError("minio probe unavailable")
 
-                def vector_exists(self, point_id: str) -> bool:
-                    raise fixture.FixtureError("qdrant probe unavailable")
+                def qdrant_point_ids(
+                    self,
+                    collections: list[str],
+                    org_id: str,
+                    *,
+                    timeout: float = 30.0,
+                ) -> list[str]:
+                    raise fixture.FixtureProbeError("qdrant probe unavailable")
 
             code, stderr, _ = self._invoke(
                 [
@@ -774,7 +824,13 @@ class ReviewFixRedTests(unittest.TestCase):
                     "--manifest",
                     str(manifest),
                 ],
-                commands=BrokenProbeCommands(psql_handler=lambda _sql: "0"),
+                commands=BrokenProbeCommands(
+                    psql_handler=lambda sql: (
+                        '{"documents":[],"objects":[],"signatures":[]}'
+                        if "fixture_resource_inventory" in sql.lower()
+                        else "{}"
+                    )
+                ),
             )
             self.assertNotEqual(code, 0)
             self.assertIn("probe unavailable", stderr)
@@ -825,7 +881,9 @@ class ReviewFixRedTests(unittest.TestCase):
 
             commands = TimeoutRecordingCommands()
             ticks = iter([0.0, 0.1, 0.4, 0.7, 1.0, 1.2, 1.5, 1.7, 1.9])
-            with mock.patch.object(fixture, "monotonic", side_effect=lambda: next(ticks)):
+            with mock.patch.object(
+                fixture.fixture_cli, "monotonic", side_effect=lambda: next(ticks)
+            ):
                 code, _stderr, _ = self._invoke(
                     [
                         "cleanup",
@@ -852,10 +910,12 @@ class ReviewFixRedTests(unittest.TestCase):
     def test_live_subprocess_argv_contains_no_password_sql_credentials_or_object_key(self) -> None:
         commands = fixture.LiveCommands(
             environ={
-                "MARKHAND_MINIO_USER": "minio-access-secret",
-                "MARKHAND_MINIO_PASSWORD": "minio-password-secret",
+                "MARKHAND_MINIO_URL": "http://127.0.0.1:9000",
+                "MARKHAND_MINIO_ACCESS_KEY": "minio-access-secret",
+                "MARKHAND_MINIO_SECRET_KEY": "minio-password-secret",
             }
         )
+        commands.http = mock.Mock(return_value=fixture.HttpResponse(404, {}, b""))
         recorded: list[tuple[list[str], dict[str, Any]]] = []
 
         def fake_run(argv: list[str], **kwargs: Any) -> Any:
@@ -871,6 +931,8 @@ class ReviewFixRedTests(unittest.TestCase):
             commands.object_exists(object_key)
 
         argv_blob = "\n".join(" ".join(argv) for argv, _kwargs in recorded)
+        self.assertEqual(len(recorded), 1, "only psql is a subprocess")
+        self.assertEqual(recorded[0][1]["input"], secret_sql)
         for forbidden in (
             secret_password,
             secret_sql,
@@ -909,16 +971,18 @@ class ReviewFixRedTests(unittest.TestCase):
                     return ""
                 if "fixture_org_table_leaks" in lowered:
                     return '{"orgs":["%s"]}' % ids["orgId"] if state["org"] else "{}"
-                return "0"
+                return ""
 
-            original_write = fixture._atomic_write_json
+            original_write = fixture.fixture_cli._atomic_write_json
 
             def fail_manifest(path: Path, payload: dict[str, Any], *, mode: int) -> None:
                 if path.name == "manifest.json":
                     raise OSError("staging failure")
                 original_write(path, payload, mode=mode)
 
-            with mock.patch.object(fixture, "_atomic_write_json", side_effect=fail_manifest):
+            with mock.patch.object(
+                fixture.fixture_cli, "_atomic_write_json", side_effect=fail_manifest
+            ):
                 code, _stderr, commands = self._invoke(
                     [
                         "setup",
@@ -945,7 +1009,14 @@ class ReviewFixRedTests(unittest.TestCase):
             credentials = root / "credentials.json"
             _write_json(manifest, _manifest_payload(ids), mode=0o644)
             _write_json(credentials, _credentials_payload(ids))
-            commands = FakeCommands(psql_handler=lambda _sql: "0")
+            def clean_psql(sql: str) -> str:
+                if "fixture_resource_inventory" in sql.lower():
+                    return '{"documents":[],"objects":[],"signatures":[]}'
+                if "fixture_org_table_leaks" in sql.lower():
+                    return "{}"
+                return ""
+
+            commands = FakeCommands(psql_handler=clean_psql)
             code, _stderr, commands = self._invoke(
                 [
                     "cleanup",
@@ -984,7 +1055,7 @@ class ReviewFixRedTests(unittest.TestCase):
                 if "delete from orgs" in lowered:
                     state["org"] = False
                     return ""
-                return "0"
+                return ""
 
             commands = FakeCommands(psql_handler=psql_handler)
             code, _stderr, commands = self._invoke(
