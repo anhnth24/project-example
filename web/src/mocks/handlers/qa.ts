@@ -192,28 +192,35 @@ function tokenizeForMatch(text: string): string[] {
     .filter((token) => token.length >= 2);
 }
 
+function matchAgainstPassages(query: string, passages: Passage[], limit: number): Passage[] {
+  const queryTokens = tokenizeForMatch(query);
+  const matched =
+    queryTokens.length === 0
+      ? passages
+      : passages.filter((p) => {
+          const passageTokens = new Set(tokenizeForMatch(`${p.title} ${p.quote}`));
+          return queryTokens.some((token) => passageTokens.has(token));
+        });
+  return matched.slice(0, limit);
+}
+
 function matchPassages(
   query: string,
   collectionIds: string[] | undefined,
   limit: number,
 ): Passage[] {
-  const queryTokens = tokenizeForMatch(query);
   const scoped = passageCatalog().filter(
     (p) => !collectionIds?.length || collectionIds.includes(p.collectionId),
   );
   // Only the current version of each document participates in plain
-  // search/current-mode matching — compare/history reach the non-current one
-  // through `resolveCompareOrHistoryPassages` instead, same as the real
-  // server never surfacing a superseded version from ordinary retrieval.
-  const current = scoped.filter((p) => p.isCurrent);
-  const matched =
-    queryTokens.length === 0
-      ? current
-      : current.filter((p) => {
-          const passageTokens = new Set(tokenizeForMatch(`${p.title} ${p.quote}`));
-          return queryTokens.some((token) => passageTokens.has(token));
-        });
-  return matched.slice(0, limit);
+  // search/current-mode matching — compare/history/as-of reach non-current
+  // versions through `resolveCompareOrHistoryPassages` instead, same as the
+  // real server never surfacing a superseded version from ordinary retrieval.
+  return matchAgainstPassages(
+    query,
+    scoped.filter((p) => p.isCurrent),
+    limit,
+  );
 }
 
 function citeIdFor(index: number): string {
@@ -279,8 +286,11 @@ function nonCurrentConflictWarning(passage: Passage): string {
   );
 }
 
-/** `mode: 'compare'`/`'history'` resolve against the one seeded multi-version document, by explicit `versionA`/`versionB`/`documentId` — never inferred, matching the real server's "the caller names the exact versions" contract for these modes. */
-function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
+/** `mode: 'compare'`/`'history'` resolve against the one seeded multi-version document, by explicit `versionA`/`versionB`/`documentId` — never inferred, matching the real server's "the caller names the exact versions" contract for these modes. `mode: 'as_of'` is scope-wide instead: one effective version per in-scope document (mirrors `db::search::resolve_as_of_version_ids`), then normal question matching + limit — never a `documentId` filter. */
+function resolveCompareOrHistoryPassages(
+  body: SearchRequest | AskRequest,
+  collectionIds: string[] | undefined,
+): {
   passages: Passage[];
   warnings: string[];
 } {
@@ -331,25 +341,54 @@ function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
     return { passages: versions, warnings };
   }
   if (body.mode === 'as_of') {
-    if (!body.documentId || !body.asOf) {
-      return { passages: [], warnings: ['Chế độ as-of cần chọn tài liệu và thời điểm (asOf).'] };
+    if (!body.asOf) {
+      return { passages: [], warnings: ['Chế độ as-of cần chọn thời điểm (asOf).'] };
     }
-    const store = getStore();
-    const versions = store.versions.get(body.documentId) ?? [];
     const asOfMs = Date.parse(body.asOf);
-    const effective = versions
-      .filter((v) => Date.parse(v.effectiveFrom) <= asOfMs)
-      .sort((x, y) => Date.parse(y.effectiveFrom) - Date.parse(x.effectiveFrom))[0];
-    const passage = effective && all.find((p) => p.versionId === effective.id);
-    if (!passage) {
+    if (Number.isNaN(asOfMs)) {
+      return {
+        passages: [],
+        warnings: [`Thời điểm as-of không hợp lệ: ${body.asOf}.`],
+      };
+    }
+
+    const store = getStore();
+    const effectiveVersionIds = new Set<string>();
+    for (const [documentId, versions] of store.versions) {
+      const doc = [...store.documents.values()].flat().find((d) => d.id === documentId);
+      if (!doc) continue;
+      if (collectionIds?.length && !collectionIds.includes(doc.collectionId)) continue;
+      const effective = versions
+        .filter((v) => Date.parse(v.effectiveFrom) <= asOfMs)
+        .sort((x, y) => Date.parse(y.effectiveFrom) - Date.parse(x.effectiveFrom))[0];
+      if (effective) effectiveVersionIds.add(effective.id);
+    }
+
+    const scopedEffective = all.filter(
+      (p) =>
+        effectiveVersionIds.has(p.versionId) &&
+        (!collectionIds?.length || collectionIds.includes(p.collectionId)),
+    );
+    if (scopedEffective.length === 0) {
       return { passages: [], warnings: [`Không có phiên bản nào hiệu lực tại ${body.asOf}.`] };
     }
+
+    const query =
+      'question' in body && typeof body.question === 'string'
+        ? stripMarkers(body.question)
+        : 'query' in body && typeof body.query === 'string'
+          ? stripMarkers(body.query)
+          : '';
+    const limit = body.limit ?? 10;
+    const passages = matchAgainstPassages(query, scopedEffective, limit);
     // The as-of'd version may be older than what's current *today* — flag it
     // the same way `current` mode flags citing a non-current version, since
     // an as-of caller reading this without the warning could easily mistake
     // "the version effective back then" for "the version effective now".
-    if (!passage.isCurrent) warnings.push(nonCurrentConflictWarning(passage));
-    return { passages: [passage], warnings };
+    for (const passage of passages) {
+      if (!passage.isCurrent) warnings.push(nonCurrentConflictWarning(passage));
+    }
+    return { passages, warnings };
   }
   return { passages: [], warnings: [] };
 }
@@ -422,7 +461,7 @@ registerOperation('search', async (ctx) => {
   let passages: Passage[];
   let warnings: string[];
   if (mode === 'compare' || mode === 'history' || mode === 'as_of') {
-    const resolved = resolveCompareOrHistoryPassages(body);
+    const resolved = resolveCompareOrHistoryPassages(body, scope.collectionIds);
     passages = resolved.passages;
     warnings = resolved.warnings;
   } else {
@@ -461,7 +500,7 @@ registerOperation('ask', async (ctx) => {
   let passages: Passage[];
   let warnings: string[];
   if (mode === 'compare' || mode === 'history' || mode === 'as_of') {
-    const resolved = resolveCompareOrHistoryPassages(body);
+    const resolved = resolveCompareOrHistoryPassages(body, scope.collectionIds);
     passages = resolved.passages;
     warnings = resolved.warnings;
   } else {
@@ -537,7 +576,7 @@ registerOperation('askStream', async (ctx) => {
   let passages: Passage[];
   let scenarioWarnings: string[];
   if (mode === 'compare' || mode === 'history' || mode === 'as_of') {
-    const resolved = resolveCompareOrHistoryPassages(body);
+    const resolved = resolveCompareOrHistoryPassages(body, scope.collectionIds);
     passages = resolved.passages;
     scenarioWarnings = resolved.warnings;
   } else {

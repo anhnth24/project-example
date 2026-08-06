@@ -401,4 +401,60 @@ describe('QaPage', () => {
       });
     });
   });
+
+  describe('as_of mode — timestamp required, scope-wide request shape', () => {
+    async function selectAsOfMode() {
+      fireEvent.click(screen.getByRole('combobox', { name: 'Chế độ truy vấn' }));
+      fireEvent.click(await screen.findByRole('option', { name: 'Tại một thời điểm (as-of)' }));
+    }
+
+    it('keeps submit disabled until a timestamp is supplied, and marks the control required', async () => {
+      const client = await loggedInClient();
+      renderQa(client);
+      await selectAsOfMode();
+
+      const asOfInput = screen.getByLabelText('Thời điểm (as-of)');
+      expect(asOfInput).toBeRequired();
+
+      fireEvent.change(screen.getByLabelText('Câu hỏi'), {
+        target: { value: 'Ngân sách vận hành là bao nhiêu?' },
+      });
+      expect(screen.getByRole('button', { name: 'Hỏi' })).toBeDisabled();
+
+      fireEvent.change(asOfInput, { target: { value: '2026-01-01T01:00' } });
+      expect(screen.getByRole('button', { name: 'Hỏi' })).toBeEnabled();
+    });
+
+    it('sends normalized ISO asOf without documentId on a valid as_of submit', async () => {
+      const client = await loggedInClient();
+      const captured: Record<string, unknown>[] = [];
+      const installedFetch = globalThis.fetch;
+      globalThis.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (url.includes('/ask/stream') && typeof init?.body === 'string') {
+          captured.push(JSON.parse(init.body) as Record<string, unknown>);
+        }
+        return installedFetch(input, init);
+      };
+
+      try {
+        renderQa(client);
+        await selectAsOfMode();
+        fireEvent.change(screen.getByLabelText('Thời điểm (as-of)'), {
+          target: { value: '2026-01-01T01:00' },
+        });
+        await askQuestion('Ngân sách vận hành là bao nhiêu?');
+
+        await waitFor(() => {
+          expect(captured.length).toBeGreaterThan(0);
+        });
+        const body = captured[0];
+        expect(body.mode).toBe('as_of');
+        expect(body.asOf).toBe(new Date('2026-01-01T01:00').toISOString());
+        expect(body).not.toHaveProperty('documentId');
+      } finally {
+        globalThis.fetch = installedFetch;
+      }
+    });
+  });
 });
