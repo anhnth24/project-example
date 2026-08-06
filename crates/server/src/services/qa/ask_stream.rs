@@ -26,7 +26,7 @@ use crate::db::ask_streams::{
 use crate::db::pool::{apply_org_context, with_org_txn};
 use crate::services::citation::{pins_from_hits, CitationPin};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
-use crate::services::qa::chitchat::{assistant_fallback_reply, is_assistant_chitchat};
+use crate::services::qa::chitchat::{assistant_fallback_reply, AskRoute};
 use crate::services::qa::grounding::{
     conflict_resolution_notes_for_history, conflict_warnings_for_current, version_context_note,
     VersionContext,
@@ -35,7 +35,7 @@ use crate::services::qa::prompt::{build_assistant_messages, build_grounded_messa
 use crate::services::qa::provider::{ChatProvider, ProviderError, StreamCancel};
 use crate::services::qa::stream::{tokenize_answer, HEARTBEAT_INTERVAL, SSE_ENVELOPE_VERSION};
 use crate::services::qa::{
-    allow_unverified_llm_runtime, force_extractive_only_runtime, hits_to_hybrid,
+    allow_unverified_llm_runtime, decide_ask_route, force_extractive_only_runtime, hits_to_hybrid,
     reserve_ask_tokens, resolve_llm_answer, settle_ask_tokens, TokenLease,
 };
 use crate::services::quota::QuotaError;
@@ -94,7 +94,10 @@ pub async fn start_ask_stream(
         ));
     }
 
-    let assistant_turn = is_assistant_chitchat(&question);
+    let (route, route_warnings) = decide_ask_route(pool, ctx, provider.as_ref(), &question)
+        .await
+        .map_err(AskStreamPrepareError::Quota)?;
+    let assistant_turn = matches!(route, AskRoute::Assistant);
     let (
         citations,
         cited_document_ids,
@@ -131,7 +134,7 @@ pub async fn start_ask_stream(
             Vec::new(),
             collection_list,
             version_context,
-            Vec::new(),
+            route_warnings,
             extractive,
             "assistant".to_string(),
             Vec::new(),
@@ -173,7 +176,8 @@ pub async fn start_ask_stream(
             .into_iter()
             .collect();
         let version_context = version_context_note(&mode, &citations, &retrieval.hits);
-        let mut warnings = retrieval.warnings;
+        let mut warnings = route_warnings;
+        warnings.extend(retrieval.warnings);
         warnings.extend(conflict_warnings_for_current(
             &mode,
             &retrieval.conflict_evidence,
@@ -432,16 +436,6 @@ async fn run_producer(
         return;
     }
 
-    let extractive_forced = force_extractive_only_runtime();
-    // Real LLM providers stay fail-closed to extractive while structured
-    // entailment is unavailable. Hermetic `StreamingStatic` doubles are not
-    // product LLM backends — they must keep incremental production so
-    // mid-stream ACL revoke tests can observe durable ask.token before close.
-    let use_provider_stream = provider.as_ref().is_some_and(|p| match p {
-        ChatProvider::StreamingStatic(_) => true,
-        other => other.supports_incremental_stream() && !extractive_forced,
-    });
-
     let mut answer_mode = started_mode;
     let mut streamed_any = false;
     // Dev-gate path (default OFF): buffer the full LLM answer so citation/claim
@@ -488,9 +482,14 @@ async fn run_producer(
         }
     } else {
         let extractive_forced = force_extractive_only_runtime();
-        let use_provider_stream = provider
-            .as_ref()
-            .is_some_and(|p| p.supports_incremental_stream() && !extractive_forced);
+        // Real LLM providers stay fail-closed to extractive while structured
+        // entailment is unavailable. Hermetic `StreamingStatic` doubles are not
+        // product LLM backends — they must keep incremental production so
+        // mid-stream ACL revoke tests can observe durable ask.token before close.
+        let use_provider_stream = provider.as_ref().is_some_and(|p| match p {
+            ChatProvider::StreamingStatic(_) => true,
+            other => other.supports_incremental_stream() && !extractive_forced,
+        });
 
         if use_provider_stream {
             if let Some(chat) = provider.as_ref() {
