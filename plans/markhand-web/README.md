@@ -51,8 +51,8 @@ không bị local override cũ che mất.
 
 ## Tiến độ milestone (2026-08-06)
 
-Tổng **120 issue** trong catalog: **81 Done**, **5 In progress**, **0 Review**,
-**1 Ready**, **4 Blocked**, **29 Backlog**.
+Tổng **120 issue** trong catalog: **81 Done**, **6 In progress**, **0 Review**,
+**0 Ready**, **4 Blocked**, **29 Backlog**.
 Nguồn sự thật là `**Status:**` trong từng issue catalog; bảng dưới tóm tắt theo phase.
 GitHub milestone progress được đồng bộ bởi workflow
 [`Sync Markhand Web issues`](../../.github/workflows/sync-markhand-issues.yml) khi
@@ -65,17 +65,17 @@ GitHub milestone progress được đồng bộ bởi workflow
 | 1A | 10/10 | 0 | 0 | 0 | 0 | Extraction gate đạt |
 | 1B | 24/24 | 0 | 0 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
 | 1C | 10/13 | 2 | 0 | 0 | 1 | 1C-04/07/09/10/11 Done (CI `6833f57`, run 30678318560); 1C-08 CI half / deployed → PR 5; exit gate 1C-12/1C-13 còn mở |
-| 2 | 15/23 | 3 | 1 | 4 | 0 | P2-15 thành umbrella blocked; P2-20 Ready; exit gate chờ 1C + blocking real/DAST matrix |
+| 2 | 15/23 | 4 | 0 | 4 | 0 | P2-15 thành umbrella blocked; P2-20 In progress; exit gate chờ 1C + blocking real/DAST matrix |
 | 3 | 0/14 | 0 | 0 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
 | 4 | 0/14 | 0 | 0 | 0 | 14 | Chưa activate — chờ Phase 3 |
 
-**Critical path hiện tại:** P2-20 real fixture/foundation đã `Ready`; song song hoàn
+**Critical path hiện tại:** P2-20 real fixture/foundation đang `In progress`; song song hoàn
 thiện P2-18/P2-19 và 1C denial suite (1C-12/1C-13) để mở P2-21/P2-22/P2-23 →
 P2-15 umbrella → P2-16 final gate.
 
 Issue Phase 2 gần đây: **P2-10/P2-17 → Done** sau independent review; P2-18 Project
 grouping và P2-19 Chat history vẫn In progress. Owner duyệt thiết kế full real-E2E và
-canonical draft P2-20 ngày 2026-08-06: P2-15 là umbrella, P2-20 `Ready`, P2-21…23
+canonical draft P2-20 ngày 2026-08-06: P2-15 là umbrella, P2-20 `In progress`, P2-21…23
 blocked theo dependency/security gate.
 
 ## Dependency và đường găng

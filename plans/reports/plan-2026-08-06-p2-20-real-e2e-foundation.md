@@ -1,7 +1,10 @@
 # P2-20 — Real E2E foundation + auth/library/upload/actions
 
 Created: 2026-08-06
-Source issue: catalog/tracker synchronization pending via [PR #394](https://github.com/anhnth24/project-example/pull/394); canonical authority remains the Phase 2 catalog entry for P2-20 (no invented GitHub issue URL)
+Source issue: canonical catalog merged via [PR #394](https://github.com/anhnth24/project-example/pull/394);
+tracker synchronization failed in [run 31067930517](https://github.com/anhnth24/project-example/actions/runs/31067930517)
+because milestone `Phase F — Engineering foundation` was missing, so P2-20 has no verified
+GitHub issue URL yet
 Catalog: [Phase 2 issue catalog — P2-20](../markhand-web/backlog/phase-2/issues/README.md#p2-20--real-e2e-foundation--authlibraryuploadactions)
 Phase plan: [Phase 2 Web SPA](../markhand-web/phase-2-web-spa.md)
 Status: In progress
@@ -536,7 +539,12 @@ authZ and public contracts untouched.
 
 - Plan authorship/review commits: `0988c1c0b7fa32438ad381c20f06adaf1f13e34f`,
   `759d0cd` (implementation had not started at either SHA).
-- Implementation commits / exact-SHA `dev-stack` job: _pending — do not fabricate._
+- Task 1 fixture implementation/fix range: `794b8d0`…`0fb7e50`; 29 hermetic fixture
+  tests and Python compilation pass. Independent task review approves every static/
+  hermetic requirement except the portable password-hash path: current code depends on
+  undeclared Linux SONAME `libargon2.so.1`; owner decision for a dev-only Rust
+  `dev-hash-password --stdin` extension remains pending.
+- Exact-SHA full-stack evidence: _pending — do not fabricate._
 - Sanitized manifest path + fixture checksum: _pending._
 - Independent review outcome: _pending._
 
@@ -556,5 +564,5 @@ authZ and public contracts untouched.
 - [ ] Independent review complete; no unresolved Critical/Important finding.
 - [ ] Catalog + plan status advanced with evidence (Ready→In progress→Review→Done) per
       `delivery.md`; merge alone is not Done.
-- [ ] Remote catalog/tracker sync for P2-20 completed or explicitly still pending via
-      PR #394 with no invented issue URL.
+- [ ] Remote tracker sync for P2-20 completed; current post-merge sync failed in run
+      `31067930517` because the Phase F milestone is missing, so no issue URL is claimed.

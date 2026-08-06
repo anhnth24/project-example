@@ -5,10 +5,10 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 <!-- roadmap-default-status: backlog -->
 
 **Trạng thái tổng quan (cập nhật 2026-08-06).** Phase 2 có **23 issue** sau khi owner
-duyệt thiết kế full real-E2E: **15 Done**, **3 In progress** (P2-16/P2-18/P2-19),
-**4 Blocked** (P2-15/P2-21/P2-22/P2-23), và **1 Ready** (P2-20, canonical draft được
-owner duyệt ngày 2026-08-06). P2-15 là umbrella, chỉ `Done` sau P2-20…23; P2-16 vẫn là
-final gate. P2-10/P2-17 đã qua independent review và `Done`.
+duyệt thiết kế full real-E2E: **15 Done**, **4 In progress**
+(P2-16/P2-18/P2-19/P2-20), và **4 Blocked** (P2-15/P2-21/P2-22/P2-23). P2-15 là
+umbrella, chỉ `Done` sau P2-20…23; P2-16 vẫn là final gate. P2-10/P2-17 đã qua
+independent review và `Done`.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
 > mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
@@ -636,8 +636,8 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-20 — Real E2E foundation + auth/library/upload/actions
 
-- **Status:** Ready — owner duyệt canonical draft ngày 2026-08-06; dependencies và
-  Definition of Ready đã được revalidate.
+- **Status:** In progress — delivery plan đã linked; run-scoped fixture Task 1 đang ở
+  vòng independent review/fix, còn một owner decision cho secure portable password hash.
 - **Plan file:** [P2-20 detailed implementation plan](../../../../reports/plan-2026-08-06-p2-20-real-e2e-foundation.md)
 - **Objective:** Tạo harness real-browser cô lập, deterministic và fail-closed; chạy
   auth/library/upload/document-action outcomes qua built SPA + real server/PostgreSQL/
