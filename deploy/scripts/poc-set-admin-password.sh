@@ -45,9 +45,11 @@ fi
 
 "${COMPOSE[@]}" "${psql_args[@]}" \
   --set "password_hash=$password_hash" \
-  -c "UPDATE users
-      SET password_hash = :'password_hash', updated_at = now()
-      WHERE email = '${admin_email}';" \
-  >/dev/null
+  --set "admin_email=$admin_email" \
+  >/dev/null <<'SQL'
+UPDATE users
+SET password_hash = :'password_hash', updated_at = now()
+WHERE email = :'admin_email';
+SQL
 
 echo "updated seeded administrator password hash"
