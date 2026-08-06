@@ -422,6 +422,10 @@ services:
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
     ports:
       - "${MARKHAND_API_BIND_HOST:-127.0.0.1}:${MARKHAND_API_PORT:-8788}:8787"
+    # Optional IPv4 pin for cloud chat hosts whose AAAA records are unreachable
+    # from the bridge (common on IPv4-only Docker hosts). Mock profile ignores it.
+    extra_hosts:
+      - "api.z.ai:${MARKHAND_CHAT_HOST_IPV4:-127.0.0.1}"
     networks: [edge, private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
