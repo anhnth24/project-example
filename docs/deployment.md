@@ -32,8 +32,11 @@ Create `deploy/.env` from `deploy/.env.example`, keep it mode `0600`, and set:
 - matching `MARKHAND_AUTH_ISSUER`
 - unique PostgreSQL, MinIO, JWT, and embedding credentials
 - the pinned AITeamVN URL/model/revision/dimensions/signature block
-- `MARKHAND_CHAT_BASE_URL`, `MARKHAND_CHAT_API_KEY`, and
-  `MARKHAND_CHAT_MODEL` for GLM
+- `MARKHAND_CHAT_BASE_URL` (full `/chat/completions` URL),
+  `MARKHAND_CHAT_API_KEY`, and `MARKHAND_CHAT_MODEL` for GLM
+- `MARKHAND_CHAT_HOST_IPV4` when `api.z.ai` (or the chosen chat host) resolves
+  to unreachable AAAA records from the Docker bridge; pin the A record so the
+  API container can reach GLM over IPv4
 - optionally `MARKHAND_QA_ALLOW_UNVERIFIED_LLM=1` only while UAT explicitly
   evaluates GLM output; responses remain labelled `llm_unverified` with a
   warning because structured entailment is unavailable
