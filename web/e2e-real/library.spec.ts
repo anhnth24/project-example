@@ -1,11 +1,11 @@
-// Real-deployment smoke (P2-15, real-deployment half): after logging in
-// against the real backend, the library shell renders and lists the seeded
-// collection from a real `GET /collections` round-trip. Upload→indexed and
-// per-document actions are a later pass — see `support.ts`'s scope note.
+// Real-deployment smoke (P2-15 / P2-20): after logging in against the real
+// backend with runtime credentials, the library shell renders and lists the
+// run-scoped collection from a real `GET /collections` round-trip.
 import { expect, test } from '@playwright/test';
-import { login, SEEDED_COLLECTION_NAME } from './support';
+import { login, runtimeFixture } from './support';
 
-test('logging in shows the library shell with the seeded collection', async ({ page }) => {
+test('logging in shows the library shell with the run-scoped collection', async ({ page }) => {
+  const fixture = runtimeFixture();
   await login(page);
 
   await page.getByRole('link', { name: 'Thư viện' }).click();
@@ -13,7 +13,7 @@ test('logging in shows the library shell with the seeded collection', async ({ p
 
   await expect(
     page.getByRole('navigation', { name: 'Điều hướng bộ sưu tập' }).getByRole('link', {
-      name: SEEDED_COLLECTION_NAME,
+      name: fixture.collectionName,
     }),
   ).toBeVisible();
 });

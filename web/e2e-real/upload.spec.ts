@@ -35,7 +35,7 @@
 // whisper path (see CLAUDE.md's architecture notes) — the slowest thing it
 // still genuinely waits on is the indexing/embedding step.
 import { expect, test } from '@playwright/test';
-import { login, openPocLibrary } from './support';
+import { login, openRunCollection } from './support';
 
 const FILE_NAME = `e2e-real-upload-${Date.now()}.txt`;
 const FILE_CONTENTS = 'Real-deployment upload smoke test contents.';
@@ -49,7 +49,7 @@ test('uploading a file against the real backend reaches indexed, and its preview
   test.slow();
 
   await login(page);
-  await openPocLibrary(page);
+  await openRunCollection(page);
 
   await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
     name: FILE_NAME,
