@@ -192,7 +192,8 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-10 — Streaming search/Q&A/citations
 
-- **Status:** Review
+- **Status:** Done — scope-wide `as_of` closure [#393](https://github.com/anhnth24/project-example/pull/393);
+  independent task and whole-branch re-reviews approved with no remaining finding.
 - **Plan file:** [P2-10 `as_of` end-to-end closure](../../../../reports/plan-2026-08-06-p2-10-as-of-e2e.md)
 - **Objective:** Cung cấp trải nghiệm tìm kiếm/Hỏi đáp chat-first trên contract
   `search`/`ask`/`ask/stream`, với citation có thể kiểm chứng, version context và
@@ -253,8 +254,9 @@ P2-15 + Phase 1C gate → P2-16
     tracker export/dry-run và `git diff --check master...HEAD`.
   - Historical delivery: chat-first/deep-link work landed via #324 and follow-ups;
     #374 added the budget conflict-warning evidence; current `as_of` closure is
-    [PR #393](https://github.com/anhnth24/project-example/pull/393). Independent
-    re-review remains required before `Done`.
+    [PR #393](https://github.com/anhnth24/project-example/pull/393). Final review covered
+    `6e8def4..fa53c06` and returned `Ready to merge: Yes` with no Critical, Important,
+    or Minor finding.
 - **Security/migration:**
   - Tenant/ACL-sensitive: active token org + profile `allowedCollectionIds` is the
     maximum mock scope; project/request filters only narrow. Unauthorized/mixed/empty

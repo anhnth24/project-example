@@ -71,7 +71,7 @@ describe('ask mock — scope-wide as_of', () => {
 
     expect(body.citations).toEqual([]);
     expect(body.answer).toMatch(/Không tìm thấy nội dung liên quan/);
-    expect(body.warnings.some((w) => /as-of|asOf|thời điểm/i.test(w))).toBe(true);
+    expect((body.warnings ?? []).some((w) => /as-of|asOf|thời điểm/i.test(w))).toBe(true);
     // Must not silently answer from the current (v2 / 15 triệu) budget passage.
     expect(body.answer).not.toMatch(/15 triệu/);
     expect(body.answer).not.toMatch(/10 triệu/);
@@ -96,7 +96,7 @@ describe('ask mock — scope-wide as_of', () => {
 
     expect(body.citations).toEqual([]);
     expect(body.answer).toMatch(/Không tìm thấy nội dung liên quan/);
-    expect(body.warnings.some((w) => /as-of|asOf|thời điểm|hợp lệ/i.test(w))).toBe(true);
+    expect((body.warnings ?? []).some((w) => /as-of|asOf|thời điểm|hợp lệ/i.test(w))).toBe(true);
     expect(body.answer).not.toMatch(/15 triệu/);
     expect(body.answer).not.toMatch(/10 triệu/);
   });
@@ -120,7 +120,9 @@ describe('ask mock — scope-wide as_of', () => {
     expect(body.citations.some((c) => c.versionId === QA_COMPARE_VERSION_A_ID)).toBe(true);
     expect(body.citations.some((c) => c.logicalDocumentId === QA_COMPARE_DOCUMENT_ID)).toBe(true);
     expect(
-      body.warnings.some((w) => /không phải phiên bản hiện hành/i.test(w) && /10 triệu/.test(w)),
+      (body.warnings ?? []).some(
+        (w) => /không phải phiên bản hiện hành/i.test(w) && /10 triệu/.test(w),
+      ),
     ).toBe(true);
   });
 

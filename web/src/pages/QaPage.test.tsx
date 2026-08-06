@@ -430,7 +430,8 @@ describe('QaPage', () => {
       const captured: Record<string, unknown>[] = [];
       const installedFetch = globalThis.fetch;
       globalThis.fetch = async (input, init) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        const url =
+          typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
         if (url.includes('/ask/stream') && typeof init?.body === 'string') {
           captured.push(JSON.parse(init.body) as Record<string, unknown>);
         }
