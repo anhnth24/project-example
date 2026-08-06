@@ -14,6 +14,7 @@ import {
   openRunCollection,
   runtimeFixture,
   armRateLimitedScenario,
+  uploadFileViaPanel,
 } from './support';
 
 test.describe.configure({ mode: 'serial' });
@@ -40,13 +41,11 @@ test('reindex on an indexed document shows the enqueue success notice', async ({
   await login(page);
   await openRunCollection(page);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -110,13 +109,11 @@ test('delete with confirm removes the document row after refetch', async ({ page
   await login(page);
   await openRunCollection(page);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -147,13 +144,11 @@ test('viewer reindex is denied with a real HTTP 403 and the document remains', a
   await login(page);
   await openRunCollection(page);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -215,13 +210,11 @@ test('reindex under the lowered route limit returns a real 429 with retry-after 
   await login(page);
   await openRunCollection(page);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });

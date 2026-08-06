@@ -115,8 +115,8 @@ export async function logout(page: Page): Promise<void> {
 let lastReindexRouteHitAtMs = 0;
 let lastUploadRouteHitAtMs = 0;
 
-/** Pad past a 1-token / 60s bucket; matches Task 6's local helper. */
-const ROUTE_RATE_WINDOW_MS = 65_000;
+/** Pad past a 1-token / 60s bucket; slightly above 60s for CI scheduling jitter. */
+const ROUTE_RATE_WINDOW_MS = 70_000;
 
 /**
  * Headroom after a rate-window wait for login/upload/index/assertions.
@@ -154,6 +154,55 @@ export function markRouteRateHit(route: 'reindex' | 'upload'): void {
     lastReindexRouteHitAtMs = now;
   } else {
     lastUploadRouteHitAtMs = now;
+  }
+}
+
+export interface RealUploadFile {
+  name: string;
+  mimeType: string;
+  buffer: Buffer;
+}
+
+function isUploadsPost(response: {
+  url: () => string;
+  request: () => { method: () => string };
+}): boolean {
+  if (response.request().method() !== 'POST') return false;
+  return new URL(response.url()).pathname.endsWith('/api/v1/uploads');
+}
+
+/**
+ * Selects a file in the upload panel, waits for the real `POST /uploads`, and
+ * marks the upload route bucket from the response time (not `setInputFiles`).
+ * Retries once after a full rate window when the lowered route bucket returns 429.
+ *
+ * `duringRequest` runs after the file is selected and before the response is
+ * awaited — use it to assert in-flight UI (e.g. progress) under `delayThenContinue`.
+ */
+export async function uploadFileViaPanel(
+  page: Page,
+  file: RealUploadFile,
+  expectedStatus: number,
+  duringRequest?: () => Promise<void>,
+): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await ensureRouteRateWindow('upload');
+    const responsePromise = page.waitForResponse(isUploadsPost);
+    await page.getByLabel('Chọn tệp để tải lên').setInputFiles(file);
+    if (duringRequest && attempt === 0) {
+      await duringRequest();
+    }
+    const response = await responsePromise;
+    markRouteRateHit('upload');
+    if (response.status() === expectedStatus) {
+      return;
+    }
+    if (response.status() === 429 && attempt === 0 && expectedStatus !== 429) {
+      continue;
+    }
+    throw new Error(
+      `POST /uploads expected status ${expectedStatus}, got ${response.status()} (attempt ${attempt + 1})`,
+    );
   }
 }
 

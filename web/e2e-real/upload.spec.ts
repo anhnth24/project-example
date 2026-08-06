@@ -10,11 +10,10 @@ import { expect, test } from '@playwright/test';
 import {
   contentCanary,
   delayThenContinue,
-  ensureRouteRateWindow,
   login,
-  markRouteRateHit,
   openRunCollection,
   armRateLimitedScenario,
+  uploadFileViaPanel,
 } from './support';
 
 test.describe.configure({ mode: 'serial' });
@@ -34,13 +33,11 @@ test('uploading a file against the real backend reaches indexed, and its preview
   await login(page);
   await openRunCollection(page);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -85,19 +82,19 @@ test('a delayed POST /uploads shows upload progress then reaches indexed preview
   // 1.5s is long enough for the XHR progress UI to paint on a tiny payload.
   await delayThenContinue(page, '**/api/v1/uploads', 1_500);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-
-  await expect(page.getByRole('progressbar', { name: `Đang tải lên ${fileName}` })).toBeVisible({
-    timeout: 5_000,
-  });
-  await expect(page.getByText('Đang tải lên…')).toBeVisible();
-
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+    async () => {
+      await expect(page.getByRole('progressbar', { name: `Đang tải lên ${fileName}` })).toBeVisible(
+        {
+          timeout: 5_000,
+        },
+      );
+      await expect(page.getByText('Đang tải lên…')).toBeVisible();
+    },
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -125,27 +122,11 @@ test('a real oversized upload returns 413 and the too-large alert without an ind
   await login(page);
   await openRunCollection(page);
 
-  // Prefer DefaultBodyLimit rejection, but if the request reaches the upload
-  // handler the lowered route bucket (capacity 1) would 429 instead of 413.
-  // Wait out a prior upload hit so a handler-path rejection is still 413.
-  await ensureRouteRateWindow('upload');
-
-  // Match any POST /uploads completion — asserting status below — so a 429/201
-  // fails fast instead of hanging until the 5-minute scenario ceiling.
-  const uploadResponse = page.waitForResponse((response) => {
-    if (response.request().method() !== 'POST') return false;
-    return new URL(response.url()).pathname.endsWith('/api/v1/uploads');
-  });
-
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: oversized,
-  });
-
-  const rejected = await uploadResponse;
-  expect(rejected.status(), `POST /uploads status=${rejected.status()}`).toBe(413);
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: oversized },
+    413,
+  );
 
   const alert = page.getByRole('alert');
   await expect(alert).toContainText(

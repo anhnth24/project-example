@@ -9,11 +9,10 @@
 import { expect, test } from '@playwright/test';
 import {
   contentCanary,
-  ensureRouteRateWindow,
   login,
-  markRouteRateHit,
   openRunCollection,
   armRateLimitedScenario,
+  uploadFileViaPanel,
 } from './support';
 
 test('navigating to the run collection shows the upload panel', async ({ page }) => {
@@ -35,13 +34,11 @@ test('uploading a unique text document indexes and previews markdown', async ({ 
   await login(page);
   await openRunCollection(page);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -72,13 +69,11 @@ test('downloading Markdown issues a capability, redeems it, and does not log the
   await login(page);
   await openRunCollection(page);
 
-  await ensureRouteRateWindow('upload');
-  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
-    name: fileName,
-    mimeType: 'text/plain',
-    buffer: Buffer.from(fileContents),
-  });
-  markRouteRateHit('upload');
+  await uploadFileViaPanel(
+    page,
+    { name: fileName, mimeType: 'text/plain', buffer: Buffer.from(fileContents) },
+    201,
+  );
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
