@@ -635,8 +635,13 @@ checksum, `skippedCount=0`, and `teardown.result=ok`.
 output locations (`WEB_E2E_REAL_ARTIFACT_DIR` / `WEB_E2E_REAL_RUNTIME_DIR`), production
 profile refusal, and sanitization warning.
 
-**Still required before Review→Done:** Docker full-stack evidence; independent review;
-catalog status advance with roadmap regen only when status changes.
+**Independent whole-branch review (2026-08-06):** APPROVE — no Critical/Important
+findings ([bc-11612232](https://cursor.com/agents/bc-11612232-bec7-5c36-9ba5-3931bdeb77c6));
+hermetic Python suites and architecture boundary re-verified at merge tip `75a5bc8`.
+
+**Still required before Done:** Docker full-stack evidence (`DEV_STACK_MODE=full`);
+`make check-web` and `make check-desktop` on delivery SHA; tracker sync (Phase F
+milestone run `31067930517`).
 
 ## Definition of done
 
@@ -658,8 +663,9 @@ catalog status advance with roadmap regen only when status changes.
 - [ ] No secret/content leak in retained artifacts; redactor/canary paths proven.
 - [ ] No dependency/pin/converter/native/public API/schema change; or issue Blocked with
       exact required change identified.
-- [ ] Independent review complete; no unresolved Critical/Important finding.
-- [ ] Catalog + plan status advanced with evidence (Ready→In progress→Review→Done) per
-      `delivery.md`; merge alone is not Done.
+- [x] Independent review complete; no unresolved Critical/Important finding
+      (whole-branch APPROVE 2026-08-06).
+- [x] Catalog advanced to `Review` with roadmap regen; plan remains `In progress` until
+      full-stack + desktop/web gates recorded; merge alone is not Done.
 - [ ] Remote tracker sync for P2-20 completed; current post-merge sync failed in run
       `31067930517` because the Phase F milestone is missing, so no issue URL is claimed.

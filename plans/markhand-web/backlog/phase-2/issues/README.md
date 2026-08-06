@@ -5,8 +5,8 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 <!-- roadmap-default-status: backlog -->
 
 **Trạng thái tổng quan (cập nhật 2026-08-06).** Phase 2 có **23 issue** sau khi owner
-duyệt thiết kế full real-E2E: **15 Done**, **4 In progress**
-(P2-16/P2-18/P2-19/P2-20), và **4 Blocked** (P2-15/P2-21/P2-22/P2-23). P2-15 là
+duyệt thiết kế full real-E2E: **15 Done**, **3 In progress** (P2-16/P2-18/P2-19),
+**1 Review** (P2-20), và **4 Blocked** (P2-15/P2-21/P2-22/P2-23). P2-15 là
 umbrella, chỉ `Done` sau P2-20…23; P2-16 vẫn là final gate. P2-10/P2-17 đã qua
 independent review và `Done`.
 
@@ -636,8 +636,12 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-20 — Real E2E foundation + auth/library/upload/actions
 
-- **Status:** In progress — delivery plan đã linked; owner duyệt dev-only
-  `dev-hash-password --stdin`, run-scoped fixture Task 1 đang ở vòng re-review cuối.
+- **Status:** Review — Tasks 1–8 implementation complete on
+  [#395](https://github.com/anhnth24/project-example/pull/395); hermetic gates green
+  (31 fixture + 17 orchestration + 11 artifact + 556 web unit); whole-branch independent
+  review APPROVE ([bc-11612232](https://cursor.com/agents/bc-11612232-bec7-5c36-9ba5-3931bdeb77c6)).
+  **Blocked before Done:** `DEV_STACK_MODE=full` live manifest on Docker host;
+  `make check-web`/`check-desktop` on delivery SHA; tracker sync (Phase F milestone).
 - **Plan file:** [P2-20 detailed implementation plan](../../../../reports/plan-2026-08-06-p2-20-real-e2e-foundation.md)
 - **Objective:** Tạo harness real-browser cô lập, deterministic và fail-closed; chạy
   auth/library/upload/document-action outcomes qua built SPA + real server/PostgreSQL/
