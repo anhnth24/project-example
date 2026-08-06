@@ -283,12 +283,15 @@ run_fixture_teardown() {
   local cleanup_rc=0
   local verify_rc=0
 
+  # Keep errexit off for the whole helper. A non-zero `return` under `set -e`
+  # aborts the EXIT trap before status preservation / process reap can run.
+  set +e
+
   if [[ "$fixture_ready" != true ]]; then
     teardown_result="ok"
     return 0
   fi
 
-  set +e
   python3 "$FIXTURE_CLI" cleanup \
     --run-id "$run_id" \
     --manifest "$fixture_file" \
@@ -296,18 +299,15 @@ run_fixture_teardown() {
     --api-base "$api_base" \
     --timeout-secs "$timeout_secs"
   cleanup_rc=$?
-  set -e
   if [[ "$cleanup_rc" -ne 0 ]]; then
     teardown_result="failed"
     return "$cleanup_rc"
   fi
 
-  set +e
   python3 "$FIXTURE_CLI" verify-clean \
     --run-id "$run_id" \
     --manifest "$fixture_file"
   verify_rc=$?
-  set -e
   if [[ "$verify_rc" -ne 0 ]]; then
     teardown_result="failed"
     return "$verify_rc"
@@ -322,6 +322,10 @@ stage_and_validate_artifacts() {
   local write_rc=0
   local validate_rc=0
 
+  # Keep errexit off for the whole helper so failing returns propagate to the
+  # EXIT trap instead of terminating the shell under `set -e`.
+  set +e
+
   if [[ -z "$artifact_dir" || -z "$playwright_results" || -z "$fixture_file" ]]; then
     artifact_failed=true
     return 1
@@ -332,26 +336,22 @@ stage_and_validate_artifacts() {
     return 1
   fi
 
-  set +e
   python3 "$ARTIFACTS_CLI" write \
     --results "$playwright_results" \
     --fixture "$fixture_file" \
     --out "$manifest_out" \
     --teardown "$teardown_result"
   write_rc=$?
-  set -e
   if [[ "$write_rc" -ne 0 ]]; then
     artifact_failed=true
     echo "web-e2e-real: artifact manifest write failed" >&2
     return "$write_rc"
   fi
 
-  set +e
   python3 "$ARTIFACTS_CLI" validate \
     --manifest "$manifest_out" \
     --artifact-dir "$artifact_dir"
   validate_rc=$?
-  set -e
   if [[ "$validate_rc" -ne 0 ]]; then
     artifact_failed=true
     echo "web-e2e-real: artifact validation failed" >&2

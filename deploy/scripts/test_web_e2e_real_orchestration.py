@@ -721,6 +721,30 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
             self.assertIn("setup-ok", fixture_events)
             self.assertIn("cleanup-ok", fixture_events)
             self.assertIn("verify-ok", fixture_events)
+            manifest_path = harness.tempdir / "artifacts" / "manifest.json"
+            self.assertTrue(manifest_path.is_file(), msg="happy path must stage sanitized manifest")
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            for key in (
+                "schemaVersion",
+                "runId",
+                "git",
+                "toolVersions",
+                "fixtureChecksum",
+                "scenarios",
+                "skippedCount",
+                "teardown",
+                "artifactChecksums",
+            ):
+                self.assertIn(key, manifest)
+            self.assertEqual(manifest["skippedCount"], 0)
+            self.assertEqual(manifest["teardown"], {"result": "ok"})
+            self.assertEqual(manifest["fixtureChecksum"], HERMETIC_FIXTURE_CHECKSUM)
+            self.assertIsInstance(manifest["scenarios"], list)
+            self.assertGreaterEqual(len(manifest["scenarios"]), 1)
+            self.assertFalse(
+                (harness.tempdir / "runtime" / "playwright-results.json").exists(),
+                msg="raw Playwright JSON must not remain after EXIT cleanup",
+            )
             combined = result.stdout + result.stderr
             self.assertNotIn(HERMETIC_ADMIN_PASSWORD, combined)
         finally:
@@ -862,6 +886,27 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
             self.assertIn("setup-ok", fixture_events)
             self.assertIn("cleanup-fail", fixture_events)
             self.assertIn("playwright-done", (harness.state / "playwright.events").read_text())
+            reaped = (harness.state / "cleanup.reaped").read_text(encoding="utf-8")
+            self.assertIn("server-reaped:", reaped)
+            combined = result.stdout + result.stderr
+            self.assertNotIn(HERMETIC_ADMIN_PASSWORD, combined)
+        finally:
+            harness.cleanup()
+
+    def test_fixture_verify_clean_failure_fails_the_job(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_FIXTURE_VERIFY_FAIL": "1"},
+                timeout=20.0,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("cleanup-ok", fixture_events)
+            self.assertIn("verify-fail", fixture_events)
+            self.assertIn("playwright-done", (harness.state / "playwright.events").read_text())
+            reaped = (harness.state / "cleanup.reaped").read_text(encoding="utf-8")
+            self.assertIn("server-reaped:", reaped)
             combined = result.stdout + result.stderr
             self.assertNotIn(HERMETIC_ADMIN_PASSWORD, combined)
         finally:
@@ -879,6 +924,65 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
             fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
             self.assertIn("cleanup-ok", fixture_events)
             self.assertIn("verify-ok", fixture_events)
+        finally:
+            harness.cleanup()
+
+    def test_playwright_failure_preserves_status_when_fixture_cleanup_also_fails(
+        self,
+    ) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={
+                    "WEB_E2E_REAL_PLAYWRIGHT_FAIL": "1",
+                    "WEB_E2E_REAL_FIXTURE_CLEANUP_FAIL": "1",
+                },
+                timeout=20.0,
+            )
+            self.assertEqual(
+                result.returncode,
+                9,
+                msg=(
+                    "primary Playwright status must be preserved when teardown also fails; "
+                    f"stdout={result.stdout}\nstderr={result.stderr}"
+                ),
+            )
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("cleanup-fail", fixture_events)
+            reaped = (harness.state / "cleanup.reaped").read_text(encoding="utf-8")
+            self.assertIn("server-reaped:", reaped)
+            for kind in ("convert", "index", "embedding", "delete"):
+                self.assertIn(f"worker-reaped-{kind}:", reaped)
+            combined = result.stdout + result.stderr
+            self.assertNotIn(HERMETIC_ADMIN_PASSWORD, combined)
+        finally:
+            harness.cleanup()
+
+    def test_playwright_failure_preserves_status_when_artifact_validation_also_fails(
+        self,
+    ) -> None:
+        harness = OrchestrationHarness()
+        try:
+            harness.install_failing_artifacts_validate()
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_PLAYWRIGHT_FAIL": "1"},
+                timeout=20.0,
+            )
+            self.assertEqual(
+                result.returncode,
+                9,
+                msg=(
+                    "primary Playwright status must be preserved when artifact validation "
+                    f"also fails; stdout={result.stdout}\nstderr={result.stderr}"
+                ),
+            )
+            events = (harness.state / "artifacts.events").read_text(encoding="utf-8")
+            self.assertIn("write", events)
+            self.assertIn("validate-fail", events)
+            reaped = (harness.state / "cleanup.reaped").read_text(encoding="utf-8")
+            self.assertIn("server-reaped:", reaped)
+            combined = result.stdout + result.stderr
+            self.assertNotIn(HERMETIC_ADMIN_PASSWORD, combined)
         finally:
             harness.cleanup()
 
