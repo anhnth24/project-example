@@ -468,29 +468,32 @@ BEGIN;
 SET LOCAL row_security = off;
 SET LOCAL app.org_id = {org_id};
 
--- Disable only project-owned immutability triggers while AccessExclusive table
--- locks prevent concurrent writes. PostgreSQL FK/internal triggers stay enabled.
+-- Disable only project-owned USER triggers (immutability + deferred invariant
+-- constraint triggers). PostgreSQL FK/internal triggers stay enabled.
+-- AccessExclusive locks held until COMMIT keep concurrent writers out.
 ALTER TABLE conflict_evidence DISABLE TRIGGER USER;
 ALTER TABLE conflicts DISABLE TRIGGER USER;
+ALTER TABLE derived_artifacts DISABLE TRIGGER USER;
+ALTER TABLE index_metadata DISABLE TRIGGER USER;
+ALTER TABLE audit_log DISABLE TRIGGER USER;
+ALTER TABLE document_versions DISABLE TRIGGER USER;
+-- documents carries DEFERRABLE invariant triggers on current_version_id; disable
+-- so nulling the pointer does not queue deferred events that block later ALTER.
+ALTER TABLE documents DISABLE TRIGGER USER;
+
 DELETE FROM conflict_evidence WHERE org_id = {org_id};
 DELETE FROM conflicts WHERE org_id = {org_id};
-ALTER TABLE conflict_evidence ENABLE TRIGGER USER;
-ALTER TABLE conflicts ENABLE TRIGGER USER;
 
 DELETE FROM claims WHERE org_id = {org_id};
 DELETE FROM chunks WHERE org_id = {org_id};
 DELETE FROM vector_cleanup_intents WHERE org_id = {org_id};
 
-ALTER TABLE derived_artifacts DISABLE TRIGGER USER;
 DELETE FROM derived_artifacts WHERE org_id = {org_id};
-ALTER TABLE derived_artifacts ENABLE TRIGGER USER;
 
 DELETE FROM embedding_batches WHERE org_id = {org_id};
 DELETE FROM index_generation_backfills WHERE org_id = {org_id};
 
-ALTER TABLE index_metadata DISABLE TRIGGER USER;
 DELETE FROM index_metadata WHERE org_id = {org_id};
-ALTER TABLE index_metadata ENABLE TRIGGER USER;
 
 DELETE FROM download_capability_redemptions WHERE org_id = {org_id};
 DELETE FROM upload_operations WHERE org_id = {org_id};
@@ -503,18 +506,14 @@ DELETE FROM event_log WHERE org_id = {org_id};
 DELETE FROM jobs WHERE org_id = {org_id};
 DELETE FROM quota_reservations WHERE org_id = {org_id};
 DELETE FROM usage_counters WHERE org_id = {org_id};
-ALTER TABLE audit_log DISABLE TRIGGER USER;
 DELETE FROM audit_log WHERE org_id = {org_id};
-ALTER TABLE audit_log ENABLE TRIGGER USER;
 
-ALTER TABLE document_versions DISABLE TRIGGER USER;
--- Null current_version_id only after triggers are off: otherwise the UPDATE
--- queues pending trigger events and PostgreSQL rejects the subsequent
--- ALTER TABLE ... DISABLE/ENABLE ("cannot ALTER TABLE because it has pending
--- trigger events").
+-- Null pointer then delete versions while USER triggers are off. Do not ENABLE
+-- in this transaction: DML with disabled triggers (and any remaining deferred
+-- events) makes PostgreSQL reject ALTER TABLE ... ENABLE TRIGGER with
+-- "cannot ALTER TABLE because it has pending trigger events".
 UPDATE documents SET current_version_id = NULL WHERE org_id = {org_id};
 DELETE FROM document_versions WHERE org_id = {org_id};
-ALTER TABLE document_versions ENABLE TRIGGER USER;
 DELETE FROM documents WHERE org_id = {org_id};
 
 DELETE FROM collection_user_access WHERE org_id = {org_id};
@@ -539,6 +538,18 @@ WHERE id IN ({admin_id}, {viewer_id})
     SELECT 1 FROM org_memberships membership WHERE membership.user_id = users.id
   );
 
+COMMIT;
+
+-- Re-enable in a fresh transaction after COMMIT cleared pending trigger events.
+-- DISABLE was committed above, so triggers stay off until these ENABLE statements.
+BEGIN;
+ALTER TABLE conflict_evidence ENABLE TRIGGER USER;
+ALTER TABLE conflicts ENABLE TRIGGER USER;
+ALTER TABLE derived_artifacts ENABLE TRIGGER USER;
+ALTER TABLE index_metadata ENABLE TRIGGER USER;
+ALTER TABLE audit_log ENABLE TRIGGER USER;
+ALTER TABLE document_versions ENABLE TRIGGER USER;
+ALTER TABLE documents ENABLE TRIGGER USER;
 COMMIT;
 """
     commands.psql(sql, timeout=deadline.remaining())

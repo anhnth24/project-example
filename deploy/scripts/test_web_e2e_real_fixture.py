@@ -1316,6 +1316,9 @@ class ReviewFixRedTests(unittest.TestCase):
             enable = sql.index(f"alter table {table} enable trigger user")
             self.assertLess(disable, delete)
             self.assertLess(delete, enable)
+            # ENABLE must be after COMMIT so pending trigger events are cleared
+            # (document_versions deferred invariants + DML while USER triggers off).
+            self.assertLess(delete, sql.rfind("commit;", 0, enable))
 
     def test_run_identity_is_bounded_and_suffix_uses_full_run_id(self) -> None:
         left = "e2e-" + "a" * 39 + "0-1234567890"
