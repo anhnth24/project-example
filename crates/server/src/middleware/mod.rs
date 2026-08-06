@@ -218,6 +218,11 @@ fn classify_route(path: &str) -> String {
 }
 
 fn looks_like_id(segment: &str) -> bool {
+    // Download capability tokens (`mhcap1.<payload>.<mac>`) are path segments
+    // under `/api/v1/downloads/{capability}` — collapse before metric labeling.
+    if segment.starts_with("mhcap1.") {
+        return true;
+    }
     if segment.len() >= 32 && segment.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
         return true;
     }
