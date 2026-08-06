@@ -34,6 +34,9 @@ Create `deploy/.env` from `deploy/.env.example`, keep it mode `0600`, and set:
 - the pinned AITeamVN URL/model/revision/dimensions/signature block
 - `MARKHAND_CHAT_BASE_URL`, `MARKHAND_CHAT_API_KEY`, and
   `MARKHAND_CHAT_MODEL` for GLM
+- optionally `MARKHAND_QA_ALLOW_UNVERIFIED_LLM=1` only while UAT explicitly
+  evaluates GLM output; responses remain labelled `llm_unverified` with a
+  warning because structured entailment is unavailable
 - `MARKHAND_POC_MAX_STORAGE_BYTES=32212254720`
 - `MARKHAND_QDRANT_MEM_LIMIT=6g`
 
