@@ -507,8 +507,12 @@ ALTER TABLE audit_log DISABLE TRIGGER USER;
 DELETE FROM audit_log WHERE org_id = {org_id};
 ALTER TABLE audit_log ENABLE TRIGGER USER;
 
-UPDATE documents SET current_version_id = NULL WHERE org_id = {org_id};
 ALTER TABLE document_versions DISABLE TRIGGER USER;
+-- Null current_version_id only after triggers are off: otherwise the UPDATE
+-- queues pending trigger events and PostgreSQL rejects the subsequent
+-- ALTER TABLE ... DISABLE/ENABLE ("cannot ALTER TABLE because it has pending
+-- trigger events").
+UPDATE documents SET current_version_id = NULL WHERE org_id = {org_id};
 DELETE FROM document_versions WHERE org_id = {org_id};
 ALTER TABLE document_versions ENABLE TRIGGER USER;
 DELETE FROM documents WHERE org_id = {org_id};
