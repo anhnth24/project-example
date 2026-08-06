@@ -46,6 +46,16 @@ describe('loadRuntimeCredentials', () => {
     expect(() => loadRuntimeCredentials({})).toThrow(/MARKHAND_E2E_REAL_CREDENTIALS_FILE/);
   });
 
+  it('fails closed when credentials path does not exist', () => {
+    const path = join(tempDir(), 'missing-credentials.json');
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      /cannot read/,
+    );
+  });
+
   it('fails on malformed JSON', () => {
     const dir = tempDir();
     const path = join(dir, 'credentials.json');
@@ -119,6 +129,16 @@ describe('loadRuntimeFixture', () => {
   it('fails closed when MARKHAND_E2E_REAL_FIXTURE_FILE is unset', () => {
     expect(() => loadRuntimeFixture({})).toThrow(RuntimeConfigError);
     expect(() => loadRuntimeFixture({})).toThrow(/MARKHAND_E2E_REAL_FIXTURE_FILE/);
+  });
+
+  it('fails closed when fixture path does not exist', () => {
+    const path = join(tempDir(), 'missing-fixture.json');
+    expect(() => loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toThrow(
+      /cannot read/,
+    );
   });
 
   it('fails on malformed JSON', () => {
