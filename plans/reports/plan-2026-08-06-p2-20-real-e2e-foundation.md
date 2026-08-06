@@ -91,9 +91,10 @@ namespace with runtime credentials and resource IDs; refuses production profile.
 - One collection with stable display name keyed by run
 - Secondary viewer actor with collection read visibility but no `doc.upload`; its
   reindex request must reach the real route and produce the required 403 mapping
-- Optional document row in terminal `failed` state (for retry) seeded via existing
-  document/version columns — **no schema change**; if existing columns cannot express
-  failed+retry without a new API, stop and escalate as blocker
+- One document row in terminal `failed` state for retry, seeded with the existing
+  `documents`, `document_versions`, and `documents.current_version_id` columns — **no
+  schema change**; if live constraints reject this existing representation, stop and
+  escalate the exact blocker
 - Fixture checksum over sorted ID list (no secrets)
 
 **Production refusal:** If `MARKHAND_PROFILE=prod` (or equivalent prod detection already
