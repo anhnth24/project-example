@@ -52,11 +52,11 @@ P2-20 is the first independently reviewable child of umbrella P2-15.
 
 ## Implementation plan
 
-Work proceeds as independently reviewable tasks (T1→T8). Each task has its own RED/GREEN
+Work proceeds as independently reviewable tasks (Task 1→Task 8). Each task has its own RED/GREEN
 TDD loop, negative paths, and commit boundary. Do not start production/test code until this
 plan is linked and plan status moves to `In progress` at the first code change.
 
-### T1 — Run-scoped fixture tooling (setup / cleanup / refuse)
+### Task 1 — Run-scoped fixture tooling (setup / cleanup / refuse)
 
 **Outcome:** A dev/CI-only CLI under `deploy/scripts/` creates and tears down a unique run
 namespace with runtime credentials and resource IDs; refuses production profile.
@@ -121,7 +121,7 @@ python3 deploy/scripts/test_web_e2e_real_fixture.py
 
 ---
 
-### T2 — Orchestrator fail-closed extensions
+### Task 2 — Orchestrator fail-closed extensions
 
 **Outcome:** `web-e2e-real.sh` owns run ID, calls fixture setup before Playwright, always
 attempts cleanup, stages sanitized artifacts, validates canaries, and fails the job on
@@ -184,7 +184,7 @@ python3 deploy/scripts/test_web_e2e_real_orchestration.py
 
 ---
 
-### T3 — Real Playwright support refactor + serial / artifact policy
+### Task 3 — Real Playwright support refactor + serial / artifact policy
 
 **Outcome:** `web/e2e-real/support.ts` loads runtime credentials and run-scoped IDs;
 `web/e2e-real/runtime.ts` owns pure JSON/env parsing; the real project runs serially
@@ -233,7 +233,7 @@ pnpm --dir web exec vitest run src/test/e2eRealRuntimeConfig.test.ts
 
 ---
 
-### T4 — Auth scenarios (login / logout / deep-link / real 401 refresh)
+### Task 4 — Auth scenarios (login / logout / deep-link / real 401 refresh)
 
 **Outcome:** Port mock `web/e2e/auth.spec.ts` outcomes to real backend.
 
@@ -265,7 +265,7 @@ on existing unit coverage in `api/client` and document).
 
 ---
 
-### T5 — Collection navigation + indexed preview + download capability/redeem
+### Task 5 — Collection navigation + indexed preview + download capability/redeem
 
 **Outcome:** Real collection open, preview of indexed markdown, download Markdown path
 issues capability and redeems through real API/storage.
@@ -289,7 +289,7 @@ issues capability and redeems through real API/storage.
 
 ---
 
-### T6 — Reindex, failed-document retry, delete
+### Task 6 — Reindex, failed-document retry, delete
 
 **Outcome:** Real mutation paths for reindex, retry-from-failed, and delete.
 
@@ -315,7 +315,7 @@ do not add schema/API seams.
 
 ---
 
-### T7 — Deterministic 403 / 429 / throttled upload / real 413
+### Task 7 — Deterministic 403 / 429 / throttled upload / real 413
 
 **Outcome:** Action error mappings and upload error/progress against real backend.
 
@@ -345,7 +345,7 @@ endpoints; changing OpenAPI.
 
 ---
 
-### T8 — Manifest contract tests + full-stack verification evidence
+### Task 8 — Manifest contract tests + full-stack verification evidence
 
 **Outcome:** Artifact/manifest validators hermetically tested; full real stack run
 produces reviewable evidence; quality gates recorded.
@@ -393,11 +393,11 @@ python3 scripts/check-dependency-policy.py
 
 ### Ordering and conflict rules
 
-- T1 before T2 (orchestrator calls fixture).
-- T3 before T4–T7 (specs need support).
-- Execute T4–T7 sequentially because they share runtime fixtures and rate-limit state;
+- Task 1 before Task 2 (orchestrator calls fixture).
+- Task 3 before Tasks 4–7 (specs need support).
+- Execute Tasks 4–7 sequentially because they share runtime fixtures and rate-limit state;
   each task uses its named spec file and receives task review before the next begins.
-- T8 last; no status→Done without independent review + evidence.
+- Task 8 last; no status→Done without independent review + evidence.
 - Catalog stays `Ready` until first production/test code lands, then `In progress`;
   plan moves `Planned` → `In progress` at that same moment.
 - Do not regenerate roadmap while catalog status remains `Ready` (this planning commit).
