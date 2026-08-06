@@ -588,35 +588,41 @@ authZ and public contracts untouched.
 
 ### Task 8 — Manifest contract tests + verification evidence (2026-08-06)
 
-Worktree `/workspace/.worktrees/p2-20-task8` on branch
-`cursor/p2-20-task8-evidence-bd0a`.
+Worktree `/workspace/.worktrees/p2-20-grok` on branch
+`cursor/p2-20-real-e2e-foundation-e9d6` (base tip before Task 8: `e45bc26`).
 
-**Implementation SHA (artifact tests + README contract):** `fe12e4cdce61476a2950e26dde70b9d9562215ce`
+**Implementation SHA (artifact tests + README contract):**
+`bc1213c0fa67ca3378d1e687e40b839195a809fb`
 
-**Hermetic / unit evidence (recorded at that SHA):**
+**Hermetic / unit evidence (re-verified 2026-08-06 on this worktree at
+`75a5bc8` + this evidence correction commit):**
 
 | Command | Result |
 |---|---|
 | `python3 deploy/scripts/test_web_e2e_real_fixture.py` | **31 passed**, 0 failed |
 | `python3 deploy/scripts/test_web_e2e_real_orchestration.py` | **17 passed**, 0 failed |
 | `python3 deploy/scripts/test_web_e2e_real_artifacts.py` | **11 passed**, 0 failed (checksum drift, missing scenario, nonzero skip, failed teardown, secret + content canaries, happy-path validate) |
-| `pnpm --dir web test --run` | **52 files / 556 tests passed** (fallback; see `make check-web` note) |
+| `pnpm --dir web test --run` | **52 files / 556 tests passed** |
+| `make check-desktop` | **passed** (5 files / 40 tests + desktop build) |
 | `python3 scripts/check-architecture-boundaries.py` | **passed** |
+| `cargo fmt --all -- --check` | **passed** (no Rust production change in Task 8) |
+| `cargo metadata --locked --format-version 1 --no-deps` | **passed** |
+| `python3 scripts/check-dependency-policy.py` | **passed** |
 | `pnpm --filter markhand-web format:check` | passed |
-| `pnpm --filter markhand-web lint` | passed (0 errors, 8 pre-existing react-refresh warnings) |
+| `pnpm --filter markhand-web lint` | passed (0 errors, 8 pre-existing warnings) |
 | `pnpm --filter markhand-web api:check` | passed (N/A drift; OpenAPI/client untouched) |
 
-**`make check-web` note:** invoked but failed at `pnpm --filter markhand-web build`
+**`make check-web` note:** `format:check`, `lint`, `test`, and `api:check` are green.
+Full `make check-web` still fails at `pnpm --filter markhand-web build`
 (`tsc && vite build`) with missing `@types/node` / `node:fs` / `Buffer` errors when
-typechecking Playwright/`e2e-real` paths. The same failure reproduces on the parent
-`/workspace` checkout — environment/toolchain gap, not introduced by Task 8. Per Task 8
-instructions, recorded `pnpm --dir web test --run` as the web unit evidence substitute.
-`format:check`, `lint`, and `api:check` portions are green above.
+typechecking Playwright/`e2e-real` paths. Environment/toolchain gap, not introduced by
+Task 8. Substituted evidence: `pnpm --dir web test --run` (**556 passed**).
 
 **Full-stack blocker (`DEV_STACK_MODE=full`):** **not run — Docker unavailable** in this
 Cloud VM (`docker` binary missing; no `/var/run/docker.sock`). No Compose up, no live
-`web-e2e-real.sh` cycle, and **no sanitized live manifest / fixture checksum** were
-produced. Do **not** fabricate stack evidence. Re-run on a Docker-capable host:
+fixture setup→cleanup→verify-clean cycle, no `web-e2e-real.sh` run, and **no sanitized
+live manifest / fixture checksum** were produced. Do **not** fabricate stack evidence.
+Re-run on a Docker-capable host:
 
 ```bash
 DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh
@@ -625,7 +631,7 @@ DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh
 then attach exact SHA, `WEB_E2E_REAL_ARTIFACT_DIR/manifest.json` (sanitized), fixture
 checksum, `skippedCount=0`, and `teardown.result=ok`.
 
-**Docs:** `deploy/README.md` now documents fixture/artifact CLI contract, local command,
+**Docs:** `deploy/README.md` documents fixture/artifact CLI contract, local command,
 output locations (`WEB_E2E_REAL_ARTIFACT_DIR` / `WEB_E2E_REAL_RUNTIME_DIR`), production
 profile refusal, and sanitization warning.
 
@@ -636,15 +642,15 @@ catalog status advance with roadmap regen only when status changes.
 
 - [ ] Every acceptance row (A1–A21) has reviewable evidence linked above.
 - [x] Focused Python orchestration/fixture/artifact tests green
-      (31 + 17 + 11 at `fe12e4c`; see Task 8 evidence).
+      (31 + 17 + 11 at `bc1213c` / re-verified on `p2-20-grok`; see Task 8 evidence).
 - [ ] Full real dev stack run (`DEV_STACK_MODE=full`) executes all required P2-20
       scenarios with skipped count 0 and teardown ok.
       **Blocked 2026-08-06:** Docker unavailable in Task 8 Cloud VM (no binary /
       socket); live sanitized manifest not recorded.
 - [ ] `make check-web` and `make check-desktop` green for the delivery SHA.
-      Task 8: `pnpm --dir web test --run` **556 passed**; `make check-web` build
-      step blocked by pre-existing missing `@types/node` in this environment;
-      `check-desktop` not re-run in Task 8.
+      Task 8: `pnpm --dir web test --run` **556 passed**; `make check-desktop`
+      **passed** (40 tests + build); `make check-web` build step blocked by
+      pre-existing missing `@types/node` in this environment.
 - [x] Architecture (and API/roadmap if applicable) checks green
       (`check-architecture-boundaries.py` passed; `api:check` passed / N/A drift).
 - [ ] No Rust production change; if any Rust file slipped in, Rust pre-push gates green
