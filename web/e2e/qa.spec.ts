@@ -134,17 +134,67 @@ test('chat keeps multi-turn history: a second question is answered without distu
   );
 });
 
+test.describe('as_of timezone portability', () => {
+  test.use({ timezoneId: 'America/Los_Angeles' });
+
+  test('as_of between budget versions cites v1 10-million content with a non-current warning', async ({
+    page,
+  }) => {
+    // Scope-wide as-of (owner option 1): timestamp only — no document picker.
+    // Budget fixture v1 effectiveFrom = mockTimestamp(50), v2 = mockTimestamp(95);
+    // fixed 01:10Z is between them. This scenario uses a non-UTC browser zone
+    // and derives the datetime-local wall time for that instant, so it cannot
+    // accidentally shift to v2 on a runner configured outside UTC.
+    const expectedAsOf = '2026-01-01T01:10:00.000Z';
+    await login(page);
+    await page.getByRole('link', { name: 'Hỏi đáp' }).click();
+
+    await page.getByRole('combobox', { name: 'Chế độ truy vấn' }).click();
+    await page.getByRole('option', { name: 'Tại một thời điểm (as-of)' }).click();
+
+    const askButton = page.getByRole('button', { name: 'Hỏi', exact: true });
+    const asOfInput = page.getByLabel('Thời điểm (as-of)');
+    await expect(asOfInput).toHaveAttribute('required', '');
+
+    await page.getByRole('textbox', { name: 'Câu hỏi' }).fill('Ngân sách vận hành là bao nhiêu?');
+    await expect(askButton).toBeDisabled();
+
+    const localInputForFixedInstant = await page.evaluate((iso) => {
+      const instant = new Date(iso);
+      const pad = (value: number) => String(value).padStart(2, '0');
+      return (
+        `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}` +
+        `T${pad(instant.getHours())}:${pad(instant.getMinutes())}`
+      );
+    }, expectedAsOf);
+    await asOfInput.fill(localInputForFixedInstant);
+    await expect(askButton).toBeEnabled();
+    expect(
+      await asOfInput.evaluate((input: HTMLInputElement) => new Date(input.value).toISOString()),
+    ).toBe(expectedAsOf);
+    await askButton.click();
+
+    const turn = page.getByRole('log', { name: 'Lịch sử hỏi đáp' }).locator('.chat-turn').first();
+    await expect(turn.getByTestId('qa-answer')).toContainText('10 triệu');
+    await expect(turn.getByTestId('qa-answer')).not.toContainText('15 triệu');
+    await expect(
+      turn.getByText(
+        /Phiên bản 1 của "Chính sách ngân sách vận hành\.pdf" không phải phiên bản hiện hành/,
+      ),
+    ).toBeVisible();
+    await expect(turn.getByText(/đã được giải quyết ở phiên bản 2/)).toBeVisible();
+    await expect(turn.getByText(/15 triệu/)).not.toBeVisible();
+  });
+});
+
 test('multi-mode conflict warnings display correctly (compare/history)', async ({ page }) => {
-  // P2-10 conflict-warning demo, extended past `current` mode to as-of/
-  // compare/history: the one seeded multi-version document
-  // (`QA_COMPARE_DOCUMENT_ID`, "Chính sách ngân sách vận hành.pdf" — see
-  // `mocks/fixtures.ts`) doubles as a live "BA's claim (v1, 10 triệu/quý) vs.
-  // thiết kế mới (v2, 15 triệu/quý, current)" conflict. `as-of` mode itself
-  // has no document picker in `ChatPanel` yet (`needsDocument` only covers
-  // `compare`/`history` — a pre-existing UI gap this task's brief says not to
-  // touch), so that mode's warning is covered at the reducer/mock level only
-  // (`state/askStream.test.ts`'s "as-of mode" case) — this spec drives the
-  // two modes the composer actually supports end-to-end.
+  // P2-10 conflict-warning demo for compare/history. The seeded multi-version
+  // document (`QA_COMPARE_DOCUMENT_ID`, "Chính sách ngân sách vận hành.pdf" —
+  // see `mocks/fixtures.ts`) doubles as a live "BA's claim (v1, 10 triệu/quý)
+  // vs. thiết kế mới (v2, 15 triệu/quý, current)" conflict. Scope-wide `as_of`
+  // (timestamp only, no document picker) is covered by the dedicated as_of
+  // scenario above; this spec drives the two modes that still use the
+  // compare/history document picker end-to-end.
   await login(page);
   await page.getByRole('link', { name: 'Hỏi đáp' }).click();
 

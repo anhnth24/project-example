@@ -42,7 +42,9 @@
 // Document/version pickers for compare/history reuse whatever documents a
 // search already turned up (`candidateDocuments`, from `SearchPanel`) plus
 // the real `GET /documents/{documentId}/versions` endpoint — no invented
-// picker data.
+// picker data. `as_of` is deliberately scope-wide (matching backend
+// `VersionMode::AsOf`): only the timestamp control is shown, never a
+// document picker.
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { apiClient, type ApiClient } from '../../api/client';
 import type { components } from '../../api/generated/contract';
@@ -98,7 +100,7 @@ export function ChatPanel({
 }: {
   collectionIds?: string[];
   client?: ApiClient;
-  /** Documents a search already found — feeds the compare/history document picker below instead of asking for a raw UUID. */
+  /** Documents a search already found — feeds the compare/history document picker below instead of asking for a raw UUID. Not used by scope-wide `as_of`. */
   candidateDocuments: SearchHit[];
   /**
    * The multi-project picker lives in this composer, but its value must also
@@ -205,6 +207,11 @@ export function ChatPanel({
   }, [busy]);
 
   const needsDocument = mode === 'compare' || mode === 'history';
+  // Scope-wide as-of (backend `VersionMode::AsOf`) only needs a timestamp —
+  // never a document picker. Submission stays blocked until both the question
+  // and that required timestamp are present.
+  const asOfReady = mode !== 'as_of' || asOf.trim() !== '';
+  const canSubmit = question.trim() !== '' && asOfReady && !busy;
   const versionsResult = useScopeSafeRequest(
     async (signal) => {
       if (!documentId || !needsDocument) return null;
@@ -232,10 +239,10 @@ export function ChatPanel({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (question.trim() === '' || busy) return;
+    if (!canSubmit) return;
     const request: AskRequest = { question, collectionIds, mode, limit: 10 };
     if (projectIds.length > 0) request.projectIds = projectIds;
-    if (mode === 'as_of' && asOf) request.asOf = new Date(asOf).toISOString();
+    if (mode === 'as_of') request.asOf = new Date(asOf).toISOString();
     if (needsDocument && documentId) request.documentId = documentId;
     if (mode === 'compare') {
       if (versionA) request.versionA = versionA;
@@ -364,6 +371,7 @@ export function ChatPanel({
                 className="input"
                 type="datetime-local"
                 value={asOf}
+                required
                 onChange={(event) => setAsOf(event.target.value)}
               />
             </div>
@@ -424,11 +432,7 @@ export function ChatPanel({
         </div>
 
         <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={question.trim() === '' || busy}
-          >
+          <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
             Hỏi
           </button>
           {busy && (

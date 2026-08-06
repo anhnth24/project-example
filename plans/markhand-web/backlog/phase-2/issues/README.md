@@ -4,10 +4,10 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-08-05).** MVP xây trên mock server đã merge vào
-`master`: **14/19 issue Done** (P2-01…09, P2-11…14, P2-17). **5 active, đều In
-progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có; **#374** đóng nốt
-gap conflict-warning demo cho as-of/compare/history — xem chi tiết bên dưới), P2-15
+**Trạng thái tổng quan (cập nhật 2026-08-06).** MVP xây trên mock server đã merge vào
+`master`: **14/19 issue Done** (P2-01…09, P2-11…14, P2-17). **1 in Review, 4 In
+progress**: P2-10 (Q&A — UI/mock/stream + conflict-warning #374; scope-wide `as_of`
+web gap đóng, đang Review), P2-15
 (E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed và lần chạy
 live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa chạy live),
 P2-18 (Project grouping — owner request mới 2026-07-29, org → project → collection →
@@ -192,166 +192,85 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-10 — Streaming search/Q&A/citations
 
-- **Status:** In progress — **owner hạ gate 2026-07-29** (môi trường dev/test, không chờ
-  full live-evidence R02/R03/R05): UI xây trên OpenAPI/SSE contract hiện có + mock server
-  như P2-01..09. `QaPage` không còn là placeholder: `search`/`ask` (đồng bộ) và
-  `POST /ask/stream` (mock mới, `mocks/handlers/qa.ts`) đều hoạt động; stream reducer
-  (`state/askStream.ts`) xử lý đúng thứ tự sự kiện `ask.started → ask.token* →
-  [ask.warning]* → ask.citations → ask.version_context → ask.completed → stream.closed`
-  (mirror `services/qa/ask_stream.rs`), có dedupe-guard độc lập với transport, và các
-  trạng thái `completed`/`revoked` (`citation_revoked` giữa chừng)/`error` (mọi
-  `stream.closed` reason + network/session-lost) đều accessible qua `aria-live="polite"`.
-  Mock kịch bản `citation_revoked` và fallback extractive điều khiển được qua marker cố
-  định trong câu hỏi (`QA_STREAM_MARKERS`, export từ `mocks/handlers/qa.ts` — seam cho
-  test, cùng quy ước `__markhandMock*`). current/as-of/compare/history đều có UI thật
-  (mode selector + document/version picker qua `GET /documents/{id}/versions` — không
-  phải chỉ current), vì cả bốn field đều có sẵn trong `AskRequest`/`SearchRequest`.
-  **Gap đã xác minh trong contract (không tự chế client-side):** `CitationPin`
-  (`openapi.yaml`, `components.schemas.CitationPin`) KHÔNG có `logicalDocumentId`/
-  `versionId` — chỉ `ResolveCitationRequest` (`/citations/resolve`) đòi hỏi hai field đó,
-  và caller phải *đã biết* chúng trước khi gọi, nên không có đường nào từ một citation
-  thô của `ask`/`ask/stream` quay lại "tài liệu/phiên bản nào" để deep-link preview —
-  `CitationCard.tsx`/`AskPanel.tsx` nói rõ điều này trong UI (không hiện nút "Xem trước"
-  chết) thay vì bịa một id. Deep-link + version badge **có** hoạt động đầy đủ cho kết quả
-  `search` (hits mang `documentId`/`versionId` — quy ước riêng của mock vì
-  `SearchResponse.hits` là `additionalProperties: true` trong spec, không phải trường bắt
-  buộc theo hợp đồng). Conflict warning demo: **gap đã đóng (#374)** — trước đó chỉ mô
-  phỏng luật `current` của `services/qa/grounding.rs`; nay fixture
-  `QA_COMPARE_DOCUMENT_ID` mang đúng kịch bản "BA đề xuất 10 triệu/quý (v1) vs thiết kế
-  15 triệu/quý (v2, hiện hành, resolved)" và `mocks/handlers/qa.ts` phát warning theo
-  từng chế độ: `as_of` (phiên bản resolve ra không phải hiện hành), `compare` (warning
-  độc lập cho từng phía không-hiện-hành — v2 là current nên chỉ v1 có warning),
-  `history` (một warning tổng kết "resolved ở phiên bản 2"). Reducer test cho cả 3 chế
-  độ (`askStream.test.ts`) + E2E compare/history (`qa.spec.ts`); riêng `as_of` chỉ cover
-  mức reducer/mock vì `ChatPanel` chưa có document picker cho chế độ đó (gap UI có sẵn,
-  ngoài scope #374).
-  "Trạng thái reconnect" chỉ hiển thị chung là "đang stream" — transport P2-04
-  (`api/sse.ts`) không phát một `SseMessage` kind riêng cho "đang thử kết nối lại" (chỉ
-  âm thầm retry/backoff nội bộ), nên UI không bịa tín hiệu không có thật; chỉ có trạng
-  thái cuối (`completed`/`revoked`/`error` với lý do) là quan sát được.
-
-  **Cập nhật (chat UI, cùng ngày):** `AskPanel` (đơn lượt) → `ChatPanel` — giao diện hội
-  thoại nhiều lượt hỏi-đáp trong một phiên. Kiến trúc giữ nguyên như chốt: server vẫn
-  đơn lượt (`/ask`, `/ask/stream` không đổi, không gửi lịch sử lên server, không chế
-  conversation memory phía client thành context giả). Lịch sử chat **chỉ tồn tại trong
-  React state của `ChatPanel`** (session in-memory) — mất khi tải lại trang (đánh đổi đã
-  chấp nhận, ghi rõ trong UI), **không** persist localStorage vì có thể chứa nội dung tài
-  liệu. Mỗi lượt (`ChatTurnBubble`) sở hữu một instance `useAskStream` riêng — tái dùng
-  nguyên `useAskStream`/`state/askStream.ts`, không sửa reducer; một lượt sau không bao
-  giờ ghi đè state của lượt trước. Composer (ô nhập + chọn chế độ truy vấn) chỉ cho một
-  stream tại một thời điểm: disable khi lượt cuối chưa "settled", nút "Hủy" gọi
-  `reset()` của đúng lượt đang chạy — vì `reset()` tự nó không phân biệt được "đã hủy"
-  với "chưa từng chạy" (cả hai đều về `'idle'`), `ChatTurnBubble` tự đóng băng
-  answer/citations/warnings ngay trước khi gọi `reset()` và báo lên trạng thái
-  `'cancelled'` riêng (không phải trong `state/askStream.ts`) để composer biết lượt đã
-  xong. Label mode (`fallback_extractive`/`llm_unverified`/…) tra theo **key string
-  thuần** (`components/qa/answerMode.ts`) chứ không theo enum từ `contract.ts` — một
-  agent song song có thể thêm `llm_unverified` vào contract sau; UI đã sẵn sàng hiện
-  nhãn cảnh báo "Trả lời từ LLM (chưa kiểm chứng đối chiếu)" cho giá trị đó ngay cả
-  trước khi `api:generate` chạy lại. Scope-safety: `ChatPanel` tự phát hiện thấy trước đó
-  chưa org-scoped (state chat không hề tồn tại ở bản đơn lượt) nên đã làm đúng theo
-  pattern P2-06 hiện có (`LibraryPage.tsx`'s `effectiveView`/`retainedDocuments`): lịch sử
-  được giữ kèm epoch nó được tạo ra, và bị xoá sạch (adjust-state-while-rendering) ngay
-  khi epoch đổi (đổi org/logout) — đóng luôn gap "chưa có test org-switch riêng cho
-  AskPanel" đã ghi nhận trước đó (xem Acceptance/tests bên dưới).
-
-  **Cập nhật (citation deep-link gap đóng, 2026-07-29):** gap ở trên (`CitationPin`
-  không có `logicalDocumentId`/`versionId`) là gap **contract/spec**, không phải gap dữ
-  liệu — server (`services::citation::CitationPin`) đã luôn serialize
-  `logicalDocumentId`/`versionId`/`collectionId`; `openapi.yaml`'s `CitationPin` schema
-  chỉ đơn giản chưa khai báo chúng, nên `openapi-typescript` sinh type thiếu 3 field đó
-  dù JSON thật đã có sẵn. Đã đóng bằng cách nới schema (field mới optional/nullable,
-  không đổi required, không bump version — additive) + regenerate `contract.ts`.
-  `CitationCard` giờ dựng link thật `/library/:collectionId?doc=:documentId`
-  (`buildLibraryDocPath`, cùng route `LibraryPage` đọc — xem P2-07) khi pin mang đủ định
-  danh; `ChatTurnBubble` vẫn giữ ghi chú cũ (đổi câu chữ: "một số trích dẫn") cho trường
-  hợp hiếm một pin không mang định danh. `LibraryPage` chuyển từ state cục bộ sang
-  `?doc=` trên URL (xem P2-07) nên deep-link này giữ được cả reload lẫn back/forward.
-  Mock (`mocks/handlers/qa.ts`'s `passageToCitation`) cập nhật theo cùng shape. Còn lại:
-  `/citations/resolve`'s response object (inline, không `$ref` tới `CitationPin`) chưa có
-  `collectionId` — không nằm trong scope lần này (caller resolve đã biết
-  `logicalDocumentId`/`versionId` trước khi gọi, theo đúng thiết kế request của endpoint
-  đó).
-
-- **Plan/files:** Search/ask panel, current/as-of/compare/history selector, index
-  readiness, stream reducer, fallback + version-change notes, citation deep-link with
-  version badge/effective date, current conflict warning + resolved conflict note,
-  abort scope change; **+ chat UI**: turn history, per-turn stream, org-scoped clear.
-  - `web/src/mocks/handlers/qa.ts` — `search`/`ask` (đồng bộ, giữ tương thích) + `askStream`
-    mới: toàn bộ response `/ask/stream` là một chuỗi `text/event-stream` dựng sẵn (mọi sự
-    kiện đã quyết định xong trước khi trả response — không có gì thật sự bất đồng bộ như
-    `jobEvents`), trả qua `rawBody` — deterministic, không `setTimeout`/sleep-race.
-    `registerOperation('askStream', ...)` khiến nó được match trước khi rơi vào
-    `DELIBERATELY_UNMOCKED_OPERATIONS` fallback của `registry.ts`/`fetchMock.ts` (2 file đó
-    ngoài phạm vi sửa của task này — comment ở đó vẫn liệt kê `askStream` là "deliberately
-    unmocked", nay không còn đúng cho riêng operation này; để lại làm việc chưa xong, xem
-    report cuối). Semantics đơn lượt của handler không đổi cho chat UI — mỗi lượt vẫn một
-    request/response độc lập.
-  - `web/src/mocks/fixtures.ts` — thêm thuần túy (không sửa fixture cũ): một tài liệu 2
-    phiên bản (`QA_COMPARE_DOCUMENT_ID`) cho demo compare/history có dữ liệu thật để so
-    sánh.
-  - `web/src/state/askStream.ts` (+ test) — reducer thuần, `describeAskStreamError`
-    (không đổi cho chat UI).
-  - `web/src/components/qa/**` — `SearchPanel`, `CitationCard`, `DocumentPreviewPanel`,
-    `useAskStream`/`askStreamSource` (SSE qua P2-04, không `EventSource`); **mới**:
-    `ChatPanel` (thay `AskPanel`), `ChatTurnBubble` (một lượt, một `useAskStream`),
-    `answerMode.ts` (map mode wire-string → nhãn tiếng Việt, key string thuần).
-  - `web/src/pages/QaPage.tsx`, `web/src/pages/QaPage.test.tsx` (+ test chat 2 lượt,
-    revoke lượt 2 không phá lượt 1, hủy giữa chừng, clear khi đổi org),
-    `web/e2e/qa.spec.ts` (4 spec cũ giữ hành vi tương đương qua layout chat + 1 spec chat
-    nhiều lượt mới, tổng suite E2E mock 25).
-- **Depends:** P2-04…07 + backend ACL. **Acceptance/tests:** `aria-live`; current source
-  citation; multi-document citations; old/new amount example labels v1/v2 and delta;
-  BA 10m vs design 15m warning then v2 resolved (**đã làm — #374**, xem cập nhật ở trên);
-  as-of/history/deep-link (**search only**, xem gap ở trên)/sequence/fallback/no-answer/
-  revoke tests đã có (`askStream.test.ts` + `QaPage.test.tsx` + `qa.spec.ts`).
-  switch-mid-answer: **đã đóng** — `QaPage.test.tsx` nay có một kịch bản org-switch cụ thể
-  gắn với `ChatPanel` (hỏi 1 lượt, `manager.setScope` sang org khác, xác nhận lịch sử về
-  rỗng và composer hết "busy"), bên cạnh bảo đảm chung ở `hooks/useScopeSafeSse.test.tsx`.
-  Chat-specific: 2 lượt liên tiếp giữ history độc lập, `citation_revoked` ở lượt 2 không
-  phá lượt 1 (cả unit lẫn e2e), hủy giữa chừng giữ nguyên phần trả lời đã có kèm thông báo
-  "Đã hủy" thay vì xoá trắng.
-- **Security:** Sanitized Markdown/server route IDs. **Out:** intelligence/conversation
-  memory (server vẫn đơn lượt; history chat là UI-only, không gửi lên server, không
-  persist).
-
-  **Cập nhật (chat-first redesign landed, 2026-07-29 — owner: "hiện tại phần hỏi đáp đang
-  nhìn lộn xộn quá"):** `QaPage` viết lại theo 4 phần. **(A)** Layout chat-first: log chat
-  + composer là cột chính, `SearchPanel` thu vào tab "Tìm kiếm" (tab "Hỏi đáp" mặc định);
-  sidebar lịch sử (`ChatHistorySidebar`, thu gọn được) đọc P2-19's `listChatSessions`
-  (mới, cursor "tải thêm", most-recently-active-first) — xem mục cập nhật riêng ở P2-19
-  bên dưới cho toàn bộ phần "ghi lịch sử thật". Disclaimer "chỉ lưu tạm trong phiên này"
-  cũ đã bỏ (không còn đúng). **(B)** Dropdown "Phạm vi" đơn (`projectId`) → multi-select
-  chip popover (`ProjectPicker.tsx`, tái dùng nguyên `useRailPopover`/`useFloatingMenu`
-  pattern của `OrgSwitch`) gửi `projectIds[]` (P2-19) cho cả `search`/`ask`/`ask/stream`;
-  `projectId` đơn không còn được UI dùng nữa (server vẫn nhận cả hai, xem P2-19).
-  **(C)** Citations chuyển từ danh sách `CitationCard` phẳng sang footnote cuối câu trả
-  lời: `citationFootnotes.ts` (thuần, có unit test riêng) tách answer text theo token
-  `[CITE-xxxx]` server đã nhúng sẵn (xác minh trong `crates/knowledge/src/citation.rs` +
-  `mocks/handlers/qa.ts`'s `buildAnswer`, không đoán) thành `[n]` inline + khối "Nguồn
-  trích dẫn" đánh số cuối bubble (`CitationFootnotes.tsx`, tái cấu trúc từ
-  `CitationCard.tsx` chứ không viết lại logic deep-link/page-label). `page` **đã** hiển
-  thị được (qua `CitationFootnotes`), bản mô tả nhiệm vụ ban đầu nói "chưa hiển thị ở đâu"
-  là sai/lỗi thời — đã xác minh code trước khi tin. **(D)** Dọn spacing/heading nhất quán
-  `.card`/design system hiện có; mode
-  badge/warnings gọn lại. `ChatTurnBubble`/`HistoricalTurnBubble` (mới — turn đã lưu, tĩnh,
-  không `useAskStream`) giờ dùng chung `AnswerText`/`CitationFootnotes`. E2E: `qa.spec.ts`
-  cập nhật theo layout mới (tab, footnote, multi-select) + `chat-history.spec.ts` mới
-  (part A) — suite mock E2E tổng 36 (từ 33).
-
-  **Cập nhật (vòng 11-A, 2026-07-29) — gap `documentTitle` đóng:** `CitationPin` giờ có
-  thêm field `documentTitle` (nullable, additive — schema `CitationPin` hiện có, KHÔNG
-  phải schema mới, nên pin-count 56 giữ nguyên). Nguồn: PostgreSQL hydration
-  (`db::search::hydrate_chunks_by_identity`) đã `JOIN documents d` sẵn cho ACL/state
-  recheck, nên thêm cột `d.title AS document_title` vào SELECT hiện có là rẻ (không join
-  mới, không N+1) — thread qua `AuthorizedChunk`/`RetrievalHit`/`CitationPin::pin_from_hit`.
-  `resolve_citation` lấy từ `documents::get_by_id(...).title` (đã có sẵn trong txn, không
-  query thêm). Web: `CitationFootnotes.tsx` ưu tiên `citation.documentTitle`, fallback tên
-  bộ sưu tập (`collectionNameById`) như cũ khi field vắng (turn lịch sử cũ chưa có).
-  `mocks/handlers/qa.ts`/`mocks/fixtures.ts` seed `documentTitle` khớp tài liệu thật; E2E
-  `qa.spec.ts` xác nhận "Roadmap.xlsx" hiển thị trong footnote. Server:
-  `citation_authz_matrix.rs`'s `live_pdf_pptx_xlsx_citation_preview_download_matrix`
-  assert `pin.document_title == Some(doc.title)` cho cả 3 định dạng đã seed.
+- **Status:** Done — scope-wide `as_of` closure [#393](https://github.com/anhnth24/project-example/pull/393);
+  independent task and whole-branch re-reviews approved with no remaining finding.
+- **Plan file:** [P2-10 `as_of` end-to-end closure](../../../../reports/plan-2026-08-06-p2-10-as-of-e2e.md)
+- **Objective:** Cung cấp trải nghiệm tìm kiếm/Hỏi đáp chat-first trên contract
+  `search`/`ask`/`ask/stream`, với citation có thể kiểm chứng, version context và
+  fail-closed collection/project authorization. `as_of` giữ semantics backend
+  scope-wide: timestamp áp dụng cho mọi tài liệu trong scope đã authorize, không có
+  document picker giả.
+- **Implementation plan:**
+  1. Dùng generated API client và P2-04 SSE transport cho search, ask đồng bộ và
+     `POST /ask/stream`; reducer giữ thứ tự/dedupe sự kiện và trạng thái terminal.
+  2. Giữ `QaPage` chat-first: nhiều turn độc lập, cancel giữ partial answer, scope epoch
+     xoá state cũ khi đổi org; persisted sidebar thuộc P2-19 và không được gửi lại làm
+     conversation context.
+  3. Resolve request scope từ active token/profile allow-list, rồi intersect project
+     union; explicit collection ngoài allow-list, mixed scope và empty scope đều 403.
+  4. Render citation thành inline footnote + khối nguồn, dùng
+     `logicalDocumentId`/`versionId`/`collectionId` và `documentTitle` để deep-link
+     preview/version; SafeMarkdown tiếp tục sanitize nội dung.
+  5. Hỗ trợ `current`/`as_of`/`compare`/`history`; cảnh báo version không hiện hành và
+     conflict đã resolved. `as_of` yêu cầu RFC3339 timestamp, chọn latest effective
+     version cho từng document trong scope, rồi áp dụng normal matching + limit.
+- **Files/modules:**
+  - `web/src/pages/QaPage.tsx`, `web/src/components/qa/**`: chat/search UI, project
+    picker, turn lifecycle, footnote citation và preview navigation.
+  - `web/src/state/askStream.ts`, `web/src/api/sse.ts`: ordered stream reduction,
+    reconnect/terminal handling và cancellation.
+  - `web/src/mocks/handlers/qa.ts`, `web/src/mocks/fixtures.ts`: deterministic
+    search/ask/SSE scenarios, authorization scope và multi-version budget fixture.
+  - `web/src/pages/QaPage.test.tsx`, `web/src/state/askStream.test.ts`,
+    `web/src/mocks/handlers/qa.asOf.test.ts`, `web/e2e/qa.spec.ts`: focused + browser
+    evidence.
+- **Dependencies/blocks:**
+  - P2-04…07 và backend retrieval/ACL/citation contracts đã có; P2-18 cung cấp project
+    grouping, P2-19 sở hữu persisted per-user chat history/multi-project `projectIds[]`.
+  - Owner hạ live-evidence R02/R03/R05 gate cho môi trường dev/test ngày 2026-07-29;
+    issue này không claim Phase 1C/Phase 2 production exit.
+  - Backend `VersionMode::AsOf`/`resolve_as_of_version_ids` là authority và không đổi
+    trong closure này.
+- **Acceptance criteria:**
+  - Search và ask hiển thị grounded answer, multi-document citation footnotes,
+    document title/page/version deep-link và accessible `aria-live` status.
+  - Stream xử lý sequence/dedupe/reconnect terminal; fallback extractive, no-answer,
+    citation revoke, cancel và turn sau không phá turn trước.
+  - Đổi org xoá retained turns/composer busy state; collection/project/allow-list
+    không thể widen scope. Explicit unauthorized hoặc empty resolved scope 403 và không
+    phát citation/version metadata.
+  - `current`/`compare`/`history` giữ behavior; conflict fixture v1 10 triệu vs v2
+    15 triệu phát warning phù hợp từng mode.
+  - `as_of` không gửi `documentId`, bắt buộc timestamp hợp lệ; thời điểm giữa v1/v2 trả
+    v1 10 triệu + non-current warning, không trả v2 15 triệu.
+- **Required tests/evidence:**
+  - Vitest: `QaPage.test.tsx`, `askStream.test.ts`,
+    `mocks/handlers/qa.asOf.test.ts`, citation-footnote tests và scope-switch tests.
+  - Playwright: `web/e2e/qa.spec.ts` cho search→preview, streaming citation,
+    revoke/fallback, multi-turn, compare/history và timezone-portable `as_of` v1 proof;
+    `chat-history.spec.ts` cho P2-19 integration.
+  - Contract/artifact gates: `pnpm --dir web api:check`,
+    `python3 scripts/build-roadmap.py --check`,
+    tracker export/dry-run và `git diff --check master...HEAD`.
+  - Historical delivery: chat-first/deep-link work landed via #324 and follow-ups;
+    #374 added the budget conflict-warning evidence; current `as_of` closure is
+    [PR #393](https://github.com/anhnth24/project-example/pull/393). Final review covered
+    `6e8def4..fa53c06` and returned `Ready to merge: Yes` with no Critical, Important,
+    or Minor finding.
+- **Security/migration:**
+  - Tenant/ACL-sensitive: active token org + profile `allowedCollectionIds` is the
+    maximum mock scope; project/request filters only narrow. Unauthorized/mixed/empty
+    scope hard-denies with canonical API error and no citation/version metadata.
+  - SafeMarkdown/server-minted route IDs remain required; không log prompt, document
+    content, PII, token, key hoặc signed URL. Chat history không đưa ngược vào ask
+    request làm memory giả.
+  - Không có migration, dependency, backend/OpenAPI/storage/auth contract change trong
+    closure này; rollback là scoped revert web mock/UI/tests/catalog.
+- **Out of scope:**
+  - Thay đổi backend `VersionMode::AsOf`, OpenAPI/generated contract hoặc thêm
+    document-scoped `as_of` picker.
+  - Conversation intelligence/memory, P2-19 persistence redesign, compare/history
+    selector redesign, production deployment/SLO/benchmark.
 
 ## P2-11 — Member/role admin
 

@@ -191,9 +191,10 @@ describe('reduceAskStreamMessage', () => {
   // `ask.warning` frames ahead of `ask.version_context`, same wire shape
   // `current` mode's own warning already uses (see the "fallback-extractive"
   // test above); these three cases check the reducer surfaces each mode's
-  // warning(s) intact, in order, alongside the right `versionContext.mode` —
-  // not the mock's own string-building, which is exercised via the mock/E2E
-  // layer instead.
+  // warning(s) intact, in order, alongside the right `versionContext.mode`.
+  // Scope-wide `as_of` request/mock/E2E behavior (no document picker) is
+  // covered in `QaPage.test.tsx`, `mocks/handlers/qa.asOf.test.ts`, and
+  // `e2e/qa.spec.ts` rather than only here.
   describe('P2-10 conflict-warning demo (as-of/compare/history)', () => {
     it('as-of mode: one warning that the resolved version is older than current', () => {
       const final = fold([

@@ -42,7 +42,7 @@
 //     `services/qa/ask_stream.rs`'s `config_reason`, consumed client-side by
 //     `api/sse.ts`'s `classifySseCloseCode`.
 import { registerOperation } from '../registry';
-import { notFound, unauthorized } from '../apiError';
+import { forbidden, notFound, unauthorized, type MockErrorResponse } from '../apiError';
 import { nextRequestId } from '../ids';
 import {
   authContextForHeader,
@@ -62,26 +62,57 @@ type SseEnvelope = components['schemas']['SseEnvelope'];
 /**
  * P2-19 — resolves `projectId` (deprecated singular) UNIONED with
  * `projectIds[]` (absent/empty on both = "all projects", today's exact
- * behavior) into the effective `collectionIds` scope, narrowing (never
- * widening) whatever the request already specified — same contract as
- * `db::projects::resolve_project_scope`/`merge_project_ids` server-side.
- * Returns `undefined` (a 404) when any named project id does not resolve to
- * a project in the caller's org.
+ * behavior) into the active token/profile's explicit allowed `collectionIds`
+ * set, intersecting (never widening) any named projects —
+ * same contract as `db::projects::resolve_project_scope`/`merge_project_ids`
+ * followed by `services::retrieval::resolve_scope` server-side. Explicit
+ * collection IDs outside the allow-list hard-deny the whole request; empty
+ * allow-lists/intersections also deny and never mean "unrestricted".
  */
 function resolveProjectScope(
   orgId: string,
+  userAllowedCollectionIds: string[],
   projectId: string | undefined,
   projectIds: string[] | undefined,
   requested: string[] | undefined,
-): { collectionIds: string[] | undefined } | undefined {
-  const allIds = [...new Set([...(projectId ? [projectId] : []), ...(projectIds ?? [])])];
-  if (allIds.length === 0) return { collectionIds: requested };
+): { collectionIds: string[] } | MockErrorResponse {
+  const store = getStore();
+  const allProjectIds = [...new Set([...(projectId ? [projectId] : []), ...(projectIds ?? [])])];
   const orgProjects = getOrgProjects(orgId);
-  if (!allIds.every((id) => orgProjects.some((p) => p.id === id))) return undefined;
-  const unionCollections = [...new Set(allIds.flatMap((id) => collectionIdsForProject(orgId, id)))];
-  const collectionIds = requested
-    ? requested.filter((id) => unionCollections.includes(id))
-    : unionCollections;
+  if (!allProjectIds.every((id) => orgProjects.some((project) => project.id === id))) {
+    return notFound('One or more requested projects do not exist in this org.');
+  }
+
+  const profileAllowedCollectionIds =
+    store.orgProfiles.get(orgId)?.allowedCollectionIds ?? userAllowedCollectionIds;
+  const allowedCollectionIds = new Set(
+    profileAllowedCollectionIds.filter(
+      (collectionId) => store.collectionOrgId.get(collectionId) === orgId,
+    ),
+  );
+  if (allowedCollectionIds.size === 0) return forbidden('Permission denied');
+
+  let collectionIds: string[];
+  if (requested === undefined) {
+    collectionIds = [...allowedCollectionIds];
+  } else {
+    const uniqueRequested = [...new Set(requested)];
+    if (
+      uniqueRequested.length === 0 ||
+      uniqueRequested.some((collectionId) => !allowedCollectionIds.has(collectionId))
+    ) {
+      return forbidden('Permission denied');
+    }
+    collectionIds = uniqueRequested;
+  }
+
+  if (allProjectIds.length > 0) {
+    const projectCollectionIds = new Set(
+      allProjectIds.flatMap((id) => collectionIdsForProject(orgId, id)),
+    );
+    collectionIds = collectionIds.filter((collectionId) => projectCollectionIds.has(collectionId));
+  }
+  if (collectionIds.length === 0) return forbidden('Permission denied');
   return { collectionIds };
 }
 
@@ -192,28 +223,29 @@ function tokenizeForMatch(text: string): string[] {
     .filter((token) => token.length >= 2);
 }
 
-function matchPassages(
-  query: string,
-  collectionIds: string[] | undefined,
-  limit: number,
-): Passage[] {
+function matchAgainstPassages(query: string, passages: Passage[], limit: number): Passage[] {
   const queryTokens = tokenizeForMatch(query);
-  const scoped = passageCatalog().filter(
-    (p) => !collectionIds?.length || collectionIds.includes(p.collectionId),
-  );
-  // Only the current version of each document participates in plain
-  // search/current-mode matching — compare/history reach the non-current one
-  // through `resolveCompareOrHistoryPassages` instead, same as the real
-  // server never surfacing a superseded version from ordinary retrieval.
-  const current = scoped.filter((p) => p.isCurrent);
   const matched =
     queryTokens.length === 0
-      ? current
-      : current.filter((p) => {
+      ? passages
+      : passages.filter((p) => {
           const passageTokens = new Set(tokenizeForMatch(`${p.title} ${p.quote}`));
           return queryTokens.some((token) => passageTokens.has(token));
         });
   return matched.slice(0, limit);
+}
+
+function matchPassages(query: string, collectionIds: string[], limit: number): Passage[] {
+  const scoped = passageCatalog().filter((p) => collectionIds.includes(p.collectionId));
+  // Only the current version of each document participates in plain
+  // search/current-mode matching — compare/history/as-of reach non-current
+  // versions through `resolveCompareOrHistoryPassages` instead, same as the
+  // real server never surfacing a superseded version from ordinary retrieval.
+  return matchAgainstPassages(
+    query,
+    scoped.filter((p) => p.isCurrent),
+    limit,
+  );
 }
 
 function citeIdFor(index: number): string {
@@ -279,12 +311,62 @@ function nonCurrentConflictWarning(passage: Passage): string {
   );
 }
 
-/** `mode: 'compare'`/`'history'` resolve against the one seeded multi-version document, by explicit `versionA`/`versionB`/`documentId` — never inferred, matching the real server's "the caller names the exact versions" contract for these modes. */
-function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
+const RFC3339_DATE_TIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?([Zz]|([+-])(\d{2}):(\d{2}))$/;
+
+/**
+ * Strict OpenAPI `date-time` parsing. Shape alone is not enough: validate
+ * Gregorian calendar, clock, and numeric-offset bounds before converting to
+ * an instant. In particular, date-only, local/no-zone, numeric-like, and
+ * Date-normalized impossible dates must fail closed.
+ */
+function parseRfc3339DateTime(value: string): number | undefined {
+  const match = RFC3339_DATE_TIME_RE.exec(value);
+  if (!match) return undefined;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const fractionMs = Number((match[7] ?? '').slice(0, 3).padEnd(3, '0'));
+  const offsetHour = match[10] === undefined ? 0 : Number(match[10]);
+  const offsetMinute = match[11] === undefined ? 0 : Number(match[11]);
+
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHour > 23 ||
+    offsetMinute > 59
+  ) {
+    return undefined;
+  }
+
+  const local = new Date(0);
+  local.setUTCFullYear(year, month - 1, day);
+  local.setUTCHours(hour, minute, second, fractionMs);
+  const offsetSign = match[9] === '-' ? -1 : 1;
+  const offsetMs = offsetSign * (offsetHour * 60 + offsetMinute) * 60_000;
+  return local.getTime() - offsetMs;
+}
+
+/** `mode: 'compare'`/`'history'` resolve against the one seeded multi-version document, by explicit `versionA`/`versionB`/`documentId` — never inferred, matching the real server's "the caller names the exact versions" contract for these modes. `mode: 'as_of'` is scope-wide instead: one effective version per in-scope document (mirrors `db::search::resolve_as_of_version_ids`), then normal question matching + limit — never a `documentId` filter. */
+function resolveCompareOrHistoryPassages(
+  body: SearchRequest | AskRequest,
+  collectionIds: string[],
+): {
   passages: Passage[];
   warnings: string[];
 } {
-  const all = passageCatalog();
+  const all = passageCatalog().filter((passage) => collectionIds.includes(passage.collectionId));
   const warnings: string[] = [];
   if (body.mode === 'compare') {
     if (!body.versionA || !body.versionB) {
@@ -331,25 +413,50 @@ function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
     return { passages: versions, warnings };
   }
   if (body.mode === 'as_of') {
-    if (!body.documentId || !body.asOf) {
-      return { passages: [], warnings: ['Chế độ as-of cần chọn tài liệu và thời điểm (asOf).'] };
+    if (!body.asOf) {
+      return { passages: [], warnings: ['Chế độ as-of cần chọn thời điểm (asOf).'] };
     }
+    const asOfMs = parseRfc3339DateTime(body.asOf);
+    if (asOfMs === undefined) {
+      return {
+        passages: [],
+        warnings: [`Thời điểm as-of không hợp lệ: ${body.asOf}.`],
+      };
+    }
+
     const store = getStore();
-    const versions = store.versions.get(body.documentId) ?? [];
-    const asOfMs = Date.parse(body.asOf);
-    const effective = versions
-      .filter((v) => Date.parse(v.effectiveFrom) <= asOfMs)
-      .sort((x, y) => Date.parse(y.effectiveFrom) - Date.parse(x.effectiveFrom))[0];
-    const passage = effective && all.find((p) => p.versionId === effective.id);
-    if (!passage) {
+    const effectiveVersionIds = new Set<string>();
+    for (const [documentId, versions] of store.versions) {
+      const doc = [...store.documents.values()].flat().find((d) => d.id === documentId);
+      if (!doc) continue;
+      if (!collectionIds.includes(doc.collectionId)) continue;
+      const effective = versions
+        .filter((v) => Date.parse(v.effectiveFrom) <= asOfMs)
+        .sort((x, y) => Date.parse(y.effectiveFrom) - Date.parse(x.effectiveFrom))[0];
+      if (effective) effectiveVersionIds.add(effective.id);
+    }
+
+    const scopedEffective = all.filter((p) => effectiveVersionIds.has(p.versionId));
+    if (scopedEffective.length === 0) {
       return { passages: [], warnings: [`Không có phiên bản nào hiệu lực tại ${body.asOf}.`] };
     }
+
+    const query =
+      'question' in body && typeof body.question === 'string'
+        ? stripMarkers(body.question)
+        : 'query' in body && typeof body.query === 'string'
+          ? stripMarkers(body.query)
+          : '';
+    const limit = body.limit ?? 10;
+    const passages = matchAgainstPassages(query, scopedEffective, limit);
     // The as-of'd version may be older than what's current *today* — flag it
     // the same way `current` mode flags citing a non-current version, since
     // an as-of caller reading this without the warning could easily mistake
     // "the version effective back then" for "the version effective now".
-    if (!passage.isCurrent) warnings.push(nonCurrentConflictWarning(passage));
-    return { passages: [passage], warnings };
+    for (const passage of passages) {
+      if (!passage.isCurrent) warnings.push(nonCurrentConflictWarning(passage));
+    }
+    return { passages, warnings };
   }
   return { passages: [], warnings: [] };
 }
@@ -357,6 +464,7 @@ function resolveCompareOrHistoryPassages(body: SearchRequest | AskRequest): {
 function versionContextFor(
   body: SearchRequest | AskRequest,
   passages: Passage[],
+  collectionIds: string[],
 ): {
   mode: string;
   currentVersionIds: string[];
@@ -367,7 +475,7 @@ function versionContextFor(
   const currentVersionIds = [
     ...new Set(
       passageCatalog()
-        .filter((p) => p.isCurrent)
+        .filter((p) => p.isCurrent && collectionIds.includes(p.collectionId))
         .map((p) => p.versionId),
     ),
   ];
@@ -412,17 +520,18 @@ registerOperation('search', async (ctx) => {
   const body = await ctx.json<SearchRequest>();
   const scope = resolveProjectScope(
     auth.orgId,
+    auth.user.allowedCollectionIds,
     body.projectId,
     body.projectIds,
     body.collectionIds,
   );
-  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
+  if ('status' in scope) return scope;
   const mode = body.mode ?? 'current';
   const limit = body.limit ?? 10;
   let passages: Passage[];
   let warnings: string[];
   if (mode === 'compare' || mode === 'history' || mode === 'as_of') {
-    const resolved = resolveCompareOrHistoryPassages(body);
+    const resolved = resolveCompareOrHistoryPassages(body, scope.collectionIds);
     passages = resolved.passages;
     warnings = resolved.warnings;
   } else {
@@ -452,16 +561,17 @@ registerOperation('ask', async (ctx) => {
   const body = await ctx.json<AskRequest>();
   const scope = resolveProjectScope(
     auth.orgId,
+    auth.user.allowedCollectionIds,
     body.projectId,
     body.projectIds,
     body.collectionIds,
   );
-  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
+  if ('status' in scope) return scope;
   const mode = body.mode ?? 'current';
   let passages: Passage[];
   let warnings: string[];
   if (mode === 'compare' || mode === 'history' || mode === 'as_of') {
-    const resolved = resolveCompareOrHistoryPassages(body);
+    const resolved = resolveCompareOrHistoryPassages(body, scope.collectionIds);
     passages = resolved.passages;
     warnings = resolved.warnings;
   } else {
@@ -470,7 +580,7 @@ registerOperation('ask', async (ctx) => {
   }
   const citations = passages.map((p, i) => passageToCitation(p, citeIdFor(i)));
   warnings = [...warnings, ...currentModeWarnings(mode, citations)];
-  const versionContext = versionContextFor(body, passages);
+  const versionContext = versionContextFor(body, passages, scope.collectionIds);
   return {
     status: 200,
     body: {
@@ -523,11 +633,12 @@ registerOperation('askStream', async (ctx) => {
   const body = await ctx.json<AskRequest>();
   const scope = resolveProjectScope(
     auth.orgId,
+    auth.user.allowedCollectionIds,
     body.projectId,
     body.projectIds,
     body.collectionIds,
   );
-  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
+  if ('status' in scope) return scope;
   const rawQuestion = body.question;
   const revoke = rawQuestion.includes(QA_STREAM_MARKERS.citationRevoked);
   const fallback = rawQuestion.includes(QA_STREAM_MARKERS.providerFallback);
@@ -537,7 +648,7 @@ registerOperation('askStream', async (ctx) => {
   let passages: Passage[];
   let scenarioWarnings: string[];
   if (mode === 'compare' || mode === 'history' || mode === 'as_of') {
-    const resolved = resolveCompareOrHistoryPassages(body);
+    const resolved = resolveCompareOrHistoryPassages(body, scope.collectionIds);
     passages = resolved.passages;
     scenarioWarnings = resolved.warnings;
   } else {
@@ -547,7 +658,7 @@ registerOperation('askStream', async (ctx) => {
   const citations = passages.map((p, i) => passageToCitation(p, citeIdFor(i)));
   const answer = buildAnswer(citations);
   const tokens = tokenizeAnswer(answer);
-  const versionContext = versionContextFor(body, passages);
+  const versionContext = versionContextFor(body, passages, scope.collectionIds);
   const warnings = [...scenarioWarnings, ...currentModeWarnings(mode, citations)];
   if (fallback) {
     warnings.push(
