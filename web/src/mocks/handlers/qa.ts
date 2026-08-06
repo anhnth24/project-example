@@ -42,7 +42,7 @@
 //     `services/qa/ask_stream.rs`'s `config_reason`, consumed client-side by
 //     `api/sse.ts`'s `classifySseCloseCode`.
 import { registerOperation } from '../registry';
-import { notFound, unauthorized } from '../apiError';
+import { forbidden, notFound, unauthorized, type MockErrorResponse } from '../apiError';
 import { nextRequestId } from '../ids';
 import {
   authContextForHeader,
@@ -62,36 +62,57 @@ type SseEnvelope = components['schemas']['SseEnvelope'];
 /**
  * P2-19 — resolves `projectId` (deprecated singular) UNIONED with
  * `projectIds[]` (absent/empty on both = "all projects", today's exact
- * behavior) into an explicit authenticated-org `collectionIds` set,
- * intersecting (never widening) whatever the request already specified —
+ * behavior) into the active token/profile's explicit allowed `collectionIds`
+ * set, intersecting (never widening) any named projects —
  * same contract as `db::projects::resolve_project_scope`/`merge_project_ids`
- * server-side. An empty intersection stays empty; it never means
- * "unrestricted".
- * Returns `undefined` (a 404) when any named project id does not resolve to
- * a project in the caller's org.
+ * followed by `services::retrieval::resolve_scope` server-side. Explicit
+ * collection IDs outside the allow-list hard-deny the whole request; empty
+ * allow-lists/intersections also deny and never mean "unrestricted".
  */
 function resolveProjectScope(
   orgId: string,
+  userAllowedCollectionIds: string[],
   projectId: string | undefined,
   projectIds: string[] | undefined,
   requested: string[] | undefined,
-): { collectionIds: string[] } | undefined {
+): { collectionIds: string[] } | MockErrorResponse {
   const store = getStore();
-  const authenticatedOrgCollections = new Set(
-    [...store.collectionOrgId.entries()]
-      .filter(([, collectionOrgId]) => collectionOrgId === orgId)
-      .map(([collectionId]) => collectionId),
-  );
-  const requestedInOrg =
-    requested === undefined
-      ? [...authenticatedOrgCollections]
-      : [...new Set(requested.filter((id) => authenticatedOrgCollections.has(id)))];
-  const allIds = [...new Set([...(projectId ? [projectId] : []), ...(projectIds ?? [])])];
-  if (allIds.length === 0) return { collectionIds: requestedInOrg };
+  const allProjectIds = [...new Set([...(projectId ? [projectId] : []), ...(projectIds ?? [])])];
   const orgProjects = getOrgProjects(orgId);
-  if (!allIds.every((id) => orgProjects.some((p) => p.id === id))) return undefined;
-  const unionCollections = [...new Set(allIds.flatMap((id) => collectionIdsForProject(orgId, id)))];
-  const collectionIds = requestedInOrg.filter((id) => unionCollections.includes(id));
+  if (!allProjectIds.every((id) => orgProjects.some((project) => project.id === id))) {
+    return notFound('One or more requested projects do not exist in this org.');
+  }
+
+  const profileAllowedCollectionIds =
+    store.orgProfiles.get(orgId)?.allowedCollectionIds ?? userAllowedCollectionIds;
+  const allowedCollectionIds = new Set(
+    profileAllowedCollectionIds.filter(
+      (collectionId) => store.collectionOrgId.get(collectionId) === orgId,
+    ),
+  );
+  if (allowedCollectionIds.size === 0) return forbidden('Permission denied');
+
+  let collectionIds: string[];
+  if (requested === undefined) {
+    collectionIds = [...allowedCollectionIds];
+  } else {
+    const uniqueRequested = [...new Set(requested)];
+    if (
+      uniqueRequested.length === 0 ||
+      uniqueRequested.some((collectionId) => !allowedCollectionIds.has(collectionId))
+    ) {
+      return forbidden('Permission denied');
+    }
+    collectionIds = uniqueRequested;
+  }
+
+  if (allProjectIds.length > 0) {
+    const projectCollectionIds = new Set(
+      allProjectIds.flatMap((id) => collectionIdsForProject(orgId, id)),
+    );
+    collectionIds = collectionIds.filter((collectionId) => projectCollectionIds.has(collectionId));
+  }
+  if (collectionIds.length === 0) return forbidden('Permission denied');
   return { collectionIds };
 }
 
@@ -499,11 +520,12 @@ registerOperation('search', async (ctx) => {
   const body = await ctx.json<SearchRequest>();
   const scope = resolveProjectScope(
     auth.orgId,
+    auth.user.allowedCollectionIds,
     body.projectId,
     body.projectIds,
     body.collectionIds,
   );
-  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
+  if ('status' in scope) return scope;
   const mode = body.mode ?? 'current';
   const limit = body.limit ?? 10;
   let passages: Passage[];
@@ -539,11 +561,12 @@ registerOperation('ask', async (ctx) => {
   const body = await ctx.json<AskRequest>();
   const scope = resolveProjectScope(
     auth.orgId,
+    auth.user.allowedCollectionIds,
     body.projectId,
     body.projectIds,
     body.collectionIds,
   );
-  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
+  if ('status' in scope) return scope;
   const mode = body.mode ?? 'current';
   let passages: Passage[];
   let warnings: string[];
@@ -610,11 +633,12 @@ registerOperation('askStream', async (ctx) => {
   const body = await ctx.json<AskRequest>();
   const scope = resolveProjectScope(
     auth.orgId,
+    auth.user.allowedCollectionIds,
     body.projectId,
     body.projectIds,
     body.collectionIds,
   );
-  if (!scope) return notFound(`Project ${body.projectId} does not exist in this org.`);
+  if ('status' in scope) return scope;
   const rawQuestion = body.question;
   const revoke = rawQuestion.includes(QA_STREAM_MARKERS.citationRevoked);
   const fallback = rawQuestion.includes(QA_STREAM_MARKERS.providerFallback);

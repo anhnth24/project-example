@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApiClient, type ApiClient } from '../../api/client';
 import { installMockFetch, resetMockState, uninstallMockFetch } from '../index';
 import {
+  getStore,
+  ORG_A_ID,
   ORG_B_COLLECTION_ID,
   ORG_B_ID,
   PROJECT_A_HR_ID,
@@ -28,6 +30,23 @@ async function loggedInClient(): Promise<ApiClient> {
 async function switchClientToOrg(client: ApiClient, orgId: string): Promise<void> {
   const tokens = await client.request('post', '/orgs/switch', { body: { orgId } });
   client.sessionManager.setTokens(tokens);
+}
+
+function setAllowedCollectionIds(orgId: string, allowedCollectionIds: string[]): void {
+  const profile = getStore().orgProfiles.get(orgId);
+  if (!profile) throw new Error(`Missing mock org profile for ${orgId}`);
+  profile.allowedCollectionIds = allowedCollectionIds;
+}
+
+async function expectScopeForbidden(request: Promise<unknown>): Promise<void> {
+  try {
+    await request;
+    throw new Error('Expected Q&A scope request to be forbidden');
+  } catch (error) {
+    expect(error).toMatchObject({ status: 403, code: 'forbidden' });
+    expect(error).not.toHaveProperty('citations');
+    expect(error).not.toHaveProperty('versionContext');
+  }
 }
 
 beforeEach(() => {
@@ -171,37 +190,109 @@ describe('ask mock — scope-wide as_of', () => {
     }
   });
 
-  it('intersects an explicitly requested foreign collection with the authenticated org', async () => {
+  it('hard-denies an explicitly requested foreign collection', async () => {
     const client = await loggedInClient();
     await switchClientToOrg(client, ORG_B_ID);
 
-    const body = await client.request('post', '/ask', {
-      body: {
-        question: 'Ngân sách vận hành là bao nhiêu?',
-        mode: 'as_of',
-        asOf: mockTimestamp(100),
-        collectionIds: [mockUuid(11)],
-        limit: 10,
-      },
-    });
-
-    expect(body.citations).toEqual([]);
-    expect(body.answer).not.toMatch(/10 triệu|15 triệu/);
+    await expectScopeForbidden(
+      client.request('post', '/ask', {
+        body: {
+          question: 'Ngân sách vận hành là bao nhiêu?',
+          mode: 'as_of',
+          asOf: mockTimestamp(100),
+          collectionIds: [mockUuid(11)],
+          limit: 10,
+        },
+      }),
+    );
   });
 
-  it('preserves a zero-collection project as an empty resolved scope', async () => {
+  it('denies an empty active-profile allow-list on both ask API paths', async () => {
+    setAllowedCollectionIds(ORG_A_ID, []);
     const client = await loggedInClient();
+
+    const request = {
+      question: 'Ngân sách vận hành là bao nhiêu?',
+      mode: 'as_of' as const,
+      asOf: mockTimestamp(70),
+      limit: 10,
+    };
+    await expectScopeForbidden(client.request('post', '/ask', { body: request }));
+    await expectScopeForbidden(client.request('post', '/ask/stream', { body: request }));
+  });
+
+  it('hard-denies same-org disallowed and mixed allowed/foreign collection requests', async () => {
+    const allowedCollectionId = mockUuid(10);
+    setAllowedCollectionIds(ORG_A_ID, [allowedCollectionId]);
+    const client = await loggedInClient();
+
+    await expectScopeForbidden(
+      client.request('post', '/ask', {
+        body: {
+          question: 'Ngân sách vận hành là bao nhiêu?',
+          collectionIds: [mockUuid(11)],
+          limit: 10,
+        },
+      }),
+    );
+    await expectScopeForbidden(
+      client.request('post', '/ask/stream', {
+        body: {
+          question: 'Nhân viên mới cần làm gì?',
+          collectionIds: [allowedCollectionId, ORG_B_COLLECTION_ID],
+          limit: 10,
+        },
+      }),
+    );
+  });
+
+  it('intersects project scope with the active-profile allow-list', async () => {
+    // HR contains collection 10, while this profile only allows collection 11.
+    setAllowedCollectionIds(ORG_A_ID, [mockUuid(11)]);
+    const client = await loggedInClient();
+
+    await expectScopeForbidden(
+      client.request('post', '/ask', {
+        body: {
+          question: 'Nhân viên mới cần làm gì?',
+          projectIds: [PROJECT_A_HR_ID],
+          limit: 10,
+        },
+      }),
+    );
+  });
+
+  it('uses exactly the active-profile allow-list when collection and project scope are omitted', async () => {
+    const allowedCollectionId = mockUuid(10);
+    setAllowedCollectionIds(ORG_A_ID, [allowedCollectionId]);
+    const client = await loggedInClient();
+
     const body = await client.request('post', '/ask', {
       body: {
-        question: 'Ngân sách vận hành là bao nhiêu?',
-        mode: 'as_of',
-        asOf: mockTimestamp(70),
-        projectIds: [PROJECT_A_PRODUCT_ID],
+        question: 'Nhân viên mới cần hoàn thành gì trong quý này?',
         limit: 10,
       },
     });
 
-    expect(body.citations).toEqual([]);
-    expect(body.answer).not.toMatch(/10 triệu|15 triệu/);
+    expect(body.citations.length).toBeGreaterThan(0);
+    expect(body.citations.every((citation) => citation.collectionId === allowedCollectionId)).toBe(
+      true,
+    );
+    expect(body.versionContext?.currentVersionIds).toEqual([mockUuid(1000)]);
+  });
+
+  it('denies a zero-collection project instead of widening its empty resolved scope', async () => {
+    const client = await loggedInClient();
+    await expectScopeForbidden(
+      client.request('post', '/ask', {
+        body: {
+          question: 'Ngân sách vận hành là bao nhiêu?',
+          mode: 'as_of',
+          asOf: mockTimestamp(70),
+          projectIds: [PROJECT_A_PRODUCT_ID],
+          limit: 10,
+        },
+      }),
+    );
   });
 });
