@@ -51,12 +51,12 @@ describe('loadRuntimeCredentials', () => {
     const path = join(dir, 'credentials.json');
     writeFileSync(path, '{not json', 'utf8');
 
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(RuntimeConfigError);
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(/malformed JSON/);
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      /malformed JSON/,
+    );
   });
 
   it('fails when required credential fields are missing', () => {
@@ -64,12 +64,12 @@ describe('loadRuntimeCredentials', () => {
     const path = join(dir, 'credentials.json');
     writeJson(path, { runId: 'e2e-run-1', adminEmail: 'admin@example.test' });
 
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(RuntimeConfigError);
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(/adminPassword/);
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      /adminPassword/,
+    );
   });
 
   it('rejects fixed POC seed admin email instead of inventing a fallback', () => {
@@ -80,12 +80,12 @@ describe('loadRuntimeCredentials', () => {
       adminEmail: 'admin@poc.example',
     });
 
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(RuntimeConfigError);
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(/fixed POC seed/);
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      /fixed POC seed/,
+    );
   });
 
   it('rejects fixed POC seed admin password instead of inventing a fallback', () => {
@@ -96,12 +96,12 @@ describe('loadRuntimeCredentials', () => {
       adminPassword: 'markhand-dev',
     });
 
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(RuntimeConfigError);
-    expect(() =>
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toThrow(/fixed POC seed/);
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toThrow(
+      /fixed POC seed/,
+    );
   });
 
   it('loads valid runtime credentials from the configured path', () => {
@@ -109,9 +109,9 @@ describe('loadRuntimeCredentials', () => {
     const path = join(dir, 'credentials.json');
     writeJson(path, validCredentials);
 
-    expect(
-      loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path }),
-    ).toEqual(validCredentials);
+    expect(loadRuntimeCredentials({ MARKHAND_E2E_REAL_CREDENTIALS_FILE: path })).toEqual(
+      validCredentials,
+    );
   });
 });
 
@@ -126,9 +126,9 @@ describe('loadRuntimeFixture', () => {
     const path = join(dir, 'fixture.json');
     writeFileSync(path, '[]', 'utf8');
 
-    expect(() =>
-      loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path }),
-    ).toThrow(RuntimeConfigError);
+    expect(() => loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
   });
 
   it('fails when required fixture fields are missing', () => {
@@ -136,12 +136,12 @@ describe('loadRuntimeFixture', () => {
     const path = join(dir, 'fixture.json');
     writeJson(path, { runId: 'e2e-run-1', orgId: 'org-uuid' });
 
-    expect(() =>
-      loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path }),
-    ).toThrow(RuntimeConfigError);
-    expect(() =>
-      loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path }),
-    ).toThrow(/missing or invalid required field/);
+    expect(() => loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toThrow(
+      /missing or invalid required field/,
+    );
   });
 
   it('rejects fixed POC seed collection name instead of inventing a fallback', () => {
@@ -152,12 +152,12 @@ describe('loadRuntimeFixture', () => {
       collectionName: 'POC Library',
     });
 
-    expect(() =>
-      loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path }),
-    ).toThrow(RuntimeConfigError);
-    expect(() =>
-      loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path }),
-    ).toThrow(/fixed POC seed/);
+    expect(() => loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toThrow(
+      RuntimeConfigError,
+    );
+    expect(() => loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toThrow(
+      /fixed POC seed/,
+    );
   });
 
   it('loads valid runtime fixture from the configured path', () => {
@@ -165,8 +165,6 @@ describe('loadRuntimeFixture', () => {
     const path = join(dir, 'fixture.json');
     writeJson(path, validFixture);
 
-    expect(loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toEqual(
-      validFixture,
-    );
+    expect(loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path })).toEqual(validFixture);
   });
 });

@@ -65,16 +65,10 @@ function asRecord(value: unknown, context: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireString(
-  obj: Record<string, unknown>,
-  field: string,
-  context: string,
-): string {
+function requireString(obj: Record<string, unknown>, field: string, context: string): string {
   const value = obj[field];
   if (typeof value !== 'string' || value.trim() === '') {
-    throw new RuntimeConfigError(
-      `${context}: missing or invalid required field "${field}"`,
-    );
+    throw new RuntimeConfigError(`${context}: missing or invalid required field "${field}"`);
   }
   return value;
 }
@@ -90,9 +84,7 @@ function requireStringArray(
     value.length === 0 ||
     value.some((entry) => typeof entry !== 'string' || entry.trim() === '')
   ) {
-    throw new RuntimeConfigError(
-      `${context}: missing or invalid required field "${field}"`,
-    );
+    throw new RuntimeConfigError(`${context}: missing or invalid required field "${field}"`);
   }
   return value;
 }
@@ -149,9 +141,7 @@ export function loadRuntimeFixture(env: EnvLike): RuntimeFixture {
     checksum: requireString(obj, 'checksum', 'fixture'),
   };
   if (!/^[0-9a-f]{64}$/.test(fixture.checksum)) {
-    throw new RuntimeConfigError(
-      'fixture: missing or invalid required field "checksum"',
-    );
+    throw new RuntimeConfigError('fixture: missing or invalid required field "checksum"');
   }
   rejectFixedSeedFixture(fixture);
   return fixture;
