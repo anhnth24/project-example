@@ -187,9 +187,9 @@ require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" \
   'python:3\.12\.12-slim-bookworm@sha256:' \
   "embedding-cpu base digest pinned"
 require_regex "$EMBEDDING_REQUIREMENTS" \
-  '^--extra-index-url https://download\.pytorch\.org/whl/cpu$' \
+  '^--extra-index-url https://download\.pytorch\.org/whl/cpu[[:space:]]*$' \
   "embedding-cpu uses the official PyTorch CPU wheel index"
-require_regex "$EMBEDDING_REQUIREMENTS" '^torch==2\.13\.0\+cpu$' \
+require_regex "$EMBEDDING_REQUIREMENTS" '^torch==2\.13\.0\+cpu[[:space:]]*$' \
   "embedding-cpu pins the CPU-only torch build"
 require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" 'torch\.version\.cuda is None' \
   "embedding-cpu build rejects CUDA-enabled torch"
