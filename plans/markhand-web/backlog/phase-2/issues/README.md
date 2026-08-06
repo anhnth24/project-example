@@ -353,6 +353,15 @@ P2-15 + Phase 1C gate → P2-16
   `citation_authz_matrix.rs`'s `live_pdf_pptx_xlsx_citation_preview_download_matrix`
   assert `pin.document_title == Some(doc.title)` cho cả 3 định dạng đã seed.
 
+  **Quyết định scope `as_of` (owner chọn phương án 1, 2026-08-06):** giữ semantics
+  backend hiện tại: timestamp áp dụng cho toàn bộ tài liệu trong collection/project scope
+  đã authorize; không thêm document picker mà server không dùng. Gap còn lại của P2-10
+  là sửa mock đang đòi `documentId`, bắt buộc timestamp ở composer, và thêm E2E chứng
+  minh thời điểm giữa v1/v2 trả nội dung v1 + warning không-hiện-hành mà không mở rộng
+  scope.
+
+- **Plan file:** [P2-10 `as_of` end-to-end closure](../../../../reports/plan-2026-08-06-p2-10-as-of-e2e.md)
+
 ## P2-11 — Member/role admin
 
 - **Status:** Done — #317. UI member table/invite (one-time token)/suspend/role/remove, owner-tier fail-closed mirror server, last-owner 409 + owner-tier 403 mapped. Mở khoá nhờ lát membership API (1C-02/1C-11) landed cùng #317.
