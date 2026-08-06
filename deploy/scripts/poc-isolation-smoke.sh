@@ -10,6 +10,7 @@ ENV_EXAMPLE="$ROOT/deploy/.env.example"
 DOCKERFILE_SERVER="$ROOT/deploy/Dockerfile.server"
 DOCKERFILE_WORKER="$ROOT/deploy/Dockerfile.worker"
 EMBEDDING_REQUIREMENTS="$ROOT/deploy/dev/requirements-embedding-server.txt"
+EMBEDDING_SERVER="$ROOT/deploy/scripts/aiteamvn-embedding-server.py"
 IMAGES_LOCK="$ROOT/deploy/poc/images.lock.json"
 WORKER_SECCOMP="$ROOT/deploy/poc/worker-sandbox-seccomp.json"
 FAIL=0
@@ -86,6 +87,7 @@ require_file "$ROOT/deploy/poc/postgres-init.sh"
 require_file "$IMAGES_LOCK"
 require_file "$ROOT/deploy/poc/Dockerfile.embedding-cpu"
 require_file "$EMBEDDING_REQUIREMENTS"
+require_file "$EMBEDDING_SERVER"
 require_file "$ROOT/deploy/README.md"
 
 # Separate API / worker images
@@ -188,6 +190,8 @@ require_regex "$EMBEDDING_REQUIREMENTS" '^torch==2\.13\.0\+cpu[[:space:]]*$' \
   "embedding-cpu pins the CPU-only torch build"
 require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" 'torch\.version\.cuda is None' \
   "embedding-cpu build rejects CUDA-enabled torch"
+require_regex "$EMBEDDING_SERVER" 'torch\.set_num_threads\(TORCH_THREADS\)' \
+  "embedding-cpu caps PyTorch threads to its CPU budget"
 require_regex "$IMAGES_LOCK" 'rust-bookworm' "images.lock records rust base"
 require_regex "$IMAGES_LOCK" 'node-bookworm-slim' "images.lock records node base"
 require_regex "$IMAGES_LOCK" 'debian-bookworm-slim' "images.lock records debian base"
