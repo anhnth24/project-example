@@ -4,7 +4,7 @@ Created: 2026-08-06
 Source issue: catalog/tracker synchronization pending via [PR #394](https://github.com/anhnth24/project-example/pull/394); canonical authority remains the Phase 2 catalog entry for P2-20 (no invented GitHub issue URL)
 Catalog: [Phase 2 issue catalog — P2-20](../markhand-web/backlog/phase-2/issues/README.md#p2-20--real-e2e-foundation--authlibraryuploadactions)
 Phase plan: [Phase 2 Web SPA](../markhand-web/phase-2-web-spa.md)
-Status: Planned
+Status: In progress
 
 ## Objective
 
@@ -533,7 +533,8 @@ authZ and public contracts untouched.
 
 ### Recorded commit/SHA references
 
-- Plan authorship commit: _pending (this change)._
+- Plan authorship/review commits: `0988c1c0b7fa32438ad381c20f06adaf1f13e34f`,
+  `759d0cd` (implementation had not started at either SHA).
 - Implementation commits / exact-SHA `dev-stack` job: _pending — do not fabricate._
 - Sanitized manifest path + fixture checksum: _pending._
 - Independent review outcome: _pending._
