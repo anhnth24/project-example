@@ -10,8 +10,9 @@ Status: Planned
 
 Deliver a deterministic, fail-closed, run-namespaced real-browser harness that exercises
 foundational auth/library/upload/document-action outcomes against a **built SPA** and
-**real** `fileconv-server` + PostgreSQL + Qdrant + MinIO + convert/index/embedding workers,
-with no fetch mock, production test route, auth bypass, or client-derived authority.
+**real** `fileconv-server` + PostgreSQL + Qdrant + MinIO +
+convert/index/embedding/delete workers, with no fetch mock, production test route, auth
+bypass, or client-derived authority.
 
 ## Context
 
@@ -28,13 +29,13 @@ P2-20 is the first independently reviewable child of umbrella P2-15.
 
 | Area | Today | Gap for P2-20 |
 |---|---|---|
-| Orchestrator | `deploy/scripts/web-e2e-real.sh` builds SPA, starts server + 3 workers, supervises process death during Playwright, redacts logs fail-closed | No run namespace, fixture setup/teardown, artifact staging/manifest, secret/content canary beyond log dump, fixture-failure fail paths |
+| Orchestrator | `deploy/scripts/web-e2e-real.sh` builds SPA, starts server + 3 workers, supervises process death during Playwright, redacts logs fail-closed | No delete worker, run namespace, fixture setup/teardown, artifact staging/manifest, secret/content canary beyond log dump, fixture-failure fail paths |
 | Hermetic tests | `deploy/scripts/test_web_e2e_real_orchestration.py` (8 cases: workers, redaction, worker-death abort, cleanup, redactor fail-closed, liveness after seed) | Missing fixture refuse/leak/cleanup, artifact validation, canary, Playwright fail→teardown evidence hooks |
 | Real support | `web/e2e-real/support.ts` uses fixed seeded `admin@poc.example` / `POC Library` | Must switch to runtime credentials + run-scoped resources; remove fixed-seed authority |
 | Real specs | `auth.spec.ts` login; `library.spec.ts` shell+collection; `upload.spec.ts` upload→indexed→preview | Missing logout, deep-link+login, real 401 refresh, download capability/redeem, reindex, failed retry, delete, 403/429, throttled upload progress, real 413 |
 | Mock parity sources | `web/e2e/auth.spec.ts`, `library.spec.ts`, `upload.spec.ts`, `document-status-polling.spec.ts` | Real ports must hit backend; may use network delay/`continue` only — never synthesize allow |
 | Playwright config | `web/playwright.config.ts` `real` project; `trace: 'on-first-retry'` | Serial workers; disable/restrict traces/screenshots so credentials/content cannot leak |
-| Runtime knobs already present (no API/schema change) | `MARKHAND_MAX_UPLOAD_BYTES` (`config.rs`); `MARKHAND_RATE_ROUTE_PER_MINUTE` (`middleware/rate_limit.rs`); `MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS`; `MARKHAND_PROFILE` | Use **dev/CI-only** lowered upload/route limits and short access TTL for deterministic 413/429/401; document as runtime config, not production seams |
+| Runtime knobs already present (no API/schema change) | `MARKHAND_MAX_UPLOAD_BYTES` (`config.rs`); `MARKHAND_RATE_ROUTE_PER_MINUTE` (`middleware/rate_limit.rs`); `MARKHAND_PROFILE` | Use **dev/CI-only** lowered upload/route limits for deterministic 413/429; create a real 401 by modifying one request's bearer value in Playwright and continuing it to the real server |
 | CI wiring | `DEV_STACK_MODE=full` → `deploy/scripts/dev-stack-ci.sh` → `web-e2e-real.sh` | Keep; extend script contract only |
 
 **Binding constraints (non-negotiable):**
@@ -62,16 +63,20 @@ namespace with runtime credentials and resource IDs; refuses production profile.
 
 **Files / interfaces (exact):**
 
-- Add `deploy/scripts/web_e2e_real_fixture.py` (or split `*_setup.py` / `*_cleanup.py` if
-  clearer — one entry module preferred) exposing CLI:
-  - `setup --run-id <id> --out <manifest.json>` → writes masked credential env file +
-    fixture manifest (IDs/checksum only; never passwords in tracked fixtures)
-  - `cleanup --run-id <id> --manifest <manifest.json>` → bounded delete of run-owned
-    users/sessions/org/collection/documents/uploads/jobs/MinIO objects/Qdrant vectors
+- Add `deploy/scripts/web_e2e_real_fixture.py` exposing CLI:
+  - `setup --run-id <id> --manifest-out <manifest.json> --credentials-out <credentials.json>`
+    → writes an ID/checksum-only public manifest plus a mode-`0600` runtime credential
+    file; neither output is tracked
+  - `cleanup --run-id <id> --manifest <manifest.json> --credentials <credentials.json>
+    --api-base <url> --timeout-secs <n>` → while the server and delete worker are alive,
+    authenticate through the public API, request deletion for every run-owned document,
+    wait boundedly for object/vector cleanup, then remove remaining run-owned database
+    rows in an explicit reviewed foreign-key order and remove the credentials file
   - `verify-clean --run-id <id> --manifest <manifest.json>` → fail if leaks remain
-- Add `deploy/scripts/test_web_e2e_real_fixture.py` hermetic tests (temp DB shims or
-  subprocess against refuse paths that need no live stack; live cleanup leak tests run
-  against Compose when available in T8)
+- The Python module must isolate subprocess/HTTP execution behind an injected runner so
+  `deploy/scripts/test_web_e2e_real_fixture.py` can use deterministic fake
+  `psql`/HTTP/MinIO/Qdrant results without a live stack. T8 adds a live Compose
+  setup→cleanup→verify-clean cycle.
 - Reuse existing seed primitives patterns from `seed-dev-password.sh` /
   `seed-poc-org.sh` / Postgres `psql` via Compose; do **not** change migrations or
   production seed SQL
@@ -84,8 +89,8 @@ namespace with runtime credentials and resource IDs; refuses production profile.
 - Run-scoped org + membership with permissions needed for happy paths
   (`doc.upload`, library read, download, reindex/delete as required by scenarios)
 - One collection with stable display name keyed by run
-- Optional secondary actor lacking download permission (for real 403) — created by
-  omitting the permission from that membership/role using **existing** tables only
+- Secondary viewer actor with collection read visibility but no `doc.upload`; its
+  reindex request must reach the real route and produce the required 403 mapping
 - Optional document row in terminal `failed` state (for retry) seeded via existing
   document/version columns — **no schema change**; if existing columns cannot express
   failed+retry without a new API, stop and escalate as blocker
@@ -97,8 +102,10 @@ used by server config), CLI exits non-zero before any write.
 **TDD steps:**
 
 1. RED: add tests asserting `setup` with `MARKHAND_PROFILE=prod` exits ≠0 and writes
-   nothing; `cleanup`/`verify-clean` detect a planted leak ID.
-2. GREEN: implement refuse + bounded cleanup + checksum write.
+   nothing; credentials are mode `0600`; `cleanup`/`verify-clean` detect a planted DB,
+   object, or vector leak ID; cleanup timeout is non-zero.
+2. GREEN: implement refusal, runtime JSON files, bounded API/object/vector/database
+   cleanup, checksum write, and idempotent `verify-clean`.
 3. Negative: missing Compose/DB → fail closed; partial cleanup → non-zero + leak report
    (IDs only).
 
@@ -126,9 +133,8 @@ every required failure class.
   - Generate `WEB_E2E_REAL_RUN_ID` when unset
   - Export runtime env for Playwright (`MARKHAND_E2E_REAL_*` from fixture out-file)
   - Set **dev-only** lowered knobs for this process only (document in script comments):
-    - `MARKHAND_MAX_UPLOAD_BYTES` small (e.g. 4096) for deterministic 413
-    - `MARKHAND_RATE_ROUTE_PER_MINUTE` low (e.g. 1–2) for deterministic reindex 429
-    - Optional short `MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS` for real 401→refresh
+    - `MARKHAND_MAX_UPLOAD_BYTES=4096` for deterministic 413
+    - `MARKHAND_RATE_ROUTE_PER_MINUTE=1` for deterministic reindex 429
   - Why runtime config (not seams): these knobs already exist in
     `crates/server/src/config.rs` / `middleware/rate_limit.rs` and are valid ops
     overrides; they are **not** test-only routes, bypasses, or schema forks. Prod
@@ -138,6 +144,14 @@ every required failure class.
     checksum artifacts; fail if missing/mismatched
   - Cleanup in `trap` **after** tests (success or fail); cleanup failure → non-zero
   - Keep existing process supervision + redactor fail-closed behavior
+  - Start and supervise a `delete` worker so browser delete and teardown remove MinIO
+    objects and Qdrant points before database fixture rows are removed
+- Add `deploy/scripts/web_e2e_real_artifacts.py` in this task with explicit
+  `write --results <playwright-json> --fixture <manifest> --out <manifest>` and
+  `validate --manifest <manifest> --artifact-dir <dir>` commands. Validation requires
+  the P2-20 fields/checksums and scans staged files for configured secret/content
+  canaries; missing results, skipped required scenarios, checksum drift, or a canary
+  match exits non-zero.
 - Extend `deploy/scripts/test_web_e2e_real_orchestration.py` with hermetic cases for:
   - fixture setup failure aborts before Playwright
   - fixture cleanup failure fails the job
@@ -150,9 +164,9 @@ every required failure class.
 (Playwright/Node/pnpm as available), fixture checksum, durations/outcomes, skipped
 count (must be 0 for required), teardown result, artifact checksums.
 
-**Traces/screenshots:** orchestrator + Playwright config must disable or allowlist only
-non-content pages; never retain credential-bearing UI dumps (P2-20 base policy;
-P2-23 enforces release retention later).
+**Traces/screenshots:** the real project sets trace, screenshot, and video to `off`;
+never retain credential-bearing UI dumps (P2-20 base policy; P2-23 owns any future
+reviewed non-content allowlist and release retention).
 
 **TDD steps:**
 
@@ -172,33 +186,39 @@ python3 deploy/scripts/test_web_e2e_real_orchestration.py
 
 ### T3 — Real Playwright support refactor + serial / artifact policy
 
-**Outcome:** `web/e2e-real/support.ts` (optionally split into small helpers under
-`web/e2e-real/support/`) loads runtime credentials and run-scoped IDs; real project runs
-serially; traces/screenshots restricted.
+**Outcome:** `web/e2e-real/support.ts` loads runtime credentials and run-scoped IDs;
+`web/e2e-real/runtime.ts` owns pure JSON/env parsing; the real project runs serially
+with traces/screenshots disabled.
 
 **Files / interfaces:**
 
 - Refactor `web/e2e-real/support.ts`:
-  - `runtimeCredentials()` from env (fail if missing — no fixed seed fallback as
-    authority)
+  - `runtimeCredentials()` from the mode-`0600` JSON path in
+    `MARKHAND_E2E_REAL_CREDENTIALS_FILE` (fail if missing — no fixed seed fallback)
+  - `runtimeFixture()` from `MARKHAND_E2E_REAL_FIXTURE_FILE` for run-scoped names/IDs
   - `login(page)`, `logout(page)`
   - `openRunCollection(page)` using fixture collection name/id
-  - `authedApi` helpers for authenticated requests when needed for setup asserts
   - Network shaping helper: `delayThenContinue(page, urlGlob, delayMs)` using
     `route.continue()` only
+- Add `web/e2e-real/runtime.ts` with pure
+  `loadRuntimeCredentials(env)` / `loadRuntimeFixture(env)` parsers and
+  `web/src/test/e2eRealRuntimeConfig.test.ts` for missing path, malformed JSON,
+  required-field, and fixed-seed-fallback rejection.
 - Update `web/playwright.config.ts` for `REAL_MODE`:
   - `workers: 1` / `fullyParallel: false` for real project
-  - `trace: 'off'` (or allowlist non-content only); `screenshot: 'off'`;
-    `video: 'off'`
+  - `trace: 'off'`; `screenshot: 'off'`; `video: 'off'`
   - Keep mutual exclusion with mock project
+- Add `web/src/test/playwrightRealConfig.test.ts`, which imports the exported config
+  factory and asserts real mode has one worker, no parallelism, and all three browser
+  artifacts disabled while mock mode retains its current behavior.
 - Do **not** change mock `web/e2e/**` behavior except accidental shared config that must
   remain mock-parallel
 
 **TDD steps:**
 
-1. RED: a focused Node/Vitest or Playwright config unit assert (if practical) / or a
-   small support unit test that missing env throws; plus a placeholder real spec that
-   fails without runtime env.
+1. RED: `web/src/test/e2eRealRuntimeConfig.test.ts` fails because the parser does not
+   exist; config contract test fails until real mode is serial with all retained browser
+   artifacts disabled.
 2. GREEN: implement helpers; keep existing three smoke specs temporarily adapted to
    runtime env so baseline does not break when stack runs.
 
@@ -206,8 +226,7 @@ serially; traces/screenshots restricted.
 
 ```bash
 pnpm --dir web exec playwright test --list  # config loads
-# focused support unit if added, e.g.:
-pnpm --dir web exec vitest run e2e-real/support*.test.ts
+pnpm --dir web exec vitest run src/test/e2eRealRuntimeConfig.test.ts
 ```
 
 **Commit boundary:** `refactor(p2-20): runtime-credential real E2E support and serial policy`
@@ -220,8 +239,7 @@ pnpm --dir web exec vitest run e2e-real/support*.test.ts
 
 **Files:**
 
-- Expand `web/e2e-real/auth.spec.ts` (or split `auth-logout`, `auth-deeplink`,
-  `auth-refresh` if clarity needs it — prefer one file unless size warrants split)
+- Expand `web/e2e-real/auth.spec.ts`
 
 **Scenarios (required, no skip):**
 
@@ -230,9 +248,10 @@ pnpm --dir web exec vitest run e2e-real/support*.test.ts
 3. Anonymous deep-link to run collection path → `/login?next=` preserved → successful
    login → lands on sanitized intended route (`PublicOnlyRoute` / `sanitizeNextPath`)
 4. One **real** backend 401 recovered via refresh/retry without bounce to `/login`:
-   prefer short access TTL + wait/expiry, or invalidate access session row while keeping
-   valid refresh — **not** a synthetic fulfilled 401 that never hits the server. If a
-   delay shim is used, the retried request must `continue` to the real backend.
+   install a one-shot Playwright route for `GET /api/v1/auth/me`, replace only the first
+   request's bearer value with an invalid value, and `route.continue()` to the real
+   server. Observe the real 401, real `POST /auth/refresh` 200, and retried real
+   `GET /auth/me` 200. Never `fulfill()` any of those responses.
 
 **TDD:**
 
@@ -253,15 +272,14 @@ issues capability and redeems through real API/storage.
 
 **Files:**
 
-- Expand `web/e2e-real/library.spec.ts` and/or add `web/e2e-real/download.spec.ts`
+- Expand `web/e2e-real/library.spec.ts`
 
 **Scenarios:**
 
 1. Navigate to run collection; upload panel visible
-2. Use a document that is already indexed (from prior upload in-serial suite **or**
-   fixture-seeded indexed doc via real workers — prefer upload-in-suite for honesty) and
-   assert preview markdown content (content canary must ensure artifacts do not retain
-   body text)
+2. Upload a unique tiny text document inside this scenario, wait for the real workers to
+   index it, and assert preview markdown content (the content canary must ensure staged
+   artifacts do not retain body text)
 3. Download → Markdown: UI triggers `issueDownloadCapability` + `redeemDownload`; assert
    success notice / download completion without exposing capability token in logs
 
@@ -277,7 +295,7 @@ issues capability and redeems through real API/storage.
 
 **Files:**
 
-- Add/expand `web/e2e-real/actions.spec.ts` (or library file)
+- Add `web/e2e-real/actions.spec.ts`
 
 **Scenarios:**
 
@@ -286,11 +304,12 @@ issues capability and redeems through real API/storage.
 2. Failed document shows failed badge; **Thử lại lập chỉ mục** enqueues retry
 3. Delete with confirm dialog → row gone after refetch
 
-**Fixture note:** failed doc must be created without production seams — SQL seed of
-existing `failed` state **or** a deliberately unconvertible tiny payload that the real
-converter marks failed. Prefer deterministic SQL/state seed inside fixture tool if
-columns already support it; else converter-failure path. Escalate if neither works
-without schema/API change.
+**Fixture note:** create the failed document deterministically inside the dev/CI fixture
+transaction using the existing `documents.state='failed'`, `document_versions`, and
+`documents.current_version_id` columns. The route still receives a real authenticated
+HTTP request and enqueues through production services. If those current columns cannot
+produce a valid retryable row under live constraints, stop and record the exact blocker;
+do not add schema/API seams.
 
 **Commit boundary:** `test(p2-20): add real reindex retry and delete scenarios`
 
@@ -307,8 +326,8 @@ without schema/API change.
 
 **Scenarios:**
 
-1. **403:** secondary fixture actor (or permission-stripped session) attempts download
-   (or other Declared-403 action) → UI shows
+1. **403:** secondary viewer actor with no `doc.upload` attempts reindex → the real
+   route returns 403 and the UI shows
    `Bạn không có quyền thực hiện thao tác này với tài liệu này.` and document remains.
    Must be real HTTP 403 from backend (observe via response listener), not hidden control.
 2. **429:** with low `MARKHAND_RATE_ROUTE_PER_MINUTE`, trigger enough `reindex` calls to
@@ -333,12 +352,13 @@ produces reviewable evidence; quality gates recorded.
 
 **Files:**
 
-- Add `deploy/scripts/web_e2e_real_artifacts.py` (validate/write manifest + canary scan)
-  if not already part of T2
-- Tests in `test_web_e2e_real_orchestration.py` and/or
-  `test_web_e2e_real_artifacts.py`
-- Docs touch only if runbook needs a short pointer (optional; skip unless required for
-  operator clarity — prefer script `--help`)
+- Complete `deploy/scripts/test_web_e2e_real_artifacts.py` for the T2 writer/validator,
+  including checksum drift, missing scenario, nonzero skip, failed teardown, and
+  secret/content canary cases
+- Run the live fixture setup→cleanup→verify-clean cycle and inspect the resulting
+  sanitized manifest
+- Update `deploy/README.md` with the fixture/artifact CLI contract, local command, output
+  location, production refusal, and sanitization warning
 
 **Verification commands (required before Review):**
 
@@ -375,8 +395,8 @@ python3 scripts/check-dependency-policy.py
 
 - T1 before T2 (orchestrator calls fixture).
 - T3 before T4–T7 (specs need support).
-- T4–T7 may parallelize across agents **only** if they do not edit the same spec file;
-  prefer sequential serial suite growth to avoid merge conflicts.
+- Execute T4–T7 sequentially because they share runtime fixtures and rate-limit state;
+  each task uses its named spec file and receives task review before the next begins.
 - T8 last; no status→Done without independent review + evidence.
 - Catalog stays `Ready` until first production/test code lands, then `In progress`;
   plan moves `Planned` → `In progress` at that same moment.
@@ -387,10 +407,10 @@ python3 scripts/check-dependency-policy.py
 | Owner / boundary | Paths |
 |---|---|
 | Deploy orchestration (CODEOWNERS `@anhnth24`) | `deploy/scripts/web-e2e-real.sh`, `deploy/scripts/web_e2e_real_fixture.py`, `deploy/scripts/web_e2e_real_artifacts.py` (if split), `deploy/scripts/test_web_e2e_real_*.py`, `deploy/scripts/redact_secrets.py` (reuse; extend canary only if needed without weakening fail-closed) |
-| CI glue (read/verify; change only if contract requires) | `deploy/scripts/dev-stack-ci.sh`, `.github/workflows/ci.yml` `dev-stack` job (prefer zero workflow change) |
-| Real Playwright | `web/e2e-real/support.ts` (+ optional `support/`), `web/e2e-real/*.spec.ts`, `web/playwright.config.ts` |
+| CI glue (read/verify; change only if contract requires) | `deploy/scripts/dev-stack-ci.sh`; existing `.github/workflows/ci.yml` `dev-stack` job remains unchanged unless its current artifact path cannot collect the validated manifest |
+| Real Playwright | `web/e2e-real/runtime.ts`, `web/e2e-real/support.ts`, `web/e2e-real/*.spec.ts`, `web/playwright.config.ts`, `web/src/test/e2eRealRuntimeConfig.test.ts`, `web/src/test/playwrightRealConfig.test.ts` |
 | Mock suite (regression only) | `web/e2e/**` — do not weaken; no forceStatus in real |
-| Existing runtime config (consume, do not redesign) | `MARKHAND_MAX_UPLOAD_BYTES`, `MARKHAND_RATE_ROUTE_PER_MINUTE`, `MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS`, `MARKHAND_PROFILE` |
+| Existing runtime config (consume, do not redesign) | `MARKHAND_MAX_UPLOAD_BYTES`, `MARKHAND_RATE_ROUTE_PER_MINUTE`, `MARKHAND_PROFILE` |
 | Catalog / plan | `plans/markhand-web/backlog/phase-2/issues/README.md` (Plan file link + later status), this plan |
 | Out of module | `crates/**` production logic, OpenAPI, migrations, converter, pins, desktop app code, P2-21/22/23 scopes |
 
@@ -416,13 +436,13 @@ python3 scripts/check-dependency-policy.py
 | A4 | Supervisor fails on required process death, Playwright fail, fixture setup/cleanup fail, redactor fail, artifact validation fail, secret/content canary | `web-e2e-real.sh` + orchestration tests | RED/GREEN: `python3 deploy/scripts/test_web_e2e_real_orchestration.py` | Hermetic shims | New tests green; no raw secrets in dumps |
 | A5 | Login + logout against real backend | `web/e2e-real/auth.spec.ts` | Real Playwright via orchestrator | Runtime user | Scenario pass; skipped=0 |
 | A6 | Anonymous deep-link preserved through successful login | `web/e2e-real/auth.spec.ts`; relies on `RouteGuard` `?next=` | Real Playwright | Run collection path | Land on intended route post-login |
-| A7 | One real backend 401 with real refresh/retry | `web/e2e-real/auth.spec.ts`; short access TTL or session invalidation via fixture/DB | Real Playwright | Short `MARKHAND_AUTH_ACCESS_TOKEN_TTL_SECS` | Stay in shell; no `/login` bounce; refresh hits real `/auth/refresh` |
+| A7 | One real backend 401 with real refresh/retry | `web/e2e-real/auth.spec.ts`; one-shot invalid bearer + `route.continue()` | Real Playwright | Runtime user with valid refresh token | Observed real 401 → real refresh 200 → retried `/auth/me` 200; no `/login` bounce |
 | A8 | Collection navigation | `web/e2e-real/library.spec.ts` | Real Playwright | Run collection | Upload control visible |
 | A9 | Real indexed preview | `library`/`upload` real specs | Real Playwright | Convert/index/embedding workers | Preview contains uploaded text; badge indexed |
 | A10 | Real download capability + redeem | `download`/`library` real specs | Real Playwright | MinIO + capability keys | Success UI; token not in artifacts |
 | A11 | Reindex + failed-document retry | `actions` real specs | Real Playwright | Failed doc fixture or real fail | Notices + state transitions |
 | A12 | Delete | `actions` real specs | Real Playwright | Indexed/failed doc | Row removed |
-| A13 | Deterministic real 403 action mapping | actions/error real specs | Real Playwright | Secondary actor without permission | UI permission copy; real status 403 observed |
+| A13 | Deterministic real 403 action mapping | actions/error real specs | Real Playwright | Secondary viewer without `doc.upload` attempts reindex | UI permission copy; real status 403 observed; document unchanged |
 | A14 | Deterministic real 429 action mapping | actions real specs | Real Playwright | Low `MARKHAND_RATE_ROUTE_PER_MINUTE` | Actionable retry-after copy |
 | A15 | Throttled real upload progress → indexed preview | `upload.spec.ts` real | Real Playwright | `delayThenContinue` + workers | Progressbar then indexed preview |
 | A16 | Real backend 413 | `upload.spec.ts` real | Real Playwright | Small `MARKHAND_MAX_UPLOAD_BYTES` | Accessible too-large alert; no crash |
