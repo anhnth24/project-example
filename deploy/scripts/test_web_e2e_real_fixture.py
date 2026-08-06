@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import json
+import io
+import os
 import sys
 import tempfile
 import unittest
 import uuid
+from contextlib import redirect_stderr
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -604,6 +607,489 @@ class RunIdValidationTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertEqual(commands.psql_calls, [])
         self.assertEqual(commands.subprocess_calls, [])
+
+
+class ReviewFixRedTests(unittest.TestCase):
+    """Blocking review regressions; each test was added before its fix."""
+
+    def _invoke(
+        self,
+        argv: list[str],
+        *,
+        commands: FakeCommands | None = None,
+        environ: dict[str, str] | None = None,
+    ) -> tuple[int, str, FakeCommands]:
+        active = commands or FakeCommands()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code = fixture.main(argv, commands=active, environ=environ or {"MARKHAND_PROFILE": "dev"})
+        return code, stderr.getvalue(), active
+
+    def test_config_file_prod_and_invalid_config_refuse_before_commands_or_writes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-config-refuse-") as tmp:
+            root = Path(tmp)
+            manifest = root / "manifest.json"
+            credentials = root / "credentials.json"
+            prod_config = root / "prod.json"
+            prod_config.write_text('{"profile":"prod"}', encoding="utf-8")
+            argv = [
+                "setup",
+                "--run-id",
+                "e2e-0123456789ab-1",
+                "--manifest-out",
+                str(manifest),
+                "--credentials-out",
+                str(credentials),
+            ]
+            for config_text in ('{"profile":"prod"}', "{invalid", '{"profile":7}'):
+                prod_config.write_text(config_text, encoding="utf-8")
+                commands = FakeCommands()
+                code, _stderr, _ = self._invoke(
+                    argv,
+                    commands=commands,
+                    environ={"MARKHAND_CONFIG_FILE": str(prod_config)},
+                )
+                self.assertNotEqual(code, 0)
+                self.assertEqual(commands.subprocess_calls, [])
+                self.assertEqual(commands.psql_calls, [])
+                self.assertFalse(manifest.exists())
+                self.assertFalse(credentials.exists())
+
+    def test_environment_profile_overrides_valid_config_profile(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-config-precedence-") as tmp:
+            root = Path(tmp)
+            config = root / "config.json"
+            config.write_text('{"profile":"prod"}', encoding="utf-8")
+            commands = FakeCommands(fail_psql=True)
+            code, stderr, _ = self._invoke(
+                [
+                    "setup",
+                    "--run-id",
+                    "e2e-0123456789ab-2",
+                    "--manifest-out",
+                    str(root / "manifest.json"),
+                    "--credentials-out",
+                    str(root / "credentials.json"),
+                ],
+                commands=commands,
+                environ={
+                    "MARKHAND_CONFIG_FILE": str(config),
+                    "MARKHAND_PROFILE": "dev",
+                },
+            )
+            self.assertNotEqual(code, 0)
+            self.assertIn("compose/db unavailable", stderr)
+            self.assertTrue(commands.psql_calls, "dev env override must reach database setup")
+
+    def test_cleanup_enumerates_and_api_deletes_every_org_document(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-all-docs-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-123456789abc-3")
+            second_document = str(uuid.uuid4())
+            manifest = root / "manifest.json"
+            credentials = root / "credentials.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+            _write_json(credentials, _credentials_payload(ids))
+
+            state = {"documents": [ids["failedDocumentId"], second_document]}
+
+            def psql_handler(sql: str) -> str:
+                lowered = sql.lower()
+                if "fixture_resource_inventory" in lowered:
+                    return json.dumps(
+                        {
+                            "documents": [
+                                {"id": document_id, "state": "failed"}
+                                for document_id in state["documents"]
+                            ],
+                            "objects": [],
+                            "signatures": [],
+                        }
+                    )
+                if "fixture_org_table_leaks" in lowered:
+                    return "{}" if not state["documents"] else json.dumps(
+                        {"documents": state["documents"]}
+                    )
+                if "delete from documents" in lowered:
+                    state["documents"].clear()
+                    return ""
+                return "0"
+
+            def http_handler(method: str, url: str, **_kwargs: Any) -> FakeHttpResponse:
+                if method == "POST" and url.endswith("/api/v1/auth/login"):
+                    return FakeHttpResponse(
+                        200, body=b'{"accessToken":"access-token-value"}'
+                    )
+                if method == "DELETE":
+                    document_id = url.rsplit("/", 1)[-1]
+                    if document_id in state["documents"]:
+                        state["documents"].remove(document_id)
+                    return FakeHttpResponse(204)
+                return FakeHttpResponse(200, body=b"{}")
+
+            commands = FakeCommands(psql_handler=psql_handler, http_handler=http_handler)
+            code, _stderr, commands = self._invoke(
+                [
+                    "cleanup",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                    "--credentials",
+                    str(credentials),
+                    "--api-base",
+                    "http://127.0.0.1:8787",
+                    "--timeout-secs",
+                    "5",
+                ],
+                commands=commands,
+            )
+            self.assertEqual(code, 0)
+            deleted = {
+                call["url"].rsplit("/", 1)[-1]
+                for call in commands.http_calls
+                if call["method"] == "DELETE"
+            }
+            self.assertEqual(deleted, {ids["failedDocumentId"], second_document})
+
+    def test_probe_errors_are_not_treated_as_confirmed_absence(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-probe-errors-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-23456789abcd-4")
+            manifest = root / "manifest.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+
+            class BrokenProbeCommands(FakeCommands):
+                def object_exists(self, key: str) -> bool:
+                    raise fixture.FixtureError("minio probe unavailable")
+
+                def vector_exists(self, point_id: str) -> bool:
+                    raise fixture.FixtureError("qdrant probe unavailable")
+
+            code, stderr, _ = self._invoke(
+                [
+                    "verify-clean",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                ],
+                commands=BrokenProbeCommands(psql_handler=lambda _sql: "0"),
+            )
+            self.assertNotEqual(code, 0)
+            self.assertIn("probe unavailable", stderr)
+
+    def test_cleanup_uses_one_decreasing_overall_deadline(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-overall-deadline-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-3456789abcde-5")
+            manifest = root / "manifest.json"
+            credentials = root / "credentials.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+            _write_json(credentials, _credentials_payload(ids))
+
+            class TimeoutRecordingCommands(FakeCommands):
+                timeouts: list[float]
+
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.timeouts = []
+
+                def psql(
+                    self,
+                    sql: str,
+                    *,
+                    timeout: float,
+                    redact: list[str] | None = None,
+                ) -> str:
+                    self.timeouts.append(timeout)
+                    if "fixture_resource_inventory" in sql.lower():
+                        return '{"documents":[],"objects":[],"signatures":[]}'
+                    if "fixture_org_table_leaks" in sql.lower():
+                        return "{}"
+                    return "0"
+
+                def object_exists(self, key: str, *, timeout: float) -> bool:
+                    self.timeouts.append(timeout)
+                    return False
+
+                def qdrant_point_ids(
+                    self,
+                    collections: list[str],
+                    org_id: str,
+                    *,
+                    timeout: float,
+                ) -> list[str]:
+                    self.timeouts.append(timeout)
+                    return []
+
+            commands = TimeoutRecordingCommands()
+            ticks = iter([0.0, 0.1, 0.4, 0.7, 1.0, 1.2, 1.5, 1.7, 1.9])
+            with mock.patch.object(fixture, "monotonic", side_effect=lambda: next(ticks)):
+                code, _stderr, _ = self._invoke(
+                    [
+                        "cleanup",
+                        "--run-id",
+                        ids["runId"],
+                        "--manifest",
+                        str(manifest),
+                        "--credentials",
+                        str(credentials),
+                        "--api-base",
+                        "http://127.0.0.1:8787",
+                        "--timeout-secs",
+                        "2",
+                    ],
+                    commands=commands,
+                )
+            self.assertEqual(code, 0)
+            self.assertGreaterEqual(len(commands.timeouts), 3)
+            self.assertTrue(
+                all(left > right for left, right in zip(commands.timeouts, commands.timeouts[1:])),
+                commands.timeouts,
+            )
+
+    def test_live_subprocess_argv_contains_no_password_sql_credentials_or_object_key(self) -> None:
+        commands = fixture.LiveCommands(
+            environ={
+                "MARKHAND_MINIO_USER": "minio-access-secret",
+                "MARKHAND_MINIO_PASSWORD": "minio-password-secret",
+            }
+        )
+        recorded: list[tuple[list[str], dict[str, Any]]] = []
+
+        def fake_run(argv: list[str], **kwargs: Any) -> Any:
+            recorded.append((list(argv), kwargs))
+            return mock.Mock(returncode=0, stdout="hash-or-zero", stderr="")
+
+        secret_password = "runtime-password-secret"
+        secret_sql = "SELECT 'password-hash-secret', 'private/object-key';"
+        object_key = "private/object-key"
+        with mock.patch.object(fixture.subprocess, "run", side_effect=fake_run):
+            commands.hash_password(secret_password)
+            commands.psql(secret_sql)
+            commands.object_exists(object_key)
+
+        argv_blob = "\n".join(" ".join(argv) for argv, _kwargs in recorded)
+        for forbidden in (
+            secret_password,
+            secret_sql,
+            "password-hash-secret",
+            "minio-access-secret",
+            "minio-password-secret",
+            object_key,
+        ):
+            self.assertNotIn(forbidden, argv_blob)
+
+    def test_setup_compensates_database_when_output_publication_fails(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-setup-compensation-") as tmp:
+            root = Path(tmp)
+            run_id = "e2e-456789abcdef-6"
+            ids = _sample_ids(run_id)
+            state = {"org": True}
+
+            def psql_handler(sql: str) -> str:
+                lowered = sql.lower()
+                if "as fixture_json" in lowered:
+                    state["org"] = True
+                    return json.dumps(
+                        {
+                            "orgId": ids["orgId"],
+                            "adminUserId": ids["adminUserId"],
+                            "viewerUserId": ids["viewerUserId"],
+                            "collectionId": ids["collectionId"],
+                            "failedDocumentId": ids["failedDocumentId"],
+                            "failedVersionId": ids["failedVersionId"],
+                            "objectId": ids["objectId"],
+                            "vectorPointId": ids["vectorPointId"],
+                        }
+                    )
+                if "delete from orgs" in lowered:
+                    state["org"] = False
+                    return ""
+                if "fixture_org_table_leaks" in lowered:
+                    return '{"orgs":["%s"]}' % ids["orgId"] if state["org"] else "{}"
+                return "0"
+
+            original_write = fixture._atomic_write_json
+
+            def fail_manifest(path: Path, payload: dict[str, Any], *, mode: int) -> None:
+                if path.name == "manifest.json":
+                    raise OSError("staging failure")
+                original_write(path, payload, mode=mode)
+
+            with mock.patch.object(fixture, "_atomic_write_json", side_effect=fail_manifest):
+                code, _stderr, commands = self._invoke(
+                    [
+                        "setup",
+                        "--run-id",
+                        run_id,
+                        "--manifest-out",
+                        str(root / "manifest.json"),
+                        "--credentials-out",
+                        str(root / "credentials.json"),
+                    ],
+                    commands=FakeCommands(psql_handler=psql_handler),
+                )
+            self.assertNotEqual(code, 0)
+            self.assertFalse(state["org"], "database fixture must be compensated")
+            self.assertTrue(
+                any("delete from orgs" in sql.lower() for sql in commands.psql_calls)
+            )
+
+    def test_already_clean_removes_stale_credentials_without_auth(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-stale-credentials-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-56789abcdef0-7")
+            manifest = root / "manifest.json"
+            credentials = root / "credentials.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+            _write_json(credentials, _credentials_payload(ids))
+            commands = FakeCommands(psql_handler=lambda _sql: "0")
+            code, _stderr, commands = self._invoke(
+                [
+                    "cleanup",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                    "--credentials",
+                    str(credentials),
+                    "--api-base",
+                    "http://127.0.0.1:8787",
+                    "--timeout-secs",
+                    "5",
+                ],
+                commands=commands,
+            )
+            self.assertEqual(code, 0)
+            self.assertFalse(credentials.exists())
+            self.assertEqual(commands.http_calls, [])
+
+    def test_db_only_residual_without_documents_cleans_without_credentials(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-db-only-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-6789abcdef01-8")
+            manifest = root / "manifest.json"
+            credentials = root / "missing-credentials.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+            state = {"org": True}
+
+            def psql_handler(sql: str) -> str:
+                lowered = sql.lower()
+                if "fixture_resource_inventory" in lowered:
+                    return '{"documents":[],"objects":[],"signatures":[]}'
+                if "fixture_org_table_leaks" in lowered:
+                    return '{"orgs":["%s"]}' % ids["orgId"] if state["org"] else "{}"
+                if "delete from orgs" in lowered:
+                    state["org"] = False
+                    return ""
+                return "0"
+
+            commands = FakeCommands(psql_handler=psql_handler)
+            code, _stderr, commands = self._invoke(
+                [
+                    "cleanup",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                    "--credentials",
+                    str(credentials),
+                    "--api-base",
+                    "http://127.0.0.1:8787",
+                    "--timeout-secs",
+                    "5",
+                ],
+                commands=commands,
+            )
+            self.assertEqual(code, 0)
+            self.assertFalse(state["org"])
+            self.assertEqual(commands.http_calls, [])
+
+    def test_cli_rejects_removed_leak_option_and_output_aliases(self) -> None:
+        parser = fixture.build_parser()
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                [
+                    "cleanup",
+                    "--run-id",
+                    "e2e-789abcdef012-9",
+                    "--manifest",
+                    "/tmp/manifest.json",
+                    "--credentials",
+                    "/tmp/credentials.json",
+                    "--api-base",
+                    "http://127.0.0.1:8787",
+                    "--timeout-secs",
+                    "5",
+                    "--leak-report-out",
+                    "/tmp/leaks.json",
+                ]
+            )
+
+        with tempfile.TemporaryDirectory(prefix="fixture-alias-") as tmp:
+            shared = Path(tmp) / "shared.json"
+            code, _stderr, commands = self._invoke(
+                [
+                    "setup",
+                    "--run-id",
+                    "e2e-789abcdef012-10",
+                    "--manifest-out",
+                    str(shared),
+                    "--credentials-out",
+                    str(shared),
+                ]
+            )
+            self.assertNotEqual(code, 0)
+            self.assertEqual(commands.subprocess_calls, [])
+            self.assertEqual(commands.psql_calls, [])
+
+    def test_default_leak_evidence_is_identifier_only(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-default-leaks-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-89abcdef0123-11")
+            manifest = root / "manifest.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+
+            def psql_handler(sql: str) -> str:
+                if "fixture_org_table_leaks" in sql.lower():
+                    return json.dumps({"documents": [ids["failedDocumentId"]]})
+                if "fixture_resource_inventory" in sql.lower():
+                    return '{"documents":[],"objects":[],"signatures":[]}'
+                return "0"
+
+            code, stderr, _ = self._invoke(
+                [
+                    "verify-clean",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                ],
+                commands=FakeCommands(psql_handler=psql_handler),
+            )
+            self.assertNotEqual(code, 0)
+            self.assertIn(ids["failedDocumentId"], stderr)
+            for forbidden in (
+                "admin-secret-value",
+                "viewer-secret-value",
+                ids["objectKey"],
+                "SELECT ",
+            ):
+                self.assertNotIn(forbidden, stderr)
+
+    def test_run_identity_is_bounded_and_suffix_uses_full_run_id(self) -> None:
+        left = "e2e-" + "a" * 39 + "0-1234567890"
+        right = "e2e-" + "a" * 39 + "1-1234567890"
+        fixture.validate_run_id(left)
+        fixture.validate_run_id(right)
+        self.assertNotEqual(fixture._slug_for_run(left), fixture._slug_for_run(right))
+        self.assertLessEqual(len(fixture._slug_for_run(left)), 63)
+        self.assertNotEqual(fixture._email_for_run("admin", left), fixture._email_for_run("admin", right))
+        self.assertLessEqual(len(fixture._email_for_run("admin", left)), 254)
+        with self.assertRaises(fixture.FixtureError):
+            fixture.validate_run_id("e2e-" + "b" * 40 + "-" + "9" * 11)
 
 
 if __name__ == "__main__":
