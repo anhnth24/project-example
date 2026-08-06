@@ -1230,7 +1230,7 @@ class ReviewFixRedTests(unittest.TestCase):
             self.assertIn("future_org_table", stderr)
             self.assertIn(ids["orgId"], stderr)
 
-    def test_hard_delete_uses_reviewed_order_and_limits_trigger_bypass(self) -> None:
+    def test_hard_delete_preserves_fk_triggers_in_reviewed_order(self) -> None:
         ids = _sample_ids("e2e-b0cdef012345-14")
         commands = FakeCommands()
         fixture._hard_delete_run_rows(commands, fixture._manifest_ids(_manifest_payload(ids)))
@@ -1250,14 +1250,19 @@ class ReviewFixRedTests(unittest.TestCase):
         ]
         positions = [sql.index(marker) for marker in expected_order]
         self.assertEqual(positions, sorted(positions))
-        replica = sql.index("session_replication_role = replica")
-        origin = sql.index("session_replication_role = origin")
-        self.assertLess(replica, origin)
-        self.assertLess(
-            origin - replica,
-            len(sql) // 2,
-            "trigger bypass must be narrowly scoped to immutable fixture rows",
-        )
+        self.assertNotIn("session_replication_role", sql)
+        for table in (
+            "conflict_evidence",
+            "conflicts",
+            "derived_artifacts",
+            "index_metadata",
+            "document_versions",
+        ):
+            disable = sql.index(f"alter table {table} disable trigger user")
+            delete = sql.index(f"delete from {table}")
+            enable = sql.index(f"alter table {table} enable trigger user")
+            self.assertLess(disable, delete)
+            self.assertLess(delete, enable)
 
     def test_run_identity_is_bounded_and_suffix_uses_full_run_id(self) -> None:
         left = "e2e-" + "a" * 39 + "0-1234567890"
