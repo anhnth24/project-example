@@ -480,7 +480,9 @@ def cmd_cleanup(
     try:
         hard_delete_run_rows(commands=commands, ids=ids, deadline=deadline)
     except FixtureError as error:
-        raise FixtureLeakError("cleanup database deletion failed", leaks) from error
+        raise FixtureLeakError(
+            f"cleanup database deletion failed: {error}", leaks
+        ) from error
     final_leaks, _inventory, _objects, _collections = collect_leaks(
         ids=ids,
         commands=commands,
