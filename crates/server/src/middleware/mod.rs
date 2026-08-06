@@ -337,4 +337,42 @@ mod tests {
         assert!(client_ip_from_xff("", &trusted).is_err());
         assert!(client_ip_from_xff("10.0.0.1", &trusted).is_err());
     }
+
+    /// Download capability tokens (`mhcap1.<payload>.<mac>`) appear as raw URI
+    /// path segments under `/api/v1/downloads/{capability}`. Route metric labels
+    /// must collapse them to `{id}` so `record_http_request` never stores the
+    /// raw token (P2-20 fail-closed secrets).
+    #[test]
+    fn classify_route_collapses_download_capability_segments() {
+        let capability =
+            "mhcap1.eyJvcmciOiIwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDAiLCJ1c2VyIjoiMSJ9.dGVzdG1hYw";
+        let path = format!("/api/v1/downloads/{capability}");
+        let classified = classify_route(&path);
+        assert_eq!(classified, "api.v1.downloads.{id}");
+        assert!(
+            !classified.contains("mhcap1"),
+            "classified route must not retain capability prefix: {classified}"
+        );
+        assert!(
+            !classified.contains(capability),
+            "classified route must not retain raw capability token: {classified}"
+        );
+        assert!(looks_like_id(capability));
+    }
+
+    #[test]
+    fn classify_route_still_collapses_uuid_and_hex_segments() {
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let hex = "abcdef0123456789abcdef0123456789";
+        assert_eq!(
+            classify_route(&format!("/api/v1/documents/{uuid}/reindex")),
+            "api.v1.documents.{id}.reindex"
+        );
+        assert_eq!(
+            classify_route(&format!("/api/v1/objects/{hex}")),
+            "api.v1.objects.{id}"
+        );
+        assert!(!looks_like_id("documents"));
+        assert!(!looks_like_id("mhcap1"));
+    }
 }
