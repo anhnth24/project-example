@@ -21,6 +21,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import web_e2e_real_fixture as fixture  # noqa: E402
+import web_e2e_fixture_database as fixture_database  # noqa: E402
 
 
 @dataclass
@@ -45,6 +46,10 @@ class FakeCommands:
     fail_psql: bool = False
     sleep_calls: list[float] = field(default_factory=list)
     timeout_calls: list[float] = field(default_factory=list)
+    object_probe_keys: list[str] = field(default_factory=list)
+    qdrant_points_by_collection: dict[str, set[str]] = field(default_factory=dict)
+    qdrant_probe_collections: list[str] = field(default_factory=list)
+    enforce_immutable_cleanup: bool = False
 
     def hash_password(self, password: str, *, timeout: float = 30.0) -> str:
         self.timeout_calls.append(timeout)
@@ -68,6 +73,26 @@ class FakeCommands:
         self.psql_calls.append(recorded)
         if self.fail_psql:
             raise fixture.FixtureError("compose/db unavailable")
+        if self.enforce_immutable_cleanup and "fixture_hard_delete_reviewed_order" in sql:
+            lowered = sql.lower()
+            for table in (
+                "conflict_evidence",
+                "conflicts",
+                "derived_artifacts",
+                "index_metadata",
+                "document_versions",
+                "audit_log",
+            ):
+                disable = f"alter table {table} disable trigger user"
+                delete = f"delete from {table}"
+                enable = f"alter table {table} enable trigger user"
+                if not (
+                    disable in lowered
+                    and delete in lowered
+                    and enable in lowered
+                    and lowered.index(disable) < lowered.index(delete) < lowered.index(enable)
+                ):
+                    raise fixture.FixtureError("immutable cleanup trigger violation")
         if self.psql_handler is not None:
             return self.psql_handler(sql)
         return ""
@@ -106,6 +131,7 @@ class FakeCommands:
 
     def object_exists(self, key: str, *, timeout: float = 30.0) -> bool:
         self.timeout_calls.append(timeout)
+        self.object_probe_keys.append(key)
         return key in self.object_keys
 
     def qdrant_point_ids(
@@ -115,9 +141,21 @@ class FakeCommands:
         *,
         timeout: float = 30.0,
     ) -> list[str]:
-        _ = collections, org_id
+        _ = org_id
         self.timeout_calls.append(timeout)
-        return sorted(self.vector_ids)
+        discovered = {
+            collection
+            for collection in self.qdrant_points_by_collection
+            if collection.startswith("markhand_chunks_")
+            and len(collection) == len("markhand_chunks_") + 64
+            and all(character in "0123456789abcdef" for character in collection[16:])
+        }
+        scanned = sorted(set(collections) | discovered)
+        self.qdrant_probe_collections.extend(scanned)
+        points = set(self.vector_ids)
+        for collection in scanned:
+            points.update(self.qdrant_points_by_collection.get(collection, set()))
+        return sorted(points)
 
     def sleep(self, seconds: float) -> None:
         self.sleep_calls.append(seconds)
@@ -1257,6 +1295,7 @@ class ReviewFixRedTests(unittest.TestCase):
             "derived_artifacts",
             "index_metadata",
             "document_versions",
+            "audit_log",
         ):
             disable = sql.index(f"alter table {table} disable trigger user")
             delete = sql.index(f"delete from {table}")
@@ -1275,6 +1314,206 @@ class ReviewFixRedTests(unittest.TestCase):
         self.assertLessEqual(len(fixture._email_for_run("admin", left)), 254)
         with self.assertRaises(fixture.FixtureError):
             fixture.validate_run_id("e2e-" + "b" * 40 + "-" + "9" * 11)
+
+
+class SecondReviewRedTests(unittest.TestCase):
+    def test_audit_log_cleanup_models_append_only_trigger(self) -> None:
+        ids = _sample_ids("e2e-c0def0123456-15")
+        commands = FakeCommands(enforce_immutable_cleanup=True)
+        fixture._hard_delete_run_rows(commands, fixture._manifest_ids(_manifest_payload(ids)))
+        sql = "\n".join(commands.psql_calls).lower()
+        self.assertLess(
+            sql.index("alter table audit_log disable trigger user"),
+            sql.index("delete from audit_log"),
+        )
+        self.assertLess(
+            sql.index("delete from audit_log"),
+            sql.index("alter table audit_log enable trigger user"),
+        )
+
+    def test_all_object_keys_are_probed_when_resource_id_is_shared(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-shared-object-id-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-d0ef01234567-16")
+            manifest = root / "manifest.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+            first_key = "documents/first-key"
+            second_key = "documents/second-key"
+
+            def psql_handler(sql: str) -> str:
+                if "fixture_resource_inventory" in sql.lower():
+                    return json.dumps(
+                        {
+                            "documents": [],
+                            "objects": [
+                                {"resourceId": ids["failedVersionId"], "key": first_key},
+                                {"resourceId": ids["failedVersionId"], "key": second_key},
+                            ],
+                            "signatures": [],
+                        }
+                    )
+                if "fixture_org_table_leaks" in sql.lower():
+                    return "{}"
+                return ""
+
+            commands = FakeCommands(
+                psql_handler=psql_handler,
+                object_keys={first_key, second_key},
+            )
+            code = fixture.main(
+                [
+                    "verify-clean",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                ],
+                commands=commands,
+                environ={"MARKHAND_PROFILE": "dev"},
+            )
+            self.assertNotEqual(code, 0)
+            self.assertEqual(commands.object_probe_keys.count(first_key), 1)
+            self.assertEqual(commands.object_probe_keys.count(second_key), 1)
+
+    def test_live_qdrant_scans_every_validated_listed_collection(self) -> None:
+        org_id = str(uuid.uuid4())
+        first_collection = "markhand_chunks_" + "1" * 64
+        second_collection = "markhand_chunks_" + "2" * 64
+        invalid_collection = "markhand_chunks_" + "A" * 64
+        first_point = str(uuid.uuid4())
+        second_point = str(uuid.uuid4())
+        commands = fixture.LiveCommands(
+            environ={"MARKHAND_QDRANT_URL": "http://qdrant.test"}
+        )
+        requested_urls: list[str] = []
+
+        def http_handler(
+            method: str,
+            url: str,
+            *,
+            headers: dict[str, str] | None = None,
+            body: bytes | None = None,
+            timeout: float,
+        ) -> fixture.HttpResponse:
+            _ = headers, body, timeout
+            requested_urls.append(url)
+            if method == "GET" and url.endswith("/collections"):
+                return fixture.HttpResponse(
+                    200,
+                    {},
+                    json.dumps(
+                        {
+                            "result": {
+                                "collections": [
+                                    {"name": first_collection},
+                                    {"name": second_collection},
+                                    {"name": invalid_collection},
+                                    {"name": "other_collection"},
+                                ]
+                            }
+                        }
+                    ).encode("utf-8"),
+                )
+            point_id = first_point if first_collection in url else second_point
+            return fixture.HttpResponse(
+                200,
+                {},
+                json.dumps(
+                    {
+                        "result": {
+                            "points": [{"id": point_id}],
+                            "next_page_offset": None,
+                        }
+                    }
+                ).encode("utf-8"),
+            )
+
+        commands.http = http_handler
+        point_ids = commands.qdrant_point_ids(
+            [first_collection],
+            org_id,
+            timeout=5,
+        )
+        self.assertEqual(point_ids, sorted([first_point, second_point]))
+        self.assertTrue(any(second_collection in url for url in requested_urls))
+        self.assertFalse(any(invalid_collection in url for url in requested_urls))
+
+    def test_qdrant_fake_is_collection_sensitive(self) -> None:
+        first_collection = "markhand_chunks_" + "3" * 64
+        second_collection = "markhand_chunks_" + "4" * 64
+        invalid_collection = "markhand_chunks_" + "G" * 64
+        first_point = str(uuid.uuid4())
+        second_point = str(uuid.uuid4())
+        ignored_point = str(uuid.uuid4())
+        commands = FakeCommands(
+            qdrant_points_by_collection={
+                first_collection: {first_point},
+                second_collection: {second_point},
+                invalid_collection: {ignored_point},
+            }
+        )
+        result = commands.qdrant_point_ids(
+            [first_collection],
+            str(uuid.uuid4()),
+            timeout=5,
+        )
+        self.assertEqual(result, sorted([first_point, second_point]))
+        self.assertEqual(
+            commands.qdrant_probe_collections,
+            [first_collection, second_collection],
+        )
+
+    def test_setup_parse_or_ambiguous_failure_compensates_expected_ids(self) -> None:
+        scenarios: list[Any] = ["{bad-json", "", fixture.FixtureError("psql timed out")]
+        for index, setup_result in enumerate(scenarios, start=17):
+            with self.subTest(setup_result=repr(setup_result)):
+                with tempfile.TemporaryDirectory(prefix="fixture-parse-compensation-") as tmp:
+                    root = Path(tmp)
+                    run_id = f"e2e-e0f012345678-{index}"
+                    state = {"org": False, "setup_calls": 0}
+
+                    def psql_handler(sql: str) -> str:
+                        lowered = sql.lower()
+                        if "fixture_setup_rows" in lowered:
+                            state["org"] = True
+                            state["setup_calls"] += 1
+                            if isinstance(setup_result, Exception):
+                                raise setup_result
+                            return setup_result
+                        if "fixture_hard_delete_reviewed_order" in lowered:
+                            state["org"] = False
+                            return ""
+                        if "fixture_org_table_leaks" in lowered:
+                            return (
+                                json.dumps({"orgs": [str(uuid.uuid4())]})
+                                if state["org"]
+                                else "{}"
+                            )
+                        return ""
+
+                    commands = FakeCommands(psql_handler=psql_handler)
+                    code = fixture.main(
+                        [
+                            "setup",
+                            "--run-id",
+                            run_id,
+                            "--manifest-out",
+                            str(root / "manifest.json"),
+                            "--credentials-out",
+                            str(root / "credentials.json"),
+                        ],
+                        commands=commands,
+                        environ={"MARKHAND_PROFILE": "dev"},
+                    )
+                    self.assertNotEqual(code, 0)
+                    self.assertEqual(state["setup_calls"], 1)
+                    self.assertFalse(state["org"], "ambiguous setup must be compensated")
+                    self.assertTrue(
+                        any(
+                            "fixture_hard_delete_reviewed_order" in sql
+                            for sql in commands.psql_calls
+                        )
+                    )
 
 
 if __name__ == "__main__":
