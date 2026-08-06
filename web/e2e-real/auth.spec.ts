@@ -4,7 +4,7 @@
 import { expect, test } from '@playwright/test';
 import { login } from './support';
 
-test('the built SPA boots against the real backend and logs in with the seeded admin', async ({
+test('the built SPA boots against the real backend and logs in with runtime credentials', async ({
   page,
 }) => {
   await page.goto('/login');

@@ -141,7 +141,7 @@ describe('loadRuntimeFixture', () => {
     ).toThrow(RuntimeConfigError);
     expect(() =>
       loadRuntimeFixture({ MARKHAND_E2E_REAL_FIXTURE_FILE: path }),
-    ).toThrow(/collectionName/);
+    ).toThrow(/missing or invalid required field/);
   });
 
   it('rejects fixed POC seed collection name instead of inventing a fallback', () => {
