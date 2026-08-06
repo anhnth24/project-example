@@ -50,8 +50,12 @@ P2-20 is the first independently reviewable child of umbrella P2-15.
 5. Real tests stay serial; required scenarios cannot skip.
 6. Network fault shaping may delay/slow then `continue` to the real backend; must not synthesize success/authorization.
 7. P2-20 owns base staging/redaction/validation; P2-23 owns release-wide retention/enforcement.
-8. No dependency/pin/converter/native/public API/schema changes. If reality requires one, stop and record a **blocker** — do not implement it under this plan.
-9. Avoid Rust production-code changes. Mandatory Rust pre-push gates apply only if Rust files change.
+8. No dependency/pin/converter/native-runtime/public API/schema changes. If reality requires one,
+   stop and record a **blocker** — do not implement it under this plan.
+9. Owner approved one narrow dev-only Rust exception on 2026-08-06:
+   `dev-hash-password --stdin` may be added so runtime fixture passwords never enter
+   process argv. No server/library behavior changes. Every push containing this change
+   runs the mandatory Rust pre-push gates.
 
 ## Implementation plan
 
@@ -80,6 +84,12 @@ namespace with runtime credentials and resource IDs; refuses production profile.
   `deploy/scripts/test_web_e2e_real_fixture.py` can use deterministic fake
   `psql`/HTTP/MinIO/Qdrant results without a live stack. T8 adds a live Compose
   setup→cleanup→verify-clean cycle.
+- Modify dev-only `crates/server/src/bin/dev-hash-password.rs` to accept `--stdin`,
+  reject empty/multiline input without echoing it, and retain the existing single argv
+  password mode for current seed scripts. `LiveCommands.hash_password` must invoke only
+  `cargo run -q -p fileconv-server --bin dev-hash-password -- --stdin`, pass the runtime
+  password through subprocess stdin, enforce the shared remaining timeout, and validate
+  the returned Argon2id PHC string.
 - Reuse existing seed primitives patterns from `seed-dev-password.sh` /
   `seed-poc-org.sh` / Postgres `psql` via Compose; do **not** change migrations or
   production seed SQL
@@ -112,11 +122,15 @@ used by server config), CLI exits non-zero before any write.
    cleanup, checksum write, and idempotent `verify-clean`.
 3. Negative: missing Compose/DB → fail closed; partial cleanup → non-zero + leak report
    (IDs only).
+4. RED→GREEN for the approved helper: Rust tests cover stdin success, empty/multiline
+   rejection, and legacy argv compatibility; Python tests assert helper argv contains no
+   password and stdin carries the secret without recording it.
 
 **Commands:**
 
 ```bash
 python3 deploy/scripts/test_web_e2e_real_fixture.py
+cargo test -p fileconv-server --bin dev-hash-password
 ```
 
 **Expected RED reason:** refuse/cleanup/leak assertions absent before implementation.
@@ -415,6 +429,7 @@ python3 scripts/check-dependency-policy.py
 | Real Playwright | `web/e2e-real/runtime.ts`, `web/e2e-real/support.ts`, `web/e2e-real/*.spec.ts`, `web/playwright.config.ts`, `web/src/test/e2eRealRuntimeConfig.test.ts`, `web/src/test/playwrightRealConfig.test.ts` |
 | Mock suite (regression only) | `web/e2e/**` — do not weaken; no forceStatus in real |
 | Existing runtime config (consume, do not redesign) | `MARKHAND_MAX_UPLOAD_BYTES`, `MARKHAND_RATE_ROUTE_PER_MINUTE`, `MARKHAND_PROFILE` |
+| Approved dev-only helper | `crates/server/src/bin/dev-hash-password.rs`: add tested stdin input; retain existing argv mode for current seed scripts; no server/library API change |
 | Catalog / plan | `plans/markhand-web/backlog/phase-2/issues/README.md` (Plan file link + later status), this plan |
 | Out of module | `crates/**` production logic, OpenAPI, migrations, converter, pins, desktop app code, P2-21/22/23 scopes |
 
@@ -454,7 +469,7 @@ python3 scripts/check-dependency-policy.py
 | A18 | Real tests serial; required scenarios cannot skip | `playwright.config.ts` real project; specs | Config assert + CI run | Real project | `workers: 1`; skipped count 0 |
 | A19 | Sanitized manifest complete; traces/screenshots restricted | artifacts module + config | Artifact unit tests + CI | Artifact dir | Manifest fields present; checksums match; no content/cred leak |
 | A20 | Mock suite no regression | `web/e2e/**` untouched in intent | `make check-web` / Playwright mock job as applicable | Mock vite | Mock green |
-| A21 | No dep/pin/converter/native/public API/schema change | Diff review | `git diff` review | N/A | Diff limited to deploy scripts + web e2e-real + plan/catalog; else blocker |
+| A21 | No dep/pin/converter/native-runtime/public API/schema change | Diff review | `git diff` review | Approved dev-only password-helper stdin exception | Diff limited to deploy scripts + web e2e-real + plan/catalog and the tested helper exception; else blocker |
 
 ## Required tests / evidence
 
@@ -486,7 +501,8 @@ python3 scripts/check-architecture-boundaries.py
 - `pnpm --dir web api:check` — only if OpenAPI/generated client touched (should not be)
 - `python3 scripts/build-roadmap.py --check` + `sync-github-issues.py --dry-run` — when
   catalog status/counts change
-- Rust fmt/metadata/dependency-policy — only if Rust files change
+- Rust fmt/metadata/dependency-policy — mandatory because the owner-approved dev helper
+  change touches Rust
 
 **Artifacts to retain (sanitized):** manifest JSON, Playwright JUnit/list reporter output
 without traces of secrets, redacted service log excerpts on failure, fixture checksum,
@@ -511,6 +527,10 @@ multi-org remains P2-22.
 - Download capability tokens must not appear in artifacts/logs
 - Preview content may appear in live browser assertions but must not be retained in
   uploaded artifacts (canary)
+
+**Approved security exception to original file scope:** owner explicitly approved
+`Duyệt sửa dev-hash-password nhận stdin.` on 2026-08-06. The helper remains dev-only,
+keeps legacy argv compatibility, and fixture tooling must use stdin exclusively.
 
 **Migration:** N/A — no schema/API migration in scope. If implementers discover a hard
 requirement for migration, record Blocked with exact gap; do not expand scope.
@@ -541,9 +561,9 @@ authZ and public contracts untouched.
   `759d0cd` (implementation had not started at either SHA).
 - Task 1 fixture implementation/fix range: `794b8d0`…`0fb7e50`; 29 hermetic fixture
   tests and Python compilation pass. Independent task review approves every static/
-  hermetic requirement except the portable password-hash path: current code depends on
-  undeclared Linux SONAME `libargon2.so.1`; owner decision for a dev-only Rust
-  `dev-hash-password --stdin` extension remains pending.
+  hermetic requirement except the portable password-hash path. Owner approved replacing
+  the undeclared Linux SONAME `libargon2.so.1` path with a dev-only Rust
+  `dev-hash-password --stdin` extension; implementation/re-review is pending.
 - Exact-SHA full-stack evidence: _pending — do not fabricate._
 - Sanitized manifest path + fixture checksum: _pending._
 - Independent review outcome: _pending._

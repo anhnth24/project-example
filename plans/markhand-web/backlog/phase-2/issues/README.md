@@ -636,8 +636,8 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-20 — Real E2E foundation + auth/library/upload/actions
 
-- **Status:** In progress — delivery plan đã linked; run-scoped fixture Task 1 đang ở
-  vòng independent review/fix, còn một owner decision cho secure portable password hash.
+- **Status:** In progress — delivery plan đã linked; owner duyệt dev-only
+  `dev-hash-password --stdin`, run-scoped fixture Task 1 đang ở vòng re-review cuối.
 - **Plan file:** [P2-20 detailed implementation plan](../../../../reports/plan-2026-08-06-p2-20-real-e2e-foundation.md)
 - **Objective:** Tạo harness real-browser cô lập, deterministic và fail-closed; chạy
   auth/library/upload/document-action outcomes qua built SPA + real server/PostgreSQL/
