@@ -62,6 +62,27 @@ export async function login(page: Page): Promise<void> {
 }
 
 /**
+ * Submits the login form with runtime viewer credentials (collection read,
+ * no `doc.upload`) on the current page and waits for the in-app shell.
+ */
+export async function submitViewerLoginForm(page: Page): Promise<void> {
+  const { viewerEmail, viewerPassword } = runtimeCredentials();
+  await page.getByLabel('Email').fill(viewerEmail);
+  await page.getByLabel('Mật khẩu').fill(viewerPassword);
+  await page.getByRole('button', { name: 'Đăng nhập' }).click();
+  await expect(page.getByRole('link', { name: 'Thư viện' })).toBeVisible();
+  await expect(page).not.toHaveURL(/\/login/);
+}
+
+/**
+ * Logs in with the runtime secondary viewer actor (no `doc.upload`).
+ */
+export async function loginAsViewer(page: Page): Promise<void> {
+  await page.goto('/login');
+  await submitViewerLoginForm(page);
+}
+
+/**
  * Logs out via the account menu (same interaction as mock `e2e/auth.spec.ts`).
  */
 export async function logout(page: Page): Promise<void> {
@@ -69,6 +90,40 @@ export async function logout(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Đăng xuất' }).click();
   await expect(page).toHaveURL(/\/login/);
   await expect(page.getByRole('link', { name: 'Thư viện' })).toHaveCount(0);
+}
+
+/**
+ * Wall-clock of the last hit on the IP-scoped expensive route buckets
+ * (`route:reindex:…` / `route:upload:…`). Shared across real specs in one
+ * worker so Task 6/7 spacing survives file boundaries under
+ * `MARKHAND_RATE_ROUTE_PER_MINUTE=1`.
+ */
+let lastReindexRouteHitAtMs = 0;
+let lastUploadRouteHitAtMs = 0;
+
+/** Pad past a 1-token / 60s bucket; matches Task 6's local helper. */
+const ROUTE_RATE_WINDOW_MS = 65_000;
+
+/**
+ * Waits until the named expensive-route token bucket can accept another call.
+ */
+export async function ensureRouteRateWindow(route: 'reindex' | 'upload'): Promise<void> {
+  const last = route === 'reindex' ? lastReindexRouteHitAtMs : lastUploadRouteHitAtMs;
+  if (last === 0) return;
+  const waitMs = ROUTE_RATE_WINDOW_MS - (Date.now() - last);
+  if (waitMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+}
+
+/** Records that a real reindex/upload route call consumed a rate-limit token. */
+export function markRouteRateHit(route: 'reindex' | 'upload'): void {
+  const now = Date.now();
+  if (route === 'reindex') {
+    lastReindexRouteHitAtMs = now;
+  } else {
+    lastUploadRouteHitAtMs = now;
+  }
 }
 
 /** Observed real HTTP statuses for the one-shot invalid-bearer `/auth/me` recovery. */

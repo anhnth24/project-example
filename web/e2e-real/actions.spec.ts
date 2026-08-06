@@ -1,32 +1,18 @@
-// Real-backend document mutation scenarios (P2-20 Task 6): reindex on an
-// indexed document, retry from the fixture failed document, and delete with
-// confirm. No fetch mock, no `route.fulfill()`, no auth bypass.
+// Real-backend document mutation + action-error scenarios (P2-20 Tasks 6–7):
+// reindex, retry-from-failed, delete, viewer 403 on reindex, and real 429
+// under the orchestrator's lowered `MARKHAND_RATE_ROUTE_PER_MINUTE`.
 //
-// Reindex/retry both hit `POST /documents/{id}/reindex`. The orchestrator sets
-// `MARKHAND_RATE_ROUTE_PER_MINUTE=1` for Task 7's deterministic 429, so this
-// file spaces the two successful reindex calls by one token-bucket window.
+// No fetch mock, no `route.fulfill()`, no auth bypass. Rate-limit tokens for
+// `route:reindex:…` / `route:upload:…` are shared via `support.ts` helpers.
 import { expect, test } from '@playwright/test';
-import { login, openRunCollection, runtimeFixture } from './support';
-
-/** Wall-clock of the last successful reindex in this worker (serial real project). */
-let lastSuccessfulReindexAtMs = 0;
-
-/**
- * Waits until the route token bucket can accept another reindex. Capacity is 1
- * token / 60s under the real orchestrator's lowered knob; pad to 65s.
- */
-async function ensureReindexRateWindow(): Promise<void> {
-  if (lastSuccessfulReindexAtMs === 0) return;
-  const elapsed = Date.now() - lastSuccessfulReindexAtMs;
-  const waitMs = 65_000 - elapsed;
-  if (waitMs > 0) {
-    await new Promise((resolve) => setTimeout(resolve, waitMs));
-  }
-}
-
-function markSuccessfulReindex(): void {
-  lastSuccessfulReindexAtMs = Date.now();
-}
+import {
+  ensureRouteRateWindow,
+  login,
+  loginAsViewer,
+  markRouteRateHit,
+  openRunCollection,
+  runtimeFixture,
+} from './support';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -39,11 +25,13 @@ test('reindex on an indexed document shows the enqueue success notice', async ({
   await login(page);
   await openRunCollection(page);
 
+  await ensureRouteRateWindow('upload');
   await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
     name: fileName,
     mimeType: 'text/plain',
     buffer: Buffer.from(fileContents),
   });
+  markRouteRateHit('upload');
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -51,12 +39,12 @@ test('reindex on an indexed document shows the enqueue success notice', async ({
   await row.getByRole('button', { name: new RegExp(fileName) }).click();
   await expect(row.getByText('Đã lập chỉ mục')).toBeVisible({ timeout: 60_000 });
 
-  await ensureReindexRateWindow();
+  await ensureRouteRateWindow('reindex');
   await page.getByRole('button', { name: 'Lập chỉ mục lại' }).click();
   await expect(page.getByText('Đã đưa tài liệu vào hàng đợi lập chỉ mục.')).toBeVisible({
     timeout: 15_000,
   });
-  markSuccessfulReindex();
+  markRouteRateHit('reindex');
 });
 
 test('fixture failed document shows the failed badge and retry enqueues reindex', async ({
@@ -80,7 +68,7 @@ test('fixture failed document shows the failed badge and retry enqueues reindex'
   // Actions mount in the preview panel for the ?doc= selection.
   await expect(page.getByRole('button', { name: 'Thử lại lập chỉ mục' })).toBeVisible();
 
-  await ensureReindexRateWindow();
+  await ensureRouteRateWindow('reindex');
   const reindexResponsePromise = page.waitForResponse((response) => {
     if (response.request().method() !== 'POST') return false;
     return new URL(response.url()).pathname === `/api/v1/documents/${failedDocumentId}/reindex`;
@@ -93,7 +81,7 @@ test('fixture failed document shows the failed badge and retry enqueues reindex'
   await expect(page.getByText('Đã đưa tài liệu vào hàng đợi lập chỉ mục.')).toBeVisible({
     timeout: 15_000,
   });
-  markSuccessfulReindex();
+  markRouteRateHit('reindex');
 });
 
 test('delete with confirm removes the document row after refetch', async ({ page }) => {
@@ -105,11 +93,13 @@ test('delete with confirm removes the document row after refetch', async ({ page
   await login(page);
   await openRunCollection(page);
 
+  await ensureRouteRateWindow('upload');
   await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
     name: fileName,
     mimeType: 'text/plain',
     buffer: Buffer.from(fileContents),
   });
+  markRouteRateHit('upload');
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -126,4 +116,133 @@ test('delete with confirm removes the document row after refetch', async ({ page
   await expect(table.getByRole('button', { name: new RegExp(fileName) })).toHaveCount(0, {
     timeout: 30_000,
   });
+});
+
+test('viewer reindex is denied with a real HTTP 403 and the document remains', async ({ page }) => {
+  test.slow();
+
+  const fileName = `e2e-real-actions-403-${Date.now()}.txt`;
+  const fileContents = `P2-20 actions 403 body ${Date.now()} unique.`;
+  const { collectionId } = runtimeFixture();
+
+  // Admin creates a durable indexed row the viewer can see but cannot reindex.
+  await login(page);
+  await openRunCollection(page);
+
+  await ensureRouteRateWindow('upload');
+  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
+    name: fileName,
+    mimeType: 'text/plain',
+    buffer: Buffer.from(fileContents),
+  });
+  markRouteRateHit('upload');
+
+  const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
+  const row = table.getByRole('row').filter({ hasText: fileName });
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await row.getByRole('button', { name: new RegExp(fileName) }).click();
+  await expect(row.getByText('Đã lập chỉ mục')).toBeVisible({ timeout: 60_000 });
+
+  const selectedDoc = new URL(page.url()).searchParams.get('doc');
+  expect(selectedDoc, 'expected ?doc= after selecting the indexed row').toBeTruthy();
+
+  await page.getByRole('button', { name: /^Tài khoản:/ }).click();
+  await page.getByRole('button', { name: 'Đăng xuất' }).click();
+  await expect(page).toHaveURL(/\/login/);
+
+  // Permission check runs after the reindex route bucket — wait so a prior
+  // reindex does not turn this into a 429 instead of 403.
+  await ensureRouteRateWindow('reindex');
+
+  await loginAsViewer(page);
+  // Do not use openRunCollection: viewers lack `doc.upload`, so the upload
+  // control that helper asserts is not rendered.
+  await page.goto(`/library/${collectionId}?doc=${selectedDoc}`);
+
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByRole('button', { name: 'Lập chỉ mục lại' })).toBeVisible();
+
+  const reindex403 = page.waitForResponse((response) => {
+    if (response.request().method() !== 'POST') return false;
+    if (!/\/api\/v1\/documents\/[^/]+\/reindex$/.test(new URL(response.url()).pathname)) {
+      return false;
+    }
+    return response.status() === 403;
+  });
+
+  await page.getByRole('button', { name: 'Lập chỉ mục lại' }).click();
+  const denied = await reindex403;
+  expect(denied.status()).toBe(403);
+  // Denied path still consumed the expensive-route token (check_route before
+  // require_permission) — record it so the 429 scenario can reuse the empty
+  // bucket without an extra wait when ordered next.
+  markRouteRateHit('reindex');
+
+  await expect(page.getByRole('alert')).toContainText(
+    'Bạn không có quyền thực hiện thao tác này với tài liệu này.',
+  );
+  await expect(row).toBeVisible();
+  await expect(row.getByText('Đã lập chỉ mục')).toBeVisible();
+});
+
+test('reindex under the lowered route limit returns a real 429 with retry-after copy', async ({
+  page,
+}) => {
+  test.slow();
+
+  const fileName = `e2e-real-actions-429-${Date.now()}.txt`;
+  const fileContents = `P2-20 actions 429 body ${Date.now()} unique.`;
+
+  await login(page);
+  await openRunCollection(page);
+
+  await ensureRouteRateWindow('upload');
+  await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
+    name: fileName,
+    mimeType: 'text/plain',
+    buffer: Buffer.from(fileContents),
+  });
+  markRouteRateHit('upload');
+
+  const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
+  const row = table.getByRole('row').filter({ hasText: fileName });
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await row.getByRole('button', { name: new RegExp(fileName) }).click();
+  await expect(row.getByText('Đã lập chỉ mục')).toBeVisible({ timeout: 60_000 });
+
+  // Prefer exhausting the bucket with a successful reindex then an immediate
+  // second call. If a prior test (viewer 403) already emptied the bucket and
+  // we have not waited, the first call itself is the real 429.
+  const reindexPath = /\/api\/v1\/documents\/[^/]+\/reindex$/;
+  const firstReindex = page.waitForResponse((response) => {
+    if (response.request().method() !== 'POST') return false;
+    return reindexPath.test(new URL(response.url()).pathname);
+  });
+
+  await page.getByRole('button', { name: 'Lập chỉ mục lại' }).click();
+  const first = await firstReindex;
+  markRouteRateHit('reindex');
+
+  if (first.status() === 200) {
+    await expect(page.getByText('Đã đưa tài liệu vào hàng đợi lập chỉ mục.')).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const secondReindex = page.waitForResponse((response) => {
+      if (response.request().method() !== 'POST') return false;
+      return reindexPath.test(new URL(response.url()).pathname) && response.status() === 429;
+    });
+    await page.getByRole('button', { name: 'Lập chỉ mục lại' }).click();
+    const limited = await secondReindex;
+    expect(limited.status()).toBe(429);
+    expect(limited.headers()['retry-after']).toBeTruthy();
+    markRouteRateHit('reindex');
+  } else {
+    expect(first.status()).toBe(429);
+    expect(first.headers()['retry-after']).toBeTruthy();
+  }
+
+  await expect(page.getByRole('alert')).toHaveText(
+    /Quá nhiều yêu cầu\. Vui lòng thử lại sau (\d+ giây|ít phút|khoảng \d+ phút)\./,
+  );
 });

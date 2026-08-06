@@ -7,7 +7,7 @@
 // `upload.spec.ts`). Download completion is the browser download event plus
 // real 200s — DocumentRowActions has no success Notice for download.
 import { expect, test } from '@playwright/test';
-import { login, openRunCollection } from './support';
+import { ensureRouteRateWindow, login, markRouteRateHit, openRunCollection } from './support';
 
 test('navigating to the run collection shows the upload panel', async ({ page }) => {
   await login(page);
@@ -27,11 +27,13 @@ test('uploading a unique text document indexes and previews markdown', async ({ 
   await login(page);
   await openRunCollection(page);
 
+  await ensureRouteRateWindow('upload');
   await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
     name: fileName,
     mimeType: 'text/plain',
     buffer: Buffer.from(fileContents),
   });
+  markRouteRateHit('upload');
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
@@ -61,11 +63,13 @@ test('downloading Markdown issues a capability, redeems it, and does not log the
   await login(page);
   await openRunCollection(page);
 
+  await ensureRouteRateWindow('upload');
   await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
     name: fileName,
     mimeType: 'text/plain',
     buffer: Buffer.from(fileContents),
   });
+  markRouteRateHit('upload');
 
   const table = page.getByRole('table', { name: 'Danh sách tài liệu' });
   const row = table.getByRole('row').filter({ hasText: fileName });
