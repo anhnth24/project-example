@@ -1079,6 +1079,115 @@ class ReviewFixRedTests(unittest.TestCase):
             ):
                 self.assertNotIn(forbidden, stderr)
 
+    def test_qdrant_collections_come_from_database_signatures(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-qdrant-signatures-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-90abcdef0123-12")
+            manifest = root / "manifest.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+            signature = "a" * 64
+
+            class SignatureCommands(FakeCommands):
+                collections: list[str]
+
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.collections = []
+
+                def psql(self, sql: str, **_kwargs: Any) -> str:
+                    if "fixture_resource_inventory" in sql.lower():
+                        return json.dumps(
+                            {
+                                "documents": [],
+                                "objects": [],
+                                "signatures": [signature],
+                            }
+                        )
+                    if "fixture_org_table_leaks" in sql.lower():
+                        return "{}"
+                    return "0"
+
+                def qdrant_point_ids(
+                    self,
+                    collections: list[str],
+                    org_id: str,
+                    *,
+                    timeout: float,
+                ) -> list[str]:
+                    self.collections = collections
+                    return []
+
+            commands = SignatureCommands()
+            code, _stderr, _ = self._invoke(
+                [
+                    "verify-clean",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                ],
+                commands=commands,
+            )
+            self.assertEqual(code, 0)
+            self.assertEqual(commands.collections, ["markhand_chunks_" + signature])
+
+    def test_verification_reports_rows_from_any_org_scoped_table(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="fixture-all-org-tables-") as tmp:
+            root = Path(tmp)
+            ids = _sample_ids("e2e-a0bcdef01234-13")
+            manifest = root / "manifest.json"
+            _write_json(manifest, _manifest_payload(ids), mode=0o644)
+
+            def psql_handler(sql: str) -> str:
+                if "fixture_resource_inventory" in sql.lower():
+                    return '{"documents":[],"objects":[],"signatures":[]}'
+                if "fixture_org_table_leaks" in sql.lower():
+                    return json.dumps({"future_org_table": [ids["orgId"]]})
+                return "0"
+
+            code, stderr, _ = self._invoke(
+                [
+                    "verify-clean",
+                    "--run-id",
+                    ids["runId"],
+                    "--manifest",
+                    str(manifest),
+                ],
+                commands=FakeCommands(psql_handler=psql_handler),
+            )
+            self.assertNotEqual(code, 0)
+            self.assertIn("future_org_table", stderr)
+            self.assertIn(ids["orgId"], stderr)
+
+    def test_hard_delete_uses_reviewed_order_and_limits_trigger_bypass(self) -> None:
+        ids = _sample_ids("e2e-b0cdef012345-14")
+        commands = FakeCommands()
+        fixture._hard_delete_run_rows(commands, fixture._manifest_ids(_manifest_payload(ids)))
+        sql = "\n".join(commands.psql_calls).lower()
+        expected_order = [
+            "delete from conflict_evidence",
+            "delete from conflicts",
+            "delete from claims",
+            "delete from chunks",
+            "delete from derived_artifacts",
+            "delete from document_versions",
+            "delete from documents",
+            "delete from collections",
+            "delete from projects",
+            "delete from orgs",
+            "delete from users",
+        ]
+        positions = [sql.index(marker) for marker in expected_order]
+        self.assertEqual(positions, sorted(positions))
+        replica = sql.index("session_replication_role = replica")
+        origin = sql.index("session_replication_role = origin")
+        self.assertLess(replica, origin)
+        self.assertLess(
+            origin - replica,
+            len(sql) // 2,
+            "trigger bypass must be narrowly scoped to immutable fixture rows",
+        )
+
     def test_run_identity_is_bounded_and_suffix_uses_full_run_id(self) -> None:
         left = "e2e-" + "a" * 39 + "0-1234567890"
         right = "e2e-" + "a" * 39 + "1-1234567890"
