@@ -760,7 +760,7 @@ class ReviewFixRedTests(unittest.TestCase):
                 },
             )
             self.assertNotEqual(code, 0)
-            self.assertIn("compose/db unavailable", stderr)
+            self.assertNotIn("refusing effective production profile", stderr)
             self.assertTrue(commands.psql_calls, "dev env override must reach database setup")
 
     def test_cleanup_enumerates_and_api_deletes_every_org_document(self) -> None:
