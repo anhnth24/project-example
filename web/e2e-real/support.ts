@@ -12,9 +12,10 @@
 //     then runs `playwright test --project=real`. Running this suite any
 //     other way requires reproducing all of that by hand.
 //   - Smoke scope only, deliberately small: login against runtime fixture
-//     credentials, library shell on the run-scoped collection, and upload →
-//     indexed against the real conversion/indexing pipeline. Broader flows
-//     (actions, org switch) belong to later tasks — see P2-20 plan.
+//     credentials (login/logout/deep-link/401-refresh), library shell on the
+//     run-scoped collection, and upload → indexed against the real
+//     conversion/indexing pipeline. Broader flows (actions, org switch)
+//     belong to later tasks — see P2-20 plan.
 //
 // FIXTURE GROUND TRUTH: admin/viewer credentials and collection IDs come from
 // `deploy/scripts/web_e2e_real_fixture.py` setup output files referenced by
@@ -38,17 +39,26 @@ export function runtimeFixture(): RuntimeFixture {
 }
 
 /**
- * Logs in with runtime admin credentials via the real `/login` form and
- * waits until the in-app shell (the "Thư viện" rail link) is mounted.
+ * Submits the login form with runtime admin credentials on the current page
+ * (must already be `/login`, including `/login?next=…`) and waits until the
+ * in-app shell (the "Thư viện" rail link) is mounted.
  */
-export async function login(page: Page): Promise<void> {
+export async function submitLoginForm(page: Page): Promise<void> {
   const { adminEmail, adminPassword } = runtimeCredentials();
-  await page.goto('/login');
   await page.getByLabel('Email').fill(adminEmail);
   await page.getByLabel('Mật khẩu').fill(adminPassword);
   await page.getByRole('button', { name: 'Đăng nhập' }).click();
   await expect(page.getByRole('link', { name: 'Thư viện' })).toBeVisible();
   await expect(page).not.toHaveURL(/\/login/);
+}
+
+/**
+ * Logs in with runtime admin credentials via the real `/login` form and
+ * waits until the in-app shell (the "Thư viện" rail link) is mounted.
+ */
+export async function login(page: Page): Promise<void> {
+  await page.goto('/login');
+  await submitLoginForm(page);
 }
 
 /**
@@ -58,6 +68,72 @@ export async function logout(page: Page): Promise<void> {
   await page.getByRole('button', { name: /^Tài khoản:/ }).click();
   await page.getByRole('button', { name: 'Đăng xuất' }).click();
   await expect(page).toHaveURL(/\/login/);
+  await expect(page.getByRole('link', { name: 'Thư viện' })).toHaveCount(0);
+}
+
+/** Observed real HTTP statuses for the one-shot invalid-bearer `/auth/me` recovery. */
+export interface AuthMeRefreshRecovery {
+  firstMeStatus: number;
+  refreshStatus: number;
+  retriedMeStatus: number;
+}
+
+/**
+ * Installs a one-shot Playwright route on `GET /api/v1/auth/me` that replaces
+ * only the first request's bearer with an invalid value, then
+ * `route.continue()`s to the real server. Subsequent `/auth/me` calls are
+ * forwarded unchanged. Never fulfills synthetic auth responses.
+ *
+ * Returns the observed real statuses (401 → refresh 200 → retried me 200)
+ * after `trigger` completes. Failed-refresh → `/login` bounce remains covered
+ * by `api/client` + `api/session` unit tests rather than a second real-stack
+ * scenario here.
+ */
+export async function withOneShotInvalidAuthMeBearer(
+  page: Page,
+  trigger: () => Promise<void>,
+): Promise<AuthMeRefreshRecovery> {
+  let corruptedMe = false;
+  await page.route('**/api/v1/auth/me', async (route) => {
+    if (route.request().method() !== 'GET' || corruptedMe) {
+      await route.continue();
+      return;
+    }
+    corruptedMe = true;
+    const headers = {
+      ...route.request().headers(),
+      authorization: 'Bearer e2e-real-invalid-access-token',
+    };
+    await route.continue({ headers });
+  });
+
+  const firstMe401 = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/auth/me') &&
+      response.request().method() === 'GET' &&
+      response.status() === 401,
+  );
+  const refresh200 = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/auth/refresh') &&
+      response.request().method() === 'POST' &&
+      response.status() === 200,
+  );
+  const retriedMe200 = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/auth/me') &&
+      response.request().method() === 'GET' &&
+      response.status() === 200,
+  );
+
+  await trigger();
+  const [firstMe, refresh, retriedMe] = await Promise.all([firstMe401, refresh200, retriedMe200]);
+
+  return {
+    firstMeStatus: firstMe.status(),
+    refreshStatus: refresh.status(),
+    retriedMeStatus: retriedMe.status(),
+  };
 }
 
 /**
