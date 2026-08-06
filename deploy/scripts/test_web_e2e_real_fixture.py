@@ -956,10 +956,21 @@ class ReviewFixRedTests(unittest.TestCase):
         )
         commands.http = mock.Mock(return_value=fixture.HttpResponse(404, {}, b""))
         recorded: list[tuple[list[str], dict[str, Any]]] = []
+        saw_password_stdin = False
+        saw_sql_stdin = False
 
         def fake_run(argv: list[str], **kwargs: Any) -> Any:
-            recorded.append((list(argv), kwargs))
-            return mock.Mock(returncode=0, stdout="hash-or-zero", stderr="")
+            nonlocal saw_password_stdin, saw_sql_stdin
+            if argv[0] == "cargo":
+                saw_password_stdin = kwargs.get("input") == secret_password + "\n"
+                stdout = PasswordHelperAdapterRedTests.VALID_HASH
+            else:
+                saw_sql_stdin = kwargs.get("input") == secret_sql
+                stdout = ""
+            safe_kwargs = dict(kwargs)
+            safe_kwargs["input"] = "<redacted>"
+            recorded.append((list(argv), safe_kwargs))
+            return mock.Mock(returncode=0, stdout=stdout, stderr="")
 
         secret_password = "runtime-password-secret"
         secret_sql = "SELECT 'password-hash-secret', 'private/object-key';"
@@ -970,8 +981,10 @@ class ReviewFixRedTests(unittest.TestCase):
             commands.object_exists(object_key)
 
         argv_blob = "\n".join(" ".join(argv) for argv, _kwargs in recorded)
-        self.assertEqual(len(recorded), 1, "only psql is a subprocess")
-        self.assertEqual(recorded[0][1]["input"], secret_sql)
+        self.assertEqual(len(recorded), 2)
+        self.assertTrue(saw_password_stdin)
+        self.assertTrue(saw_sql_stdin)
+        self.assertTrue(all(kwargs["input"] == "<redacted>" for _argv, kwargs in recorded))
         for forbidden in (
             secret_password,
             secret_sql,
@@ -1520,8 +1533,8 @@ class SecondReviewRedTests(unittest.TestCase):
 class PasswordHelperAdapterRedTests(unittest.TestCase):
     VALID_HASH = (
         "$argon2id$v=19$m=19456,t=2,p=1$"
-        "c2FsdHNhbHRzYWx0MTIzNA$"
-        "ZmFrZWhhc2hmYWtlaGFzaGZha2VoYXNoZmFrZWhhc2g"
+        "DJuP5fQiiu8+OsqZhAX0Sw$"
+        "YQIhOhW0a/xYGU8DZf94y4YIaKmD4TpMsjWnb8yuv7g"
     )
 
     def test_password_uses_exact_stdin_helper_command_without_secret_retention(self) -> None:
@@ -1537,7 +1550,7 @@ class PasswordHelperAdapterRedTests(unittest.TestCase):
             if "input" in safe_kwargs:
                 safe_kwargs["input"] = "<redacted>"
             recorded.append((list(argv), safe_kwargs))
-            return mock.Mock(returncode=0, stdout=self.VALID_HASH + "\n", stderr="")
+            return mock.Mock(returncode=0, stdout=self.VALID_HASH, stderr="")
 
         with mock.patch.object(fixture.subprocess, "run", side_effect=fake_run):
             result = commands.hash_password(secret, timeout=7.5)

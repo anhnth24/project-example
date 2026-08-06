@@ -3,12 +3,12 @@
 
 from __future__ import annotations
 
-import ctypes
 import datetime as dt
 import hashlib
 import hmac
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -30,6 +30,10 @@ from web_e2e_fixture_identity import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPO_ROOT / "deploy" / "dev" / "compose.yml"
 QDRANT_COLLECTION_PREFIX = "markhand_chunks_"
+ARGON2ID_PHC_RE = re.compile(
+    r"^\$argon2id\$v=19\$m=19456,t=2,p=1\$"
+    r"[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$"
+)
 
 
 @dataclass
@@ -93,52 +97,6 @@ def collection_name_for_signature(signature: str) -> str:
     return QDRANT_COLLECTION_PREFIX + validate_signature(signature)
 
 
-def _hash_password_native(password: str) -> str:
-    """Argon2id PHC hash without putting the password in argv or environment."""
-
-    if not password:
-        raise FixtureError("password hashing failed")
-    try:
-        library = ctypes.CDLL("libargon2.so.1")
-        function = library.argon2id_hash_encoded
-    except (OSError, AttributeError) as error:
-        raise FixtureError("native Argon2 password hashing unavailable") from error
-    function.argtypes = [
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_size_t,
-        ctypes.c_void_p,
-        ctypes.c_size_t,
-        ctypes.c_size_t,
-        ctypes.c_char_p,
-        ctypes.c_size_t,
-    ]
-    function.restype = ctypes.c_int
-    password_bytes = password.encode("utf-8")
-    salt = os.urandom(16)
-    output = ctypes.create_string_buffer(256)
-    result = function(
-        2,
-        19_456,
-        1,
-        password_bytes,
-        len(password_bytes),
-        salt,
-        len(salt),
-        32,
-        output,
-        len(output),
-    )
-    if result != 0:
-        raise FixtureError("native Argon2 password hashing failed")
-    encoded = output.value.decode("ascii", errors="strict")
-    if not encoded.startswith("$argon2id$v=19$m=19456,t=2,p=1$"):
-        raise FixtureError("native Argon2 password hashing returned invalid output")
-    return encoded
-
-
 class LiveCommands:
     """Compose PostgreSQL plus in-process authenticated storage probes."""
 
@@ -156,9 +114,37 @@ class LiveCommands:
     def hash_password(self, password: str, *, timeout: float = 30.0) -> str:
         if timeout <= 0:
             raise FixtureError("overall fixture deadline exceeded")
-        value = _hash_password_native(password)
-        if timeout <= 0:
-            raise FixtureError("overall fixture deadline exceeded")
+        if not password:
+            raise FixtureError("password hashing failed")
+        command = [
+            "cargo",
+            "run",
+            "-q",
+            "-p",
+            "fileconv-server",
+            "--bin",
+            "dev-hash-password",
+            "--",
+            "--stdin",
+        ]
+        try:
+            process = subprocess.run(
+                command,
+                cwd=str(self.repo_root),
+                input=password + "\n",
+                capture_output=True,
+                text=True,
+                check=False,
+                env=dict(self.environ),
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise FixtureError("password hashing timed out") from error
+        if process.returncode != 0:
+            raise FixtureError("password hashing failed")
+        value = process.stdout or ""
+        if not ARGON2ID_PHC_RE.fullmatch(value):
+            raise FixtureError("password hashing returned invalid output")
         return value
 
     def psql(
