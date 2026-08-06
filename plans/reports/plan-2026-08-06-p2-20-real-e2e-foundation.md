@@ -635,11 +635,18 @@ catalog status advance with roadmap regen only when status changes.
 ## Definition of done
 
 - [ ] Every acceptance row (A1–A21) has reviewable evidence linked above.
-- [ ] Focused Python orchestration/fixture/artifact tests green.
+- [x] Focused Python orchestration/fixture/artifact tests green
+      (31 + 17 + 11 at `fe12e4c`; see Task 8 evidence).
 - [ ] Full real dev stack run (`DEV_STACK_MODE=full`) executes all required P2-20
       scenarios with skipped count 0 and teardown ok.
+      **Blocked 2026-08-06:** Docker unavailable in Task 8 Cloud VM (no binary /
+      socket); live sanitized manifest not recorded.
 - [ ] `make check-web` and `make check-desktop` green for the delivery SHA.
-- [ ] Architecture (and API/roadmap if applicable) checks green.
+      Task 8: `pnpm --dir web test --run` **556 passed**; `make check-web` build
+      step blocked by pre-existing missing `@types/node` in this environment;
+      `check-desktop` not re-run in Task 8.
+- [x] Architecture (and API/roadmap if applicable) checks green
+      (`check-architecture-boundaries.py` passed; `api:check` passed / N/A drift).
 - [ ] No Rust production change; if any Rust file slipped in, Rust pre-push gates green
       and justified — otherwise revert.
 - [ ] No secret/content leak in retained artifacts; redactor/canary paths proven.
