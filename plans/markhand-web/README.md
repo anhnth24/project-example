@@ -14,7 +14,7 @@ Kế hoạch này biến report kiến trúc thành các gói việc có depende
 test và gate đo được. Không dùng thời gian lịch làm tiêu chí; chỉ chuyển phase khi
 gate kỹ thuật của phase trước đã đạt.
 
-Issue-level backlog (116 issues):
+Issue-level backlog (120 issues):
 [`backlog/README.md`](backlog/README.md).
 
 Roadmap dashboard tương tác:
@@ -45,35 +45,38 @@ không bị local override cũ che mất.
 | 1A | Tách logic RAG dùng chung thành `crates/knowledge`, desktop không đổi hành vi | [Phase plan](phase-1a-knowledge-extraction.md) | [10 issues](backlog/phase-1a/issues/README.md) |
 | 1B | POC single-org hoàn chỉnh: upload → convert → index → Q&A citation | [Phase plan](phase-1b-single-org-poc.md) | [24 issues](backlog/phase-1b/issues/README.md) |
 | 1C | Multi-org, RBAC/ACL, quota atomic và denial test | [Phase plan](phase-1c-multi-org-security.md) | [13 issues](backlog/phase-1c/issues/README.md) |
-| 2 | Web SPA MVP: login, library, Q&A, admin tối thiểu | [Phase plan](phase-2-web-spa.md) | [19 issues](backlog/phase-2/issues/README.md) |
+| 2 | Web SPA MVP: login, library, Q&A, admin tối thiểu | [Phase plan](phase-2-web-spa.md) | [23 issues](backlog/phase-2/issues/README.md) |
 | 3 | Port intelligence: BRD/PRD, quality, PII, bảng, version, export | [Phase plan](phase-3-intelligence.md) | [14 issues](backlog/phase-3/issues/README.md) |
 | 4 | OIDC/SSO, hardening production, DR và onboarding/help | [Phase plan](phase-4-production-hardening.md) | [14 issues](backlog/phase-4/issues/README.md) |
 
-## Tiến độ milestone (2026-08-05)
+## Tiến độ milestone (2026-08-06)
 
-Tổng **116 issue** trong catalog: **80 Done**, **7 In progress**, **0 Review**, **29 Backlog**.
+Tổng **120 issue** trong catalog: **81 Done**, **5 In progress**, **0 Review**,
+**1 Ready**, **4 Blocked**, **29 Backlog**.
 Nguồn sự thật là `**Status:**` trong từng issue catalog; bảng dưới tóm tắt theo phase.
 GitHub milestone progress được đồng bộ bởi workflow
 [`Sync Markhand Web issues`](../../.github/workflows/sync-markhand-issues.yml) khi
 [`github-issues.json`](backlog/github-issues.json) thay đổi trên `master`.
 
-| Phase | Done | Active (In progress + Review) | Backlog | Gate / ghi chú |
-|---|---:|---:|---:|---|
-| F | 12/12 | 0 | 0 | Foundation gate đạt |
-| 0 | 10/10 | 0 | 0 | Discovery gates đạt |
-| 1A | 10/10 | 0 | 0 | Extraction gate đạt |
-| 1B | 24/24 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
-| 1C | 10/13 | 2 | 1 | 1C-04/07/09/10/11 Done (CI `6833f57`, run 30678318560); 1C-08 CI half / deployed → PR 5; exit gate 1C-12/1C-13 còn mở |
-| 2 | 14/19 | 5 | 0 | MVP mock/CI xanh; P2-17 Done sau independent final review; exit gate chờ 1C + E2E deploy thật |
-| 3 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
-| 4 | 0/14 | 0 | 14 | Chưa activate — chờ Phase 3 |
+| Phase | Done | Active (In progress + Review) | Ready | Blocked | Backlog | Gate / ghi chú |
+|---|---:|---:|---:|---:|---:|---|
+| F | 12/12 | 0 | 0 | 0 | 0 | Foundation gate đạt |
+| 0 | 10/10 | 0 | 0 | 0 | 0 | Discovery gates đạt |
+| 1A | 10/10 | 0 | 0 | 0 | 0 | Extraction gate đạt |
+| 1B | 24/24 | 0 | 0 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
+| 1C | 10/13 | 2 | 0 | 0 | 1 | 1C-04/07/09/10/11 Done (CI `6833f57`, run 30678318560); 1C-08 CI half / deployed → PR 5; exit gate 1C-12/1C-13 còn mở |
+| 2 | 15/23 | 3 | 1 | 4 | 0 | P2-15 thành umbrella blocked; P2-20 Ready; exit gate chờ 1C + blocking real/DAST matrix |
+| 3 | 0/14 | 0 | 0 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
+| 4 | 0/14 | 0 | 0 | 0 | 14 | Chưa activate — chờ Phase 3 |
 
-**Critical path hiện tại:** hoàn thiện 1C denial suite (1C-12/1C-13) + deployed
-1C-08 half → Phase 2 completion gate (P2-15/P2-16 trên backend thật).
+**Critical path hiện tại:** P2-20 real fixture/foundation đã `Ready`; song song hoàn
+thiện P2-18/P2-19 và 1C denial suite (1C-12/1C-13) để mở P2-21/P2-22/P2-23 →
+P2-15 umbrella → P2-16 final gate.
 
-Issue Phase 2 gần đây (owner request 2026-07-29): **P2-17 Document graph → Done**
-(MVP + similarity + deep-link + fail-soft evidence đã qua independent final review);
-P2-18 Project grouping và P2-19 Chat history vẫn In progress.
+Issue Phase 2 gần đây: **P2-10/P2-17 → Done** sau independent review; P2-18 Project
+grouping và P2-19 Chat history vẫn In progress. Owner duyệt thiết kế full real-E2E và
+canonical draft P2-20 ngày 2026-08-06: P2-15 là umbrella, P2-20 `Ready`, P2-21…23
+blocked theo dependency/security gate.
 
 ## Dependency và đường găng
 

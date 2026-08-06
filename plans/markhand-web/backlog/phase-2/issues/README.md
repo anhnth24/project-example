@@ -4,18 +4,11 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-08-06).** MVP xây trên mock server đã merge vào
-`master`: **14/19 issue Done** (P2-01…09, P2-11…14, P2-17). **1 in Review, 4 In
-progress**: P2-10 (Q&A — UI/mock/stream + conflict-warning #374; scope-wide `as_of`
-web gap đóng, đang Review), P2-15
-(E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed và lần chạy
-live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa chạy live),
-P2-18 (Project grouping — owner request mới 2026-07-29, org → project → collection →
-document, MVP server+web+mock xong; **#374** bổ sung 409 `name_taken` cho
-`PATCH /projects/{projectId}` vào spec + regenerate contract — xem chi tiết bên dưới),
-P2-16 (serve SPA / final gate), và P2-19 (chat history). P2-17 Document graph đã qua
-independent final review và chuyển `Done`; P2-11/P2-12 rời khỏi Blocked nhờ lát
-membership API (1C-02/1C-11 slice) landed ở #317.
+**Trạng thái tổng quan (cập nhật 2026-08-06).** Phase 2 có **23 issue** sau khi owner
+duyệt thiết kế full real-E2E: **15 Done**, **3 In progress** (P2-16/P2-18/P2-19),
+**4 Blocked** (P2-15/P2-21/P2-22/P2-23), và **1 Ready** (P2-20, canonical draft được
+owner duyệt ngày 2026-08-06). P2-15 là umbrella, chỉ `Done` sau P2-20…23; P2-16 vẫn là
+final gate. P2-10/P2-17 đã qua independent review và `Done`.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
 > mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
@@ -31,6 +24,10 @@ Truy vết merge: **#311** (P2-01…06 — foundations, client, SSE, mock, login
 security scan; P2-17 graph→document deep-link; P2-18 spec 409 PATCH; 1C-12 fixture/test
 + hạ tầng gate 1C — kèm loạt fix CI: repin canonical gates SHA, cargo/pnpm audit
 exception có hồ sơ, Trivy `ignore-unfixed`, 2 flaky test integration, contract drift).
+**#377/#379** sửa worker harness và chứng minh real E2E login/library/upload→indexed
+3/3 trên master ancestry. **#378** chạy ZAP live ba lần; run cuối 0 fail, 66 pass, còn
+một alert informational `10049`. Thiết kế owner duyệt ngày 2026-08-06:
+[`P2-15 full real-E2E`](../../../../../docs/superpowers/specs/2026-08-06-p2-15-full-real-e2e-design.md).
 P2-13 đi cùng wave 0 (#311); phần CSP/header của nó thực tế landed ở P2-16 (#313).
 
 ## Dependency
@@ -43,7 +40,11 @@ P2-01 → P2-02 → P2-03 → P2-04
                                       └→ P2-12
 P2-01 + P2-07/10 → P2-13
 P2-05 + P2-07..12 → P2-14
-P2-02..14 → P2-15
+P2-02..14 → P2-20
+P2-18 + P2-19 + P2-20 → P2-21
+P2-18 + 1C-12 + P2-20 → P2-22
+P2-21 + P2-22 + 1C-13 → P2-23
+P2-20 + P2-21 + P2-22 + P2-23 → P2-15
 P2-15 + Phase 1C gate → P2-16
 ```
 
@@ -315,30 +316,44 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-15 — Contract/integration/E2E suite
 
-- **Status:** In progress — #318 + follow-up. **Nửa mock-based xong**: harness Playwright (mock-mode build, Chromium) + 17 spec chạy trong CI (job `web-e2e`) — auth/library/actions/member-admin/usage/permission-deny/quota, và **upload→indexed đã hết hoãn** (`web/e2e/upload.spec.ts`: chặn XHR bằng `page.route()` rồi replay qua fetch-mock trong page — happy path + 413). **Harness real-deployment đã landed**: `deploy/scripts/web-e2e-real.sh` + Playwright project `real` (`web/e2e-real/`, smoke login + library trên credential seed), chạy trong CI job `dev-stack` tier full (classifier đã có carve-out full-tier cho harness); lần chạy live đầu tiên là chính CI của PR chứa nó. **ask→citation đã hết hoãn** (P2-10): `web/e2e/qa.spec.ts` — search→preview, ask→stream→citations, kịch bản `citation_revoked` giữa chừng, kịch bản fallback extractive, conflict-warning đa chế độ (#374). **Upload→indexed real-mode đã hết hoãn (#374)**: `web/e2e-real/upload.spec.ts` — upload thật qua `POST /uploads`, chờ terminal state `indexed` do worker thật convert/index (không nudge, không interception), preview render đúng nội dung đã convert; không assert badge trung gian "Đang chuyển đổi" vì file .txt nhỏ convert nhanh hơn tick poll 5s (lần chạy live đầu xác nhận đúng dự báo trong spec), state machine trung gian vẫn do mock suite cover. **OWASP baseline đã wire, SCA/image scan đã chạy live lần đầu (#374)**: CI có 3 job mới —
-`security-deps` (cargo-audit qua `rustsec/audit-check` + `pnpm audit --audit-level
-high`, unconditional, fail High/Critical — lần chạy đầu lộ nợ có sẵn, xử lý bằng
-`cargo update crossbeam-epoch` + ignore-list có hồ sơ: `.cargo/audit.toml` 5 advisory
-không có đường fix qua parent pin, `pnpm.auditConfig.ignoreGhsas` cho js-yaml bị
-redocly pin cứng =4.2.0), `security-image` (Trivy scan
-`deploy/Dockerfile.server`/`Dockerfile.worker`, gate theo `deploy_images` classifier
-output hoặc master push, fail High/Critical **có fix** — `ignore-unfixed: true` vì lần
-chạy đầu fail toàn CVE base-image Debian `will_not_fix`/`fix_deferred`; exception qua
-`.trivyignore`),
-`owasp-baseline` (ZAP baseline scan qua `zaproxy/action-baseline`, opt-in
-`workflow_dispatch`/label `run-live-gates` giống `phase1b-o04-release-gate`,
-**warning-only** — `fail_action: false` + `continue-on-error: true`, chưa vào
-branch-protection required checks vì alert-filter rules chưa tune trên corpus thật).
-Xem `docs/conventions/ci.md`. **Còn hoãn**: chạy live
-`owasp-baseline` lần đầu + tune alert-filter + quyết định promote sang blocking gate.
-Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-switch.spec.ts` chứng minh "no stale org-A render" (mock 24 spec). Unit/component đã có (462 test, tăng từ P2-10's reducer/QaPage suite).
-
-- **Plan/files:** Unit API/SSE/cache; component auth/library/Q&A/admin; Playwright full
-  flows, org switch, deny/quota; CI artifacts redacted.
-- **Depends:** P2-02…14; deployed integration cần 1C endpoints.
-- **Acceptance/tests:** Mock deterministic + real deployment E2E; no stale-scope render;
-  desktop regression.
-- **Security:** Ephemeral users/credentials. **Out:** thay backend denial suite.
+- **Status:** Blocked — umbrella chờ P2-20, P2-21, P2-22 và P2-23 `Done`.
+- **Objective:** Đóng qualification suite Phase 2 bằng parity giữa 38 outcome mock hiện
+  có và real backend/browser matrix, kèm blocking OWASP/artifact gate; không dùng mock
+  E2E thay integration hoặc thay Phase 1C denial suite.
+- **Implementation plan:** Phân rã theo
+  [thiết kế owner đã duyệt](../../../../../docs/superpowers/specs/2026-08-06-p2-15-full-real-e2e-design.md):
+  P2-20 xây fixture/orchestrator + auth/library/upload/actions; P2-21 real knowledge
+  flows; P2-22 real multi-org/admin/denial; P2-23 ghép matrix thành required gate và
+  promote ZAP fail-closed. P2-15 chỉ tổng hợp evidence và đóng lifecycle sau bốn child.
+- **Files/modules:** Umbrella authority:
+  `plans/markhand-web/backlog/phase-2/issues/README.md`, thiết kế P2-15, child issue/plan
+  evidence, generated roadmap/tracker. Implementation owner/module nằm trong P2-20…23;
+  P2-15 không có production-code PR riêng.
+- **Dependencies/blocks:** P2-20…23 phải `Done`; P2-21 còn phụ thuộc P2-18/P2-19;
+  P2-22 phụ thuộc P2-18/1C-12; P2-23 phụ thuộc P2-21/P2-22/1C-13 và required-check
+  configuration. P2-16 tiếp tục chờ P2-15.
+- **Acceptance criteria:** Mọi mock outcome có real scenario hoặc exclusion kỹ thuật
+  được independent review; closure-SHA chạy real matrix với 0 required skip; desktop,
+  SCA/image, blocking ZAP, artifact checksum/secret-canary và teardown đều pass; không
+  còn Critical/Important security finding chưa disposition bằng reviewable evidence;
+  bốn child và P2-15 evidence nhất quán.
+- **Required tests/evidence:** Exact-SHA CI links từ từng child; final required
+  aggregator run; sanitized manifest nêu SHA/ref/tool versions/scenario inventory/
+  duration/outcome/skipped/fixture checksum/teardown/artifact checksums; branch/ruleset
+  evidence cho required check. Historical evidence: real 3/3 ở
+  [PR #377 run 30835682218](https://github.com/anhnth24/project-example/actions/runs/30835682218)
+  và [master-ancestry job 91853591422](https://github.com/anhnth24/project-example/actions/runs/30864553227/job/91853591422);
+  ZAP live gần nhất
+  [job 91823571982](https://github.com/anhnth24/project-example/actions/runs/30854831271/job/91823571982)
+  có 0 fail/66 pass + informational alert `10049`.
+- **Security/migration:** Mandatory independent review cho auth/session, tenant/RBAC/ACL,
+  upload/storage, quota, secret/egress, dependency và CI permissions. Runtime credentials
+  chỉ tồn tại trong isolated dev/CI; artifact không chứa content/prompt/PII/token/key/
+  signed URL/cookie/password. Không migration trực tiếp ở umbrella; child nào đổi schema
+  phải có migration/rollback riêng.
+- **Out of scope:** Thay backend denial/RLS/ACL gate bằng browser tests; production
+  test-only route/bypass; thay public API/converter/native pin chỉ để làm test; P2-16
+  packaging/SLO; Phase 3 intelligence.
 
 ## P2-16 — Production build/static serving/final gate
 
@@ -529,11 +544,6 @@ Org-switch đã hết hoãn: 1C-01 ship list/switch, UI switcher + E2E `org-swit
   permission mới); RLS org-scoped như `collections`. **Out:** xóa dự án, gán một bộ sưu
   tập vào nhiều dự án, project-scoped permission riêng.
 
-## Exit gate
-
-Phase 2 chỉ đóng khi P2-16 đạt trên backend deploy thật và Phase 1C denial/security
-gate đã pass; mock E2E không thay thế integration.
-
 ## P2-19 — Chat history (private per-user) + multi-project `projectIds[]`
 
 - **Status:** In progress — owner yêu cầu mới 2026-07-29. Backend-only vòng này (server
@@ -623,3 +633,162 @@ gate đã pass; mock E2E không thay thế integration.
   `citationFootnotes.test.ts` (thuần, 10 case) + E2E `chat-history.spec.ts` mới (2 spec:
   2 câu → "Cuộc trò chuyện mới" → 1 câu nữa → mở lại phiên đầu thấy nguyên transcript +
   citation click được; đổi tên + xóa phiên).
+
+## P2-20 — Real E2E foundation + auth/library/upload/actions
+
+- **Status:** Ready — owner duyệt canonical draft ngày 2026-08-06; dependencies và
+  Definition of Ready đã được revalidate.
+- **Objective:** Tạo harness real-browser cô lập, deterministic và fail-closed; chạy
+  auth/library/upload/document-action outcomes qua built SPA + real server/PostgreSQL/
+  Qdrant/storage/workers, không production test seam hoặc mock fetch.
+- **Implementation plan:** Thêm run ID namespace; sinh runtime credential/resource
+  fixture bằng dev/CI-only setup; bounded teardown; refactor real Playwright support;
+  port scenario-equivalent login/logout, giữ intended deep-link qua anonymous login,
+  one-time 401 refresh/session recovery, collection/preview/download/delete/reindex/
+  retry, upload progress→indexed/preview, 413 và action-error flows. Supervisor phải
+  fail khi fixture/worker/cleanup/redactor/artifact validation lỗi.
+- **Files/modules:** Owner theo CODEOWNERS `@anhnth24`; `deploy/scripts/web-e2e-real.sh`,
+  fixture/orchestration scripts + tests dưới `deploy/scripts/`, `web/e2e-real/support.ts`,
+  real auth/library/upload/action specs, Playwright real config, CI `dev-stack` wiring.
+- **Dependencies/blocks:** P2-02…14 `Done`; real 3-flow baseline đã pass trên master
+  ancestry. Không phụ thuộc P2-18/P2-19 hoặc Phase 1C closure; không còn blocker để bắt
+  đầu delivery plan.
+- **Acceptance criteria:** Mỗi run có namespace/credential tạm; không dùng fixed seeded
+  account làm authority; setup/teardown idempotent và bounded; required process death,
+  cleanup leak, redactor failure hoặc secret-canary match làm job fail. Real Chromium
+  giữ anonymous intended route sau login, recover đúng một refresh, hiển thị upload
+  progress rồi terminal indexed/preview, và pass toàn bộ library/actions đã liệt kê;
+  HTTP mutation/error thực sự chạm backend; 0 required skip; mock suite không regression.
+- **Required tests/evidence:** TDD cho orchestration negative paths;
+  `python3 deploy/scripts/test_web_e2e_real_orchestration.py`;
+  `DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh`; `make check-web`;
+  `make check-desktop`; exact-SHA `dev-stack` job và sanitized manifest chứa scenario
+  inventory, tool/SHA/ref, fixture checksum, duration/outcome, teardown và artifact
+  checksums.
+- **Security/migration:** Mandatory review cho auth/session, upload/converter/storage,
+  runtime secrets/egress và CI permissions. Credential chỉ ở masked runtime state; không
+  content/prompt/PII/token/key/signed URL/cookie/password trong logs/artifacts. Dev/CI
+  fixture tool phải refuse production profile. Mỗi run tạo rồi xoá bounded user/session/
+  org/collection/document/upload/job/object records trong isolated test tenant; không đổi
+  production API hoặc tenant semantics. N/A migration hiện tại; nếu implementation cần
+  schema thì phải tách migration/rollback review, không tự mở rộng scope.
+- **Out of scope:** Q&A/version/graph/chat (P2-21); multi-org/admin/quota (P2-22);
+  blocking gate/ZAP (P2-23); production test endpoint/bypass; parallel real workers
+  trước khi isolation được đo/review.
+
+## P2-21 — Real knowledge flows
+
+- **Status:** Blocked — chờ P2-18, P2-19 và P2-20 `Done`.
+- **Objective:** Chứng minh search, streaming Q&A, citation/version modes, graph và
+  private chat history hoạt động qua real server/storage/provider boundaries với dữ
+  liệu Việt deterministic và không leak scope/version metadata.
+- **Implementation plan:** Seed run-scoped documents qua real convert/index workers;
+  dùng approved loopback mock embedding/provider profile; port search→preview,
+  ask-stream→citation→preview, no-answer, provider fallback, citation revoke, current/
+  `as_of`/compare/history, multi-project narrowing, graph filter/table/keyboard/deep-link
+  và chat-history outcomes. Search preview phải render sanitized content. Fault phải được
+  tạo bằng process/API/ACL thật, không production route flag.
+- **Files/modules:** Owner web/server test boundaries theo CODEOWNERS `@anhnth24`;
+  `web/e2e-real/{support,qa,graph,chat-history,...}`, real fixture scripts,
+  `deploy/scripts/web-e2e-real.sh`, provider supervision, relevant server integration
+  tests và sanitized manifest renderer.
+- **Dependencies/blocks:** P2-17 `Done`; P2-18/P2-19/P2-20 chưa `Done`. Public
+  search/ask/SSE/citation contracts là authority; không đổi contract chỉ để test dễ hơn.
+- **Acceptance criteria:** Stream event order/terminal durable; citation mở đúng
+  document/version; revoke không complete sau khi mất quyền; fallback chỉ pass khi fault
+  được quan sát; `as_of`/compare/history đúng effective versions; project scope không
+  widen; search preview sanitize; graph filter/table fallback/keyboard/deep-link đúng;
+  chat history per-user giữ reload/pagination và không cross-user. Worker/provider death
+  được phân loại riêng; 0 required skip.
+- **Required tests/evidence:** Focused server SSE/revoke integration; real Playwright
+  project qua `DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh`; mock Q&A/graph/
+  chat regression; `make check-web`; API drift check; exact-SHA manifest và CI job chứng
+  minh provider fault/revoke thực sự xảy ra, successful teardown và không skip.
+- **Security/migration:** Mandatory review cho tenant/ACL, citation identity, LLM/provider
+  content policy, secret/egress và persisted chat. Không log prompt/document/citation
+  quote/vector/token. N/A migration theo scope test-only; production schema/API change
+  cần issue/migration/rollback riêng.
+- **Out of scope:** Auth/library fixture foundation (P2-20); admin/quota/denial matrix
+  (P2-22); required gate/ZAP (P2-23); model-quality benchmark hoặc Phase 3 intelligence.
+
+## P2-22 — Real multi-org security/admin
+
+- **Status:** Blocked — chờ P2-18, P2-20 và 1C-12 `Done`.
+- **Objective:** Chứng minh qua browser + real API rằng org/project scope, membership
+  admin, permission và quota failures không render hoặc mutate dữ liệu tenant ngoài
+  quyền, kể cả late HTTP/SSE response.
+- **Implementation plan:** Seed hai org cô lập, owner/admin/member actors, nhiều
+  project/collection, same-org restricted collection và quota states; port org switch/
+  org listing/denied switch, stale HTTP/SSE discard, project narrowing, invite/role/
+  suspend/reactivate/remove, last-owner 409, owner-tier/collection/document-action 403,
+  API-backed usage values, quota/upload 429 và stale-update outcomes. Delay layer chỉ
+  forward response backend thật, không synthesize allow.
+- **Files/modules:** Owner security/web/server test boundaries theo CODEOWNERS
+  `@anhnth24`; real multi-org/admin/usage specs, runtime fixture setup/cleanup,
+  test-runner reverse proxy hoặc Playwright scheduling, denial manifest renderer,
+  `deploy/scripts/web-e2e-real.sh`, relevant server denial/integration suites.
+- **Dependencies/blocks:** P2-18/P2-20 và 1C-12 chưa `Done`; 1C-12 vẫn là authority cho
+  backend denial. P2-22 không thể dùng browser test để thay/waive RLS/ACL evidence.
+- **Acceptance criteria:** Sau switch không còn org-A ID/title/version/content hoặc
+  active stream render; foreign/unknown scope no-oracle; forbidden mutation không đổi
+  state; org list/current state đúng; suspend/reactivate và member mutations đúng role;
+  last-owner trả 409; usage UI khớp API; collection/document actions 403; quota không
+  over-admit và UI map 429 actionable; incomplete fixture hard-fail thay vì owner
+  fallback. Denial manifest chỉ metadata/hash và 0 required skip.
+- **Required tests/evidence:** Exploit/denial fixture RED trước; Phase 1C-12 exact-SHA
+  evidence; real Playwright via full dev stack; focused server auth/ACL/quota integration;
+  `make check-web`; `make check-rust-tests`; sanitized manifest nêu route template,
+  expected/actual status, actor role, org relationship, request-ID hash, teardown và CI
+  links.
+- **Security/migration:** Mandatory independent security review cho auth/session,
+  tenant/RBAC/ACL, quota, audit, fixture credentials, SQL/RLS và CI. Không raw ID/content/
+  prompt/PII/token/key/signed URL trong artifact. N/A migration theo test scope; schema
+  fixture helper không được đổi production semantics hoặc bypass RLS.
+- **Out of scope:** Thay Phase 1C denial/load gate; Q&A/graph/chat behavior (P2-21);
+  gate promotion/ZAP (P2-23); custom roles/SSO; production seed account.
+
+## P2-23 — Blocking real-E2E/OWASP qualification gate
+
+- **Status:** Blocked — chờ P2-21, P2-22 và 1C-13 `Done`, cùng owner/admin capability
+  cấu hình required check.
+- **Objective:** Biến full real Playwright matrix, desktop regression, SCA/image scan,
+  blocking ZAP, artifact validation và teardown thành một required qualification check
+  ổn định cho mọi thay đổi liên quan.
+- **Implementation plan:** Mở rộng classifier cho web/server/OpenAPI/migration/deploy/
+  locks/workflow/security paths; chạy child jobs trên relevant change; stable aggregator
+  luôn report success/failure và chỉ no-op khi classifier chứng minh irrelevant. Promote
+  ZAP thành automatic `fail_action: true`, bỏ `continue-on-error`; áp scoped exception
+  lifecycle cho alert informational `10049`; validate/sanitize/checksum artifact trước
+  upload; chạy full real matrix serial; cấu hình aggregator thành required check. P2-20
+  sở hữu base artifact staging/redaction; P2-23 sở hữu release manifest, retention và
+  enforcement của toàn matrix.
+- **Files/modules:** Owner CI/security/deploy theo CODEOWNERS `@anhnth24`;
+  `.github/workflows/ci.yml`, `scripts/classify-ci-changes.py` + self-tests,
+  `docs/conventions/ci.md`, ZAP rules/exception record, artifact manifest/redactor/
+  validator scripts/tests, Playwright reporters, branch/ruleset evidence.
+- **Dependencies/blocks:** P2-21/P2-22/1C-13 chưa `Done`; required-check configuration
+  cần repository owner/admin. Security exception cho `10049` cần owner, exact URL scope,
+  rationale, compensating cache controls, expiry và retest condition.
+- **Acceptance criteria:** Relevant path không thể skip real matrix/ZAP/desktop/scans;
+  irrelevant path cho explicit aggregator no-op; mọi unknown ZAP WARN/FAIL block; rules
+  change cần live before/after evidence; required scenario skipped, missing artifact,
+  checksum mismatch, teardown failure hoặc secret/content canary đều block. Branch/ruleset
+  thực tế yêu cầu stable aggregator. Real matrix chạy serial cho tới khi có issue riêng
+  chứng minh isolation cho parallel. Release manifest bắt buộc có SHA/ref/tool versions,
+  scenario inventory/duration/outcome/skipped count, fixture checksum, teardown và mọi
+  artifact checksum; trace/screenshot chỉ giữ cho non-content page allowlist.
+- **Required tests/evidence:** `python3 scripts/classify-ci-changes.py --self-test`;
+  workflow contract/negative tests; redactor/manifest/checksum/canary tests; closure-SHA
+  CI chạy full real matrix + desktop + dependency/image + ZAP với 0 required skip;
+  sanitized Playwright/ZAP/scan/desktop artifacts; GitHub required-check/ruleset evidence.
+- **Security/migration:** Mandatory security/CI-permission/dependency/egress review.
+  Workflow actions pin full SHA; permissions least privilege; artifact retention explicit;
+  exception lifecycle reviewable. N/A database migration; rollback restore warning-only
+  workflow nhưng không xóa historical reports, và P2-15/P2-16 phải quay lại Blocked.
+- **Out of scope:** Authenticated active DAST/pentest; Phase 1C denial replacement;
+  production deploy/SLO/HA/CDN; đổi app behavior chỉ để silence scanner.
+
+## Exit gate
+
+Phase 2 chỉ đóng khi P2-20…23 và P2-15 `Done`, P2-16 đạt trên backend deploy thật, và
+Phase 1C denial/security gate đã pass; mock E2E không thay thế integration.
