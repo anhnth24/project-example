@@ -201,6 +201,8 @@ require_regex "$IMAGES_LOCK" 'python-slim-bookworm' "images.lock records python 
 require_regex "$ENV_EXAMPLE" "$MOCK_SIG" ".env.example has mock index signature"
 require_regex "$ENV_EXAMPLE" "$AITEAMVN_SIG" ".env.example documents AITeamVN index signature"
 require_regex "$COMPOSE_FILE" "$MOCK_SIG" "compose defaults to mock index signature"
+require_regex "$COMPOSE_FILE" 'MARKHAND_QA_ALLOW_UNVERIFIED_LLM.*:-0' \
+  "compose keeps unverified LLM output opt-in"
 require_regex "$IMAGES_LOCK" "$MOCK_SIG" "images.lock records mock signature"
 require_regex "$IMAGES_LOCK" "$AITEAMVN_SIG" "images.lock records AITeamVN signature"
 require_regex "$ROOT/deploy/scripts/poc-up.sh" 'poc-set-quota\.sh' \
