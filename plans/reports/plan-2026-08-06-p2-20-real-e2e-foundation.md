@@ -553,20 +553,34 @@ authZ and public contracts untouched.
 
 ### Implementation PRs
 
-- _Pending — fill with real PR URL(s) after implementation lands._
+- https://github.com/anhnth24/project-example/pull/395 (open; Task 1 closeout on
+  `cursor/p2-20-real-e2e-foundation-e9d6`)
 
 ### Recorded commit/SHA references
 
 - Plan authorship/review commits: `0988c1c0b7fa32438ad381c20f06adaf1f13e34f`,
   `759d0cd` (implementation had not started at either SHA).
-- Task 1 fixture implementation/fix range: `794b8d0`…`0fb7e50`; 29 hermetic fixture
-  tests and Python compilation pass. Independent task review approves every static/
-  hermetic requirement except the portable password-hash path. Owner approved replacing
-  the undeclared Linux SONAME `libargon2.so.1` path with a dev-only Rust
-  `dev-hash-password --stdin` extension; implementation/re-review is pending.
-- Exact-SHA full-stack evidence: _pending — do not fabricate._
-- Sanitized manifest path + fixture checksum: _pending._
-- Independent review outcome: _pending._
+- Task 1 fixture + stdin helper range: `794b8d0`…`40a7c31` (fixture tooling through
+  `LiveCommands.hash_password` → `cargo run … --bin dev-hash-password -- --stdin`).
+  Undeclared `libargon2.so.1` / native-argon2 live path removed; FakeCommands test
+  labels may still mention native-argon2 but the live adapter uses only the approved
+  helper. Legacy argv mode retained for seed scripts only.
+- Owner stdin approval: initial approval 2026-08-06 (`Duyệt sửa dev-hash-password nhận
+  stdin.`); **reconfirmed** in coordinator run `bc-233a3415` (dev-only `--stdin`;
+  keep legacy argv for seeds; fixture LiveCommands must use `--stdin` exclusively; no
+  `libargon2.so.1` / undeclared SONAME path).
+- Task 1 closeout verification (worktree
+  `/workspace/.worktrees/p2-20-real-e2e-foundation-e911` @ `40a7c31` + this evidence
+  commit):
+  - `python3 deploy/scripts/test_web_e2e_real_fixture.py` → **31 passed**, 0 failed
+  - `cargo test -p fileconv-server --bin dev-hash-password` → **4 passed**, 0 failed
+  - `cargo fmt --all -- --check` → pass
+  - `cargo metadata --locked --format-version 1 --no-deps` → pass
+  - `python3 scripts/check-dependency-policy.py` → pass
+- Exact-SHA full-stack evidence: _pending (Tasks 2–8 / live Compose cycle)._
+- Sanitized manifest path + fixture checksum: _pending (live setup)._
+- Independent review outcome: _pending — independent re-review still required before
+  Task 1 is fully Approved; implementer closeout alone is not approval._
 
 ## Definition of done
 
