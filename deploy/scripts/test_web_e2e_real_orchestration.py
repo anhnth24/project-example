@@ -25,6 +25,69 @@ HERMETIC_ADMIN_USER_ID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"
 HERMETIC_RUN_ID = "e2e-abcdef012345-1"
 HERMETIC_ADMIN_PASSWORD = "hermetic-admin-password-not-for-logs"
 
+# Keep in sync with web_e2e_real_artifacts.REQUIRED_SCENARIO_TITLES / Playwright --list.
+REQUIRED_SCENARIO_TITLES = (
+    "reindex on an indexed document shows the enqueue success notice",
+    "fixture failed document shows the failed badge and retry enqueues reindex",
+    "delete with confirm removes the document row after refetch",
+    "viewer reindex is denied with a real HTTP 403 and the document remains",
+    "reindex under the lowered route limit returns a real 429 with retry-after copy",
+    "login with runtime credentials shows the in-app shell",
+    "logout returns to /login without the library rail",
+    "anonymous deep-link to the run collection preserves ?next= through login",
+    "a one-shot invalid bearer on GET /auth/me recovers via real refresh without /login bounce",
+    "navigating to the run collection shows the upload panel",
+    "uploading a unique text document indexes and previews markdown",
+    "downloading Markdown issues a capability, redeems it, and does not log the token",
+    "uploading a file against the real backend reaches indexed, and its preview renders",
+    "a delayed POST /uploads shows upload progress then reaches indexed preview",
+    "a real oversized upload returns 413 and the too-large alert without an indexed row",
+)
+
+
+def _hermetic_playwright_results() -> dict:
+    specs = []
+    for title in REQUIRED_SCENARIO_TITLES:
+        specs.append(
+            {
+                "title": title,
+                "ok": True,
+                "tests": [
+                    {
+                        "projectName": "real",
+                        "results": [
+                            {
+                                "status": "passed",
+                                "duration": 42,
+                                "errors": [],
+                                "stdout": [],
+                                "stderr": [],
+                            }
+                        ],
+                        "status": "expected",
+                    }
+                ],
+            }
+        )
+    return {
+        "suites": [
+            {
+                "title": "e2e-real",
+                "file": "e2e-real",
+                "specs": specs,
+                "suites": [],
+            }
+        ],
+        "errors": [],
+        "stats": {
+            "duration": 42 * len(REQUIRED_SCENARIO_TITLES),
+            "expected": len(REQUIRED_SCENARIO_TITLES),
+            "skipped": 0,
+            "unexpected": 0,
+            "flaky": 0,
+        },
+    }
+
 
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
@@ -41,8 +104,48 @@ class OrchestrationHarness:
         self.state.mkdir()
         self.shim_bin.mkdir()
         self.path_bin.mkdir()
+        self.root.mkdir(parents=True)
+        self._init_git_repo()
         self._install_shims()
         self._install_env()
+
+    def _init_git_repo(self) -> None:
+        (self.root / ".gitignore").write_text("target/\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "init", "-b", "hermetic-e2e"],
+            cwd=str(self.root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "e2e@example.test"],
+            cwd=str(self.root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "hermetic-e2e"],
+            cwd=str(self.root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "add", ".gitignore"],
+            cwd=str(self.root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "hermetic init"],
+            cwd=str(self.root),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
 
     def _install_env(self) -> None:
         env_dir = self.root / "deploy" / "dev"
@@ -143,17 +246,31 @@ class OrchestrationHarness:
             """,
         )
 
+        results_json = json.dumps(_hermetic_playwright_results(), indent=2)
+        # Indent so the heredoc body stays valid inside the shim script.
+        results_json_indented = "\n".join(
+            f"            {line}" if line else "" for line in results_json.splitlines()
+        )
+
         _write_executable(
             shim_bin / "pnpm",
             f"""\
             #!/usr/bin/env bash
             set -euo pipefail
+            if [[ "${{1:-}}" == "--version" ]]; then
+              echo "10.33.3"
+              exit 0
+            fi
             if [[ "$1" == "--dir" && "$3" == "build" ]]; then
               mkdir -p "{root}/web/dist"
               touch "{root}/web/dist/index.html"
               exit 0
             fi
             if [[ "$1" == "--dir" && "$3" == "exec" && "$4" == "playwright" ]]; then
+              if [[ "${{5:-}}" == "--version" ]]; then
+                echo "Version 1.55.0"
+                exit 0
+              fi
               exec "{shim_bin}/playwright-shim" "$@"
             fi
             echo "unexpected pnpm invocation: $*" >&2
@@ -171,44 +288,7 @@ class OrchestrationHarness:
             results="${{WEB_E2E_REAL_PLAYWRIGHT_RESULTS:-}}"
             if [[ -n "$results" ]]; then
               cat > "$results" <<'JSON'
-            {{
-              "suites": [
-                {{
-                  "title": "auth.spec.ts",
-                  "file": "e2e-real/auth.spec.ts",
-                  "specs": [
-                    {{
-                      "title": "login succeeds",
-                      "ok": true,
-                      "tests": [
-                        {{
-                          "projectName": "real",
-                          "results": [
-                            {{
-                              "status": "passed",
-                              "duration": 42,
-                              "errors": [],
-                              "stdout": [],
-                              "stderr": []
-                            }}
-                          ],
-                          "status": "expected"
-                        }}
-                      ]
-                    }}
-                  ],
-                  "suites": []
-                }}
-              ],
-              "errors": [],
-              "stats": {{
-                "duration": 42,
-                "expected": 1,
-                "skipped": 0,
-                "unexpected": 0,
-                "flaky": 0
-              }}
-            }}
+{results_json_indented}
             JSON
             fi
             if [[ "${{WEB_E2E_REAL_PLAYWRIGHT_FAIL:-}}" == "1" ]]; then
@@ -740,7 +820,14 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
             self.assertEqual(manifest["teardown"], {"result": "ok"})
             self.assertEqual(manifest["fixtureChecksum"], HERMETIC_FIXTURE_CHECKSUM)
             self.assertIsInstance(manifest["scenarios"], list)
-            self.assertGreaterEqual(len(manifest["scenarios"]), 1)
+            self.assertEqual(len(manifest["scenarios"]), len(REQUIRED_SCENARIO_TITLES))
+            self.assertEqual(
+                sorted(item["title"] for item in manifest["scenarios"]),
+                sorted(REQUIRED_SCENARIO_TITLES),
+            )
+            self.assertTrue(
+                all(item.get("outcome") == "passed" for item in manifest["scenarios"])
+            )
             self.assertFalse(
                 (harness.tempdir / "runtime" / "playwright-results.json").exists(),
                 msg="raw Playwright JSON must not remain after EXIT cleanup",

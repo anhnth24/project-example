@@ -25,6 +25,33 @@ REQUIRED_MANIFEST_FIELDS = (
     "artifactChecksums",
 )
 
+# Exact Playwright titles from
+# `MARKHAND_E2E_REAL=1 pnpm --dir web exec playwright test --list`.
+REQUIRED_SCENARIO_TITLES: tuple[str, ...] = (
+    "reindex on an indexed document shows the enqueue success notice",
+    "fixture failed document shows the failed badge and retry enqueues reindex",
+    "delete with confirm removes the document row after refetch",
+    "viewer reindex is denied with a real HTTP 403 and the document remains",
+    "reindex under the lowered route limit returns a real 429 with retry-after copy",
+    "login with runtime credentials shows the in-app shell",
+    "logout returns to /login without the library rail",
+    "anonymous deep-link to the run collection preserves ?next= through login",
+    "a one-shot invalid bearer on GET /auth/me recovers via real refresh without /login bounce",
+    "navigating to the run collection shows the upload panel",
+    "uploading a unique text document indexes and previews markdown",
+    "downloading Markdown issues a capability, redeems it, and does not log the token",
+    "uploading a file against the real backend reaches indexed, and its preview renders",
+    "a delayed POST /uploads shows upload progress then reaches indexed preview",
+    "a real oversized upload returns 413 and the too-large alert without an indexed row",
+)
+
+# P2-20 retains only the sanitized manifest beside the artifact directory root.
+# Reviewed companions may be added here later; until then reject any other file.
+ALLOWED_ARTIFACT_COMPANIONS: frozenset[str] = frozenset()
+
+GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+FIXTURE_CHECKSUM_RE = re.compile(r"^[a-f0-9]{64}$")
+
 FORBIDDEN_SCENARIO_KEYS = {
     "errors",
     "stdout",
@@ -90,15 +117,21 @@ def _git_info(repo_root: Path) -> dict[str, str]:
     }
 
 
-def _tool_versions() -> dict[str, str]:
+def _tool_versions(*, repo_root: Path | None = None) -> dict[str, str]:
     versions = {
         "node": _run_capture(["node", "--version"]),
         "pnpm": _run_capture(["pnpm", "--version"]),
         "playwright": "",
     }
-    playwright = _run_capture(
-        ["pnpm", "exec", "playwright", "--version"]
-    ) or _run_capture(["playwright", "--version"])
+    playwright = ""
+    if repo_root is not None:
+        playwright = _run_capture(
+            ["pnpm", "--dir", str(repo_root / "web"), "exec", "playwright", "--version"]
+        )
+    if not playwright:
+        playwright = _run_capture(
+            ["pnpm", "exec", "playwright", "--version"]
+        ) or _run_capture(["playwright", "--version"])
     versions["playwright"] = playwright
     return versions
 
@@ -196,9 +229,77 @@ def extract_scenarios(results: Mapping[str, Any]) -> tuple[list[dict[str, Any]],
 
 def _fixture_checksum(fixture: Mapping[str, Any]) -> str:
     checksum = fixture.get("checksum")
-    if not isinstance(checksum, str) or not re.fullmatch(r"[a-f0-9]{64}", checksum):
+    if not isinstance(checksum, str) or not FIXTURE_CHECKSUM_RE.fullmatch(checksum):
         raise ArtifactError("fixture checksum missing or invalid")
     return checksum
+
+
+def _validate_git_metadata(git: Any) -> None:
+    if not isinstance(git, dict) or "sha" not in git or "ref" not in git:
+        raise ArtifactError("manifest git metadata incomplete")
+    sha = git.get("sha")
+    ref = git.get("ref")
+    if not isinstance(sha, str) or not GIT_SHA_RE.fullmatch(sha) or sha == "unknown":
+        raise ArtifactError("manifest git sha invalid")
+    if not isinstance(ref, str) or not ref.strip() or ref.strip() == "unknown":
+        raise ArtifactError("manifest git ref invalid")
+
+
+def _validate_tool_versions(tools: Any) -> None:
+    if not isinstance(tools, dict):
+        raise ArtifactError("manifest toolVersions invalid")
+    if not tools:
+        raise ArtifactError("manifest toolVersions incomplete")
+    for key, value in tools.items():
+        if not isinstance(key, str) or not key.strip():
+            raise ArtifactError("manifest toolVersions invalid")
+        if not isinstance(value, str) or not value.strip():
+            raise ArtifactError("manifest toolVersions incomplete")
+
+
+def _validate_fixture_checksum_value(checksum: Any) -> None:
+    if not isinstance(checksum, str) or not FIXTURE_CHECKSUM_RE.fullmatch(checksum):
+        raise ArtifactError("fixture checksum missing or invalid")
+
+
+def _validate_required_scenarios(scenarios: list[Any]) -> None:
+    if not scenarios:
+        raise ArtifactError("manifest scenarios missing")
+    titles: list[str] = []
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            raise ArtifactError("manifest scenario invalid")
+        if set(scenario.keys()) - {"title", "outcome", "durationMs"}:
+            raise ArtifactError("manifest scenario has extra fields")
+        for key in ("title", "outcome", "durationMs"):
+            if key not in scenario:
+                raise ArtifactError("manifest scenario incomplete")
+        title = scenario.get("title")
+        outcome = scenario.get("outcome")
+        duration = scenario.get("durationMs")
+        if not isinstance(title, str) or not title.strip():
+            raise ArtifactError("manifest scenario incomplete")
+        if not isinstance(outcome, str) or not outcome.strip():
+            raise ArtifactError("manifest scenario incomplete")
+        if outcome != "passed":
+            raise ArtifactError("scenario outcome is not passed")
+        if not isinstance(duration, int) or isinstance(duration, bool) or duration < 0:
+            raise ArtifactError("manifest scenario duration invalid")
+        titles.append(title)
+
+    if len(titles) != len(set(titles)):
+        raise ArtifactError("duplicate scenario titles")
+
+    required = set(REQUIRED_SCENARIO_TITLES)
+    actual = set(titles)
+    missing = required - actual
+    if missing:
+        raise ArtifactError("missing required scenario")
+    unexpected = actual - required
+    if unexpected:
+        raise ArtifactError("unexpected scenario title")
+    if len(titles) != len(REQUIRED_SCENARIO_TITLES):
+        raise ArtifactError("required scenario inventory incomplete")
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -252,7 +353,7 @@ def write_manifest(
         "schemaVersion": 1,
         "runId": str(fixture.get("runId") or env.get("WEB_E2E_REAL_RUN_ID") or ""),
         "git": _git_info(root),
-        "toolVersions": _tool_versions(),
+        "toolVersions": _tool_versions(repo_root=root),
         "fixtureChecksum": _fixture_checksum(fixture),
         "scenarios": scenarios,
         "skippedCount": skipped,
@@ -268,6 +369,9 @@ def write_manifest(
 
     checksums: dict[str, str] = {}
     for rel in _relative_artifact_paths(artifact_dir, out_path.name):
+        if rel not in ALLOWED_ARTIFACT_COMPANIONS:
+            # Do not retain arbitrary pre-existing files as companions.
+            continue
         checksums[rel] = _sha256_file(artifact_dir / rel)
     # Include the manifest checksum of the payload without recursive self-hash:
     # hash the canonical bytes currently on disk after the first write, then store
@@ -311,23 +415,14 @@ def validate_manifest(
         if field not in manifest:
             raise ArtifactError(f"manifest missing field: {field}")
 
-    git = manifest.get("git")
-    if not isinstance(git, dict) or "sha" not in git or "ref" not in git:
-        raise ArtifactError("manifest git metadata incomplete")
-    tools = manifest.get("toolVersions")
-    if not isinstance(tools, dict):
-        raise ArtifactError("manifest toolVersions invalid")
+    _validate_git_metadata(manifest.get("git"))
+    _validate_tool_versions(manifest.get("toolVersions"))
+    _validate_fixture_checksum_value(manifest.get("fixtureChecksum"))
+
     scenarios = manifest.get("scenarios")
-    if not isinstance(scenarios, list) or not scenarios:
+    if not isinstance(scenarios, list):
         raise ArtifactError("manifest scenarios missing")
-    for scenario in scenarios:
-        if not isinstance(scenario, dict):
-            raise ArtifactError("manifest scenario invalid")
-        if set(scenario.keys()) - {"title", "outcome", "durationMs"}:
-            raise ArtifactError("manifest scenario has extra fields")
-        for key in ("title", "outcome", "durationMs"):
-            if key not in scenario:
-                raise ArtifactError("manifest scenario incomplete")
+    _validate_required_scenarios(scenarios)
 
     try:
         skipped = int(manifest.get("skippedCount"))
@@ -351,8 +446,12 @@ def validate_manifest(
     }
     if len(expected) != len(checksums):
         raise ArtifactError("artifactChecksums contains invalid entries")
+    if any(rel not in ALLOWED_ARTIFACT_COMPANIONS for rel in expected):
+        raise ArtifactError("unallowlisted artifact companion in checksums")
 
     actual_files = set(_relative_artifact_paths(artifact_dir, manifest_path.name))
+    if any(rel not in ALLOWED_ARTIFACT_COMPANIONS for rel in actual_files):
+        raise ArtifactError("unallowlisted artifact companion")
     expected_files = set(expected)
     if actual_files != expected_files:
         raise ArtifactError("artifact inventory mismatch")
