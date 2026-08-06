@@ -27,6 +27,7 @@ LISTEN_PORT = int(os.environ.get("MARKHAND_EMBEDDING_LISTEN_PORT", "8080"))
 
 _model = None
 _model_lock = threading.Lock()
+_ready_probe: np.ndarray | None = None
 _ready = False
 _load_error: str | None = None
 
@@ -42,14 +43,14 @@ def prepare_text(text: str) -> str:
 
 
 def load_model() -> None:
-    global _model, _ready, _load_error
+    global _model, _ready_probe, _ready, _load_error
     try:
         from sentence_transformers import SentenceTransformer
 
         model = SentenceTransformer(HUB_ID, revision=REVISION, device=DEVICE)
         model.max_seq_length = MAX_SEQ_LENGTH
         probe = model.encode(
-            ["markhand embedding probe"],
+            [prepare_text("markhand-ready")],
             batch_size=1,
             show_progress_bar=False,
             convert_to_numpy=True,
@@ -62,11 +63,13 @@ def load_model() -> None:
             )
         with _model_lock:
             _model = model
+            _ready_probe = probe
             _ready = True
             _load_error = None
     except Exception as error:  # noqa: BLE001 — surface load failure via /health
         with _model_lock:
             _model = None
+            _ready_probe = None
             _ready = False
             _load_error = str(error)
 
@@ -76,7 +79,10 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         if _model is None:
             raise RuntimeError(_load_error or "embedding model is not loaded")
         model = _model
+        ready_probe = _ready_probe
     prepared = [prepare_text(text) for text in texts]
+    if prepared == ["markhand-ready"] and ready_probe is not None:
+        return ready_probe.tolist()
     vectors: list[np.ndarray] = []
     for offset in range(0, len(prepared), BATCH_SIZE):
         batch = prepared[offset : offset + BATCH_SIZE]
