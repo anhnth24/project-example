@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import io
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -1514,6 +1515,84 @@ class SecondReviewRedTests(unittest.TestCase):
                             for sql in commands.psql_calls
                         )
                     )
+
+
+class PasswordHelperAdapterRedTests(unittest.TestCase):
+    VALID_HASH = (
+        "$argon2id$v=19$m=19456,t=2,p=1$"
+        "c2FsdHNhbHRzYWx0MTIzNA$"
+        "ZmFrZWhhc2hmYWtlaGFzaGZha2VoYXNoZmFrZWhhc2g"
+    )
+
+    def test_password_uses_exact_stdin_helper_command_without_secret_retention(self) -> None:
+        commands = fixture.LiveCommands(environ={"SAFE_SETTING": "fixture"})
+        secret = "runtime-password-must-not-leak"
+        recorded: list[tuple[list[str], dict[str, Any]]] = []
+        saw_expected_stdin = False
+
+        def fake_run(argv: list[str], **kwargs: Any) -> Any:
+            nonlocal saw_expected_stdin
+            saw_expected_stdin = kwargs.get("input") == secret + "\n"
+            safe_kwargs = dict(kwargs)
+            if "input" in safe_kwargs:
+                safe_kwargs["input"] = "<redacted>"
+            recorded.append((list(argv), safe_kwargs))
+            return mock.Mock(returncode=0, stdout=self.VALID_HASH + "\n", stderr="")
+
+        with mock.patch.object(fixture.subprocess, "run", side_effect=fake_run):
+            result = commands.hash_password(secret, timeout=7.5)
+
+        self.assertEqual(result, self.VALID_HASH)
+        self.assertTrue(saw_expected_stdin)
+        self.assertEqual(
+            recorded[0][0],
+            [
+                "cargo",
+                "run",
+                "-q",
+                "-p",
+                "fileconv-server",
+                "--bin",
+                "dev-hash-password",
+                "--",
+                "--stdin",
+            ],
+        )
+        self.assertEqual(recorded[0][1]["input"], "<redacted>")
+        self.assertEqual(recorded[0][1]["timeout"], 7.5)
+        recorded_blob = repr(recorded)
+        self.assertNotIn(secret, recorded_blob)
+        self.assertNotIn(self.VALID_HASH, recorded_blob)
+        self.assertNotIn(secret, repr(recorded[0][1]["env"]))
+
+    def test_password_helper_timeout_nonzero_and_invalid_output_fail_closed(self) -> None:
+        commands = fixture.LiveCommands(environ={})
+        secret = "never-echo-this-password"
+
+        failures = [
+            subprocess.TimeoutExpired(cmd=["cargo"], timeout=0.01),
+            mock.Mock(returncode=1, stdout="", stderr=secret),
+            mock.Mock(returncode=0, stdout="", stderr=""),
+            mock.Mock(returncode=0, stdout="not-a-phc", stderr=""),
+            mock.Mock(
+                returncode=0,
+                stdout="$argon2id$v=19$m=1,t=1,p=1$short$short",
+                stderr="",
+            ),
+        ]
+        for outcome in failures:
+            with self.subTest(outcome=type(outcome).__name__):
+                side_effect = outcome if isinstance(outcome, Exception) else None
+                return_value = None if side_effect else outcome
+                with mock.patch.object(
+                    fixture.subprocess,
+                    "run",
+                    side_effect=side_effect,
+                    return_value=return_value,
+                ):
+                    with self.assertRaises(fixture.FixtureError) as raised:
+                        commands.hash_password(secret, timeout=0.5)
+                self.assertNotIn(secret, str(raised.exception))
 
 
 if __name__ == "__main__":
