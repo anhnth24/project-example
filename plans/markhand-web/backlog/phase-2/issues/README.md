@@ -636,12 +636,20 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-20 — Real E2E foundation + auth/library/upload/actions
 
+<<<<<<< HEAD
 - **Status:** Review — Tasks 1–8 implementation complete on
   [#395](https://github.com/anhnth24/project-example/pull/395); hermetic gates green
   (31 fixture + 17 orchestration + 11 artifact + 556 web unit); whole-branch independent
   review APPROVE ([bc-11612232](https://cursor.com/agents/bc-11612232-bec7-5c36-9ba5-3931bdeb77c6)).
   **Blocked before Done:** `DEV_STACK_MODE=full` live manifest on Docker host;
   `make check-web`/`check-desktop` on delivery SHA; tracker sync (Phase F milestone).
+=======
+- **Status:** In progress — delivery plan linked; Tasks 1–7 statically Approved after
+  rebase; Task 8 Sol re-review required Changes (inventory/allowlist/`check-web`/
+  evidence). Docker full-stack evidence still Blocked in Cloud VMs without Docker.
+  Owner-approved `dev-hash-password --stdin` remains in force; Task 1 fixture closeout
+  is Approved (not pending final re-review).
+>>>>>>> 3c9fcd5 (docs(p2-20): record artifact retention and middleware remediation evidence)
 - **Plan file:** [P2-20 detailed implementation plan](../../../../reports/plan-2026-08-06-p2-20-real-e2e-foundation.md)
 - **Objective:** Tạo harness real-browser cô lập, deterministic và fail-closed; chạy
   auth/library/upload/document-action outcomes qua built SPA + real server/PostgreSQL/

@@ -243,8 +243,8 @@ Runtime credentials are never the fixed seed account. Fixture tooling refuses
 
 | Command | Required flags | Notes |
 |---|---|---|
-| `write` | `--results`, `--fixture`, `--out`, `--teardown` | Extracts only `{title, outcome, durationMs}` per scenario; records git/tool versions, fixture checksum, skipped count, teardown, companion checksums |
-| `validate` | `--manifest`, `--artifact-dir` | Fail-closed: missing scenarios, `skippedCount != 0`, teardown ≠ `ok`, checksum drift, inventory mismatch, secret/content canaries |
+| `write` | `--results`, `--fixture`, `--out`, `--teardown` | Extracts only `{title, outcome, durationMs}` per scenario; records git/tool versions, fixture checksum, skipped count, teardown; checksums **allowlisted companions only** (P2-20 allowlist is empty — `manifest.json` alone) |
+| `validate` | `--manifest`, `--artifact-dir` | Fail-closed: exact inventory of the 15 required Playwright titles, every outcome `passed`, no duplicates, `skippedCount == 0`, teardown `ok`, exact 40-hex git SHA + nonempty ref (rejects `unknown`), 64-hex fixture checksum, nonempty `toolVersions` values, **no unallowlisted companions**, checksum/inventory match, secret/content canaries |
 
 Optional canary env (comma- or newline-separated):
 
@@ -255,10 +255,19 @@ Optional canary env (comma- or newline-separated):
 
 | Path | Contents |
 |---|---|
-| `$WEB_E2E_REAL_ARTIFACT_DIR` (default: temp under `/tmp/markhand-web-e2e-real-artifacts.*`) | Staged sanitized `manifest.json` + allowlisted companions |
+| `$WEB_E2E_REAL_ARTIFACT_DIR` (default: temp under `/tmp/markhand-web-e2e-real-artifacts.*`) | Staged sanitized `manifest.json` only (no unreviewed companions) |
 | `$WEB_E2E_REAL_RUNTIME_DIR` (default: temp under `/tmp/markhand-web-e2e-real-runtime.*`) | Fixture manifest, credentials (0600), raw Playwright JSON — **outside** the uploaded artifact dir |
 
-Override either directory via env when CI needs a stable collection path.
+**Retention:** when `WEB_E2E_REAL_ARTIFACT_DIR` is unset, the orchestrator creates a temp directory and **deletes it after a fully successful run**. Task 8 / CI evidence must set an explicit stable path so `manifest.json` is retained:
+
+```bash
+export WEB_E2E_REAL_ARTIFACT_DIR=/tmp/markhand-p2-20-artifacts
+mkdir -p "$WEB_E2E_REAL_ARTIFACT_DIR"
+DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh
+# retained: $WEB_E2E_REAL_ARTIFACT_DIR/manifest.json
+```
+
+Caller-provided artifact dirs are never auto-deleted. Override `WEB_E2E_REAL_RUNTIME_DIR` the same way when CI needs a stable runtime path.
 
 ### Production refusal
 
