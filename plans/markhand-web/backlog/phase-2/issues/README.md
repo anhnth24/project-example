@@ -638,6 +638,7 @@ P2-15 + Phase 1C gate → P2-16
 
 - **Status:** Ready — owner duyệt canonical draft ngày 2026-08-06; dependencies và
   Definition of Ready đã được revalidate.
+- **Plan file:** [P2-20 detailed implementation plan](../../../../reports/plan-2026-08-06-p2-20-real-e2e-foundation.md)
 - **Objective:** Tạo harness real-browser cô lập, deterministic và fail-closed; chạy
   auth/library/upload/document-action outcomes qua built SPA + real server/PostgreSQL/
   Qdrant/storage/workers, không production test seam hoặc mock fetch.
