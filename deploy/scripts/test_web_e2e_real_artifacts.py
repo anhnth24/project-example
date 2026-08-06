@@ -226,7 +226,7 @@ class ArtifactHelperTests(unittest.TestCase):
         )
         self.assertNotEqual(validate.returncode, 0)
 
-    def test_validate_rejects_canary_match(self) -> None:
+    def test_validate_rejects_secret_canary_match(self) -> None:
         write = self._run(
             "write",
             "--results",
@@ -244,7 +244,6 @@ class ArtifactHelperTests(unittest.TestCase):
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
         manifest["artifactChecksums"]["note.txt"] = _sha256(planted)
         self.manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        # Refresh manifest self-checksum if present after edit.
         validate = self._run(
             "validate",
             "--manifest",
@@ -254,6 +253,127 @@ class ArtifactHelperTests(unittest.TestCase):
             env={"WEB_E2E_REAL_SECRET_CANARIES": "CANARY_SECRET"},
         )
         self.assertNotEqual(validate.returncode, 0)
+
+    def test_validate_rejects_content_canary_match(self) -> None:
+        write = self._run(
+            "write",
+            "--results",
+            str(self.results_path),
+            "--fixture",
+            str(self.fixture_path),
+            "--out",
+            str(self.manifest_path),
+            "--teardown",
+            "ok",
+        )
+        self.assertEqual(write.returncode, 0, msg=write.stderr)
+        planted = self.artifact_dir / "preview.txt"
+        planted.write_text("indexed preview CANARY_DOC_BODY retained\n", encoding="utf-8")
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["artifactChecksums"]["preview.txt"] = _sha256(planted)
+        self.manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        validate = self._run(
+            "validate",
+            "--manifest",
+            str(self.manifest_path),
+            "--artifact-dir",
+            str(self.artifact_dir),
+            env={"WEB_E2E_REAL_CONTENT_CANARIES": "CANARY_DOC_BODY"},
+        )
+        self.assertNotEqual(validate.returncode, 0)
+        self.assertIn("canary", validate.stderr.lower())
+
+    def test_validate_rejects_missing_scenario(self) -> None:
+        write = self._run(
+            "write",
+            "--results",
+            str(self.results_path),
+            "--fixture",
+            str(self.fixture_path),
+            "--out",
+            str(self.manifest_path),
+            "--teardown",
+            "ok",
+        )
+        self.assertEqual(write.returncode, 0, msg=write.stderr)
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["scenarios"] = []
+        self.manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        validate = self._run(
+            "validate",
+            "--manifest",
+            str(self.manifest_path),
+            "--artifact-dir",
+            str(self.artifact_dir),
+        )
+        self.assertNotEqual(validate.returncode, 0)
+        self.assertIn("scenarios", validate.stderr.lower())
+
+    def test_validate_rejects_nonzero_skipped_count(self) -> None:
+        write = self._run(
+            "write",
+            "--results",
+            str(self.results_path),
+            "--fixture",
+            str(self.fixture_path),
+            "--out",
+            str(self.manifest_path),
+            "--teardown",
+            "ok",
+        )
+        self.assertEqual(write.returncode, 0, msg=write.stderr)
+        manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        manifest["skippedCount"] = 2
+        self.manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        validate = self._run(
+            "validate",
+            "--manifest",
+            str(self.manifest_path),
+            "--artifact-dir",
+            str(self.artifact_dir),
+        )
+        self.assertNotEqual(validate.returncode, 0)
+        self.assertIn("skipped", validate.stderr.lower())
+
+    def test_validate_accepts_sanitized_manifest(self) -> None:
+        write = self._run(
+            "write",
+            "--results",
+            str(self.results_path),
+            "--fixture",
+            str(self.fixture_path),
+            "--out",
+            str(self.manifest_path),
+            "--teardown",
+            "ok",
+        )
+        self.assertEqual(write.returncode, 0, msg=write.stderr)
+        companion = self.artifact_dir / "summary.txt"
+        companion.write_text("sanitized summary\n", encoding="utf-8")
+        rewrite = self._run(
+            "write",
+            "--results",
+            str(self.results_path),
+            "--fixture",
+            str(self.fixture_path),
+            "--out",
+            str(self.manifest_path),
+            "--teardown",
+            "ok",
+        )
+        self.assertEqual(rewrite.returncode, 0, msg=rewrite.stderr)
+        validate = self._run(
+            "validate",
+            "--manifest",
+            str(self.manifest_path),
+            "--artifact-dir",
+            str(self.artifact_dir),
+            env={
+                "WEB_E2E_REAL_SECRET_CANARIES": "CANARY_SECRET",
+                "WEB_E2E_REAL_CONTENT_CANARIES": "CANARY_DOC_BODY",
+            },
+        )
+        self.assertEqual(validate.returncode, 0, msg=validate.stderr)
 
     def test_validate_rejects_missing_required_fields(self) -> None:
         self.manifest_path.write_text(json.dumps({"runId": "x"}), encoding="utf-8")
