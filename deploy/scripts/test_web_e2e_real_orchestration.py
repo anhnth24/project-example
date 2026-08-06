@@ -3,20 +3,20 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
 import textwrap
-import time
 import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "web-e2e-real.sh"
 REPO_ROOT = SCRIPT.resolve().parents[2]
+ARTIFACTS = Path(__file__).resolve().parent / "web_e2e_real_artifacts.py"
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -31,9 +31,11 @@ class OrchestrationHarness:
         self.state = self.tempdir / "state"
         self.shim_bin = self.tempdir / "shims"
         self.path_bin = self.tempdir / "path"
+        self.artifact_dir = self.tempdir / "artifacts"
         self.state.mkdir()
         self.shim_bin.mkdir()
         self.path_bin.mkdir()
+        self.artifact_dir.mkdir()
         self._install_shims()
         self._install_env()
 
@@ -81,6 +83,8 @@ class OrchestrationHarness:
             echo "server:$$" >> "{state}/child.pids"
             echo "MARKHAND_AUTH_SIGNING_KEY=super-secret-key-at-least-32-bytes"
             echo "server-start pid=$$" >> "{state}/server.events"
+            echo "MARKHAND_MAX_UPLOAD_BYTES=${{MARKHAND_MAX_UPLOAD_BYTES:-}}" >> "{state}/server.env"
+            echo "MARKHAND_RATE_ROUTE_PER_MINUTE=${{MARKHAND_RATE_ROUTE_PER_MINUTE:-}}" >> "{state}/server.env"
             if [[ "${{WEB_E2E_REAL_SERVER_EXIT_EARLY:-}}" == "1" ]]; then
               echo "server-exit-early" >> "{state}/server.events"
               exit 1
@@ -137,13 +141,25 @@ class OrchestrationHarness:
             f"""\
             #!/usr/bin/env bash
             set -euo pipefail
+            if [[ "${{1:-}}" == "--version" || "${{1:-}}" == "-v" ]]; then
+              echo "10.0.0"
+              exit 0
+            fi
             if [[ "$1" == "--dir" && "$3" == "build" ]]; then
               mkdir -p "{root}/web/dist"
               touch "{root}/web/dist/index.html"
               exit 0
             fi
-            if [[ "$1" == "--dir" && "$3" == "exec" && "$4" == "playwright" ]]; then
+            if [[ "$1" == "--dir" && "$3" == "exec" && "$4" == "playwright" && "${{5:-}}" == "test" ]]; then
               exec "{shim_bin}/playwright-shim" "$@"
+            fi
+            if [[ "$1" == "--dir" && "$3" == "exec" && "$4" == "playwright" ]]; then
+              echo "Version 1.55.0"
+              exit 0
+            fi
+            if [[ "$1" == "exec" && "$2" == "playwright" ]]; then
+              echo "Version 1.55.0"
+              exit 0
             fi
             echo "unexpected pnpm invocation: $*" >&2
             exit 1
@@ -157,6 +173,26 @@ class OrchestrationHarness:
             set -euo pipefail
             echo "playwright-start pid=$$" >> "{state}/playwright.events"
             touch "{state}/playwright.started"
+            echo "creds=${{MARKHAND_E2E_REAL_CREDENTIALS_FILE:-}}" >> "{state}/playwright.env"
+            echo "fixture=${{MARKHAND_E2E_REAL_FIXTURE_FILE:-}}" >> "{state}/playwright.env"
+            echo "run_id=${{MARKHAND_E2E_REAL_RUN_ID:-}}" >> "{state}/playwright.env"
+            results="${{WEB_E2E_REAL_PLAYWRIGHT_RESULTS:-}}"
+            if [[ -n "$results" ]]; then
+              mkdir -p "$(dirname "$results")"
+              if [[ "${{WEB_E2E_REAL_PLAYWRIGHT_SKIP:-}}" == "1" ]]; then
+                cat >"$results" <<'JSON'
+            {{"suites":[],"stats":{{"expected":0,"unexpected":0,"flaky":0,"skipped":1}},"tests":[{{"title":"required scenario","outcome":"skipped","ok":false,"duration":1}}]}}
+            JSON
+              elif [[ "${{WEB_E2E_REAL_CANARY_IN_RESULTS:-}}" == "1" ]]; then
+                cat >"$results" <<'JSON'
+            {{"suites":[],"stats":{{"expected":1,"unexpected":0,"flaky":0,"skipped":0}},"tests":[{{"title":"login","outcome":"expected","ok":true,"duration":5}}],"leak":"password=super-secret-canary-value"}}
+            JSON
+              else
+                cat >"$results" <<'JSON'
+            {{"suites":[],"stats":{{"expected":1,"unexpected":0,"flaky":0,"skipped":0}},"tests":[{{"title":"login","outcome":"expected","ok":true,"duration":5}}]}}
+            JSON
+              fi
+            fi
             if [[ "${{WEB_E2E_REAL_PLAYWRIGHT_FAIL:-}}" == "1" ]]; then
               echo "playwright-fail" >> "{state}/playwright.events"
               exit 9
@@ -196,6 +232,111 @@ class OrchestrationHarness:
             deploy_scripts / "init-dev-env.sh",
             self.root / "deploy" / "scripts" / "init-dev-env.sh",
         )
+        if ARTIFACTS.exists():
+            shutil.copy2(
+                ARTIFACTS,
+                self.root / "deploy" / "scripts" / "web_e2e_real_artifacts.py",
+            )
+        self._install_fixture_shim()
+
+    def _install_fixture_shim(self) -> None:
+        state = self.state
+        fixture_path = self.root / "deploy" / "scripts" / "web_e2e_real_fixture.py"
+        fixture_path.parent.mkdir(parents=True, exist_ok=True)
+        fixture_path.write_text(
+            textwrap.dedent(
+                f"""\
+                #!/usr/bin/env python3
+                from __future__ import annotations
+
+                import json
+                import os
+                import sys
+                from pathlib import Path
+
+                STATE = Path({str(state)!r})
+
+
+                def _arg(flag: str) -> str:
+                    argv = sys.argv[1:]
+                    for index, value in enumerate(argv):
+                        if value == flag and index + 1 < len(argv):
+                            return argv[index + 1]
+                    raise SystemExit(f"missing {{flag}}")
+
+
+                def main() -> int:
+                    if len(sys.argv) < 2:
+                        return 2
+                    command = sys.argv[1]
+                    if command == "setup":
+                        (STATE / "fixture.events").write_text(
+                            "setup-start\\n", encoding="utf-8"
+                        )
+                        if os.environ.get("WEB_E2E_REAL_FIXTURE_SETUP_FAIL") == "1":
+                            with (STATE / "fixture.events").open("a", encoding="utf-8") as handle:
+                                handle.write("setup-fail\\n")
+                            print("fixture setup failed", file=sys.stderr)
+                            return 3
+                        run_id = _arg("--run-id")
+                        manifest_out = Path(_arg("--manifest-out"))
+                        credentials_out = Path(_arg("--credentials-out"))
+                        manifest_out.parent.mkdir(parents=True, exist_ok=True)
+                        credentials_out.parent.mkdir(parents=True, exist_ok=True)
+                        manifest = {{
+                            "runId": run_id,
+                            "orgId": "11111111-1111-1111-1111-111111111111",
+                            "adminUserId": "22222222-2222-2222-2222-222222222201",
+                            "viewerUserId": "22222222-2222-2222-2222-222222222202",
+                            "collectionId": "33333333-3333-3333-3333-333333333333",
+                            "collectionName": f"E2E Library {{run_id}}",
+                            "failedDocumentId": "44444444-4444-4444-4444-444444444401",
+                            "failedVersionId": "44444444-4444-4444-4444-444444444402",
+                            "objectIds": ["55555555-5555-5555-5555-555555555501"],
+                            "vectorPointIds": ["66666666-6666-6666-6666-666666666601"],
+                            "checksum": "a" * 64,
+                        }}
+                        credentials = {{
+                            "runId": run_id,
+                            "adminEmail": f"admin+{{run_id}}@example.test",
+                            "adminPassword": "admin-secret-value",
+                            "viewerEmail": f"viewer+{{run_id}}@example.test",
+                            "viewerPassword": "viewer-secret-value",
+                        }}
+                        manifest_out.write_text(json.dumps(manifest), encoding="utf-8")
+                        credentials_out.write_text(json.dumps(credentials), encoding="utf-8")
+                        credentials_out.chmod(0o600)
+                        with (STATE / "fixture.events").open("a", encoding="utf-8") as handle:
+                            handle.write("setup-ok\\n")
+                        (STATE / "fixture.manifest").write_text(str(manifest_out), encoding="utf-8")
+                        (STATE / "fixture.credentials").write_text(
+                            str(credentials_out), encoding="utf-8"
+                        )
+                        return 0
+                    if command == "cleanup":
+                        with (STATE / "fixture.events").open("a", encoding="utf-8") as handle:
+                            handle.write("cleanup-start\\n")
+                        if os.environ.get("WEB_E2E_REAL_FIXTURE_CLEANUP_FAIL") == "1":
+                            with (STATE / "fixture.events").open("a", encoding="utf-8") as handle:
+                                handle.write("cleanup-fail\\n")
+                            print("fixture cleanup failed", file=sys.stderr)
+                            return 4
+                        with (STATE / "fixture.events").open("a", encoding="utf-8") as handle:
+                            handle.write("cleanup-ok\\n")
+                        return 0
+                    if command == "verify-clean":
+                        return 0
+                    print(f"unknown command: {{command}}", file=sys.stderr)
+                    return 2
+
+
+                if __name__ == "__main__":
+                    raise SystemExit(main())
+                """
+            ),
+            encoding="utf-8",
+        )
+        fixture_path.chmod(0o755)
 
     def run(
         self,
@@ -212,6 +353,8 @@ class OrchestrationHarness:
                 "WEB_E2E_REAL_ROOT": str(self.root),
                 "WEB_E2E_REAL_SHIM_BIN_DIR": str(self.shim_bin),
                 "WEB_E2E_REAL_PLAYWRIGHT_CMD": f"exec {self.shim_bin}/playwright-shim",
+                "WEB_E2E_REAL_ARTIFACT_DIR": str(self.artifact_dir),
+                "WEB_E2E_REAL_RUN_ID": "e2e-orch-test-run",
                 "PATH": f"{self.path_bin}:{self.shim_bin}:{env.get('PATH', '')}",
                 "HOME": str(self.tempdir),
             }
@@ -259,6 +402,29 @@ class OrchestrationHarness:
             """,
         )
 
+    def install_failing_artifact_validator(self) -> None:
+        artifacts = self.root / "deploy" / "scripts" / "web_e2e_real_artifacts.py"
+        _write_executable(
+            artifacts,
+            """\
+            #!/usr/bin/env python3
+            import sys
+            if len(sys.argv) > 1 and sys.argv[1] == "write":
+                # Still write a stub so the orchestrator reaches validate.
+                out = None
+                argv = sys.argv[1:]
+                for index, value in enumerate(argv):
+                    if value == "--out" and index + 1 < len(argv):
+                        out = argv[index + 1]
+                if out:
+                    from pathlib import Path
+                    Path(out).write_text("{\\"schemaVersion\\":1}\\n", encoding="utf-8")
+                raise SystemExit(0)
+            print("artifact validation injected failure", file=sys.stderr)
+            raise SystemExit(11)
+            """,
+        )
+
     def child_pids(self) -> list[int]:
         pids_file = self.state / "child.pids"
         if not pids_file.exists():
@@ -295,10 +461,25 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
             self.assertIn("kind=convert", started)
             self.assertIn("kind=index", started)
             self.assertIn("kind=embedding", started)
+            self.assertIn("kind=delete", started)
             env_dump = (harness.state / "workers.env").read_text(encoding="utf-8")
             self.assertRegex(env_dump, r"markhand_worker")
             self.assertRegex(env_dump, r"target/debug/fileconv")
             self.assertIn("playwright-done", (harness.state / "playwright.events").read_text())
+            server_env = (harness.state / "server.env").read_text(encoding="utf-8")
+            self.assertIn("MARKHAND_MAX_UPLOAD_BYTES=4096", server_env)
+            self.assertIn("MARKHAND_RATE_ROUTE_PER_MINUTE=1", server_env)
+            playwright_env = (harness.state / "playwright.env").read_text(encoding="utf-8")
+            self.assertIn("creds=", playwright_env)
+            self.assertIn("fixture=", playwright_env)
+            self.assertIn("run_id=e2e-orch-test-run", playwright_env)
+            self.assertTrue(
+                (harness.artifact_dir / "manifest.json").is_file(),
+                msg="sanitized artifact manifest must be written",
+            )
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("setup-ok", fixture_events)
+            self.assertIn("cleanup-ok", fixture_events)
         finally:
             harness.cleanup()
 
@@ -373,10 +554,10 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
                 timeout=15.0,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertGreaterEqual(len(harness.child_pids()), 4)
+            self.assertGreaterEqual(len(harness.child_pids()), 5)
             reaped = (harness.state / "cleanup.reaped").read_text(encoding="utf-8")
             self.assertIn("server-reaped:", reaped)
-            for kind in ("convert", "index", "embedding"):
+            for kind in ("convert", "index", "embedding", "delete"):
                 self.assertIn(f"worker-reaped-{kind}:", reaped)
             harness.assert_no_live_child_pids()
         finally:
@@ -406,6 +587,130 @@ class WebE2eRealExecutableOrchestrationTests(unittest.TestCase):
             msg="must not re-enable errexit before capturing Playwright status",
         )
         self.assertIn("run_playwright_supervised || playwright_status=", text)
+
+    def test_fixture_setup_failure_aborts_before_playwright(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_FIXTURE_SETUP_FAIL": "1"},
+                timeout=20.0,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("setup-fail", fixture_events)
+            self.assertFalse(
+                (harness.state / "playwright.started").exists(),
+                msg="Playwright must not start after fixture setup failure",
+            )
+            combined = result.stdout + result.stderr
+            self.assertNotIn("admin-secret-value", combined)
+        finally:
+            harness.cleanup()
+
+    def test_fixture_cleanup_failure_fails_the_job(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_FIXTURE_CLEANUP_FAIL": "1"},
+                timeout=20.0,
+            )
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                msg=f"stdout={result.stdout}\nstderr={result.stderr}",
+            )
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("setup-ok", fixture_events)
+            self.assertIn("cleanup-fail", fixture_events)
+            self.assertIn("playwright-done", (harness.state / "playwright.events").read_text())
+        finally:
+            harness.cleanup()
+
+    def test_playwright_failure_still_runs_fixture_cleanup(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_PLAYWRIGHT_FAIL": "1"},
+                timeout=20.0,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("setup-ok", fixture_events)
+            self.assertIn("cleanup-ok", fixture_events)
+            self.assertIn("playwright-fail", (harness.state / "playwright.events").read_text())
+        finally:
+            harness.cleanup()
+
+    def test_canary_match_in_artifacts_fails_the_job(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_CANARY_IN_RESULTS": "1"},
+                timeout=20.0,
+            )
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                msg=f"stdout={result.stdout}\nstderr={result.stderr}",
+            )
+            combined = result.stdout + result.stderr
+            self.assertNotIn("super-secret-canary-value", combined)
+            self.assertTrue(
+                "canary" in combined.lower() or "secret" in combined.lower(),
+                msg=combined,
+            )
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("cleanup-ok", fixture_events)
+        finally:
+            harness.cleanup()
+
+    def test_artifact_validation_failure_fails_the_job(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            harness.install_failing_artifact_validator()
+            result = harness.run(timeout=20.0)
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                msg=f"stdout={result.stdout}\nstderr={result.stderr}",
+            )
+            self.assertIn("artifact", (result.stdout + result.stderr).lower())
+            fixture_events = (harness.state / "fixture.events").read_text(encoding="utf-8")
+            self.assertIn("cleanup-ok", fixture_events)
+        finally:
+            harness.cleanup()
+
+    def test_skipped_required_scenario_fails_artifact_validation(self) -> None:
+        harness = OrchestrationHarness()
+        try:
+            result = harness.run(
+                extra_env={"WEB_E2E_REAL_PLAYWRIGHT_SKIP": "1"},
+                timeout=20.0,
+            )
+            self.assertNotEqual(
+                result.returncode,
+                0,
+                msg=f"stdout={result.stdout}\nstderr={result.stderr}",
+            )
+            combined = (result.stdout + result.stderr).lower()
+            self.assertTrue(
+                "skip" in combined or "artifact" in combined,
+                msg=combined,
+            )
+        finally:
+            harness.cleanup()
+
+    def test_script_wires_fixture_artifact_and_delete_worker_hooks(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("web_e2e_real_fixture.py", text)
+        self.assertIn("web_e2e_real_artifacts.py", text)
+        self.assertIn("MARKHAND_MAX_UPLOAD_BYTES=4096", text)
+        self.assertIn("MARKHAND_RATE_ROUTE_PER_MINUTE=1", text)
+        self.assertIn("MARKHAND_E2E_REAL_CREDENTIALS_FILE", text)
+        self.assertIn("MARKHAND_E2E_REAL_FIXTURE_FILE", text)
+        self.assertRegex(text, r"start_worker\s+delete\b")
+        self.assertIn("WEB_E2E_REAL_RUN_ID", text)
+        self.assertIn("WEB_E2E_REAL_ARTIFACT_DIR", text)
 
 
 def main() -> int:
