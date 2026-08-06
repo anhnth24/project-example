@@ -38,6 +38,20 @@ export function runtimeFixture(): RuntimeFixture {
   return loadRuntimeFixture(process.env as Record<string, string | undefined>);
 }
 
+/** Stable default scanned by orchestrator artifact validation. */
+export const DEFAULT_CONTENT_CANARY = 'P2-20-CONTENT-CANARY';
+
+/**
+ * Run-scoped content canary embedded in unique upload bodies. Prefer
+ * `WEB_E2E_REAL_CONTENT_CANARY` when the orchestrator exports it; otherwise
+ * the stable default so local/real runs stay aligned with
+ * `WEB_E2E_REAL_CONTENT_CANARIES` validation.
+ */
+export function contentCanary(): string {
+  const fromEnv = process.env.WEB_E2E_REAL_CONTENT_CANARY?.trim();
+  return fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_CONTENT_CANARY;
+}
+
 /**
  * Submits the login form with runtime admin credentials on the current page
  * (must already be `/login`, including `/login?next=…`) and waits until the

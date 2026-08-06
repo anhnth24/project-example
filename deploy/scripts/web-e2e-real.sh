@@ -150,6 +150,24 @@ export_secret_canaries_from_credentials() {
   fi
 }
 
+# Merge the run content canary into WEB_E2E_REAL_CONTENT_CANARIES for artifact
+# validation. Specs embed WEB_E2E_REAL_CONTENT_CANARY (default
+# P2-20-CONTENT-CANARY) in unique upload bodies.
+export_content_canaries() {
+  local canary="${WEB_E2E_REAL_CONTENT_CANARY:-P2-20-CONTENT-CANARY}"
+  export WEB_E2E_REAL_CONTENT_CANARY="$canary"
+  if [[ -z "${WEB_E2E_REAL_CONTENT_CANARIES:-}" ]]; then
+    export WEB_E2E_REAL_CONTENT_CANARIES="$canary"
+    return 0
+  fi
+  case $'\n'"${WEB_E2E_REAL_CONTENT_CANARIES}"$'\n' in
+    *$'\n'"${canary}"$'\n'*) ;;
+    *)
+      export WEB_E2E_REAL_CONTENT_CANARIES="${WEB_E2E_REAL_CONTENT_CANARIES}"$'\n'"${canary}"
+      ;;
+  esac
+}
+
 dump_redacted_logs() {
   local reason="${1:-failure}"
   echo "=== web-e2e-real: ${reason} ===" >&2
@@ -382,6 +400,7 @@ cleanup() {
 
   # Capture credential canaries before cleanup deletes the 0600 credentials file.
   export_secret_canaries_from_credentials "$credentials_file"
+  export_content_canaries
 
   # Fixture cleanup + verify-clean must run while server/delete worker are alive.
   set +e
@@ -463,6 +482,9 @@ else
   run_id="${WEB_E2E_REAL_RUN_ID}"
 fi
 export WEB_E2E_REAL_RUN_ID="$run_id"
+
+# Content canary for Playwright upload bodies + artifact validation scan.
+export_content_canaries
 
 if [[ -n "${WEB_E2E_REAL_ARTIFACT_DIR:-}" ]]; then
   artifact_dir="${WEB_E2E_REAL_ARTIFACT_DIR}"

@@ -7,7 +7,13 @@
 // `upload.spec.ts`). Download completion is the browser download event plus
 // real 200s — DocumentRowActions has no success Notice for download.
 import { expect, test } from '@playwright/test';
-import { ensureRouteRateWindow, login, markRouteRateHit, openRunCollection } from './support';
+import {
+  contentCanary,
+  ensureRouteRateWindow,
+  login,
+  markRouteRateHit,
+  openRunCollection,
+} from './support';
 
 test('navigating to the run collection shows the upload panel', async ({ page }) => {
   await login(page);
@@ -22,7 +28,7 @@ test('uploading a unique text document indexes and previews markdown', async ({ 
   test.slow();
 
   const fileName = `e2e-real-library-preview-${Date.now()}.txt`;
-  const fileContents = `P2-20 library preview body ${Date.now()} unique.`;
+  const fileContents = `P2-20 library preview body ${contentCanary()} ${Date.now()} unique.`;
 
   await login(page);
   await openRunCollection(page);
@@ -53,7 +59,7 @@ test('downloading Markdown issues a capability, redeems it, and does not log the
   test.slow();
 
   const fileName = `e2e-real-library-download-${Date.now()}.txt`;
-  const fileContents = `P2-20 library download body ${Date.now()} unique.`;
+  const fileContents = `P2-20 library download body ${contentCanary()} ${Date.now()} unique.`;
 
   const consoleLines: string[] = [];
   page.on('console', (msg) => {

@@ -8,6 +8,7 @@
 // never a synthesized Playwright response.
 import { expect, test } from '@playwright/test';
 import {
+  contentCanary,
   delayThenContinue,
   ensureRouteRateWindow,
   login,
@@ -26,7 +27,7 @@ test('uploading a file against the real backend reaches indexed, and its preview
   test.slow();
 
   const fileName = `e2e-real-upload-${Date.now()}.txt`;
-  const fileContents = 'Real-deployment upload smoke test contents.';
+  const fileContents = `Real-deployment upload smoke test contents. ${contentCanary()}`;
 
   await login(page);
   await openRunCollection(page);
@@ -72,7 +73,7 @@ test('a delayed POST /uploads shows upload progress then reaches indexed preview
   test.slow();
 
   const fileName = `e2e-real-upload-throttled-${Date.now()}.txt`;
-  const fileContents = `P2-20 throttled upload body ${Date.now()} unique.`;
+  const fileContents = `P2-20 throttled upload body ${contentCanary()} ${Date.now()} unique.`;
 
   await login(page);
   await openRunCollection(page);

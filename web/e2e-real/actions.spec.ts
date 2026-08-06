@@ -4,8 +4,9 @@
 //
 // No fetch mock, no `route.fulfill()`, no auth bypass. Rate-limit tokens for
 // `route:reindex:…` / `route:upload:…` are shared via `support.ts` helpers.
-import { expect, test } from '@playwright/test';
+import { expect, test, type Response } from '@playwright/test';
 import {
+  contentCanary,
   ensureRouteRateWindow,
   login,
   loginAsViewer,
@@ -16,11 +17,23 @@ import {
 
 test.describe.configure({ mode: 'serial' });
 
+/** Assert the lowered route bucket produced this 429 (not IP/user/org). */
+async function assertRouteScoped429(response: Response): Promise<void> {
+  expect(response.status()).toBe(429);
+  const retryAfter = response.headers()['retry-after'];
+  expect(retryAfter).toBeTruthy();
+  const body = (await response.json()) as {
+    details?: { scope?: string; retryAfterSeconds?: number };
+  };
+  expect(body.details?.scope).toBe('route');
+  expect(String(body.details?.retryAfterSeconds)).toBe(String(retryAfter));
+}
+
 test('reindex on an indexed document shows the enqueue success notice', async ({ page }) => {
   test.slow();
 
   const fileName = `e2e-real-actions-reindex-${Date.now()}.txt`;
-  const fileContents = `P2-20 actions reindex body ${Date.now()} unique.`;
+  const fileContents = `P2-20 actions reindex body ${contentCanary()} ${Date.now()} unique.`;
 
   await login(page);
   await openRunCollection(page);
@@ -88,7 +101,7 @@ test('delete with confirm removes the document row after refetch', async ({ page
   test.slow();
 
   const fileName = `e2e-real-actions-delete-${Date.now()}.txt`;
-  const fileContents = `P2-20 actions delete body ${Date.now()} unique.`;
+  const fileContents = `P2-20 actions delete body ${contentCanary()} ${Date.now()} unique.`;
 
   await login(page);
   await openRunCollection(page);
@@ -122,7 +135,7 @@ test('viewer reindex is denied with a real HTTP 403 and the document remains', a
   test.slow();
 
   const fileName = `e2e-real-actions-403-${Date.now()}.txt`;
-  const fileContents = `P2-20 actions 403 body ${Date.now()} unique.`;
+  const fileContents = `P2-20 actions 403 body ${contentCanary()} ${Date.now()} unique.`;
   const { collectionId } = runtimeFixture();
 
   // Admin creates a durable indexed row the viewer can see but cannot reindex.
@@ -191,7 +204,7 @@ test('reindex under the lowered route limit returns a real 429 with retry-after 
   test.slow();
 
   const fileName = `e2e-real-actions-429-${Date.now()}.txt`;
-  const fileContents = `P2-20 actions 429 body ${Date.now()} unique.`;
+  const fileContents = `P2-20 actions 429 body ${contentCanary()} ${Date.now()} unique.`;
 
   await login(page);
   await openRunCollection(page);
@@ -234,12 +247,10 @@ test('reindex under the lowered route limit returns a real 429 with retry-after 
     });
     await page.getByRole('button', { name: 'Lập chỉ mục lại' }).click();
     const limited = await secondReindex;
-    expect(limited.status()).toBe(429);
-    expect(limited.headers()['retry-after']).toBeTruthy();
+    await assertRouteScoped429(limited);
     markRouteRateHit('reindex');
   } else {
-    expect(first.status()).toBe(429);
-    expect(first.headers()['retry-after']).toBeTruthy();
+    await assertRouteScoped429(first);
   }
 
   await expect(page.getByRole('alert')).toHaveText(
