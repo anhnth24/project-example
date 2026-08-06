@@ -126,6 +126,26 @@ describe('ask mock — scope-wide as_of', () => {
     ).toBe(true);
   });
 
+  it('excludes a version at its effectiveTo boundary', async () => {
+    const versions = getStore().versions.get(QA_COMPARE_DOCUMENT_ID);
+    const current = versions?.find((version) => version.id === QA_COMPARE_VERSION_B_ID);
+    if (!current) throw new Error('Missing current budget version');
+    current.effectiveTo = mockTimestamp(120);
+
+    const client = await loggedInClient();
+    const body = await client.request('post', '/ask', {
+      body: {
+        question: 'Ngân sách vận hành là bao nhiêu?',
+        mode: 'as_of',
+        asOf: mockTimestamp(120),
+        limit: 10,
+      },
+    });
+
+    expect(body.citations.every((c) => c.logicalDocumentId !== QA_COMPARE_DOCUMENT_ID)).toBe(true);
+    expect(body.answer).not.toMatch(/10 triệu|15 triệu/);
+  });
+
   it('never cites a passage from a collection outside the resolved project scope', async () => {
     const client = await loggedInClient();
     const asOf = mockTimestamp(70);

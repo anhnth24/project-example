@@ -431,8 +431,12 @@ function resolveCompareOrHistoryPassages(
       if (!doc) continue;
       if (!collectionIds.includes(doc.collectionId)) continue;
       const effective = versions
-        .filter((v) => Date.parse(v.effectiveFrom) <= asOfMs)
-        .sort((x, y) => Date.parse(y.effectiveFrom) - Date.parse(x.effectiveFrom))[0];
+        .filter(
+          (v) =>
+            Date.parse(v.effectiveFrom) <= asOfMs &&
+            (v.effectiveTo === null || Date.parse(v.effectiveTo) > asOfMs),
+        )
+        .sort((x, y) => y.versionNumber - x.versionNumber || x.id.localeCompare(y.id))[0];
       if (effective) effectiveVersionIds.add(effective.id);
     }
 
