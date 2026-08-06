@@ -170,7 +170,46 @@ class OrchestrationHarness:
             touch "{state}/playwright.started"
             results="${{WEB_E2E_REAL_PLAYWRIGHT_RESULTS:-}}"
             if [[ -n "$results" ]]; then
-              printf '%s\\n' '{{"suites":[{{"title":"auth.spec.ts","file":"e2e-real/auth.spec.ts","specs":[{{"title":"login succeeds","ok":true,"tests":[{{"projectName":"real","results":[{{"status":"passed","duration":42,"errors":[],"stdout":[],"stderr":[]}}],"status":"expected"}}],"suites":[]}}],"errors":[],"stats":{{"duration":42,"expected":1,"skipped":0,"unexpected":0,"flaky":0}}}}' > "$results"
+              cat > "$results" <<'JSON'
+            {{
+              "suites": [
+                {{
+                  "title": "auth.spec.ts",
+                  "file": "e2e-real/auth.spec.ts",
+                  "specs": [
+                    {{
+                      "title": "login succeeds",
+                      "ok": true,
+                      "tests": [
+                        {{
+                          "projectName": "real",
+                          "results": [
+                            {{
+                              "status": "passed",
+                              "duration": 42,
+                              "errors": [],
+                              "stdout": [],
+                              "stderr": []
+                            }}
+                          ],
+                          "status": "expected"
+                        }}
+                      ]
+                    }}
+                  ],
+                  "suites": []
+                }}
+              ],
+              "errors": [],
+              "stats": {{
+                "duration": 42,
+                "expected": 1,
+                "skipped": 0,
+                "unexpected": 0,
+                "flaky": 0
+              }}
+            }}
+            JSON
             fi
             if [[ "${{WEB_E2E_REAL_PLAYWRIGHT_FAIL:-}}" == "1" ]]; then
               echo "playwright-fail" >> "{state}/playwright.events"
