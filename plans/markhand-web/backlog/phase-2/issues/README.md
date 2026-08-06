@@ -6,9 +6,9 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 **Trạng thái tổng quan (cập nhật 2026-08-06).** Phase 2 có **23 issue** sau khi owner
 duyệt thiết kế full real-E2E: **15 Done**, **3 In progress** (P2-16/P2-18/P2-19),
-**4 Blocked** (P2-15/P2-21/P2-22/P2-23), và **1 Backlog draft** (P2-20, chờ trigger
-duyệt canonical draft để chuyển `Ready`). P2-15 là umbrella, chỉ `Done` sau P2-20…23;
-P2-16 vẫn là final gate. P2-10/P2-17 đã qua independent review và `Done`.
+**4 Blocked** (P2-15/P2-21/P2-22/P2-23), và **1 Ready** (P2-20, canonical draft được
+owner duyệt ngày 2026-08-06). P2-15 là umbrella, chỉ `Done` sau P2-20…23; P2-16 vẫn là
+final gate. P2-10/P2-17 đã qua independent review và `Done`.
 
 > Ranh giới quan trọng: "Done" ở đây nghĩa là **hành vi client đã build và test trên
 > mock/deterministic**, đã qua CI (`web`, `web-e2e`, `rust`, `rust-integration`) trên
@@ -636,8 +636,8 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-20 — Real E2E foundation + auth/library/upload/actions
 
-- **Status:** Backlog — canonical draft chờ owner dùng trigger `Tôi duyệt draft.` để
-  chuyển `Ready` và sync tracker.
+- **Status:** Ready — owner duyệt canonical draft ngày 2026-08-06; dependencies và
+  Definition of Ready đã được revalidate.
 - **Objective:** Tạo harness real-browser cô lập, deterministic và fail-closed; chạy
   auth/library/upload/document-action outcomes qua built SPA + real server/PostgreSQL/
   Qdrant/storage/workers, không production test seam hoặc mock fetch.
@@ -651,8 +651,8 @@ P2-15 + Phase 1C gate → P2-16
   fixture/orchestration scripts + tests dưới `deploy/scripts/`, `web/e2e-real/support.ts`,
   real auth/library/upload/action specs, Playwright real config, CI `dev-stack` wiring.
 - **Dependencies/blocks:** P2-02…14 `Done`; real 3-flow baseline đã pass trên master
-  ancestry. Không phụ thuộc P2-18/P2-19 hoặc Phase 1C closure. Draft chưa được owner
-  approve nên chưa `Ready`.
+  ancestry. Không phụ thuộc P2-18/P2-19 hoặc Phase 1C closure; không còn blocker để bắt
+  đầu delivery plan.
 - **Acceptance criteria:** Mỗi run có namespace/credential tạm; không dùng fixed seeded
   account làm authority; setup/teardown idempotent và bounded; required process death,
   cleanup leak, redactor failure hoặc secret-canary match làm job fail. Real Chromium
