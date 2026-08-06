@@ -117,28 +117,35 @@ test('a real oversized upload returns 413 and the too-large alert without an ind
   armRateLimitedScenario();
 
   // Orchestrator sets MARKHAND_MAX_UPLOAD_BYTES=4096 for this process only.
-  const fileName = `e2e-real-upload-413-${Date.now()}.bin`;
-  const oversized = Buffer.alloc(5_000, 0x61);
+  // Use an accepted `.txt` extension so the dropzone `accept` filter cannot
+  // silently drop the selection; body size alone must trigger the 413.
+  const fileName = `e2e-real-upload-413-${Date.now()}.txt`;
+  const oversized = Buffer.alloc(8_192, 0x61);
 
   await login(page);
   await openRunCollection(page);
 
-  // Oversized bodies are rejected by axum's DefaultBodyLimit before the
-  // upload handler (and its route bucket) runs — no rate-window wait needed.
-  const upload413 = page.waitForResponse((response) => {
+  // Prefer DefaultBodyLimit rejection, but if the request reaches the upload
+  // handler the lowered route bucket (capacity 1) would 429 instead of 413.
+  // Wait out a prior upload hit so a handler-path rejection is still 413.
+  await ensureRouteRateWindow('upload');
+
+  // Match any POST /uploads completion — asserting status below — so a 429/201
+  // fails fast instead of hanging until the 5-minute scenario ceiling.
+  const uploadResponse = page.waitForResponse((response) => {
     if (response.request().method() !== 'POST') return false;
-    if (!new URL(response.url()).pathname.endsWith('/api/v1/uploads')) return false;
-    return response.status() === 413;
+    return new URL(response.url()).pathname.endsWith('/api/v1/uploads');
   });
 
   await page.getByLabel('Chọn tệp để tải lên').setInputFiles({
     name: fileName,
-    mimeType: 'application/octet-stream',
+    mimeType: 'text/plain',
     buffer: oversized,
   });
 
-  const rejected = await upload413;
-  expect(rejected.status()).toBe(413);
+  const rejected = await uploadResponse;
+  expect(rejected.status(), `POST /uploads status=${rejected.status()}`).toBe(413);
+  markRouteRateHit('upload');
 
   const alert = page.getByRole('alert');
   await expect(alert).toContainText(
