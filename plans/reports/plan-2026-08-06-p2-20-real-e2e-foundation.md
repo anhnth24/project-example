@@ -652,19 +652,14 @@ allowlist (manifest-only), retention/cleanup of default artifact dirs, explicit
 `WEB_E2E_REAL_ARTIFACT_DIR` for evidence, production profile refusal, and sanitization
 warning.
 
-<<<<<<< HEAD
-**Independent whole-branch review (2026-08-06):** APPROVE — no Critical/Important
-findings ([bc-11612232](https://cursor.com/agents/bc-11612232-bec7-5c36-9ba5-3931bdeb77c6));
-hermetic Python suites and architecture boundary re-verified at merge tip `75a5bc8`.
+**Independent reviews (2026-08-06):** Tasks 4–7 Sol Approved (capability route-label
+redaction + 429 route scope + content canaries). Task 8 Sol Approved with Blocked
+external gate after inventory/allowlist/`check-web` remediation. Hermetic Python suites
+and architecture boundaries re-verified on the delivery tip.
 
-**Still required before Done:** Docker full-stack evidence (`DEV_STACK_MODE=full`);
-`make check-web` and `make check-desktop` on delivery SHA; tracker sync (Phase F
-milestone run `31067930517`).
-=======
-**Still required before Review→Done:** Docker full-stack evidence with retained artifact
-dir; independent re-review of Sol Critical/Important fixes; catalog status advance with
-roadmap regen only when status changes.
->>>>>>> 3c9fcd5 (docs(p2-20): record artifact retention and middleware remediation evidence)
+**Still required before Done:** Docker full-stack evidence (`DEV_STACK_MODE=full`) with
+explicit retained `WEB_E2E_REAL_ARTIFACT_DIR`; tracker sync (Phase F milestone run
+`31067930517`).
 
 ## Definition of done
 
