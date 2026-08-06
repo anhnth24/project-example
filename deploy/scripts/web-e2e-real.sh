@@ -301,9 +301,9 @@ run_fixture_teardown() {
   # CI full-stack runs accumulate many org-scoped rows; 30s is too short after a
   # mid-suite Playwright failure and falsely reports cleanup interruption.
   local timeout_secs="${WEB_E2E_REAL_CLEANUP_TIMEOUT_SECS:-}"
-  if [[ -z "$timeout_secs" ]]; then
+    if [[ -z "$timeout_secs" ]]; then
     if [[ "${CI:-}" == "true" || "${CI:-}" == "1" ]]; then
-      timeout_secs=180
+      timeout_secs=300
     else
       timeout_secs=30
     fi
@@ -728,5 +728,8 @@ if [[ "$playwright_status" -ne 0 ]]; then
   upgrade_status "$playwright_status"
   exit "$playwright_status"
 fi
+
+echo "web-e2e-real: Playwright real project passed"
+dump_playwright_scenario_summary "$playwright_results"
 
 exit 0

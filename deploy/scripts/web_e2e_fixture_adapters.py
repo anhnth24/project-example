@@ -200,6 +200,10 @@ class LiveCommands:
         except subprocess.TimeoutExpired as error:
             raise FixtureError("compose/db operation timed out") from error
         if process.returncode != 0:
+            detail = ((process.stderr or "") + "\n" + (process.stdout or "")).strip()
+            detail = " ".join(detail.split())
+            if detail:
+                raise FixtureError(f"compose/db unavailable: {detail[:500]}")
             raise FixtureError("compose/db unavailable")
         return (process.stdout or "").strip()
 
