@@ -14,6 +14,7 @@ import {
   login,
   markRouteRateHit,
   openRunCollection,
+  armRateLimitedScenario,
 } from './support';
 
 test.describe.configure({ mode: 'serial' });
@@ -25,6 +26,7 @@ test('uploading a file against the real backend reaches indexed, and its preview
   // synthetic timings; `test.slow()` triples Playwright's default per-test
   // timeout so the generous waits below have room to actually complete.
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-upload-${Date.now()}.txt`;
   const fileContents = `Real-deployment upload smoke test contents. ${contentCanary()}`;
@@ -71,6 +73,7 @@ test('a delayed POST /uploads shows upload progress then reaches indexed preview
   page,
 }) => {
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-upload-throttled-${Date.now()}.txt`;
   const fileContents = `P2-20 throttled upload body ${contentCanary()} ${Date.now()} unique.`;
@@ -111,6 +114,7 @@ test('a real oversized upload returns 413 and the too-large alert without an ind
   page,
 }) => {
   test.slow();
+  armRateLimitedScenario();
 
   // Orchestrator sets MARKHAND_MAX_UPLOAD_BYTES=4096 for this process only.
   const fileName = `e2e-real-upload-413-${Date.now()}.bin`;

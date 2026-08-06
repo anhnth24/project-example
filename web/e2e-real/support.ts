@@ -22,7 +22,7 @@
 // `MARKHAND_E2E_REAL_CREDENTIALS_FILE` and `MARKHAND_E2E_REAL_FIXTURE_FILE`.
 // There is no fixed POC seed fallback — parsers fail closed when those env
 // paths are missing or still point at POC seed values.
-import { expect, type Page } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import {
   loadRuntimeCredentials,
   loadRuntimeFixture,
@@ -119,13 +119,30 @@ let lastUploadRouteHitAtMs = 0;
 const ROUTE_RATE_WINDOW_MS = 65_000;
 
 /**
+ * Headroom after a rate-window wait for login/upload/index/assertions.
+ * `test.slow()` alone (~90s) is not enough when a prior hit forces a 65s sleep.
+ */
+const RATE_LIMITED_WORK_BUDGET_MS = 180_000;
+
+/**
+ * Arm a 5-minute ceiling for scenarios that may wait on the lowered route
+ * bucket and then still need real convert/index time.
+ */
+export function armRateLimitedScenario(): void {
+  test.setTimeout(5 * 60_000);
+}
+
+/**
  * Waits until the named expensive-route token bucket can accept another call.
+ * Extends the current test timeout so the wait cannot consume the whole budget.
  */
 export async function ensureRouteRateWindow(route: 'reindex' | 'upload'): Promise<void> {
   const last = route === 'reindex' ? lastReindexRouteHitAtMs : lastUploadRouteHitAtMs;
   if (last === 0) return;
   const waitMs = ROUTE_RATE_WINDOW_MS - (Date.now() - last);
   if (waitMs > 0) {
+    const info = test.info();
+    test.setTimeout(Math.max(info.timeout, waitMs + RATE_LIMITED_WORK_BUDGET_MS));
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 }

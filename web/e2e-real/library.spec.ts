@@ -13,6 +13,7 @@ import {
   login,
   markRouteRateHit,
   openRunCollection,
+  armRateLimitedScenario,
 } from './support';
 
 test('navigating to the run collection shows the upload panel', async ({ page }) => {
@@ -26,6 +27,7 @@ test('uploading a unique text document indexes and previews markdown', async ({ 
   // Real conversion + indexing needs headroom beyond the mock suite's instant
   // transitions (`test.slow()` triples the default timeout).
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-library-preview-${Date.now()}.txt`;
   const fileContents = `P2-20 library preview body ${contentCanary()} ${Date.now()} unique.`;
@@ -57,6 +59,7 @@ test('downloading Markdown issues a capability, redeems it, and does not log the
   page,
 }) => {
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-library-download-${Date.now()}.txt`;
   const fileContents = `P2-20 library download body ${contentCanary()} ${Date.now()} unique.`;

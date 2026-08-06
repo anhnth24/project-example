@@ -13,6 +13,7 @@ import {
   markRouteRateHit,
   openRunCollection,
   runtimeFixture,
+  armRateLimitedScenario,
 } from './support';
 
 test.describe.configure({ mode: 'serial' });
@@ -31,6 +32,7 @@ async function assertRouteScoped429(response: Response): Promise<void> {
 
 test('reindex on an indexed document shows the enqueue success notice', async ({ page }) => {
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-actions-reindex-${Date.now()}.txt`;
   const fileContents = `P2-20 actions reindex body ${contentCanary()} ${Date.now()} unique.`;
@@ -64,6 +66,7 @@ test('fixture failed document shows the failed badge and retry enqueues reindex'
   page,
 }) => {
   test.slow();
+  armRateLimitedScenario();
 
   const { collectionId, failedDocumentId, runId } = runtimeFixture();
   const failedTitle = `E2E Failed ${runId}`;
@@ -99,6 +102,7 @@ test('fixture failed document shows the failed badge and retry enqueues reindex'
 
 test('delete with confirm removes the document row after refetch', async ({ page }) => {
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-actions-delete-${Date.now()}.txt`;
   const fileContents = `P2-20 actions delete body ${contentCanary()} ${Date.now()} unique.`;
@@ -133,6 +137,7 @@ test('delete with confirm removes the document row after refetch', async ({ page
 
 test('viewer reindex is denied with a real HTTP 403 and the document remains', async ({ page }) => {
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-actions-403-${Date.now()}.txt`;
   const fileContents = `P2-20 actions 403 body ${contentCanary()} ${Date.now()} unique.`;
@@ -202,6 +207,7 @@ test('reindex under the lowered route limit returns a real 429 with retry-after 
   page,
 }) => {
   test.slow();
+  armRateLimitedScenario();
 
   const fileName = `e2e-real-actions-429-${Date.now()}.txt`;
   const fileContents = `P2-20 actions 429 body ${contentCanary()} ${Date.now()} unique.`;

@@ -296,7 +296,16 @@ stop_and_reap_processes() {
 }
 
 run_fixture_teardown() {
-  local timeout_secs="${WEB_E2E_REAL_CLEANUP_TIMEOUT_SECS:-30}"
+  # CI full-stack runs accumulate many org-scoped rows; 30s is too short after a
+  # mid-suite Playwright failure and falsely reports cleanup interruption.
+  local timeout_secs="${WEB_E2E_REAL_CLEANUP_TIMEOUT_SECS:-}"
+  if [[ -z "$timeout_secs" ]]; then
+    if [[ "${CI:-}" == "true" || "${CI:-}" == "1" ]]; then
+      timeout_secs=180
+    else
+      timeout_secs=30
+    fi
+  fi
   local api_base="http://${bind_addr:-127.0.0.1:8787}"
   local cleanup_rc=0
   local verify_rc=0
@@ -625,10 +634,63 @@ if ! required_processes_alive "after seed, before Playwright"; then
   exit 1
 fi
 
+dump_playwright_scenario_summary() {
+  local results_path="$1"
+  if [[ -z "$results_path" || ! -f "$results_path" ]]; then
+    echo "web-e2e-real: no Playwright JSON results to summarize" >&2
+    return 0
+  fi
+  python3 - "$results_path" <<'PY' || true
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception as error:
+    print(f"web-e2e-real: unable to parse Playwright results ({error})", file=sys.stderr)
+    raise SystemExit(0)
+
+def walk(suite, prefix=""):
+    title = suite.get("title") or ""
+    path = f"{prefix} › {title}".strip(" ›") if title else prefix
+    for spec in suite.get("specs") or []:
+        spec_title = spec.get("title") or "(untitled)"
+        full = f"{path} › {spec_title}".strip(" ›")
+        outcome = "unknown"
+        for test in spec.get("tests") or []:
+            for result in test.get("results") or []:
+                status = result.get("status")
+                if status:
+                    outcome = status
+                    break
+            if outcome == "unknown":
+                status = test.get("status")
+                if status:
+                    outcome = status
+        print(f"  [{outcome}] {full}")
+    for child in suite.get("suites") or []:
+        walk(child, path)
+
+print("web-e2e-real: Playwright scenario summary (title/outcome only):")
+for suite in payload.get("suites") or []:
+    walk(suite)
+stats = payload.get("stats") or {}
+if stats:
+    print(
+        "web-e2e-real: stats "
+        f"expected={stats.get('expected')} unexpected={stats.get('unexpected')} "
+        f"skipped={stats.get('skipped')} flaky={stats.get('flaky')}"
+    )
+PY
+}
+
 playwright_status=0
 run_playwright_supervised || playwright_status=$?
 set -e
 if [[ "$playwright_status" -ne 0 ]]; then
+  dump_playwright_scenario_summary "$playwright_results"
   dump_redacted_logs "Playwright real project failed (exit ${playwright_status})"
   upgrade_status "$playwright_status"
   exit "$playwright_status"
