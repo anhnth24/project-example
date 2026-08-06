@@ -1,6 +1,7 @@
 //! Grounded Q&A with version-aware citations and extractive fallback (P1B-R03).
 
 pub mod ask_stream;
+pub mod chitchat;
 pub mod grounding;
 pub mod prompt;
 pub mod provider;
@@ -88,6 +89,21 @@ pub const UNVERIFIED_LLM_WARNING: &str =
     "Dev-gate: LLM answer passed citation/claim checks but structured entailment \
 is NOT available — this answer is unverified, not grounded.";
 
+/// Prefix for an optional UAT-only warning that carries the discarded LLM draft
+/// when claim validation fails under `MARKHAND_QA_ALLOW_UNVERIFIED_LLM`. Must
+/// stay in sync with `DISCARDED_LLM_DRAFT_PREFIX` in the web chat UI.
+pub const DISCARDED_LLM_DRAFT_WARNING_PREFIX: &str = "Discarded LLM draft (UAT):\n";
+
+const DISCARDED_LLM_DRAFT_MAX_CHARS: usize = 4_000;
+
+fn discarded_llm_draft_warning(llm_answer: &str) -> String {
+    let truncated: String = llm_answer
+        .chars()
+        .take(DISCARDED_LLM_DRAFT_MAX_CHARS)
+        .collect();
+    format!("{DISCARDED_LLM_DRAFT_WARNING_PREFIX}{truncated}")
+}
+
 /// Decides the final (answer, mode) for a completed LLM response, applying the
 /// fail-closed / dev-gate policy, plus any extra warnings the caller must
 /// attach. Pure/DB-free by design so both `ask()` (JSON) and the SSE producer
@@ -137,6 +153,11 @@ pub(crate) fn resolve_llm_answer(
                 }
                 .into(),
             );
+            // UAT-only: surface the discarded draft so operators can inspect
+            // what GLM said without promoting it to the primary answer.
+            if allow_unverified_llm() {
+                warnings.push(discarded_llm_draft_warning(&llm_answer));
+            }
             (
                 extractive.to_string(),
                 AnswerMode::FallbackExtractive,
@@ -315,6 +336,62 @@ pub async fn ask(
     if request.question.len() > 8_192 {
         return Err(AskError::InvalidRequest("question exceeds max length"));
     }
+
+    // Short social turns: assistant system prompt, no retrieval/citations.
+    if chitchat::is_assistant_chitchat(&request.question) {
+        let fallback = chitchat::assistant_fallback_reply(&request.question);
+        let version_context = version_context_note(&request.mode, &[], &[]);
+        let (answer, warnings) = match provider {
+            Some(chat) => {
+                let messages = prompt::build_assistant_messages(&request.question);
+                let lease = reserve_ask_tokens(pool, ctx, &messages)
+                    .await
+                    .map_err(AskError::Quota)?;
+                match chat.complete(&messages).await {
+                    Ok(llm_answer) => {
+                        settle_ask_tokens(pool, ctx, lease, Some(llm_answer.chars().count())).await;
+                        let trimmed = llm_answer.trim();
+                        if trimmed.is_empty() {
+                            (
+                                fallback,
+                                vec!["Assistant provider returned empty; using offline reply."
+                                    .into()],
+                            )
+                        } else {
+                            (trimmed.to_string(), Vec::new())
+                        }
+                    }
+                    Err(ProviderError::Timeout) => {
+                        settle_ask_tokens(pool, ctx, lease, Some(0)).await;
+                        (
+                            fallback,
+                            vec!["LLM provider timed out; using offline assistant reply.".into()],
+                        )
+                    }
+                    Err(_) => {
+                        settle_ask_tokens(pool, ctx, lease, None).await;
+                        (
+                            fallback,
+                            vec!["LLM provider unavailable; using offline assistant reply.".into()],
+                        )
+                    }
+                }
+            }
+            None => (
+                fallback,
+                vec!["No chat provider configured; using offline assistant reply.".into()],
+            ),
+        };
+        return Ok(AskResponse {
+            answer,
+            mode: AnswerMode::Assistant,
+            citations: Vec::new(),
+            warnings,
+            version_context,
+            embedding_mode: "assistant".into(),
+        });
+    }
+
     let retrieval = hybrid_search(
         pool,
         qdrant,
@@ -594,6 +671,10 @@ mod tests {
             assert!(warnings
                 .iter()
                 .any(|w| w.contains("Fabricated") || w.contains("unknown")));
+            assert!(warnings
+                .iter()
+                .any(|w| w.starts_with(DISCARDED_LLM_DRAFT_WARNING_PREFIX)));
+            assert!(warnings.iter().any(|w| w.contains("CITE-9999")));
         });
     }
 

@@ -1047,7 +1047,7 @@ export interface components {
         };
         AskResponse: {
             answer: string;
-            /** @description offline_extractive|fallback_extractive|local_llm|cloud_llm| subscription_cli|llm_unverified. Free-form string (not a closed enum) so new modes can ship without a schema bump. llm_unverified is a dev-gate-only value (env MARKHAND_QA_ALLOW_UNVERIFIED_LLM, default off): the LLM answer passed citation/claim validation but structured entailment is still unavailable, so it is never grounded — the response always carries a matching warning. */
+            /** @description offline_extractive|fallback_extractive|local_llm|cloud_llm| subscription_cli|llm_unverified|assistant. Free-form string (not a closed enum) so new modes can ship without a schema bump. llm_unverified is a dev-gate-only value (env MARKHAND_QA_ALLOW_UNVERIFIED_LLM, default off): the LLM answer passed citation/claim validation but structured entailment is still unavailable, so it is never grounded — the response always carries a matching warning. assistant is used for short social turns (greeting/thanks/identity) answered with the assistant system prompt and no document citations. */
             mode: string;
             citations: components["schemas"]["CitationPin"][];
             warnings?: string[];
@@ -1339,7 +1339,7 @@ export interface components {
             question: string;
             answer: string;
             /** @enum {string} */
-            answerMode: "offline_extractive" | "fallback_extractive" | "local_llm" | "cloud_llm" | "subscription_cli" | "llm_unverified";
+            answerMode: "offline_extractive" | "fallback_extractive" | "local_llm" | "cloud_llm" | "subscription_cli" | "llm_unverified" | "assistant";
             /** @description Stored verbatim from AppendChatTurnRequest — never re-validated server-side on read; see routes::chat_sessions module doc. */
             citations: components["schemas"]["CitationPin"][];
             warnings: string[];
@@ -1367,7 +1367,7 @@ export interface components {
             question: string;
             answer: string;
             /** @enum {string} */
-            answerMode: "offline_extractive" | "fallback_extractive" | "local_llm" | "cloud_llm" | "subscription_cli" | "llm_unverified";
+            answerMode: "offline_extractive" | "fallback_extractive" | "local_llm" | "cloud_llm" | "subscription_cli" | "llm_unverified" | "assistant";
             /** @description Defaults to [] when omitted. Stored opaque, not re-validated. */
             citations?: components["schemas"]["CitationPin"][];
             /** @description Defaults to [] when omitted. */

@@ -17,8 +17,8 @@ import {
   type AskStreamStatus,
 } from '../../state/askStream';
 import { AnswerText } from './AnswerText';
-import { describeAnswerMode } from './answerMode';
 import { CitationFootnotes } from './CitationFootnotes';
+import { TurnModeBadge, TurnWarningBlocks } from './TurnAnswerMeta';
 import { useAskStream } from './useAskStream';
 
 type AskRequest = components['schemas']['AskRequest'];
@@ -101,7 +101,6 @@ export function ChatTurnBubble({
   const display = cancelled && frozen ? frozen : state;
   const isDone =
     display.status === 'completed' || display.status === 'revoked' || display.status === 'error';
-  const modeInfo = isDone && !cancelled ? describeAnswerMode(display.answerMode) : null;
 
   const lastReportedRef = useRef<ChatTurnStatus | undefined>(undefined);
   useEffect(() => {
@@ -118,15 +117,21 @@ export function ChatTurnBubble({
   }, [state.status, cancelled]);
 
   return (
-    <div className="chat-turn" style={{ display: 'grid', gap: 'var(--space-2)' }}>
+    <div className="chat-turn" style={{ display: 'grid', gap: 'var(--space-3)' }}>
       <p style={{ margin: 0 }}>
         <span className="tag tag-outline">Bạn</span>{' '}
         <span style={{ fontWeight: 600 }}>{question}</span>
       </p>
 
-      <div aria-live="polite" role="status">
+      <div aria-live="polite" role="status" style={{ display: 'grid', gap: 'var(--space-2)' }}>
+        <p style={{ margin: 0 }}>
+          <span className="tag tag-outline">Trợ lý</span>
+        </p>
+        {isDone && !cancelled && <TurnModeBadge answerMode={display.answerMode} />}
         {!cancelled && display.status === 'streaming' && !display.answer && (
-          <p className="text-muted">Đang tạo câu trả lời…</p>
+          <p className="text-muted" style={{ margin: 0 }}>
+            Đang tạo câu trả lời…
+          </p>
         )}
         {display.answer && (
           <AnswerText text={display.answer} citations={display.citations} scopeId={turnId} />
@@ -136,12 +141,6 @@ export function ChatTurnBubble({
             Đã hủy câu trả lời này — nội dung phía trên (nếu có) có thể chưa đầy đủ.
           </Notice>
         )}
-        {modeInfo?.tone === 'neutral' && (
-          <p>
-            <span className="tag tag-neutral">{modeInfo.label}</span>
-          </p>
-        )}
-        {modeInfo?.tone === 'warning' && <Notice tone="warning">{modeInfo.label}</Notice>}
         {!cancelled && display.status === 'revoked' && (
           <Notice tone="warning">
             Trích dẫn đã bị thu hồi giữa chừng — câu trả lời phía trên có thể không đầy đủ.{' '}
@@ -159,16 +158,6 @@ export function ChatTurnBubble({
         </p>
       ))}
 
-      {display.warnings.length > 0 && (
-        <div style={{ display: 'grid', gap: 'var(--space-1)' }}>
-          {display.warnings.map((warning, i) => (
-            <Notice key={i} tone="warning">
-              {warning}
-            </Notice>
-          ))}
-        </div>
-      )}
-
       {display.versionContext?.changeNote && (
         <p className="text-muted">{display.versionContext.changeNote}</p>
       )}
@@ -178,6 +167,8 @@ export function ChatTurnBubble({
         collectionNameById={collectionNameById}
         scopeId={turnId}
       />
+
+      {isDone && !cancelled && <TurnWarningBlocks warnings={display.warnings} />}
     </div>
   );
 }
