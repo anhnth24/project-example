@@ -468,26 +468,29 @@ BEGIN;
 SET LOCAL row_security = off;
 SET LOCAL app.org_id = {org_id};
 
--- Immutable conflict history: all dependants are removed in the same narrow bypass.
-SET LOCAL session_replication_role = replica;
+-- Disable only project-owned immutability triggers while AccessExclusive table
+-- locks prevent concurrent writes. PostgreSQL FK/internal triggers stay enabled.
+ALTER TABLE conflict_evidence DISABLE TRIGGER USER;
+ALTER TABLE conflicts DISABLE TRIGGER USER;
 DELETE FROM conflict_evidence WHERE org_id = {org_id};
 DELETE FROM conflicts WHERE org_id = {org_id};
-SET LOCAL session_replication_role = origin;
+ALTER TABLE conflict_evidence ENABLE TRIGGER USER;
+ALTER TABLE conflicts ENABLE TRIGGER USER;
 
 DELETE FROM claims WHERE org_id = {org_id};
 DELETE FROM chunks WHERE org_id = {org_id};
 DELETE FROM vector_cleanup_intents WHERE org_id = {org_id};
 
-SET LOCAL session_replication_role = replica;
+ALTER TABLE derived_artifacts DISABLE TRIGGER USER;
 DELETE FROM derived_artifacts WHERE org_id = {org_id};
-SET LOCAL session_replication_role = origin;
+ALTER TABLE derived_artifacts ENABLE TRIGGER USER;
 
 DELETE FROM embedding_batches WHERE org_id = {org_id};
 DELETE FROM index_generation_backfills WHERE org_id = {org_id};
 
-SET LOCAL session_replication_role = replica;
+ALTER TABLE index_metadata DISABLE TRIGGER USER;
 DELETE FROM index_metadata WHERE org_id = {org_id};
-SET LOCAL session_replication_role = origin;
+ALTER TABLE index_metadata ENABLE TRIGGER USER;
 
 DELETE FROM download_capability_redemptions WHERE org_id = {org_id};
 DELETE FROM upload_operations WHERE org_id = {org_id};
@@ -503,9 +506,9 @@ DELETE FROM usage_counters WHERE org_id = {org_id};
 DELETE FROM audit_log WHERE org_id = {org_id};
 
 UPDATE documents SET current_version_id = NULL WHERE org_id = {org_id};
-SET LOCAL session_replication_role = replica;
+ALTER TABLE document_versions DISABLE TRIGGER USER;
 DELETE FROM document_versions WHERE org_id = {org_id};
-SET LOCAL session_replication_role = origin;
+ALTER TABLE document_versions ENABLE TRIGGER USER;
 DELETE FROM documents WHERE org_id = {org_id};
 
 DELETE FROM collection_user_access WHERE org_id = {org_id};
