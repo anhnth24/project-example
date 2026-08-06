@@ -4,10 +4,10 @@ Parent plan: [`../../../phase-2-web-spa.md`](../../../phase-2-web-spa.md)
 
 <!-- roadmap-default-status: backlog -->
 
-**Trạng thái tổng quan (cập nhật 2026-08-05).** MVP xây trên mock server đã merge vào
-`master`: **14/19 issue Done** (P2-01…09, P2-11…14, P2-17). **5 active, đều In
-progress**: P2-10 (Q&A — UI/mock/stream xây xong trên contract hiện có; **#374** đóng nốt
-gap conflict-warning demo cho as-of/compare/history — xem chi tiết bên dưới), P2-15
+**Trạng thái tổng quan (cập nhật 2026-08-06).** MVP xây trên mock server đã merge vào
+`master`: **14/19 issue Done** (P2-01…09, P2-11…14, P2-17). **1 in Review, 4 In
+progress**: P2-10 (Q&A — UI/mock/stream + conflict-warning #374; scope-wide `as_of`
+web gap đóng, đang Review), P2-15
 (E2E — mock-based xong; **#374** landed nửa real-deployment upload→indexed và lần chạy
 live đầu tiên của `security-deps`/`security-image`; còn ZAP baseline chưa chạy live),
 P2-18 (Project grouping — owner request mới 2026-07-29, org → project → collection →
@@ -192,7 +192,7 @@ P2-15 + Phase 1C gate → P2-16
 
 ## P2-10 — Streaming search/Q&A/citations
 
-- **Status:** In progress — **owner hạ gate 2026-07-29** (môi trường dev/test, không chờ
+- **Status:** Review — **owner hạ gate 2026-07-29** (môi trường dev/test, không chờ
   full live-evidence R02/R03/R05): UI xây trên OpenAPI/SSE contract hiện có + mock server
   như P2-01..09. `QaPage` không còn là placeholder: `search`/`ask` (đồng bộ) và
   `POST /ask/stream` (mock mới, `mocks/handlers/qa.ts`) đều hoạt động; stream reducer
@@ -222,9 +222,10 @@ P2-15 + Phase 1C gate → P2-16
   từng chế độ: `as_of` (phiên bản resolve ra không phải hiện hành), `compare` (warning
   độc lập cho từng phía không-hiện-hành — v2 là current nên chỉ v1 có warning),
   `history` (một warning tổng kết "resolved ở phiên bản 2"). Reducer test cho cả 3 chế
-  độ (`askStream.test.ts`) + E2E compare/history (`qa.spec.ts`); riêng `as_of` chỉ cover
-  mức reducer/mock vì `ChatPanel` chưa có document picker cho chế độ đó (gap UI có sẵn,
-  ngoài scope #374).
+  độ (`askStream.test.ts`) + E2E compare/history (`qa.spec.ts`); `as_of` giờ cũng có
+  E2E timestamp-only (scope-wide, không document picker — owner chọn phương án 1
+  2026-08-06) chứng minh thời điểm giữa v1/v2 trả nội dung 10 triệu + warning
+  không-hiện-hành (`qa.spec.ts`).
   "Trạng thái reconnect" chỉ hiển thị chung là "đang stream" — transport P2-04
   (`api/sse.ts`) không phát một `SseMessage` kind riêng cho "đang thử kết nối lại" (chỉ
   âm thầm retry/backoff nội bộ), nên UI không bịa tín hiệu không có thật; chỉ có trạng
@@ -355,10 +356,13 @@ P2-15 + Phase 1C gate → P2-16
 
   **Quyết định scope `as_of` (owner chọn phương án 1, 2026-08-06):** giữ semantics
   backend hiện tại: timestamp áp dụng cho toàn bộ tài liệu trong collection/project scope
-  đã authorize; không thêm document picker mà server không dùng. Gap còn lại của P2-10
-  là sửa mock đang đòi `documentId`, bắt buộc timestamp ở composer, và thêm E2E chứng
-  minh thời điểm giữa v1/v2 trả nội dung v1 + warning không-hiện-hành mà không mở rộng
-  scope.
+  đã authorize; không thêm document picker mà server không dùng. **Đã đóng gap web:**
+  mock `as_of` không còn đòi `documentId` (resolve latest effective version cho mọi
+  tài liệu trong scope đã authorize, rồi match/limit như current); composer bắt buộc
+  timestamp (`required` + disable submit); E2E `qa.spec.ts` chứng minh thời điểm giữa
+  v1/v2 trả nội dung v1 + warning không-hiện-hành. Vitest: `QaPage.test.tsx` (request
+  shape) + `mocks/handlers/qa.asOf.test.ts` (missing/invalid/scope-negative). Ready for
+  independent review; `Done` chỉ sau review độc lập (không tự đóng trong task này).
 
 - **Plan file:** [P2-10 `as_of` end-to-end closure](../../../../reports/plan-2026-08-06-p2-10-as-of-e2e.md)
 
