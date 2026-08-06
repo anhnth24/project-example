@@ -134,39 +134,57 @@ test('chat keeps multi-turn history: a second question is answered without distu
   );
 });
 
-test('as_of between budget versions cites v1 10-million content with a non-current warning', async ({
-  page,
-}) => {
-  // Scope-wide as-of (owner option 1): timestamp only — no document picker.
-  // Budget fixture v1 effectiveFrom = mockTimestamp(50), v2 = mockTimestamp(95);
-  // a local datetime between those instants (UTC test env) must surface v1.
-  await login(page);
-  await page.getByRole('link', { name: 'Hỏi đáp' }).click();
+test.describe('as_of timezone portability', () => {
+  test.use({ timezoneId: 'America/Los_Angeles' });
 
-  await page.getByRole('combobox', { name: 'Chế độ truy vấn' }).click();
-  await page.getByRole('option', { name: 'Tại một thời điểm (as-of)' }).click();
+  test('as_of between budget versions cites v1 10-million content with a non-current warning', async ({
+    page,
+  }) => {
+    // Scope-wide as-of (owner option 1): timestamp only — no document picker.
+    // Budget fixture v1 effectiveFrom = mockTimestamp(50), v2 = mockTimestamp(95);
+    // fixed 01:10Z is between them. This scenario uses a non-UTC browser zone
+    // and derives the datetime-local wall time for that instant, so it cannot
+    // accidentally shift to v2 on a runner configured outside UTC.
+    const expectedAsOf = '2026-01-01T01:10:00.000Z';
+    await login(page);
+    await page.getByRole('link', { name: 'Hỏi đáp' }).click();
 
-  const askButton = page.getByRole('button', { name: 'Hỏi', exact: true });
-  const asOfInput = page.getByLabel('Thời điểm (as-of)');
-  await expect(asOfInput).toHaveAttribute('required', '');
+    await page.getByRole('combobox', { name: 'Chế độ truy vấn' }).click();
+    await page.getByRole('option', { name: 'Tại một thời điểm (as-of)' }).click();
 
-  await page.getByRole('textbox', { name: 'Câu hỏi' }).fill('Ngân sách vận hành là bao nhiêu?');
-  await expect(askButton).toBeDisabled();
+    const askButton = page.getByRole('button', { name: 'Hỏi', exact: true });
+    const asOfInput = page.getByLabel('Thời điểm (as-of)');
+    await expect(asOfInput).toHaveAttribute('required', '');
 
-  await asOfInput.fill('2026-01-01T01:00');
-  await expect(askButton).toBeEnabled();
-  await askButton.click();
+    await page.getByRole('textbox', { name: 'Câu hỏi' }).fill('Ngân sách vận hành là bao nhiêu?');
+    await expect(askButton).toBeDisabled();
 
-  const turn = page.getByRole('log', { name: 'Lịch sử hỏi đáp' }).locator('.chat-turn').first();
-  await expect(turn.getByTestId('qa-answer')).toContainText('10 triệu');
-  await expect(turn.getByTestId('qa-answer')).not.toContainText('15 triệu');
-  await expect(
-    turn.getByText(
-      /Phiên bản 1 của "Chính sách ngân sách vận hành\.pdf" không phải phiên bản hiện hành/,
-    ),
-  ).toBeVisible();
-  await expect(turn.getByText(/đã được giải quyết ở phiên bản 2/)).toBeVisible();
-  await expect(turn.getByText(/15 triệu/)).not.toBeVisible();
+    const localInputForFixedInstant = await page.evaluate((iso) => {
+      const instant = new Date(iso);
+      const pad = (value: number) => String(value).padStart(2, '0');
+      return (
+        `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}` +
+        `T${pad(instant.getHours())}:${pad(instant.getMinutes())}`
+      );
+    }, expectedAsOf);
+    await asOfInput.fill(localInputForFixedInstant);
+    await expect(askButton).toBeEnabled();
+    expect(
+      await asOfInput.evaluate((input: HTMLInputElement) => new Date(input.value).toISOString()),
+    ).toBe(expectedAsOf);
+    await askButton.click();
+
+    const turn = page.getByRole('log', { name: 'Lịch sử hỏi đáp' }).locator('.chat-turn').first();
+    await expect(turn.getByTestId('qa-answer')).toContainText('10 triệu');
+    await expect(turn.getByTestId('qa-answer')).not.toContainText('15 triệu');
+    await expect(
+      turn.getByText(
+        /Phiên bản 1 của "Chính sách ngân sách vận hành\.pdf" không phải phiên bản hiện hành/,
+      ),
+    ).toBeVisible();
+    await expect(turn.getByText(/đã được giải quyết ở phiên bản 2/)).toBeVisible();
+    await expect(turn.getByText(/15 triệu/)).not.toBeVisible();
+  });
 });
 
 test('multi-mode conflict warnings display correctly (compare/history)', async ({ page }) => {
