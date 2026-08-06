@@ -42,9 +42,10 @@ fi
 "${COMPOSE[@]}" "${psql_args[@]}" \
   --set "quota_bytes=$quota_bytes" \
   --set "org_id=$org_id" \
-  -c "UPDATE org_quotas
-      SET max_storage_bytes = :'quota_bytes'::bigint, updated_at = now()
-      WHERE org_id = :'org_id'::uuid;" \
-  >/dev/null
+  >/dev/null <<'SQL'
+UPDATE org_quotas
+SET max_storage_bytes = :'quota_bytes'::bigint, updated_at = now()
+WHERE org_id = :'org_id'::uuid;
+SQL
 
 echo "updated seeded organization storage quota to ${quota_bytes} bytes"
