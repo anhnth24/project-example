@@ -12,7 +12,9 @@
 #
 # Dev-only process-local server knobs (not test seams / bypasses / schema forks):
 #   MARKHAND_MAX_UPLOAD_BYTES=4096          → deterministic HTTP 413
-#   MARKHAND_RATE_ROUTE_PER_MINUTE=1        → deterministic reindex HTTP 429
+#   MARKHAND_RATE_ROUTE_PER_MINUTE=1        → deterministic reindex/upload HTTP 429
+# Login stays on MARKHAND_RATE_AUTH_PER_MINUTE only (not this route knob), so a
+# lowered route capacity does not starve subsequent logins or fixture cleanup.
 # These already exist in crates/server config + rate_limit middleware. Production
 # profile validation continues to refuse unsafe defaults.
 #
@@ -642,6 +644,7 @@ dump_playwright_scenario_summary() {
   fi
   python3 - "$results_path" <<'PY' || true
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -652,6 +655,19 @@ except Exception as error:
     print(f"web-e2e-real: unable to parse Playwright results ({error})", file=sys.stderr)
     raise SystemExit(0)
 
+# Keep failure hints short and strip common secret-looking tokens.
+_SECRETISH = re.compile(
+    r"(?i)(bearer\s+[a-z0-9._\-+=/]+|eyJ[a-z0-9_\-]+=*\.[a-z0-9_\-.=]+|"
+    r"mhcap1\.[a-z0-9._\-]+|password[=:]\s*\S+)"
+)
+
+
+def safe_error(text: str) -> str:
+    cleaned = _SECRETISH.sub("[redacted]", text or "")
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:240]
+
+
 def walk(suite, prefix=""):
     title = suite.get("title") or ""
     path = f"{prefix} › {title}".strip(" ›") if title else prefix
@@ -659,21 +675,38 @@ def walk(suite, prefix=""):
         spec_title = spec.get("title") or "(untitled)"
         full = f"{path} › {spec_title}".strip(" ›")
         outcome = "unknown"
+        hint = ""
         for test in spec.get("tests") or []:
-            for result in test.get("results") or []:
-                status = result.get("status")
+            results = test.get("results") or []
+            if results:
+                # Prefer the last attempt (retry-aware).
+                last = results[-1]
+                status = last.get("status")
                 if status:
                     outcome = status
-                    break
+                for error in last.get("errors") or []:
+                    message = error.get("message") if isinstance(error, dict) else str(error)
+                    if message:
+                        hint = safe_error(message)
+                        break
+                if not hint:
+                    error = last.get("error")
+                    if isinstance(error, dict) and error.get("message"):
+                        hint = safe_error(str(error["message"]))
+                    elif isinstance(error, str):
+                        hint = safe_error(error)
             if outcome == "unknown":
                 status = test.get("status")
                 if status:
                     outcome = status
-        print(f"  [{outcome}] {full}")
+        line = f"  [{outcome}] {full}"
+        if hint and outcome not in {"passed", "skipped", "expected"}:
+            line = f"{line} :: {hint}"
+        print(line)
     for child in suite.get("suites") or []:
         walk(child, path)
 
-print("web-e2e-real: Playwright scenario summary (title/outcome only):")
+print("web-e2e-real: Playwright scenario summary (title/outcome + safe error hints):")
 for suite in payload.get("suites") or []:
     walk(suite)
 stats = payload.get("stats") or {}

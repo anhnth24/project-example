@@ -155,12 +155,11 @@ async fn login(
 ) -> Response {
     let request_id = request_id(request_id_ext);
     let ip = peer_ip(client_ip);
+    // Login uses the dedicated auth-IP bucket (`MARKHAND_RATE_AUTH_PER_MINUTE`),
+    // not `check_route` / `MARKHAND_RATE_ROUTE_PER_MINUTE`. The route knob is for
+    // expensive APIs (upload/reindex/search/ask); putting login on it makes a
+    // lowered E2E route capacity of 1 also starve every subsequent login.
     if let Err(rejected) = crate::routes::rate_limit_guard::check_auth_ip(&state, &ip, &request_id)
-    {
-        return rejected.into_response();
-    }
-    if let Err(rejected) =
-        crate::routes::rate_limit_guard::check_route(&state, "auth.login", &ip, &request_id)
     {
         return rejected.into_response();
     }
