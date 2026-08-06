@@ -579,8 +579,12 @@ authZ and public contracts untouched.
   - `python3 scripts/check-dependency-policy.py` → pass
 - Exact-SHA full-stack evidence: _pending (Tasks 2–8 / live Compose cycle)._
 - Sanitized manifest path + fixture checksum: _pending (live setup)._
-- Independent review outcome: _pending — independent re-review still required before
-  Task 1 is fully Approved; implementer closeout alone is not approval._
+- Independent Task 1 review outcome: **Approved** (2026-08-06) by independent
+  Sol-style reviewer (`kimi-k3-high`; owner-requested GPT 5.6 Sol unavailable in Task
+  allowlist). Range `0fb7e50`…`ae284da`. No Critical/Important findings; Minor polish
+  items (PHC regex/server-default drift note, cold `cargo run` under deadline, argv
+  `--stdin` edge, multi-commit boundary) deferred to whole-branch review. Report:
+  coordinator artifact `task-1-review.md`.
 
 ## Definition of done
 
