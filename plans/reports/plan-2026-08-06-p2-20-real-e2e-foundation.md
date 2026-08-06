@@ -586,6 +586,52 @@ authZ and public contracts untouched.
   `--stdin` edge, multi-commit boundary) deferred to whole-branch review. Report:
   coordinator artifact `task-1-review.md`.
 
+### Task 8 — Manifest contract tests + verification evidence (2026-08-06)
+
+Worktree `/workspace/.worktrees/p2-20-task8` on branch
+`cursor/p2-20-task8-evidence-bd0a`.
+
+**Implementation SHA (artifact tests + README contract):** `fe12e4cdce61476a2950e26dde70b9d9562215ce`
+
+**Hermetic / unit evidence (recorded at that SHA):**
+
+| Command | Result |
+|---|---|
+| `python3 deploy/scripts/test_web_e2e_real_fixture.py` | **31 passed**, 0 failed |
+| `python3 deploy/scripts/test_web_e2e_real_orchestration.py` | **17 passed**, 0 failed |
+| `python3 deploy/scripts/test_web_e2e_real_artifacts.py` | **11 passed**, 0 failed (checksum drift, missing scenario, nonzero skip, failed teardown, secret + content canaries, happy-path validate) |
+| `pnpm --dir web test --run` | **52 files / 556 tests passed** (fallback; see `make check-web` note) |
+| `python3 scripts/check-architecture-boundaries.py` | **passed** |
+| `pnpm --filter markhand-web format:check` | passed |
+| `pnpm --filter markhand-web lint` | passed (0 errors, 8 pre-existing react-refresh warnings) |
+| `pnpm --filter markhand-web api:check` | passed (N/A drift; OpenAPI/client untouched) |
+
+**`make check-web` note:** invoked but failed at `pnpm --filter markhand-web build`
+(`tsc && vite build`) with missing `@types/node` / `node:fs` / `Buffer` errors when
+typechecking Playwright/`e2e-real` paths. The same failure reproduces on the parent
+`/workspace` checkout — environment/toolchain gap, not introduced by Task 8. Per Task 8
+instructions, recorded `pnpm --dir web test --run` as the web unit evidence substitute.
+`format:check`, `lint`, and `api:check` portions are green above.
+
+**Full-stack blocker (`DEV_STACK_MODE=full`):** **not run — Docker unavailable** in this
+Cloud VM (`docker` binary missing; no `/var/run/docker.sock`). No Compose up, no live
+`web-e2e-real.sh` cycle, and **no sanitized live manifest / fixture checksum** were
+produced. Do **not** fabricate stack evidence. Re-run on a Docker-capable host:
+
+```bash
+DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh
+```
+
+then attach exact SHA, `WEB_E2E_REAL_ARTIFACT_DIR/manifest.json` (sanitized), fixture
+checksum, `skippedCount=0`, and `teardown.result=ok`.
+
+**Docs:** `deploy/README.md` now documents fixture/artifact CLI contract, local command,
+output locations (`WEB_E2E_REAL_ARTIFACT_DIR` / `WEB_E2E_REAL_RUNTIME_DIR`), production
+profile refusal, and sanitization warning.
+
+**Still required before Review→Done:** Docker full-stack evidence; independent review;
+catalog status advance with roadmap regen only when status changes.
+
 ## Definition of done
 
 - [ ] Every acceptance row (A1–A21) has reviewable evidence linked above.
