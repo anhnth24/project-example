@@ -141,6 +141,17 @@ Accessibility:
   - permission deny và quota exceed.
 - OWASP baseline/dependency/license scan.
 
+Full real-deployment parity được tách theo thiết kế owner duyệt 2026-08-06:
+
+- P2-20: fixture/orchestrator cô lập + auth/library/upload/actions;
+- P2-21: search/Q&A/citation/version/graph/chat history;
+- P2-22: multi-org/project/member/quota/denial;
+- P2-23: required aggregator + desktop/SCA/image + blocking OWASP/artifact gate.
+
+P2-15 là umbrella, không `Done` cho tới khi bốn child có exact-SHA evidence và
+independent security review. Mock Playwright vẫn là fast deterministic layer, không thay
+real integration.
+
 ## P2.9 — Build và serve SPA
 
 - Build Vite tạo hashed immutable assets.
@@ -158,6 +169,8 @@ Accessibility:
 - Q&A đạt first-token/retrieval SLO và citation mở đúng nguồn.
 - Browser/a11y/security gates xanh.
 - Desktop `app/` vẫn test/build bình thường.
+- Relevant PR/master change không thể skip stable P2-23 aggregator; real matrix,
+  blocking ZAP, artifact validation và teardown phải pass.
 
 ## Không thuộc phase
 
