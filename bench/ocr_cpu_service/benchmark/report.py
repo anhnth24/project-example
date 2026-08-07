@@ -402,16 +402,82 @@ def render_markdown(data: dict[str, Any]) -> str:
     )
     for candidate in data["candidates"]:
         for page in candidate.get("pages", []):
-            if page.get(
-                "gate_included",
-                page["stratum"] in {"real-scan", "synthetic-scan"},
-            ):
+            if page["source_id"] != official["source_id"]:
                 continue
             status = "ok" if page["success"] else page.get("error_kind", "failed")
             lines.append(
                 f"| {candidate['label']} | {page['page_number']} | "
                 f"{page['elapsed_seconds']:.3f} | "
                 f"{_mib(page['peak_rss_bytes'])} | {status} |"
+            )
+
+    historical = corpus.get("historical_samples", [])
+    lines.extend(
+        [
+            "",
+            "## Historical qualitative evidence",
+            "",
+            "These public historical scans were already checksum-pinned in the "
+            "manifest and were run as bounded qualitative samples. There is no "
+            "trustworthy transcription for the sampled pages, so no CER/WER or "
+            "quality-gate claim is made.",
+            "",
+        ]
+    )
+    for sample in historical:
+        lines.append(
+            f"- `{sample['source_id']}`: classification "
+            f"**{sample['classification']}**; sampled pages "
+            + ", ".join(str(page) for page in sample["sampled_pages"])
+            + "; evidence mode **qualitative only**."
+        )
+    lines.extend(
+        [
+            "",
+            "| Candidate | Source ID | Page | Warm seconds | Sampled process-tree RSS MiB | Status |",
+            "|---|---|--:|--:|--:|---|",
+        ]
+    )
+    historical_ids = {sample["source_id"] for sample in historical}
+    for candidate in data["candidates"]:
+        for page in candidate.get("pages", []):
+            if page["source_id"] not in historical_ids:
+                continue
+            status = "ok" if page["success"] else page.get("error_kind", "failed")
+            lines.append(
+                f"| {candidate['label']} | `{page['source_id']}` | "
+                f"{page['page_number']} | {page['elapsed_seconds']:.3f} | "
+                f"{_mib(page['peak_rss_bytes'])} | {status} |"
+            )
+
+    reading_cases = corpus.get("reading_order_cases", [])
+    lines.extend(
+        [
+            "",
+            "## Reviewed multi-column reading order",
+            "",
+            "The deterministic two-column fixture uses source-ground-truth "
+            "column-major anchor order. Violations are pairwise inversions "
+            "among observed anchors; missing anchors are reported separately "
+            "and are not silently counted as correctly ordered.",
+            "",
+            "| Candidate | Expected anchors | Observed anchors | Comparable pairs | Violations | Missing anchors |",
+            "|---|--:|--:|--:|--:|--:|",
+        ]
+    )
+    reading_ids = {case["source_id"] for case in reading_cases}
+    for candidate in data["candidates"]:
+        for page in candidate.get("pages", []):
+            if page["source_id"] not in reading_ids:
+                continue
+            metric = page.get("reading_order")
+            if metric is None:
+                lines.append(f"| {candidate['label']} | — | — | — | — | — |")
+                continue
+            lines.append(
+                f"| {candidate['label']} | {metric['expected_anchors']} | "
+                f"{metric['observed_anchors']} | {metric['comparable_pairs']} | "
+                f"{metric['violations']} | {metric['missing_anchors']} |"
             )
 
     lines.extend(

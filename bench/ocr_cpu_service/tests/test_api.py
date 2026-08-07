@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import inspect
 import sys
 import threading
@@ -9,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-import pymupdf
+import pypdfium2 as pdfium
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -22,13 +23,17 @@ from markhand_ocr.service import ConvertRequest, InvalidPdf  # noqa: E402
 
 
 def make_pdf(*, pages: int = 1) -> bytes:
-    document = pymupdf.open()
+    document = pdfium.PdfDocument.new()
+    created_pages: list[pdfium.PdfPage] = []
+    output = io.BytesIO()
     try:
-        for page_number in range(1, pages + 1):
-            page = document.new_page(width=100, height=50)
-            page.insert_text((5, 15), f"sensitive page {page_number}")
-        return document.tobytes()
+        for _ in range(pages):
+            created_pages.append(document.new_page(100, 50))
+        document.save(output)
+        return output.getvalue()
     finally:
+        for page in created_pages:
+            page.close()
         document.close()
 
 

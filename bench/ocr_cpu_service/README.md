@@ -11,22 +11,24 @@ Run from the repository root with Python 3.12:
 
 ```bash
 python3 -m venv bench/ocr_cpu_service/.venv
-bench/ocr_cpu_service/.venv/bin/python -m pip install --upgrade pip
 bench/ocr_cpu_service/.venv/bin/python -m pip install \
-  --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
-  -e 'bench/ocr_cpu_service[test,model]'
-```
-
-`requirements.lock` records the complete environment resolved by that command.
-For an exact reinstall, install the lock with the same CPU wheel index, then
-install this package without resolving dependencies:
-
-```bash
+  --upgrade pip==26.2.1
 bench/ocr_cpu_service/.venv/bin/python -m pip install \
-  --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
-  -r bench/ocr_cpu_service/requirements.lock
+  -r bench/ocr_cpu_service/pylock.toml
 bench/ocr_cpu_service/.venv/bin/python -m pip install \
   --no-deps -e bench/ocr_cpu_service
+```
+
+`pylock.toml` is the native pip 26 platform lock for CPython 3.12 on Linux
+x86_64. It records the exact selected wheel URL and SHA-256 for every runtime,
+test, and model dependency; installation does not re-resolve versions. Regenerate
+it only on the declared target with:
+
+```bash
+bench/ocr_cpu_service/.venv/bin/python -m pip lock --only-deps \
+  'bench/ocr_cpu_service[test,model]' \
+  --extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/ \
+  -o bench/ocr_cpu_service/pylock.toml
 ```
 
 PaddleOCR does not install or pin the PaddlePaddle framework. At investigation
@@ -171,9 +173,16 @@ integration requires separate evidence and review.
 
 - PaddleOCR, PaddlePaddle, PaddleX, and the official pretrained OCR weights are
   Apache-2.0.
+- pypdfium2 5.12.1 reports `BSD-3-Clause, Apache-2.0, dependency licenses`
+  in installed package metadata. Upstream documents pypdfium2 as
+  Apache-2.0/BSD-3-Clause and PDFium as BSD-style:
+  <https://github.com/pypdfium2-team/pypdfium2/#licensing>.
+  Binary redistribution must also ship the PDFium and bundled third-party
+  notices from the wheel's `BUILD_LICENSES` material; exact build composition
+  still requires release review.
 - The resolved environment contains no package whose name indicates a CUDA,
   ROCm, GPU, TensorRT, or cuDNN-only runtime.
 - Transitive licenses are predominantly Apache, BSD, MIT, MPL, and PSF.
-  `python-bidi` is LGPL-3.0-or-later. PyMuPDF retains its existing
-  AGPL-3.0/commercial dual license and must be reviewed before distribution.
+  `python-bidi` is LGPL-3.0-or-later. PyMuPDF is no longer a direct or
+  transitive locked dependency.
 - Downloaded model assets and the `.venv` are runtime-only, ignored artifacts.

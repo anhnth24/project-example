@@ -6,7 +6,7 @@
 
 **Architecture:** A benchmark-only Python package under `bench/ocr_cpu_service/` owns bounded PDF rendering, OCR orchestration, deterministic reading order, API serialization, corpus acquisition, and reports. PaddleOCR is accessed through its public API and models are cached outside git; no MinerU code or runtime is imported.
 
-**Tech Stack:** Python 3.12, FastAPI, Pydantic, PyMuPDF, Pillow, PaddleOCR/PP-OCRv6, PaddlePaddle CPU, psutil, pytest, and httpx.
+**Tech Stack:** Python 3.12, FastAPI, Pydantic, pypdfium2/PDFium, Pillow, PaddleOCR/PP-OCRv6, PaddlePaddle CPU, psutil, pytest, and httpx.
 
 ## Global Constraints
 
@@ -204,7 +204,7 @@ Expected: import failure because the service module does not exist.
 
 - [ ] **Step 3: Implement rendering and conversion**
 
-Use PyMuPDF only for local bytes, reject encrypted/invalid PDFs, render at bounded DPI,
+Use pypdfium2/PDFium only for local bytes, reject encrypted/invalid PDFs, render at bounded DPI,
 enforce maximum pages and pixel dimensions before allocating images, record monotonic
 duration and process peak RSS, and always close the document.
 

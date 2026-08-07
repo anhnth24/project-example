@@ -11,18 +11,20 @@ import select
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 import psutil
-import pymupdf
+import pypdfium2 as pdfium
+from PIL import Image, ImageDraw, ImageFont
 
-from benchmark.metrics import error_counts
+from benchmark.metrics import error_counts, reading_order_violations
 from benchmark.report import aggregate_records, recompute_and_validate_summary
 from corpus.download import CorpusSource, load_sources
+from markhand_ocr.render import RenderLimits, render_page
 
 ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = ROOT / "bench" / "ocr_cpu_service"
@@ -63,6 +65,7 @@ class BenchmarkPage:
     path: Path
     reference: str | None
     gate_included: bool = True
+    reading_order_anchors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,26 +167,109 @@ def deterministic_page_sample(page_count: int) -> tuple[int, ...]:
     return tuple(sorted({1, (page_count + 1) // 2, page_count}))
 
 
+def generate_reviewed_multicolumn_case(
+    work_dir: Path,
+) -> tuple[dict[str, Any], BenchmarkPage]:
+    """Create a deterministic two-column page with source-ground-truth order."""
+    work_dir.mkdir(parents=True, exist_ok=True)
+    output = work_dir / "reviewed-multicolumn-v1.png"
+    font_path = Path(
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    )
+    font = ImageFont.truetype(str(font_path), 44)
+    heading_font = ImageFont.truetype(str(font_path), 54)
+    anchors = ("L1", "L2", "L3", "R1", "R2", "R3")
+    left = (
+        ("L1", "Dòng trái thứ nhất"),
+        ("L2", "Dòng trái thứ hai"),
+        ("L3", "Dòng trái thứ ba"),
+    )
+    right = (
+        ("R1", "Dòng phải thứ nhất"),
+        ("R2", "Dòng phải thứ hai"),
+        ("R3", "Dòng phải thứ ba"),
+    )
+    image = Image.new("RGB", (1600, 1000), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text(
+        (100, 70),
+        "Trường hợp kiểm tra thứ tự hai cột",
+        fill="black",
+        font=heading_font,
+    )
+    for x, rows in ((100, left), (880, right)):
+        for index, (anchor, text) in enumerate(rows):
+            draw.text(
+                (x, 230 + index * 190),
+                f"{anchor} {text}",
+                fill="black",
+                font=font,
+            )
+    try:
+        image.save(output, format="PNG", optimize=False, compress_level=9)
+    finally:
+        image.close()
+    image_sha256 = _sha256(output)
+    metadata = {
+        "source_id": "reviewed-multicolumn-v1",
+        "classification": "synthetic-scan",
+        "layout": "two-column-column-major",
+        "ground_truth": "deterministic-source",
+        "review_status": "reviewed-fixture-contract",
+        "expected_anchors": len(anchors),
+        "image_sha256": image_sha256,
+        "font_sha256": _sha256(font_path),
+        "generator": "Pillow fixed canvas, coordinates, font, and PNG settings",
+    }
+    return (
+        metadata,
+        BenchmarkPage(
+            source_id="reviewed-multicolumn-v1",
+            source_sha256=image_sha256,
+            stratum="reviewed-multicolumn",
+            page_number=1,
+            path=output,
+            reference=None,
+            gate_included=False,
+            reading_order_anchors=anchors,
+        ),
+    )
+
+
 def inspect_and_render_official(
     source: CorpusSource,
     corpus_dir: Path,
     work_dir: Path,
     *,
     dpi: int = 200,
+    benchmark_stratum: str = "mixed",
 ) -> tuple[dict[str, Any], list[BenchmarkPage]]:
-    """Inspect every official page, then render one bounded deterministic sample."""
+    """Inspect every PDF page, then render one bounded deterministic sample."""
     path = _verified_path(source, corpus_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-    document = pymupdf.open(path)
+    document = pdfium.PdfDocument(path)
     try:
-        page_count = document.page_count
+        page_count = len(document)
         text_pages = 0
         image_pages = 0
-        for page in document:
-            if page.get_text().strip():
-                text_pages += 1
-            if page.get_images(full=True):
-                image_pages += 1
+        for index in range(page_count):
+            page = document[index]
+            try:
+                text_page = page.get_textpage()
+                try:
+                    if text_page.get_text_range().strip():
+                        text_pages += 1
+                finally:
+                    text_page.close()
+                if any(
+                    True
+                    for _ in page.get_objects(
+                        filter=(pdfium.raw.FPDF_PAGEOBJ_IMAGE,)
+                    )
+                ):
+                    image_pages += 1
+            finally:
+                page.close()
         classification = (
             "mixed"
             if text_pages and image_pages
@@ -196,30 +282,53 @@ def inspect_and_render_official(
         sampled = deterministic_page_sample(page_count)
         pages: list[BenchmarkPage] = []
         sampled_page_classification: dict[str, str] = {}
-        matrix = pymupdf.Matrix(dpi / 72, dpi / 72)
         for page_number in sampled:
-            output = work_dir / f"official-89-2026-tt-btc-p{page_number}.png"
-            source_page = document.load_page(page_number - 1)
-            has_text = bool(source_page.get_text().strip())
-            has_image = bool(source_page.get_images(full=True))
-            sampled_page_classification[str(page_number)] = (
-                "mixed"
-                if has_text and has_image
-                else "native"
-                if has_text
-                else "scan"
-                if has_image
-                else "empty"
-            )
-            pixmap = source_page.get_pixmap(
-                matrix=matrix, colorspace=pymupdf.csRGB, alpha=False
-            )
-            pixmap.save(output)
+            output = work_dir / f"{source.id}-p{page_number}.png"
+            source_page = document[page_number - 1]
+            try:
+                text_page = source_page.get_textpage()
+                try:
+                    has_text = bool(text_page.get_text_range().strip())
+                finally:
+                    text_page.close()
+                has_image = any(
+                    True
+                    for _ in source_page.get_objects(
+                        filter=(pdfium.raw.FPDF_PAGEOBJ_IMAGE,)
+                    )
+                )
+                sampled_page_classification[str(page_number)] = (
+                    "mixed"
+                    if has_text and has_image
+                    else "native"
+                    if has_text
+                    else "scan"
+                    if has_image
+                    else "empty"
+                )
+                width, height = source_page.get_size()
+                max_dimension = max(
+                    1, int(max(width, height) * dpi / 72) + 1
+                )
+                image = render_page(
+                    source_page,
+                    RenderLimits(
+                        dpi=dpi,
+                        max_pixels=max_dimension * max_dimension,
+                        max_dimension=max_dimension,
+                    ),
+                )
+                try:
+                    image.save(output, format="PNG")
+                finally:
+                    image.close()
+            finally:
+                source_page.close()
             pages.append(
                 BenchmarkPage(
                     source_id=source.id,
                     source_sha256=source.sha256,
-                    stratum="mixed",
+                    stratum=benchmark_stratum,
                     page_number=page_number,
                     path=output,
                     reference=None,
@@ -249,6 +358,31 @@ def inspect_and_render_official(
         },
         pages,
     )
+
+
+def inspect_and_render_historical(
+    sources: list[CorpusSource],
+    corpus_dir: Path,
+    work_dir: Path,
+    *,
+    dpi: int = 200,
+) -> tuple[list[dict[str, Any]], list[BenchmarkPage]]:
+    """Render bounded manifest-pinned historical samples as qualitative evidence."""
+    evidence: list[dict[str, Any]] = []
+    pages: list[BenchmarkPage] = []
+    for source in sorted(sources, key=lambda item: item.id):
+        source_evidence, source_pages = inspect_and_render_official(
+            source,
+            corpus_dir,
+            work_dir,
+            dpi=dpi,
+            benchmark_stratum="historical-scan",
+        )
+        source_evidence["transcription"] = "none-trustworthy-available"
+        source_evidence["evidence_mode"] = "qualitative-only"
+        evidence.append(source_evidence)
+        pages.extend(source_pages)
+    return evidence, pages
 
 
 def _process_tree_rss(process: psutil.Process) -> int:
@@ -454,6 +588,12 @@ def _run_candidate(
                         else (0.0 if not measurement.text else 1.0)
                     ),
                 )
+            if page.reading_order_anchors:
+                record["reading_order"] = asdict(
+                    reading_order_violations(
+                        page.reading_order_anchors, measurement.text
+                    )
+                )
         except TimeoutError:
             record["error_kind"] = "timeout"
         except Exception:
@@ -508,7 +648,20 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     official, official_pages = inspect_and_render_official(
         official_source, corpus_dir, args.work_dir.resolve()
     )
-    pages = quantitative_pages + official_pages
+    historical, historical_pages = inspect_and_render_historical(
+        [source for source in sources if source.kind == "wikimedia-scan"],
+        corpus_dir,
+        args.work_dir.resolve(),
+    )
+    multicolumn, multicolumn_page = generate_reviewed_multicolumn_case(
+        args.work_dir.resolve()
+    )
+    pages = (
+        quantitative_pages
+        + official_pages
+        + historical_pages
+        + [multicolumn_page]
+    )
     fileconv = args.fileconv.resolve()
     system_tessdata = args.system_tessdata.resolve()
     best_tessdata = args.best_tessdata.resolve()
@@ -535,6 +688,10 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "provenance": {
                 "fileconv_build": fileconv_build,
                 "invocation": "fileconv one <identical-page.png> --lang vie+eng",
+                "timing_note": (
+                    "warm timing includes a fresh fileconv/Tesseract subprocess "
+                    "spawn, execution, and output collection for every page"
+                ),
                 "tessdata_role": "system-default",
                 "tessdata_sha256": {
                     language: _sha256(
@@ -559,6 +716,10 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "provenance": {
                 "fileconv_build": fileconv_build,
                 "invocation": "fileconv one <identical-page.png> --lang vie+eng",
+                "timing_note": (
+                    "warm timing includes a fresh fileconv/Tesseract subprocess "
+                    "spawn, execution, and output collection for every page"
+                ),
                 "tessdata_role": "best",
                 "tessdata_sha256": {
                     language: _sha256(
@@ -658,6 +819,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 "paddleocr": _version("paddleocr"),
                 "paddlepaddle": _version("paddlepaddle"),
                 "paddlex": _version("paddlex"),
+                "pypdfium2": _version("pypdfium2"),
                 "python": platform.python_version(),
                 "tesseract": _command_version(["tesseract", "--version"]),
             },
@@ -680,6 +842,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 )
             },
             "official_sample": official,
+            "historical_samples": historical,
+            "reading_order_cases": [multicolumn],
         },
         "candidates": candidate_results,
     }

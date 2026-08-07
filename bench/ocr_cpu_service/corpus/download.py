@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
 import re
 import socket
+import ssl
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urljoin, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import Request
 
 _SOURCE_FIELDS = (
     "id",
@@ -26,6 +29,8 @@ _SOURCE_FIELDS = (
 )
 _CHUNK_BYTES = 64 * 1024
 _DOWNLOAD_TIMEOUT_SECONDS = 30.0
+_DOWNLOAD_TOTAL_DEADLINE_SECONDS = 120.0
+_monotonic = time.monotonic
 _APPROVED_HOSTS = frozenset(
     {
         "cas-bridge.xethub.hf.co",
@@ -56,23 +61,118 @@ class DownloadedSource:
     bytes_downloaded: int
 
 
-class _ValidatedRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to one validated IP while retaining hostname TLS verification."""
+
+    def __init__(
+        self, host: str, addresses: tuple[str, ...], timeout: float
+    ) -> None:
+        super().__init__(
+            host,
+            port=443,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        )
+        self._validated_addresses = addresses
+
+    def connect(self) -> None:
+        last_error: OSError | None = None
+        for address in self._validated_addresses:
+            raw_socket: socket.socket | None = None
+            try:
+                raw_socket = socket.create_connection(
+                    (address, 443),
+                    self.timeout,
+                    self.source_address,
+                )
+                self.sock = self._context.wrap_socket(
+                    raw_socket, server_hostname=self.host
+                )
+                return
+            except OSError as error:
+                last_error = error
+                if raw_socket is not None:
+                    raw_socket.close()
+        if last_error is None:
+            raise OSError("no validated download address")
+        raise last_error
+
+
+class _PinnedResponse:
+    def __init__(
         self,
-        req: Request,
-        fp: Any,
-        code: int,
-        msg: str,
-        headers: Any,
-        newurl: str,
-    ) -> Request | None:
-        absolute_url = urljoin(req.full_url, newurl)
-        _validate_download_url(absolute_url)
-        return super().redirect_request(req, fp, code, msg, headers, absolute_url)
+        response: Any,
+        connection: Any,
+        url: str,
+    ) -> None:
+        self._response = response
+        self._connection = connection
+        self._url = url
+        self.headers = response.headers
+
+    def geturl(self) -> str:
+        return self._url
+
+    def read(self, size: int = -1) -> bytes:
+        return self._response.read(size)
+
+    def read1(self, size: int = -1) -> bytes:
+        method = getattr(self._response, "read1", self._response.read)
+        return method(size)
+
+    def close(self) -> None:
+        try:
+            self._response.close()
+        finally:
+            self._connection.close()
+
+    def __enter__(self) -> _PinnedResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        self.close()
 
 
-def urlopen(request: Request, timeout: float) -> Any:
-    return build_opener(_ValidatedRedirectHandler()).open(request, timeout=timeout)
+def urlopen(request: Request, timeout: float) -> _PinnedResponse:
+    """Open one allowlisted GET using only the addresses validated per hop."""
+    if request.get_method() != "GET" or request.data is not None:
+        raise ValueError("corpus downloader supports only GET")
+    current_url = request.full_url
+    headers = dict(request.header_items())
+    started = _monotonic()
+    for _ in range(6):
+        remaining = timeout - (_monotonic() - started)
+        if remaining <= 0:
+            raise TimeoutError("download connection deadline exceeded")
+        parsed = urlsplit(current_url)
+        assert parsed.hostname is not None
+        addresses = _validate_download_url(current_url)
+        connection = _PinnedHTTPSConnection(
+            parsed.hostname, addresses, remaining
+        )
+        target = parsed.path or "/"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        try:
+            connection.request("GET", target, headers=headers)
+            response = connection.getresponse()
+        except BaseException:
+            connection.close()
+            raise
+        if response.status not in {301, 302, 303, 307, 308}:
+            if not 200 <= response.status < 300:
+                response.close()
+                connection.close()
+                raise ValueError("download server returned an unsuccessful status")
+            return _PinnedResponse(response, connection, current_url)
+        location = response.headers.get("Location")
+        response.close()
+        connection.close()
+        if not location:
+            raise ValueError("download redirect is missing Location")
+        current_url = urljoin(current_url, location)
+        _validate_download_url(current_url)
+    raise ValueError("download redirect limit exceeded")
 
 
 def validate_source(source: CorpusSource) -> None:
@@ -205,6 +305,7 @@ def _destination_name(source: CorpusSource) -> str:
 
 
 def _stream_source(source: CorpusSource, destination: Any) -> int:
+    started = _monotonic()
     request = Request(
         source.url,
         headers={"User-Agent": "Markhand-OCR-corpus-downloader/1"},
@@ -213,7 +314,12 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
     bytes_downloaded = 0
 
     _validate_download_url(source.url)
-    with urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
+    remaining = _DOWNLOAD_TOTAL_DEADLINE_SECONDS - (_monotonic() - started)
+    if remaining <= 0:
+        raise TimeoutError(f"{source.id}: download deadline exceeded")
+    with urlopen(
+        request, timeout=min(_DOWNLOAD_TIMEOUT_SECONDS, remaining)
+    ) as response:
         final_url = response.geturl()
         _validate_download_url(final_url)
 
@@ -230,7 +336,13 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
                     f"{source.id}: Content-Length exceeds max_bytes"
                 )
 
-        while chunk := response.read(_CHUNK_BYTES):
+        read_chunk = getattr(response, "read1", response.read)
+        while True:
+            if _monotonic() - started >= _DOWNLOAD_TOTAL_DEADLINE_SECONDS:
+                raise TimeoutError(f"{source.id}: download deadline exceeded")
+            chunk = read_chunk(_CHUNK_BYTES)
+            if not chunk:
+                break
             bytes_downloaded += len(chunk)
             if bytes_downloaded > source.max_bytes:
                 raise ValueError(f"{source.id}: streamed content exceeds max_bytes")
@@ -246,7 +358,7 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
     return bytes_downloaded
 
 
-def _validate_download_url(url: str) -> None:
+def _validate_download_url(url: str) -> tuple[str, ...]:
     parsed = urlsplit(url)
     if parsed.scheme != "https":
         raise ValueError("download redirected to a non-HTTPS URL")
@@ -269,9 +381,14 @@ def _validate_download_url(url: str) -> None:
     if not addresses:
         raise ValueError(f"download host could not be resolved: {parsed.hostname}")
 
+    validated: list[str] = []
     for address in addresses:
-        ip = ipaddress.ip_address(address[4][0])
+        address_text = address[4][0]
+        ip = ipaddress.ip_address(address_text)
         if not ip.is_global:
             raise ValueError(
                 f"download host must resolve only to public addresses: {parsed.hostname}"
             )
+        if address_text not in validated:
+            validated.append(address_text)
+    return tuple(validated)

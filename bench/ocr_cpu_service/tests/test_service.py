@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import io
 import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-import pymupdf
+import pypdfium2 as pdfium
 import pytest
 from PIL import Image
 
@@ -22,13 +23,17 @@ from markhand_ocr.service import (  # noqa: E402
 
 
 def make_pdf(*, pages: int = 1, width: float = 200, height: float = 100) -> bytes:
-    document = pymupdf.open()
+    document = pdfium.PdfDocument.new()
+    created_pages: list[pdfium.PdfPage] = []
+    output = io.BytesIO()
     try:
-        for page_number in range(1, pages + 1):
-            page = document.new_page(width=width, height=height)
-            page.insert_text((10, 20), f"page {page_number}")
-        return document.tobytes()
+        for _ in range(pages):
+            created_pages.append(document.new_page(width, height))
+        document.save(output)
+        return output.getvalue()
     finally:
+        for page in created_pages:
+            page.close()
         document.close()
 
 
@@ -108,16 +113,16 @@ def test_rejects_oversized_page_before_pixmap_allocation(
     fake_backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     allocation_attempted = False
-    original_get_pixmap = pymupdf.Page.get_pixmap
+    original_render = pdfium.PdfPage.render
 
-    def tracked_get_pixmap(
-        self: pymupdf.Page, *args: object, **kwargs: object
+    def tracked_render(
+        self: pdfium.PdfPage, *args: object, **kwargs: object
     ) -> object:
         nonlocal allocation_attempted
         allocation_attempted = True
-        return original_get_pixmap(self, *args, **kwargs)
+        return original_render(self, *args, **kwargs)
 
-    monkeypatch.setattr(pymupdf.Page, "get_pixmap", tracked_get_pixmap)
+    monkeypatch.setattr(pdfium.PdfPage, "render", tracked_render)
 
     with pytest.raises(ConversionRejected, match="pixel limit"):
         convert_pdf(
@@ -134,14 +139,14 @@ def test_rejects_oversized_input_before_opening_pdf(
     tiny_pdf: bytes, fake_backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     opened = False
-    original_open = pymupdf.open
+    original_open = pdfium.PdfDocument
 
-    def tracked_open(*args: object, **kwargs: object) -> pymupdf.Document:
+    def tracked_open(*args: object, **kwargs: object) -> pdfium.PdfDocument:
         nonlocal opened
         opened = True
         return original_open(*args, **kwargs)
 
-    monkeypatch.setattr(pymupdf, "open", tracked_open)
+    monkeypatch.setattr(pdfium, "PdfDocument", tracked_open)
 
     with pytest.raises(ConversionRejected, match="input size limit"):
         convert_pdf(
@@ -153,23 +158,27 @@ def test_rejects_oversized_input_before_opening_pdf(
     assert opened is False
 
 
-def test_rejects_malformed_and_encrypted_pdfs(fake_backend: FakeBackend) -> None:
+def test_rejects_malformed_and_encrypted_pdfs(
+    fake_backend: FakeBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
     with pytest.raises(InvalidPdf, match="invalid PDF"):
         convert_pdf(b"%PDF-1.7\nnot really a pdf", ConvertRequest(), fake_backend)
 
-    document = pymupdf.open()
-    try:
-        document.new_page()
-        encrypted = document.tobytes(
-            encryption=pymupdf.PDF_ENCRYPT_AES_256,
-            owner_pw="owner",
-            user_pw="secret",
-        )
-    finally:
-        document.close()
+    import markhand_ocr.render as render
+
+    original_document = render.pdfium.PdfDocument
+
+    def open_document(data: bytes) -> pdfium.PdfDocument:
+        if data == b"%PDF-encrypted":
+            raise pdfium.PdfiumError(
+                "Failed to load document (PDFium: Incorrect password error)."
+            )
+        return original_document(data)
+
+    monkeypatch.setattr(render.pdfium, "PdfDocument", open_document)
 
     with pytest.raises(InvalidPdf, match="encrypted PDF"):
-        convert_pdf(encrypted, ConvertRequest(), fake_backend)
+        convert_pdf(b"%PDF-encrypted", ConvertRequest(), fake_backend)
 
 
 def test_closes_page_image_when_backend_fails(tiny_pdf: bytes) -> None:
@@ -193,20 +202,23 @@ def test_maps_pdf_page_failures_to_invalid_pdf(
     import markhand_ocr.service as service
 
     class BrokenPage:
-        @property
-        def rect(self) -> object:
-            raise RuntimeError("secret geometry details")
+        def get_size(self) -> tuple[int, int]:
+            if failure_point == "geometry":
+                raise RuntimeError("secret geometry details")
+            return (10, 10)
+
+        def close(self) -> None:
+            pass
 
     class BrokenDocument:
-        page_count = 1
+        def __len__(self) -> int:
+            return 1
 
-        def load_page(self, index: int) -> object:
+        def __getitem__(self, index: int) -> object:
             assert index == 0
             if failure_point == "load":
                 raise RuntimeError("secret page load details")
-            if failure_point == "geometry":
-                return BrokenPage()
-            return object()
+            return BrokenPage()
 
     @contextmanager
     def broken_pdf(data: bytes) -> Iterator[BrokenDocument]:

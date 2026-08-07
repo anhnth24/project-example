@@ -121,6 +121,23 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                 },
                 "sampled_pages": [1, 420, 839],
             },
+            "historical_samples": [
+                {
+                    "source_id": "wikimedia-history",
+                    "classification": "scan",
+                    "sampled_pages": [1],
+                    "evidence_mode": "qualitative-only",
+                    "transcription": "none-trustworthy-available",
+                }
+            ],
+            "reading_order_cases": [
+                {
+                    "source_id": "reviewed-multicolumn-v1",
+                    "classification": "synthetic-scan",
+                    "ground_truth": "deterministic-source",
+                    "expected_anchors": 6,
+                }
+            ],
         },
         "candidates": [
             {
@@ -154,6 +171,31 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                         "success": True,
                         "elapsed_seconds": 2.5,
                         "peak_rss_bytes": 200,
+                    },
+                    {
+                        "source_id": "wikimedia-history",
+                        "stratum": "historical-scan",
+                        "gate_included": False,
+                        "page_number": 1,
+                        "success": True,
+                        "elapsed_seconds": 3.0,
+                        "peak_rss_bytes": 220,
+                    },
+                    {
+                        "source_id": "reviewed-multicolumn-v1",
+                        "stratum": "reviewed-multicolumn",
+                        "gate_included": False,
+                        "page_number": 1,
+                        "success": True,
+                        "elapsed_seconds": 1.5,
+                        "peak_rss_bytes": 180,
+                        "reading_order": {
+                            "expected_anchors": 6,
+                            "observed_anchors": 6,
+                            "comparable_pairs": 15,
+                            "violations": 1,
+                            "missing_anchors": 0,
+                        },
                     }
                 ],
             }
@@ -168,7 +210,7 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
         },
     }
     quantitative_page = data["candidates"][0]["pages"][0]
-    official_page = data["candidates"][0]["pages"][1]
+    qualitative_pages = data["candidates"][0]["pages"][1:]
     data["candidates"] = [
         {
             "id": candidate_id,
@@ -183,7 +225,10 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                     "reference_words": 5,
                     "resource_limit_violation": False,
                 },
-                {**official_page, "resource_limit_violation": False},
+                *[
+                    {**page, "resource_limit_violation": False}
+                    for page in qualitative_pages
+                ],
             ],
         }
         for candidate_id, label, edits in (
@@ -220,6 +265,11 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
     assert "sample-1" in first
     assert "## Official sample runtime evidence" in first
     assert "| Markhand default | 420 | 2.500" in first
+    assert "## Historical qualitative evidence" in first
+    assert "`wikimedia-history`" in first
+    assert "no trustworthy transcription" in first
+    assert "## Reviewed multi-column reading order" in first
+    assert "| Markhand default | 6 | 6 | 15 | 1 | 0 |" in first
     assert "## Sample-size and representativeness limits" in first
     assert "9 real-scan pages" in first
     assert "not a population estimate" in first

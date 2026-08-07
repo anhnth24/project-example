@@ -74,7 +74,7 @@ def convert_pdf(
     try:
         with open_pdf(data) as document:
             try:
-                page_count = document.page_count
+                page_count = len(document)
             except Exception as error:
                 raise InvalidPdf("invalid PDF") from error
             if page_count > request.max_pages:
@@ -82,13 +82,17 @@ def convert_pdf(
             selected_pages = _selected_pages(request.pages, page_count)
 
             for page_number in selected_pages:
+                page = None
                 try:
-                    page = document.load_page(page_number - 1)
+                    page = document[page_number - 1]
                     image = render_page(page, limits)
                 except PageRenderRejected as error:
                     raise ConversionRejected(str(error), kind="render_bound") from error
                 except Exception as error:
                     raise InvalidPdf("invalid PDF") from error
+                finally:
+                    if page is not None:
+                        page.close()
 
                 try:
                     try:

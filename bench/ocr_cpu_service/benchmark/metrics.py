@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -16,6 +17,15 @@ class ErrorCounts:
     reference_characters: int
     word_edits: int
     reference_words: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReadingOrderCounts:
+    expected_anchors: int
+    observed_anchors: int
+    comparable_pairs: int
+    violations: int
+    missing_anchors: int
 
 
 def normalize_for_metric(text: str) -> str:
@@ -75,4 +85,36 @@ def error_counts(reference: str, hypothesis: str) -> ErrorCounts:
         reference_characters=len(normalized_reference),
         word_edits=_distance(reference_words, hypothesis_words),
         reference_words=len(reference_words),
+    )
+
+
+def reading_order_violations(
+    expected_anchors: Sequence[str], hypothesis: str
+) -> ReadingOrderCounts:
+    """Count pairwise inversions among uniquely reviewed anchor tokens."""
+    expected = tuple(expected_anchors)
+    if len(expected) != len(set(expected)) or any(not item for item in expected):
+        raise ValueError("reading-order anchors must be non-empty and unique")
+    normalized = normalize_for_metric(hypothesis)
+    observed: list[tuple[int, int]] = []
+    for expected_index, anchor in enumerate(expected):
+        match = re.search(
+            rf"(?<!\w){re.escape(anchor)}(?!\w)",
+            normalized,
+        )
+        if match is not None:
+            observed.append((expected_index, match.start()))
+    observed.sort(key=lambda item: item[1])
+    violations = sum(
+        left_expected > right_expected
+        for index, (left_expected, _) in enumerate(observed)
+        for right_expected, _ in observed[index + 1 :]
+    )
+    observed_count = len(observed)
+    return ReadingOrderCounts(
+        expected_anchors=len(expected),
+        observed_anchors=observed_count,
+        comparable_pairs=observed_count * (observed_count - 1) // 2,
+        violations=violations,
+        missing_anchors=len(expected) - observed_count,
     )

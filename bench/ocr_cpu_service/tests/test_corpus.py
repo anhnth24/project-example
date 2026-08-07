@@ -332,31 +332,172 @@ def test_download_sources_uses_bounded_timeout(
     assert 0 < observed["timeout"] <= 60
 
 
-def test_redirect_handler_resolves_relative_location_before_validation(
+def test_download_sources_enforces_total_monotonic_deadline_against_slow_drip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = valid_source(max_bytes=100)
+    manifest = tmp_path / "sources.json"
+    output = tmp_path / "corpus"
+    write_manifest(manifest, [source])
+
+    class SlowDripResponse(FakeResponse):
+        def __init__(self) -> None:
+            super().__init__(b"")
+            self.reads = 0
+
+        def read1(self, size: int = -1) -> bytes:
+            del size
+            self.reads += 1
+            return b"x" if self.reads <= 3 else b""
+
+    ticks = iter((0.0, 0.0, 0.6, 1.2, 1.2))
+    monkeypatch.setattr(
+        corpus_download, "_monotonic", lambda: next(ticks), raising=False
+    )
+    monkeypatch.setattr(
+        corpus_download, "_DOWNLOAD_TOTAL_DEADLINE_SECONDS", 1.0, raising=False
+    )
+    monkeypatch.setattr(
+        "corpus.download.urlopen",
+        lambda request, timeout=None: SlowDripResponse(),
+    )
+
+    with pytest.raises(TimeoutError, match="deadline"):
+        download_sources(manifest, output)
+
+    assert not (output / "fixture.pdf").exists()
+    assert not list(output.glob("*.tmp"))
+
+
+def test_urlopen_resolves_relative_redirect_before_validating_next_hop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    validated: list[str] = []
+
+    class Response:
+        def __init__(self, status: int, headers: dict[str, str]) -> None:
+            self.status = status
+            self.headers = headers
+
+        def close(self) -> None:
+            pass
+
+    responses = iter(
+        (
+            Response(307, {"Location": "/api/resolve-cache/artifact"}),
+            Response(200, {}),
+        )
+    )
+
+    class Connection:
+        def __init__(
+            self, host: str, addresses: tuple[str, ...], timeout: float
+        ) -> None:
+            del host, addresses, timeout
+
+        def request(
+            self, method: str, target: str, headers: dict[str, str]
+        ) -> None:
+            del method, target, headers
+
+        def getresponse(self) -> Response:
+            return next(responses)
+
+        def close(self) -> None:
+            pass
+
     monkeypatch.setattr(
-        corpus_download.HTTPRedirectHandler,
-        "redirect_request",
-        lambda self, req, fp, code, msg, headers, newurl: req,
+        corpus_download,
+        "_validate_download_url",
+        lambda url: validated.append(url) or ("203.0.113.10",),
     )
-    handler = corpus_download._ValidatedRedirectHandler()
-    request = corpus_download.Request("https://huggingface.co/original")
-
-    redirected = handler.redirect_request(
-        request,
-        None,
-        307,
-        "Temporary Redirect",
-        {},
-        "/api/resolve-cache/artifact",
+    monkeypatch.setattr(
+        corpus_download, "_PinnedHTTPSConnection", Connection
     )
 
-    assert redirected is request
+    response = corpus_download.urlopen(
+        corpus_download.Request("https://huggingface.co/original"),
+        timeout=2.5,
+    )
+    response.close()
+
+    assert validated == [
+        "https://huggingface.co/original",
+        "https://huggingface.co/api/resolve-cache/artifact",
+        "https://huggingface.co/api/resolve-cache/artifact",
+    ]
 
 
 def test_hugging_face_regional_cdn_is_an_approved_redirect_host() -> None:
-    corpus_download._validate_download_url("https://us.aws.cdn.hf.co/artifact")
+    assert corpus_download._validate_download_url(
+        "https://us.aws.cdn.hf.co/artifact"
+    ) == ("93.184.216.34",)
+
+
+def test_urlopen_binds_connection_to_prevalidated_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    class Response:
+        status = 200
+        headers: dict[str, str] = {}
+
+        def read(self) -> bytes:
+            return b""
+
+        def close(self) -> None:
+            calls.append(("response-close",))
+
+    class Connection:
+        def __init__(
+            self, host: str, addresses: tuple[str, ...], timeout: float
+        ) -> None:
+            calls.append(("connect", host, addresses, timeout))
+
+        def request(
+            self, method: str, target: str, headers: dict[str, str]
+        ) -> None:
+            calls.append(("request", method, target, headers))
+
+        def getresponse(self) -> Response:
+            return Response()
+
+        def close(self) -> None:
+            calls.append(("connection-close",))
+
+    monkeypatch.setattr(
+        corpus_download,
+        "_validate_download_url",
+        lambda url: ("203.0.113.10",),
+    )
+    monkeypatch.setattr(
+        corpus_download, "_PinnedHTTPSConnection", Connection, raising=False
+    )
+
+    response = corpus_download.urlopen(
+        corpus_download.Request(
+            "https://huggingface.co/path/file.pdf?download=1",
+            headers={"User-Agent": "test"},
+        ),
+        timeout=2.5,
+    )
+    with response:
+        assert response.geturl() == (
+            "https://huggingface.co/path/file.pdf?download=1"
+        )
+
+    assert calls[0][0:3] == (
+        "connect",
+        "huggingface.co",
+        ("203.0.113.10",),
+    )
+    assert 0 < float(calls[0][3]) <= 2.5
+    assert calls[1][0:3] == (
+        "request",
+        "GET",
+        "/path/file.pdf?download=1",
+    )
 
 
 def test_download_sources_rejects_checksum_mismatch_without_replacing_existing(

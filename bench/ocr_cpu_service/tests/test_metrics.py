@@ -9,6 +9,7 @@ from benchmark.metrics import (  # noqa: E402
     cer,
     error_counts,
     normalize_for_metric,
+    reading_order_violations,
     wer,
 )
 
@@ -40,3 +41,16 @@ def test_error_counts_support_micro_averaging_without_storing_text() -> None:
     assert counts.character_edits == 4
     assert counts.reference_words == 3
     assert counts.word_edits == 1
+
+
+def test_reading_order_metric_counts_inversions_and_missing_anchors() -> None:
+    result = reading_order_violations(
+        ("L1", "L2", "R1", "R2"),
+        "L1 R1 L2",
+    )
+
+    assert result.expected_anchors == 4
+    assert result.observed_anchors == 3
+    assert result.comparable_pairs == 3
+    assert result.violations == 1
+    assert result.missing_anchors == 1

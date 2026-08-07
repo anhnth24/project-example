@@ -55,7 +55,7 @@ Data flow:
 
 ```text
 bounded PDF upload
-  -> PDFium/PyMuPDF page render at configured DPI
+  -> pypdfium2/PDFium page render at configured DPI
   -> PP-OCRv6 detection and recognition on CPU
   -> deterministic line grouping and column-aware reading order
   -> NFC normalization

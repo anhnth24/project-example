@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterator
 
-import pymupdf
+import pypdfium2 as pdfium
 from PIL import Image
 
 
@@ -27,30 +27,31 @@ class RenderLimits:
 
 
 @contextmanager
-def open_pdf(data: bytes) -> Iterator[pymupdf.Document]:
+def open_pdf(data: bytes) -> Iterator[pdfium.PdfDocument]:
     """Open PDF bytes and guarantee native document cleanup."""
-    document: pymupdf.Document | None = None
+    document: pdfium.PdfDocument | None = None
     try:
         try:
-            document = pymupdf.open(stream=data, filetype="pdf")
-        except (pymupdf.FileDataError, RuntimeError, ValueError) as error:
-            raise PdfOpenError("invalid PDF") from error
-
-        if not document.is_pdf:
-            raise PdfOpenError("invalid PDF")
-        if document.needs_pass:
-            raise PdfOpenError("encrypted PDF")
+            document = pdfium.PdfDocument(data)
+        except (pdfium.PdfiumError, RuntimeError, ValueError) as error:
+            message = (
+                "encrypted PDF"
+                if "password" in str(error).lower()
+                else "invalid PDF"
+            )
+            raise PdfOpenError(message) from error
         yield document
     finally:
         if document is not None:
             document.close()
 
 
-def render_page(page: pymupdf.Page, limits: RenderLimits) -> Image.Image:
+def render_page(page: pdfium.PdfPage, limits: RenderLimits) -> Image.Image:
     """Render one page after validating dimensions without image allocation."""
     scale = limits.dpi / 72
-    width = math.ceil(page.rect.width * scale)
-    height = math.ceil(page.rect.height * scale)
+    page_width, page_height = page.get_size()
+    width = math.ceil(page_width * scale)
+    height = math.ceil(page_height * scale)
     if width <= 0 or height <= 0:
         raise PageRenderRejected("invalid page dimensions")
     if width > limits.max_dimension or height > limits.max_dimension:
@@ -58,9 +59,12 @@ def render_page(page: pymupdf.Page, limits: RenderLimits) -> Image.Image:
     if width * height > limits.max_pixels:
         raise PageRenderRejected("pixel limit exceeded")
 
-    pixmap = page.get_pixmap(
-        matrix=pymupdf.Matrix(scale, scale),
-        colorspace=pymupdf.csRGB,
-        alpha=False,
-    )
-    return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
+    bitmap = page.render(scale=scale, may_draw_forms=True)
+    try:
+        rendered = bitmap.to_pil()
+        try:
+            return rendered.convert("RGB").copy()
+        finally:
+            rendered.close()
+    finally:
+        bitmap.close()
