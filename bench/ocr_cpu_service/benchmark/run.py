@@ -6,9 +6,8 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
-import os
 import platform
-import statistics
+import select
 import subprocess
 import sys
 import time
@@ -20,13 +19,10 @@ from urllib.parse import urlsplit
 
 import psutil
 import pymupdf
-from PIL import Image
 
 from benchmark.metrics import error_counts
-from benchmark.report import evaluate_gate
+from benchmark.report import aggregate_records, recompute_and_validate_summary
 from corpus.download import CorpusSource, load_sources
-from markhand_ocr.ordering import order_spans
-from markhand_ocr.paddle_backend import PaddleOcrBackend
 
 ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = ROOT / "bench" / "ocr_cpu_service"
@@ -35,6 +31,27 @@ DEFAULT_CORPUS = SERVICE_ROOT / ".data" / "corpus"
 DEFAULT_WORK = SERVICE_ROOT / ".data" / "benchmark"
 OFFICIAL_SOURCE_ID = "official-89-2026-tt-btc"
 MODEL_ASSETS = ("inference.json", "inference.yml", "inference.pdiparams")
+FILECONV_BUILD_COMMAND = (
+    "CC=gcc CXX=g++ cargo build --release "
+    "-p fileconv-cli --no-default-features"
+)
+
+
+def sanitized_candidate_environment(*, cpu_threads: int) -> dict[str, str]:
+    """Return the complete non-secret environment shared by all workers."""
+    if cpu_threads <= 0:
+        raise ValueError("cpu_threads must be positive")
+    threads = str(cpu_threads)
+    return {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "OMP_NUM_THREADS": threads,
+        "OPENBLAS_NUM_THREADS": threads,
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": "bench/ocr_cpu_service",
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +62,14 @@ class BenchmarkPage:
     page_number: int
     path: Path
     reference: str | None
+    gate_included: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class RecognitionMeasurement:
+    text: str
+    candidate_seconds: float
+    resource: dict[str, Any]
 
 
 class Candidate(Protocol):
@@ -52,8 +77,8 @@ class Candidate(Protocol):
     label: str
     metadata: dict[str, Any]
 
-    def recognize(self, page: BenchmarkPage) -> tuple[str, float, int]:
-        """Return recognized text, elapsed seconds, and peak RSS bytes."""
+    def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
+        """Recognize one page with explicit timing and RSS semantics."""
 
 
 def _sha256(path: Path) -> str:
@@ -62,6 +87,15 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _fileconv_provenance(fileconv: Path) -> dict[str, Any]:
+    return {
+        "binary_sha256": _sha256(fileconv),
+        "build_command": FILECONV_BUILD_COMMAND,
+        "build_features": ["no-default-features"],
+        "profile": "release",
+    }
 
 
 def _destination(source: CorpusSource) -> str:
@@ -161,10 +195,23 @@ def inspect_and_render_official(
         )
         sampled = deterministic_page_sample(page_count)
         pages: list[BenchmarkPage] = []
+        sampled_page_classification: dict[str, str] = {}
         matrix = pymupdf.Matrix(dpi / 72, dpi / 72)
         for page_number in sampled:
             output = work_dir / f"official-89-2026-tt-btc-p{page_number}.png"
-            pixmap = document.load_page(page_number - 1).get_pixmap(
+            source_page = document.load_page(page_number - 1)
+            has_text = bool(source_page.get_text().strip())
+            has_image = bool(source_page.get_images(full=True))
+            sampled_page_classification[str(page_number)] = (
+                "mixed"
+                if has_text and has_image
+                else "native"
+                if has_text
+                else "scan"
+                if has_image
+                else "empty"
+            )
+            pixmap = source_page.get_pixmap(
                 matrix=matrix, colorspace=pymupdf.csRGB, alpha=False
             )
             pixmap.save(output)
@@ -172,10 +219,11 @@ def inspect_and_render_official(
                 BenchmarkPage(
                     source_id=source.id,
                     source_sha256=source.sha256,
-                    stratum="official-government",
+                    stratum="mixed",
                     page_number=page_number,
                     path=output,
                     reference=None,
+                    gate_included=False,
                 )
             )
     finally:
@@ -185,12 +233,15 @@ def inspect_and_render_official(
             "source_id": source.id,
             "source_sha256": source.sha256,
             "classification": classification,
+            "manifest_classification": source.classification,
+            "classification_mismatch": source.classification != classification,
             "classification_evidence": {
                 "pages": page_count,
                 "text_pages": text_pages,
                 "image_pages": image_pages,
             },
             "sampled_pages": list(sampled),
+            "sampled_page_classification": sampled_page_classification,
             "render_dpi": dpi,
             "rendered_page_sha256": {
                 str(page.page_number): _sha256(page.path) for page in pages
@@ -215,144 +266,140 @@ def _process_tree_rss(process: psutil.Process) -> int:
     return total
 
 
-class MarkhandCandidate:
+def _read_event_with_process_tree_rss(
+    process: subprocess.Popen[str],
+    *,
+    timeout_seconds: float,
+    sample_interval_seconds: float = 0.01,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read one worker event while sampling the complete descendant tree."""
+    if process.stdout is None:
+        raise ValueError("worker stdout must be piped")
+    started = time.perf_counter()
+    monitored = psutil.Process(process.pid)
+    peak_rss = 0
+    sample_count = 0
+    while True:
+        peak_rss = max(peak_rss, _process_tree_rss(monitored))
+        sample_count += 1
+        elapsed = time.perf_counter() - started
+        if elapsed > timeout_seconds:
+            process.kill()
+            process.wait()
+            raise TimeoutError("candidate worker event timeout")
+        readable, _, _ = select.select(
+            [process.stdout], [], [], sample_interval_seconds
+        )
+        if readable:
+            line = process.stdout.readline()
+            if not line:
+                raise RuntimeError("candidate worker exited without an event")
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or "event" not in event:
+                continue
+            return (
+                event,
+                {
+                    "method": "sampled_process_tree_rss",
+                    "peak_rss_bytes": peak_rss,
+                    "sample_count": sample_count,
+                    "sample_interval_seconds": sample_interval_seconds,
+                    "wall_seconds": time.perf_counter() - started,
+                },
+            )
+        if process.poll() is not None:
+            raise RuntimeError("candidate worker exited without an event")
+
+
+class IsolatedCandidateWorker:
+    """One candidate in its own long-lived, consistently monitored process."""
+
     def __init__(
         self,
         *,
         candidate_id: str,
         label: str,
-        fileconv: Path,
-        tessdata: Path,
+        command: list[str],
+        environment: dict[str, str],
         timeout_seconds: float,
+        command_description: str = "isolated candidate worker",
+        provenance: dict[str, Any] | None = None,
     ) -> None:
         self.id = candidate_id
         self.label = label
-        self._fileconv = fileconv
-        self._tessdata = tessdata
         self._timeout_seconds = timeout_seconds
-        self.metadata = {
-            "invocation": "fileconv one <identical-page.png> --lang vie+eng",
-            "tessdata_role": (
-                "system-default" if candidate_id == "markhand-default" else "best"
-            ),
-            "tessdata_sha256": {
-                language: _sha256(tessdata / f"{language}.traineddata")
-                for language in ("vie", "eng")
-            },
-        }
-
-    def recognize(self, page: BenchmarkPage) -> tuple[str, float, int]:
-        environment = os.environ.copy()
-        environment["FILECONV_TESSDATA"] = str(self._tessdata)
-        started = time.perf_counter()
-        process = subprocess.Popen(
-            [
-                str(self._fileconv),
-                "one",
-                str(page.path),
-                "--lang",
-                "vie+eng",
-            ],
+        process_invoked = time.perf_counter()
+        self._process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             text=True,
+            bufsize=1,
             env=environment,
         )
-        ps_process = psutil.Process(process.pid)
-        peak_rss = 0
-        while process.poll() is None:
-            peak_rss = max(peak_rss, _process_tree_rss(ps_process))
-            if time.perf_counter() - started > self._timeout_seconds:
-                process.kill()
-                process.communicate()
-                raise TimeoutError("candidate page timeout")
-            time.sleep(0.01)
-        stdout, _stderr = process.communicate()
-        elapsed = time.perf_counter() - started
-        if process.returncode:
-            raise RuntimeError("candidate process failed")
-        return stdout, elapsed, peak_rss
-
-
-class PaddleCandidate:
-    id = "pp-ocrv6"
-    label = "PP-OCRv6"
-
-    def __init__(self, detection_dir: Path, recognition_dir: Path) -> None:
-        started = time.perf_counter()
-        self._backend = PaddleOcrBackend(
-            text_detection_model_dir=detection_dir,
-            text_recognition_model_dir=recognition_dir,
+        event, resource = _read_event_with_process_tree_rss(
+            self._process, timeout_seconds=timeout_seconds
         )
-        self.initialization_seconds = time.perf_counter() - started
+        cold_wall_seconds = time.perf_counter() - process_invoked
+        if event.get("event") != "ready":
+            self.close()
+            raise RuntimeError("candidate worker did not become ready")
         self.metadata = {
-            "invocation": "cached CPU public API over identical page image",
-            "model_asset_sha256": {
-                role: {
-                    asset: _sha256(directory / asset)
-                    for asset in MODEL_ASSETS
-                }
-                for role, directory in (
-                    ("detection", detection_dir),
-                    ("recognition", recognition_dir),
-                )
+            "worker_command": command_description,
+            "environment": environment,
+            "cold_initialization": {
+                "candidate_seconds": event["candidate_seconds"],
+                "wall_seconds": cold_wall_seconds,
+                "timing_scope": "worker_process_invocation_to_ready",
+                "process_startup_included": True,
+                "rss_measurement": resource,
             },
-            "initialization_seconds": self.initialization_seconds,
+            **(provenance or {}),
         }
 
-    def recognize(self, page: BenchmarkPage) -> tuple[str, float, int]:
-        process = psutil.Process()
-        started = time.perf_counter()
-        peak_rss = process.memory_info().rss
-        with Image.open(page.path) as image:
-            spans = self._backend.recognize(image.convert("RGB"))
-            peak_rss = max(peak_rss, process.memory_info().rss)
-            ordered = order_spans(spans, page_width=image.width)
-        elapsed = time.perf_counter() - started
-        return "\n".join(span.text for span in ordered), elapsed, peak_rss
+    def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
+        if self._process.stdin is None:
+            raise RuntimeError("candidate worker stdin is unavailable")
+        self._process.stdin.write(
+            json.dumps(
+                {
+                    "event": "recognize",
+                    "path": str(page.path),
+                    "page_number": page.page_number,
+                }
+            )
+            + "\n"
+        )
+        self._process.stdin.flush()
+        event, resource = _read_event_with_process_tree_rss(
+            self._process, timeout_seconds=self._timeout_seconds
+        )
+        if event.get("event") != "result":
+            raise RuntimeError("candidate worker returned an invalid event")
+        return RecognitionMeasurement(
+            text=event["text"],
+            candidate_seconds=event["candidate_seconds"],
+            resource=resource,
+        )
 
-
-def _percentile(values: list[float], percentile: float) -> float:
-    ordered = sorted(values)
-    if not ordered:
-        return 0.0
-    position = (len(ordered) - 1) * percentile
-    lower = int(position)
-    upper = min(lower + 1, len(ordered) - 1)
-    fraction = position - lower
-    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
-
-
-def aggregate_records(records: list[dict[str, Any]]) -> dict[str, Any]:
-    successful = [record for record in records if record["success"]]
-    character_total = sum(
-        record.get("reference_characters", 0) for record in successful
-    )
-    word_total = sum(record.get("reference_words", 0) for record in successful)
-    latencies = [record["elapsed_seconds"] for record in successful]
-    return {
-        "pages": len(records),
-        "cer": (
-            sum(record.get("character_edits", 0) for record in successful)
-            / character_total
-            if character_total
-            else 0.0
-        ),
-        "wer": (
-            sum(record.get("word_edits", 0) for record in successful)
-            / word_total
-            if word_total
-            else 0.0
-        ),
-        "median_seconds_per_page": (
-            statistics.median(latencies) if latencies else 0.0
-        ),
-        "p95_seconds_per_page": _percentile(latencies, 0.95),
-        "peak_rss_bytes": max(
-            (record.get("peak_rss_bytes", 0) for record in records), default=0
-        ),
-        "failures": len(records) - len(successful),
-    }
+    def close(self) -> None:
+        if self._process.poll() is not None:
+            return
+        if self._process.stdin is not None:
+            try:
+                self._process.stdin.write('{"event":"shutdown"}\n')
+                self._process.stdin.flush()
+            except BrokenPipeError:
+                pass
+        try:
+            self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+            self._process.wait()
 
 
 def _run_candidate(
@@ -367,23 +414,30 @@ def _run_candidate(
             "source_id": page.source_id,
             "source_sha256": page.source_sha256,
             "stratum": page.stratum,
+            "gate_included": page.gate_included,
             "page_number": page.page_number,
             "success": False,
             "error_kind": None,
             "elapsed_seconds": 0.0,
+            "timing_scope": "warm_worker_request_wall",
+            "process_startup_included": False,
             "peak_rss_bytes": 0,
             "resource_limit_violation": False,
         }
         try:
-            hypothesis, elapsed, peak_rss = candidate.recognize(page)
+            measurement = candidate.recognize(page)
+            elapsed = measurement.resource["wall_seconds"]
+            peak_rss = measurement.resource["peak_rss_bytes"]
             record.update(
                 success=True,
                 elapsed_seconds=elapsed,
+                candidate_seconds=measurement.candidate_seconds,
                 peak_rss_bytes=peak_rss,
+                rss_measurement=measurement.resource,
                 resource_limit_violation=peak_rss > max_rss_bytes,
             )
             if page.reference is not None:
-                counts = error_counts(page.reference, hypothesis)
+                counts = error_counts(page.reference, measurement.text)
                 record.update(
                     character_edits=counts.character_edits,
                     reference_characters=counts.reference_characters,
@@ -392,12 +446,12 @@ def _run_candidate(
                     cer=(
                         counts.character_edits / counts.reference_characters
                         if counts.reference_characters
-                        else (0.0 if not hypothesis else 1.0)
+                        else (0.0 if not measurement.text else 1.0)
                     ),
                     wer=(
                         counts.word_edits / counts.reference_words
                         if counts.reference_words
-                        else (0.0 if not hypothesis else 1.0)
+                        else (0.0 if not measurement.text else 1.0)
                     ),
                 )
         except TimeoutError:
@@ -414,7 +468,7 @@ def _run_candidate(
     quantitative = [
         record
         for record in records
-        if record["stratum"] in {"real-scan", "synthetic-scan"}
+        if record["gate_included"]
     ]
     strata = {
         stratum: aggregate_records(
@@ -455,68 +509,131 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         official_source, corpus_dir, args.work_dir.resolve()
     )
     pages = quantitative_pages + official_pages
-
-    candidates: list[Candidate] = [
-        MarkhandCandidate(
-            candidate_id="markhand-default",
-            label="Markhand default",
-            fileconv=args.fileconv.resolve(),
-            tessdata=args.system_tessdata.resolve(),
-            timeout_seconds=args.timeout_seconds,
-        ),
-        MarkhandCandidate(
-            candidate_id="markhand-tessdata-best",
-            label="Markhand tessdata_best",
-            fileconv=args.fileconv.resolve(),
-            tessdata=args.best_tessdata.resolve(),
-            timeout_seconds=args.timeout_seconds,
-        ),
-        PaddleCandidate(
-            args.paddle_detection_dir.resolve(),
-            args.paddle_recognition_dir.resolve(),
-        ),
-    ]
-    candidate_results = [
-        _run_candidate(candidate, pages, max_rss_bytes=args.max_rss_bytes)
-        for candidate in candidates
-    ]
-    by_id = {candidate["id"]: candidate for candidate in candidate_results}
-    default = by_id["markhand-default"]
-    best = by_id["markhand-tessdata-best"]
-    paddle = by_id["pp-ocrv6"]
-    baseline_strata = {
-        stratum: min(
-            default["strata"][stratum]["cer"],
-            best["strata"][stratum]["cer"],
-        )
-        for stratum in default["strata"]
-    }
-    failures = sum(
-        1
-        for candidate in candidate_results
-        for record in candidate["pages"]
-        if not record["success"]
+    fileconv = args.fileconv.resolve()
+    system_tessdata = args.system_tessdata.resolve()
+    best_tessdata = args.best_tessdata.resolve()
+    detection_dir = args.paddle_detection_dir.resolve()
+    recognition_dir = args.paddle_recognition_dir.resolve()
+    environment = sanitized_candidate_environment(
+        cpu_threads=args.cpu_threads
     )
-    resource_violations = sum(
-        1
-        for candidate in candidate_results
-        for record in candidate["pages"]
-        if record["resource_limit_violation"]
-    )
-    gate = evaluate_gate(
-        default["strata"]["real-scan"]["cer"],
-        best["strata"]["real-scan"]["cer"],
-        paddle["strata"]["real-scan"]["cer"],
-        baseline_cer_by_stratum=baseline_strata,
-        paddle_cer_by_stratum={
-            stratum: metrics["cer"]
-            for stratum, metrics in paddle["strata"].items()
+    worker_base = [sys.executable, "-m", "benchmark.worker"]
+    fileconv_build = _fileconv_provenance(fileconv)
+    configurations = [
+        {
+            "id": "markhand-default",
+            "label": "Markhand default",
+            "command": worker_base
+            + [
+                "--candidate",
+                "markhand-default",
+                "--fileconv",
+                str(fileconv),
+                "--tessdata",
+                str(system_tessdata),
+            ],
+            "provenance": {
+                "fileconv_build": fileconv_build,
+                "invocation": "fileconv one <identical-page.png> --lang vie+eng",
+                "tessdata_role": "system-default",
+                "tessdata_sha256": {
+                    language: _sha256(
+                        system_tessdata / f"{language}.traineddata"
+                    )
+                    for language in ("vie", "eng")
+                },
+            },
         },
-        failures=failures,
-        resource_limit_violations=resource_violations,
-    )
+        {
+            "id": "markhand-tessdata-best",
+            "label": "Markhand tessdata_best",
+            "command": worker_base
+            + [
+                "--candidate",
+                "markhand-tessdata-best",
+                "--fileconv",
+                str(fileconv),
+                "--tessdata",
+                str(best_tessdata),
+            ],
+            "provenance": {
+                "fileconv_build": fileconv_build,
+                "invocation": "fileconv one <identical-page.png> --lang vie+eng",
+                "tessdata_role": "best",
+                "tessdata_sha256": {
+                    language: _sha256(
+                        best_tessdata / f"{language}.traineddata"
+                    )
+                    for language in ("vie", "eng")
+                },
+            },
+        },
+        {
+            "id": "pp-ocrv6",
+            "label": "PP-OCRv6",
+            "command": worker_base
+            + [
+                "--candidate",
+                "pp-ocrv6",
+                "--detection-dir",
+                str(detection_dir),
+                "--recognition-dir",
+                str(recognition_dir),
+            ],
+            "provenance": {
+                "invocation": "cached CPU public API over identical page image",
+                "model_asset_sha256": {
+                    role: {
+                        asset: _sha256(directory / asset)
+                        for asset in MODEL_ASSETS
+                    }
+                    for role, directory in (
+                        ("detection", detection_dir),
+                        ("recognition", recognition_dir),
+                    )
+                },
+            },
+        },
+    ]
+    candidate_results: list[dict[str, Any]] = []
+    for configuration in configurations:
+        candidate = IsolatedCandidateWorker(
+            candidate_id=configuration["id"],
+            label=configuration["label"],
+            command=configuration["command"],
+            environment=environment,
+            timeout_seconds=args.timeout_seconds,
+            command_description=(
+                "python -m benchmark.worker --candidate "
+                f"{configuration['id']} <role-specific local assets>"
+            ),
+            provenance={
+                **configuration["provenance"],
+                "measurement_semantics": {
+                    "cold_initialization": (
+                        "worker process start through candidate-ready event"
+                    ),
+                    "warm_page_latency": (
+                        "parent wall time from request flush through result event; "
+                        "worker remains initialized"
+                    ),
+                    "rss": (
+                        "10 ms sampled sum of worker and descendant RSS during "
+                        "the measured interval"
+                    ),
+                },
+            },
+        )
+        try:
+            candidate_results.append(
+                _run_candidate(
+                    candidate, pages, max_rss_bytes=args.max_rss_bytes
+                )
+            )
+        finally:
+            candidate.close()
     memory = psutil.virtual_memory()
-    return {
+    summary = {
         "schema_version": 1,
         "generated_at_utc": datetime.now(timezone.utc)
         .isoformat(timespec="seconds")
@@ -548,6 +665,12 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "corpus": {
             "manifest_sha256": _sha256(manifest),
             "quantitative_pages": len(quantitative_pages),
+            "representativeness": {
+                "bounded_sample": True,
+                "population_estimate": False,
+                "confidence_interval_claimed": False,
+                "documents_per_source": 1,
+            },
             "strata": {
                 stratum: sum(
                     page.stratum == stratum for page in quantitative_pages
@@ -559,8 +682,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             "official_sample": official,
         },
         "candidates": candidate_results,
-        "gate": gate.as_json(),
     }
+    return recompute_and_validate_summary(summary)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -591,6 +714,9 @@ def _parser() -> argparse.ArgumentParser:
         default=SERVICE_ROOT / ".data" / "models" / "recognition",
     )
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
+    parser.add_argument(
+        "--cpu-threads", type=int, default=psutil.cpu_count(logical=True) or 1
+    )
     parser.add_argument(
         "--max-rss-bytes", type=int, default=4 * 1024 * 1024 * 1024
     )

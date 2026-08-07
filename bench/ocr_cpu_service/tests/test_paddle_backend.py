@@ -57,6 +57,7 @@ def test_adapts_paddle_result_without_numpy_values() -> None:
     spans = adapt_result(
         {
             "dt_polys": [[[1, 2], [5, 2], [5, 8], [1, 8]]],
+            "rec_polys": [[[1, 2], [5, 2], [5, 8], [1, 8]]],
             "rec_texts": ["Cộng hòa"],
             "rec_scores": [0.98],
         }
@@ -73,16 +74,35 @@ def test_adapts_paddle_result_without_numpy_values() -> None:
     )
 
 
+def test_adapts_recognition_aligned_polygons_not_detection_polygons() -> None:
+    spans = adapt_result(
+        {
+            "dt_polys": [
+                [[0, 0], [9, 0], [9, 9], [0, 9]],
+                [[10, 0], [19, 0], [19, 9], [10, 9]],
+            ],
+            "rec_polys": [[[10, 0], [19, 0], [19, 9], [10, 9]]],
+            "rec_texts": ["recognized"],
+            "rec_scores": [0.9],
+        }
+    )
+
+    assert len(spans) == 1
+    assert spans[0].polygon == ((10, 0), (19, 0), (19, 9), (10, 9))
+
+
 @pytest.mark.parametrize(
     "result",
     [
         {
             "dt_polys": [],
+            "rec_polys": [],
             "rec_texts": ["orphan"],
             "rec_scores": [],
         },
         {
             "dt_polys": [[[1, 2], [5, 2], [5, 8], [1, 8]]],
+            "rec_polys": [[[1, 2], [5, 2], [5, 8], [1, 8]]],
             "rec_texts": [],
             "rec_scores": [0.98],
         },
@@ -110,6 +130,7 @@ def test_backend_initializes_cpu_pipeline_once_and_adapts_predict_result() -> No
             return [
                 FakeResult(
                     dt_polys=[[[1, 2], [5, 2], [5, 8], [1, 8]]],
+                    rec_polys=[[[1, 2], [5, 2], [5, 8], [1, 8]]],
                     rec_texts=["Cộng hòa"],
                     rec_scores=[0.98],
                 )
@@ -160,7 +181,14 @@ def test_backend_serializes_concurrent_predict_calls() -> None:
             time.sleep(0.05)
             with state_lock:
                 active_calls -= 1
-            return [{"dt_polys": [], "rec_texts": [], "rec_scores": []}]
+            return [
+                {
+                    "dt_polys": [],
+                    "rec_polys": [],
+                    "rec_texts": [],
+                    "rec_scores": [],
+                }
+            ]
 
     pipeline = OverlapDetectingPipeline()
     backend = PaddleOcrBackend(pipeline_factory=lambda **kwargs: pipeline)

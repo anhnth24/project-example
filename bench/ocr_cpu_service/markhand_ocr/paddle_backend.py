@@ -32,8 +32,8 @@ def _default_pipeline_factory(**kwargs: object) -> _PaddlePipeline:
 
 
 def adapt_result(result: Mapping[str, Any]) -> list[OcrSpan]:
-    """Adapt PaddleOCR's documented detection, text, and score fields."""
-    polygons = result["dt_polys"]
+    """Adapt PaddleOCR's documented recognition-aligned result fields."""
+    polygons = result["rec_polys"]
     texts = result["rec_texts"]
     scores = result["rec_scores"]
     lengths = (len(polygons), len(texts), len(scores))

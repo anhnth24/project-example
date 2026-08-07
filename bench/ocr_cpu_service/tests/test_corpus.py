@@ -155,7 +155,7 @@ def test_checked_in_manifest_is_valid_and_pinned() -> None:
     assert len(wikimedia) >= 2
     assert all(source.classification == "scan" for source in wikimedia)
     assert len(official) == 1
-    assert official[0].classification in {"scan", "native", "mixed"}
+    assert official[0].classification == "mixed"
     assert official[0].url.startswith("https://datafiles.chinhphu.vn/")
     assert all(
         "/resolve/36f3060fd7628937c77c1b1e2a95892f24f562e0/" in source.url

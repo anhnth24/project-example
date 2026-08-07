@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -8,12 +9,21 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from benchmark.report import evaluate_gate, render_markdown  # noqa: E402
+from benchmark.report import (  # noqa: E402
+    evaluate_gate,
+    recompute_and_validate_summary,
+    render_markdown,
+)
 from benchmark.run import (  # noqa: E402
     BenchmarkPage,
+    IsolatedCandidateWorker,
+    RecognitionMeasurement,
+    _fileconv_provenance,
+    _read_event_with_process_tree_rss,
     _run_candidate,
     aggregate_records,
     deterministic_page_sample,
+    sanitized_candidate_environment,
 )
 
 
@@ -46,6 +56,46 @@ def test_gate_enforces_stratum_and_completion_requirements() -> None:
     assert "synthetic-scan" in " ".join(regression.reasons)
     assert not failure.passed
     assert not resource.passed
+
+
+def test_report_recomputes_gate_and_rejects_inconsistent_stored_summary() -> None:
+    def candidate(candidate_id: str, edits: int) -> dict[str, object]:
+        return {
+            "id": candidate_id,
+            "label": candidate_id,
+            "metadata": {},
+            "pages": [
+                {
+                    "source_id": "page",
+                    "stratum": "real-scan",
+                    "page_number": 1,
+                    "success": True,
+                    "character_edits": edits,
+                    "reference_characters": 10,
+                    "word_edits": edits,
+                    "reference_words": 5,
+                    "elapsed_seconds": 1.0,
+                    "peak_rss_bytes": 100,
+                    "resource_limit_violation": False,
+                }
+            ],
+        }
+
+    raw = {
+        "candidates": [
+            candidate("markhand-default", 2),
+            candidate("markhand-tessdata-best", 1),
+            candidate("pp-ocrv6", 0),
+        ]
+    }
+
+    computed = recompute_and_validate_summary(raw)
+
+    assert computed["candidates"][0]["aggregate"]["cer"] == 0.2
+    assert computed["gate"]["decision"] == "PASS"
+    computed["candidates"][0]["aggregate"]["cer"] = 0.9
+    with pytest.raises(ValueError, match="stored aggregate"):
+        recompute_and_validate_summary(computed)
 
 
 def test_markdown_is_deterministic_metadata_only_rendering() -> None:
@@ -98,7 +148,8 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                     },
                     {
                         "source_id": "official-89-2026-tt-btc",
-                        "stratum": "official-government",
+                        "stratum": "mixed",
+                        "gate_included": False,
                         "page_number": 420,
                         "success": True,
                         "elapsed_seconds": 2.5,
@@ -116,6 +167,47 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
             "reasons": ["relative CER improvement below 20%"],
         },
     }
+    quantitative_page = data["candidates"][0]["pages"][0]
+    official_page = data["candidates"][0]["pages"][1]
+    data["candidates"] = [
+        {
+            "id": candidate_id,
+            "label": label,
+            "metadata": {},
+            "pages": [
+                {
+                    **quantitative_page,
+                    "character_edits": edits,
+                    "reference_characters": 10,
+                    "word_edits": edits,
+                    "reference_words": 5,
+                    "resource_limit_violation": False,
+                },
+                {**official_page, "resource_limit_violation": False},
+            ],
+        }
+        for candidate_id, label, edits in (
+            ("markhand-default", "Markhand default", 2),
+            ("markhand-tessdata-best", "Markhand tessdata_best", 1),
+            ("pp-ocrv6", "PP-OCRv6", 9),
+        )
+    ]
+    for candidate in data["candidates"]:
+        candidate["metadata"]["environment"] = {
+            "PATH": "/usr/local/bin:/usr/bin:/bin",
+            "PYTHONNOUSERSITE": "1",
+        }
+    for candidate in data["candidates"][:2]:
+        candidate["metadata"]["fileconv_build"] = {
+            "binary_sha256": "b" * 64,
+            "build_command": (
+                "CC=gcc CXX=g++ cargo build --release "
+                "-p fileconv-cli --no-default-features"
+            ),
+            "build_features": ["no-default-features"],
+            "profile": "release",
+        }
+    data.pop("gate")
 
     first = render_markdown(data)
     second = render_markdown(json.loads(json.dumps(data)))
@@ -128,6 +220,15 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
     assert "sample-1" in first
     assert "## Official sample runtime evidence" in first
     assert "| Markhand default | 420 | 2.500" in first
+    assert "## Sample-size and representativeness limits" in first
+    assert "9 real-scan pages" in first
+    assert "not a population estimate" in first
+    assert "## Cold initialization and resource semantics" in first
+    assert "Warm median s/page" in first
+    assert "sampled process-tree RSS" in first
+    assert "## Candidate environment and build provenance" in first
+    assert f"`{'b' * 64}`" in first
+    assert "PYTHONNOUSERSITE=1" in first
     assert "complete OCR output" not in first
 
 
@@ -178,10 +279,20 @@ def test_candidate_summary_counts_failed_quantitative_pages(
 
         def recognize(
             self, page: BenchmarkPage
-        ) -> tuple[str, float, int]:
+        ) -> RecognitionMeasurement:
             if page.source_id == "failed":
                 raise RuntimeError("failure")
-            return "reference", 1.0, 100
+            return RecognitionMeasurement(
+                text="reference",
+                candidate_seconds=0.8,
+                resource={
+                    "method": "sampled_process_tree_rss",
+                    "peak_rss_bytes": 100,
+                    "sample_count": 4,
+                    "sample_interval_seconds": 0.01,
+                    "wall_seconds": 1.0,
+                },
+            )
 
     pages = [
         BenchmarkPage(
@@ -202,3 +313,141 @@ def test_candidate_summary_counts_failed_quantitative_pages(
     assert result["aggregate"]["pages"] == 2
     assert result["aggregate"]["failures"] == 1
     assert result["strata"]["real-scan"]["failures"] == 1
+    assert result["pages"][0]["elapsed_seconds"] == 1.0
+    assert result["pages"][0]["candidate_seconds"] == 0.8
+    assert result["pages"][0]["timing_scope"] == "warm_worker_request_wall"
+    assert not result["pages"][0]["process_startup_included"]
+    assert (
+        result["pages"][0]["rss_measurement"]["method"]
+        == "sampled_process_tree_rss"
+    )
+
+
+def test_process_tree_monitor_samples_transient_descendant_rss() -> None:
+    script = """
+import json
+import subprocess
+import sys
+child = subprocess.Popen([
+    sys.executable,
+    "-c",
+    "import time; payload = bytearray(48 * 1024 * 1024); time.sleep(0.2)",
+])
+child.wait()
+print("unstructured native runtime diagnostic", flush=True)
+print(json.dumps({"event": "done"}), flush=True)
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+    event, measurement = _read_event_with_process_tree_rss(
+        process, timeout_seconds=5.0, sample_interval_seconds=0.005
+    )
+
+    assert event == {"event": "done"}
+    assert measurement["method"] == "sampled_process_tree_rss"
+    assert measurement["sample_count"] > 2
+    assert measurement["peak_rss_bytes"] > 48 * 1024 * 1024
+
+
+def test_candidate_environment_is_allowlisted_and_report_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SECRET_TOKEN", "must-not-propagate")
+    monkeypatch.setenv("PYTHONPATH", "/secret/path")
+
+    environment = sanitized_candidate_environment(cpu_threads=8)
+
+    assert environment == {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "OMP_NUM_THREADS": "8",
+        "OPENBLAS_NUM_THREADS": "8",
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": "bench/ocr_cpu_service",
+    }
+
+
+def test_isolated_worker_separates_cold_start_from_warm_page(
+    tmp_path: Path,
+) -> None:
+    worker_script = tmp_path / "worker.py"
+    worker_script.write_text(
+        """
+import json
+import sys
+print(json.dumps({"event": "ready", "candidate_seconds": 0.02}), flush=True)
+for line in sys.stdin:
+    request = json.loads(line)
+    if request["event"] == "shutdown":
+        break
+    print(json.dumps({
+        "event": "result",
+        "text": "reference",
+        "candidate_seconds": 0.1,
+    }), flush=True)
+""",
+        encoding="utf-8",
+    )
+    environment = sanitized_candidate_environment(cpu_threads=8)
+    worker = IsolatedCandidateWorker(
+        candidate_id="isolated",
+        label="Isolated",
+        command=[sys.executable, str(worker_script)],
+        environment=environment,
+        timeout_seconds=5.0,
+    )
+    page = BenchmarkPage(
+        source_id="page",
+        source_sha256="a" * 64,
+        stratum="real-scan",
+        page_number=1,
+        path=tmp_path / "page.png",
+        reference="reference",
+    )
+    try:
+        measurement = worker.recognize(page)
+    finally:
+        worker.close()
+
+    assert worker.metadata["environment"] == environment
+    assert worker.metadata["cold_initialization"]["candidate_seconds"] == 0.02
+    assert (
+        worker.metadata["cold_initialization"]["timing_scope"]
+        == "worker_process_invocation_to_ready"
+    )
+    assert worker.metadata["cold_initialization"]["process_startup_included"]
+    assert (
+        worker.metadata["cold_initialization"]["rss_measurement"]["method"]
+        == "sampled_process_tree_rss"
+    )
+    assert measurement.text == "reference"
+    assert measurement.candidate_seconds == 0.1
+    assert measurement.resource["method"] == "sampled_process_tree_rss"
+
+
+def test_fileconv_provenance_records_binary_hash_and_build_features(
+    tmp_path: Path,
+) -> None:
+    binary = tmp_path / "fileconv"
+    binary.write_bytes(b"release binary")
+
+    provenance = _fileconv_provenance(binary)
+
+    assert provenance == {
+        "binary_sha256": (
+            "9708beac508eb53b8ba9b8e7359a09237371a8a220a7c60da408e14c7a41cec4"
+        ),
+        "build_command": (
+            "CC=gcc CXX=g++ cargo build --release "
+            "-p fileconv-cli --no-default-features"
+        ),
+        "build_features": ["no-default-features"],
+        "profile": "release",
+    }
