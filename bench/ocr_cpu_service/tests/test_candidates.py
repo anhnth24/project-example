@@ -101,3 +101,50 @@ def test_candidate_spec_is_immutable() -> None:
         spec.environment["THREADS"] = "8"  # type: ignore[index]
     with pytest.raises((AttributeError, TypeError)):
         spec.provenance["version"] = "2"  # type: ignore[index]
+
+
+def test_provenance_nested_structures_are_immutable() -> None:
+    spec = CommandCandidateSpec(
+        "x",
+        "X",
+        ("tool", "{input}"),
+        {},
+        {
+            "build": {
+                "assets": [{"name": "detector"}],
+                "features": {"cpu", "offline"},
+            }
+        },
+    )
+    build = spec.provenance["build"]
+
+    with pytest.raises(TypeError):
+        build["profile"] = "debug"  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        build["assets"].append({"name": "recognizer"})  # type: ignore[union-attr]
+    with pytest.raises(AttributeError):
+        build["features"].add("network")  # type: ignore[union-attr]
+
+
+def test_provenance_is_detached_from_caller_nested_structures() -> None:
+    assets = [{"name": "detector"}]
+    features = {"cpu", "offline"}
+    build = {"assets": assets, "features": features}
+    provenance = {"build": build}
+
+    spec = CommandCandidateSpec(
+        "x",
+        "X",
+        ("tool", "{input}"),
+        {},
+        provenance,
+    )
+    assets[0]["name"] = "mutated"
+    assets.append({"name": "recognizer"})
+    features.add("network")
+    build["profile"] = "debug"
+
+    frozen_build = spec.provenance["build"]
+    assert frozen_build["assets"] == ({"name": "detector"},)
+    assert frozen_build["features"] == frozenset({"cpu", "offline"})
+    assert "profile" not in frozen_build

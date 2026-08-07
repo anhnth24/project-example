@@ -3,12 +3,49 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping as MappingABC
+from collections.abc import Set as SetABC
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
+_IMMUTABLE_PROVENANCE_SCALARS = (str, int, float, bool, bytes, type(None))
+
+
+def _freeze_provenance(value: Any, active: set[int] | None = None) -> Any:
+    """Detach and recursively freeze JSON-like provenance containers."""
+    if isinstance(value, _IMMUTABLE_PROVENANCE_SCALARS):
+        return value
+
+    active = set() if active is None else active
+    identity = id(value)
+    if identity in active:
+        raise ValueError("candidate provenance must not contain cycles")
+
+    active.add(identity)
+    try:
+        if isinstance(value, MappingABC):
+            return MappingProxyType(
+                {
+                    key: _freeze_provenance(item, active)
+                    for key, item in value.items()
+                }
+            )
+        if isinstance(value, (list, tuple)):
+            return tuple(_freeze_provenance(item, active) for item in value)
+        if isinstance(value, SetABC):
+            return frozenset(
+                _freeze_provenance(item, active) for item in value
+            )
+    finally:
+        active.remove(identity)
+
+    raise TypeError(
+        "candidate provenance values must be immutable scalars, "
+        "mappings, sequences, or sets"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,13 +92,13 @@ class CommandCandidateSpec:
             for key, value in environment.items()
         ):
             raise TypeError("candidate environment keys and values must be strings")
-        try:
-            provenance = dict(self.provenance)
-        except (TypeError, ValueError) as error:
-            raise TypeError("candidate provenance must be a mapping") from error
+        if not isinstance(self.provenance, MappingABC):
+            raise TypeError("candidate provenance must be a mapping")
 
         object.__setattr__(self, "environment", MappingProxyType(environment))
-        object.__setattr__(self, "provenance", MappingProxyType(provenance))
+        object.__setattr__(
+            self, "provenance", _freeze_provenance(self.provenance)
+        )
 
 
 def render_argv(
