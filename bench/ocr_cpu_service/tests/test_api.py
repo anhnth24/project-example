@@ -17,7 +17,11 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from markhand_ocr.api import ConversionAdmission, create_app  # noqa: E402
+from markhand_ocr.api import (  # noqa: E402
+    AdmissionUnavailable,
+    ConversionAdmission,
+    create_app,
+)
 from markhand_ocr.models import OcrSpan  # noqa: E402
 from markhand_ocr.service import ConvertRequest, InvalidPdf  # noqa: E402
 
@@ -208,6 +212,164 @@ def call_asgi(
         if message["type"] == "http.response.body"
     )
     return start["status"], response_body
+
+
+def test_admission_happens_before_request_body_is_read() -> None:
+    admission = ConversionAdmission()
+    held = admission.acquire(
+        acquisition_timeout_seconds=0.1,
+        request_deadline_seconds=1,
+    )
+    app = create_app(
+        FakeBackend(),
+        admission=admission,
+        acquisition_timeout_seconds=0.02,
+    )
+    receive_calls = 0
+
+    async def run_request() -> tuple[int, bytes]:
+        nonlocal receive_calls
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/v1/convert",
+            "raw_path": b"/v1/convert",
+            "query_string": b"",
+            "headers": [
+                (b"content-type", b"multipart/form-data; boundary=x"),
+            ],
+            "client": ("127.0.0.1", 1),
+            "server": ("test", 80),
+        }
+        sent: list[dict[str, Any]] = []
+
+        async def receive() -> dict[str, Any]:
+            nonlocal receive_calls
+            receive_calls += 1
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        await app(scope, receive, send)
+        start = next(
+            message
+            for message in sent
+            if message["type"] == "http.response.start"
+        )
+        body = b"".join(
+            message.get("body", b"")
+            for message in sent
+            if message["type"] == "http.response.body"
+        )
+        return start["status"], body
+
+    try:
+        status, body = asyncio.run(run_request())
+    finally:
+        held.finish_request()
+
+    assert status == 503
+    assert body == b'{"detail":"conversion capacity unavailable"}'
+    assert receive_calls == 0
+
+
+def test_admission_queue_has_one_waiter_and_rejects_excess_immediately() -> None:
+    admission = ConversionAdmission(max_waiters=1)
+    held = admission.acquire(
+        acquisition_timeout_seconds=0.1,
+        request_deadline_seconds=1,
+    )
+    acquired: list[object] = []
+
+    def wait_for_slot() -> None:
+        lease = admission.acquire(
+            acquisition_timeout_seconds=1,
+            request_deadline_seconds=1,
+        )
+        acquired.append(lease)
+
+    waiter = threading.Thread(target=wait_for_slot)
+    waiter.start()
+    deadline = time.monotonic() + 1
+    while admission.waiting_count != 1 and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert admission.waiting_count == 1
+
+    started = time.monotonic()
+    with pytest.raises(AdmissionUnavailable, match="queue"):
+        admission.acquire(
+            acquisition_timeout_seconds=1,
+            request_deadline_seconds=1,
+        )
+    assert time.monotonic() - started < 0.1
+
+    held.finish_request()
+    waiter.join(timeout=1)
+    assert not waiter.is_alive()
+    assert len(acquired) == 1
+    acquired[0].finish_request()
+
+
+def test_request_deadline_cancels_slow_body_receive_and_releases_slot() -> None:
+    admission = ConversionAdmission()
+    app = create_app(
+        FakeBackend(),
+        admission=admission,
+        conversion_deadline_seconds=0.03,
+    )
+    receive_cancelled = False
+    sent: list[dict[str, Any]] = []
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/convert",
+        "raw_path": b"/v1/convert",
+        "query_string": b"",
+        "headers": [
+            (b"content-type", b"multipart/form-data; boundary=x"),
+        ],
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+
+    async def receive() -> dict[str, Any]:
+        nonlocal receive_cancelled
+        try:
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            receive_cancelled = True
+            raise
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: dict[str, Any]) -> None:
+        sent.append(message)
+
+    asyncio.run(app(scope, receive, send))
+
+    start = next(
+        message for message in sent if message["type"] == "http.response.start"
+    )
+    body = b"".join(
+        message.get("body", b"")
+        for message in sent
+        if message["type"] == "http.response.body"
+    )
+    assert start["status"] == 504
+    assert body == b'{"detail":"conversion deadline exceeded"}'
+    assert receive_cancelled
+
+    reusable = admission.acquire(
+        acquisition_timeout_seconds=0.1,
+        request_deadline_seconds=1,
+    )
+    reusable.finish_request()
 
 
 @pytest.mark.parametrize("content_length", [None, b"1"])
