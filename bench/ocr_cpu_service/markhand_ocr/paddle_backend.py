@@ -166,6 +166,7 @@ def create_runtime_app(
     conversion_deadline = _runtime_positive_seconds(
         "MARKHAND_OCR_CONVERSION_DEADLINE_SECONDS", 120.0
     )
+    os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
     return create_app(
         backend_factory(
             text_detection_model_dir=detection_dir,

@@ -130,7 +130,8 @@ the stable backend name (`paddle`), not model identifiers. Startup fails before
 PaddleOCR construction unless both configured local model directories exist
 and contain non-empty `inference.json`, `inference.yml`, and
 `inference.pdiparams` assets. The real service therefore has no model-download
-fallback.
+fallback. Startup also forces PaddleX model-source connectivity checks off; the
+runtime does not probe a remote model source.
 
 Conversion admission is process-wide and occurs in ASGI middleware before the
 application reads or parses the multipart body. Exactly one request owns the

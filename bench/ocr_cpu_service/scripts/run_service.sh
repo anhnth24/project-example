@@ -13,6 +13,7 @@ if [[ ! -x "${venv_dir}/bin/python" ]]; then
   exit 2
 fi
 
+export PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True
 exec "${venv_dir}/bin/python" -m uvicorn \
   --app-dir "${service_dir}" \
   --factory markhand_ocr.paddle_backend:create_runtime_app \
