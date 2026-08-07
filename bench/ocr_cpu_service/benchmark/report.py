@@ -463,9 +463,25 @@ def render_markdown(data: dict[str, Any]) -> str:
             "column-major anchor order. Violations are pairwise inversions "
             "among observed anchors; missing anchors are reported separately "
             "and are not silently counted as correctly ordered.",
+            "The historical scan case uses only a small human-reviewed "
+            "sequence of short headings. It is qualitative and limited: "
+            "it is not a transcription, CER sample, or general layout score. "
+            "Matching folds accents/punctuation and permits at most 25% "
+            "character edits for OCR noise.",
             "",
-            "| Candidate | Expected anchors | Observed anchors | Comparable pairs | Violations | Missing anchors |",
-            "|---|--:|--:|--:|--:|--:|",
+        ]
+    )
+    for case in reading_cases:
+        sequence = " → ".join(case.get("expected_sequence", []))
+        lines.append(
+            f"- `{case['source_id']}` page {case.get('page_number', 1)} "
+            f"({case.get('ground_truth', 'reviewed')}): {sequence}."
+        )
+    lines.extend(
+        [
+            "",
+            "| Candidate | Source ID | Page | Expected anchors | Observed anchors | Comparable pairs | Violations | Missing anchors |",
+            "|---|---|--:|--:|--:|--:|--:|--:|",
         ]
     )
     reading_ids = {case["source_id"] for case in reading_cases}
@@ -475,10 +491,14 @@ def render_markdown(data: dict[str, Any]) -> str:
                 continue
             metric = page.get("reading_order")
             if metric is None:
-                lines.append(f"| {candidate['label']} | — | — | — | — | — |")
+                lines.append(
+                    f"| {candidate['label']} | `{page['source_id']}` | "
+                    f"{page['page_number']} | — | — | — | — | — |"
+                )
                 continue
             lines.append(
-                f"| {candidate['label']} | {metric['expected_anchors']} | "
+                f"| {candidate['label']} | `{page['source_id']}` | "
+                f"{page['page_number']} | {metric['expected_anchors']} | "
                 f"{metric['observed_anchors']} | {metric['comparable_pairs']} | "
                 f"{metric['violations']} | {metric['missing_anchors']} |"
             )

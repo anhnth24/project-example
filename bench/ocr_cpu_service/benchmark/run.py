@@ -34,6 +34,15 @@ DEFAULT_CORPUS = SERVICE_ROOT / ".data" / "corpus"
 DEFAULT_WORK = SERVICE_ROOT / ".data" / "benchmark"
 OFFICIAL_SOURCE_ID = "official-89-2026-tt-btc"
 MODEL_ASSETS = ("inference.json", "inference.yml", "inference.pdiparams")
+HISTORICAL_READING_ORDER_ANCHORS = {
+    ("wikimedia-dai-nam-1907-804", 4): (
+        "NHỜI ĐÀN BÀ",
+        "RAO HẸN",
+        "TẬP THƠ, PHÚ, CA, RAO",
+        "CÁO BẠCH",
+        "HIỆN BÁO HOÀN CẦU",
+    ),
+}
 FILECONV_BUILD_COMMAND = (
     "CC=gcc CXX=g++ cargo build --release "
     "-p fileconv-cli --no-default-features"
@@ -168,6 +177,15 @@ def deterministic_page_sample(page_count: int) -> tuple[int, ...]:
     return tuple(sorted({1, (page_count + 1) // 2, page_count}))
 
 
+def historical_reading_order_anchors(
+    source_id: str, page_number: int
+) -> tuple[str, ...]:
+    """Return the small human-reviewed sequence for a pinned historical page."""
+    return HISTORICAL_READING_ORDER_ANCHORS.get(
+        (source_id, page_number), ()
+    )
+
+
 def bounded_sample_render_limits(
     *,
     page_width: float,
@@ -253,6 +271,8 @@ def generate_reviewed_multicolumn_case(
         "ground_truth": "deterministic-source",
         "review_status": "reviewed-fixture-contract",
         "expected_anchors": len(anchors),
+        "page_number": 1,
+        "expected_sequence": list(anchors),
         "image_sha256": image_sha256,
         "font_sha256": _sha256(font_path),
         "generator": "Pillow fixed canvas, coordinates, font, and PNG settings",
@@ -369,6 +389,9 @@ def inspect_and_render_official(
                     path=output,
                     reference=None,
                     gate_included=False,
+                    reading_order_anchors=historical_reading_order_anchors(
+                        source.id, page_number
+                    ),
                 )
             )
     finally:
@@ -417,6 +440,28 @@ def inspect_and_render_historical(
         )
         source_evidence["transcription"] = "none-trustworthy-available"
         source_evidence["evidence_mode"] = "qualitative-only"
+        reviewed_pages = [
+            page for page in source_pages if page.reading_order_anchors
+        ]
+        if reviewed_pages:
+            if len(reviewed_pages) != 1:
+                raise ValueError(
+                    f"{source.id}: expected one reviewed reading-order page"
+                )
+            reviewed_page = reviewed_pages[0]
+            source_evidence["reading_order_review"] = {
+                "page_number": reviewed_page.page_number,
+                "review_status": "human-reviewed-short-anchors",
+                "expected_anchors": len(
+                    reviewed_page.reading_order_anchors
+                ),
+                "expected_sequence": list(
+                    reviewed_page.reading_order_anchors
+                ),
+                "matching": (
+                    "accent/punctuation folded; <=25% character edits"
+                ),
+            }
         evidence.append(source_evidence)
         pages.extend(source_pages)
     return evidence, pages
@@ -880,7 +925,21 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             },
             "official_sample": official,
             "historical_samples": historical,
-            "reading_order_cases": [multicolumn],
+            "reading_order_cases": [
+                multicolumn,
+                *[
+                    {
+                        "source_id": sample["source_id"],
+                        "classification": sample["classification"],
+                        "ground_truth": sample["reading_order_review"][
+                            "review_status"
+                        ],
+                        **sample["reading_order_review"],
+                    }
+                    for sample in historical
+                    if "reading_order_review" in sample
+                ],
+            ],
         },
         "candidates": candidate_results,
     }

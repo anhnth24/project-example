@@ -91,19 +91,20 @@ def error_counts(reference: str, hypothesis: str) -> ErrorCounts:
 def reading_order_violations(
     expected_anchors: Sequence[str], hypothesis: str
 ) -> ReadingOrderCounts:
-    """Count pairwise inversions among uniquely reviewed anchor tokens."""
+    """Count inversions using accent-folded anchors and bounded OCR noise."""
     expected = tuple(expected_anchors)
-    if len(expected) != len(set(expected)) or any(not item for item in expected):
+    folded_expected = tuple(_fold_anchor(item) for item in expected)
+    if (
+        len(folded_expected) != len(set(folded_expected))
+        or any(not item for item in folded_expected)
+    ):
         raise ValueError("reading-order anchors must be non-empty and unique")
-    normalized = normalize_for_metric(hypothesis)
+    normalized = _fold_anchor(hypothesis)
     observed: list[tuple[int, int]] = []
-    for expected_index, anchor in enumerate(expected):
-        match = re.search(
-            rf"(?<!\w){re.escape(anchor)}(?!\w)",
-            normalized,
-        )
-        if match is not None:
-            observed.append((expected_index, match.start()))
+    for expected_index, anchor in enumerate(folded_expected):
+        position = _locate_anchor(anchor, normalized)
+        if position is not None:
+            observed.append((expected_index, position))
     observed.sort(key=lambda item: item[1])
     violations = sum(
         left_expected > right_expected
@@ -118,3 +119,34 @@ def reading_order_violations(
         violations=violations,
         missing_anchors=len(expected) - observed_count,
     )
+
+
+def _fold_anchor(text: str) -> str:
+    decomposed = unicodedata.normalize("NFD", text.lower().replace("đ", "d"))
+    unaccented = "".join(
+        character
+        for character in decomposed
+        if unicodedata.category(character) != "Mn"
+    )
+    return " ".join(re.findall(r"\w+", unaccented))
+
+
+def _locate_anchor(anchor: str, hypothesis: str) -> int | None:
+    exact = re.search(rf"(?<!\w){re.escape(anchor)}(?!\w)", hypothesis)
+    if exact is not None:
+        return exact.start()
+
+    anchor_words = anchor.split()
+    hypothesis_words = list(re.finditer(r"\w+", hypothesis))
+    if len(hypothesis_words) < len(anchor_words):
+        return None
+    best: tuple[float, int] | None = None
+    for index in range(len(hypothesis_words) - len(anchor_words) + 1):
+        window = hypothesis_words[index : index + len(anchor_words)]
+        candidate = " ".join(match.group(0) for match in window)
+        error_rate = _distance(anchor, candidate) / len(anchor)
+        if error_rate <= 0.25:
+            choice = (error_rate, window[0].start())
+            if best is None or choice < best:
+                best = choice
+    return None if best is None else best[1]
