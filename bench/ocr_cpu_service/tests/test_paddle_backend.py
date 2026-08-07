@@ -313,13 +313,19 @@ def test_runtime_selection_preserves_backend_injection_and_safe_health(
     monkeypatch.setenv(
         "MARKHAND_OCR_RECOGNITION_MODEL_DIR", str(recognition_dir)
     )
+    monkeypatch.delenv("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", raising=False)
     backend = InjectedBackend()
     options: list[dict[str, object]] = []
+    source_checks: list[str | None] = []
 
     response = TestClient(
         create_runtime_app(
             backend_factory=lambda **kwargs: (
-                options.append(kwargs) or backend
+                options.append(kwargs)
+                or source_checks.append(
+                    os.environ.get("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK")
+                )
+                or backend
             )
         )
     ).get("/healthz")
@@ -332,6 +338,7 @@ def test_runtime_selection_preserves_backend_injection_and_safe_health(
             "text_recognition_model_dir": recognition_dir.resolve(),
         }
     ]
+    assert source_checks == ["True"]
 
 
 def test_runtime_rejects_unselected_backend(
