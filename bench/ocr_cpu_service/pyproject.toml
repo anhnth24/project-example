@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=80.10.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "markhand-ocr-benchmark"
+version = "0.1.0"
+description = "Bounded benchmark-only OCR conversion service"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "Pillow>=12.3.0",
+    "PyMuPDF>=1.28.2",
+    "python-multipart>=0.0.32",
+]
+
+[project.optional-dependencies]
+test = [
+    "httpx2>=2.9.1",
+    "pytest>=9.1.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["markhand_ocr*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
