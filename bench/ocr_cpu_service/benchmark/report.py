@@ -384,9 +384,10 @@ def render_markdown(data: dict[str, Any]) -> str:
             "- Benchmark stratum: **mixed**; gate-included: **false**.",
             "- Manifest/inspection mismatch: "
             f"**{str(official.get('classification_mismatch', False)).lower()}**.",
-            f"- Inspection: {evidence['pages']} pages; "
-            f"{evidence['text_pages']} with extractable text; "
-            f"{evidence['image_pages']} with page images.",
+            f"- Inspection: {evidence['pages']} physical PDF pages; "
+            f"{evidence['image_pages']} image-bearing and "
+            f"{evidence['text_pages']} text-bearing page observations "
+            "(categories may overlap).",
             "- Deterministic sampled pages: "
             + ", ".join(str(page) for page in official["sampled_pages"])
             + ".",

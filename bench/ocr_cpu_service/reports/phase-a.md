@@ -104,7 +104,7 @@ Cold initialization is measured once from isolated worker process start through 
 - Classification: **mixed**.
 - Benchmark stratum: **mixed**; gate-included: **false**.
 - Manifest/inspection mismatch: **false**.
-- Inspection: 839 pages; 1 with extractable text; 839 with page images.
+- Inspection: 839 physical PDF pages; 839 image-bearing and 1 text-bearing page observations (categories may overlap).
 - Deterministic sampled pages: 1, 420, 839.
 - This source has no pinned human-verified page transcription and is excluded from CER/WER and the quality gate.
 
