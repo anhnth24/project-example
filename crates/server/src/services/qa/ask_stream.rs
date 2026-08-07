@@ -995,4 +995,20 @@ mod tests {
         assert!(!text.contains("\"body\""));
         assert!(text.contains("questionSha256"));
     }
+
+    #[test]
+    fn hermetic_streaming_static_stays_enabled_under_extractive_fail_closed() {
+        // Mid-stream ACL revoke tests wire StreamingStatic; extractive-only
+        // fail-closed must not suppress that hermetic path (real LLM providers
+        // remain gated by `!extractive_forced` in the same match).
+        let source = include_str!("ask_stream.rs");
+        assert!(
+            source.contains("ChatProvider::StreamingStatic(_) => true"),
+            "StreamingStatic must keep incremental production while entailment is unavailable"
+        );
+        assert!(
+            source.contains("other => other.supports_incremental_stream() && !extractive_forced"),
+            "non-hermetic providers must stay extractive-gated"
+        );
+    }
 }
