@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 import platform
 import select
 import subprocess
@@ -167,6 +168,41 @@ def deterministic_page_sample(page_count: int) -> tuple[int, ...]:
     return tuple(sorted({1, (page_count + 1) // 2, page_count}))
 
 
+def bounded_sample_render_limits(
+    *,
+    page_width: float,
+    page_height: float,
+    requested_dpi: int,
+    max_pixels: int = 20_000_000,
+    max_dimension: int = 5_000,
+) -> RenderLimits:
+    """Choose the highest integer DPI that fits explicit sample image bounds."""
+    if page_width <= 0 or page_height <= 0 or requested_dpi <= 0:
+        raise ValueError("page dimensions and DPI must be positive")
+    scale = min(
+        requested_dpi / 72,
+        max_dimension / page_width,
+        max_dimension / page_height,
+        math.sqrt(max_pixels / (page_width * page_height)),
+    )
+    dpi = max(1, math.floor(scale * 72))
+    while (
+        math.ceil(page_width * dpi / 72) > max_dimension
+        or math.ceil(page_height * dpi / 72) > max_dimension
+        or math.ceil(page_width * dpi / 72)
+        * math.ceil(page_height * dpi / 72)
+        > max_pixels
+    ):
+        dpi -= 1
+        if dpi <= 0:
+            raise ValueError("page cannot fit bounded render dimensions")
+    return RenderLimits(
+        dpi=dpi,
+        max_pixels=max_pixels,
+        max_dimension=max_dimension,
+    )
+
+
 def generate_reviewed_multicolumn_case(
     work_dir: Path,
 ) -> tuple[dict[str, Any], BenchmarkPage]:
@@ -282,6 +318,7 @@ def inspect_and_render_official(
         sampled = deterministic_page_sample(page_count)
         pages: list[BenchmarkPage] = []
         sampled_page_classification: dict[str, str] = {}
+        sampled_page_dpi: dict[str, int] = {}
         for page_number in sampled:
             output = work_dir / f"{source.id}-p{page_number}.png"
             source_page = document[page_number - 1]
@@ -307,16 +344,15 @@ def inspect_and_render_official(
                     else "empty"
                 )
                 width, height = source_page.get_size()
-                max_dimension = max(
-                    1, int(max(width, height) * dpi / 72) + 1
+                limits = bounded_sample_render_limits(
+                    page_width=width,
+                    page_height=height,
+                    requested_dpi=dpi,
                 )
+                sampled_page_dpi[str(page_number)] = limits.dpi
                 image = render_page(
                     source_page,
-                    RenderLimits(
-                        dpi=dpi,
-                        max_pixels=max_dimension * max_dimension,
-                        max_dimension=max_dimension,
-                    ),
+                    limits,
                 )
                 try:
                     image.save(output, format="PNG")
@@ -351,7 +387,8 @@ def inspect_and_render_official(
             },
             "sampled_pages": list(sampled),
             "sampled_page_classification": sampled_page_classification,
-            "render_dpi": dpi,
+            "requested_render_dpi": dpi,
+            "sampled_page_render_dpi": sampled_page_dpi,
             "rendered_page_sha256": {
                 str(page.page_number): _sha256(page.path) for page in pages
             },

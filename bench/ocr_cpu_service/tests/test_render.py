@@ -9,7 +9,10 @@ import pypdfium2 as pdfium
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 import benchmark.run as benchmark_run  # noqa: E402
-from benchmark.run import generate_reviewed_multicolumn_case  # noqa: E402
+from benchmark.run import (  # noqa: E402
+    bounded_sample_render_limits,
+    generate_reviewed_multicolumn_case,
+)
 from markhand_ocr.render import RenderLimits, open_pdf, render_page  # noqa: E402
 
 
@@ -73,3 +76,18 @@ def test_generates_deterministic_source_ground_truth_multicolumn_case(
     )
     assert first_metadata["ground_truth"] == "deterministic-source"
     assert "text" not in first_metadata
+
+
+def test_historical_sample_render_limits_reduce_extreme_page_dimensions() -> None:
+    limits = bounded_sample_render_limits(
+        page_width=6_210,
+        page_height=6_210,
+        requested_dpi=200,
+    )
+
+    assert limits.dpi < 200
+    assert int(6_210 * limits.dpi / 72 + 0.999) <= limits.max_dimension
+    assert (
+        int(6_210 * limits.dpi / 72 + 0.999) ** 2
+        <= limits.max_pixels
+    )
