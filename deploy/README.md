@@ -195,3 +195,91 @@ contract.
 
 <!-- ci: nudge after digest pins -->
 
+## Real web E2E fixture + artifacts (P2-20)
+
+Dev/CI-only harness for the Playwright `real` project. It creates a run-scoped
+fixture against the local Compose stack, runs `web-e2e-real.sh`, then stages a
+**sanitized** result manifest. Do not use these tools against production.
+
+### Local command
+
+Prerequisites: dev Compose stack up (`make dev-up` / `DEV_STACK_MODE=full bash
+deploy/scripts/dev-stack-ci.sh`), Node/pnpm installed, Playwright Chromium
+installed, and `deploy/dev/.env` present (or let the orchestrator call
+`init-dev-env.sh`).
+
+```bash
+# Full CI path (Compose + real Playwright + fixture teardown):
+DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh
+
+# Or invoke the orchestrator when the stack is already up:
+bash deploy/scripts/web-e2e-real.sh
+```
+
+Hermetic unit coverage (no Docker):
+
+```bash
+python3 deploy/scripts/test_web_e2e_real_fixture.py
+python3 deploy/scripts/test_web_e2e_real_orchestration.py
+python3 deploy/scripts/test_web_e2e_real_artifacts.py
+```
+
+### Fixture CLI contract
+
+`deploy/scripts/web_e2e_real_fixture.py`:
+
+| Command | Required flags | Notes |
+|---|---|---|
+| `setup` | `--run-id`, `--manifest-out`, `--credentials-out` | Creates run-namespaced org/users/collection/docs; writes sanitized manifest + mode-0600 credentials |
+| `cleanup` | `--run-id`, `--manifest`, `--credentials`, `--api-base`, `--timeout-secs` | Bounded teardown of run-attributable rows/objects/vectors |
+| `verify-clean` | `--run-id`, `--manifest` | Fail-closed leak check after cleanup |
+
+Runtime credentials are never the fixed seed account. Fixture tooling refuses
+`MARKHAND_PROFILE=prod` (and other production profiles) before any DB write.
+
+### Artifact CLI contract
+
+`deploy/scripts/web_e2e_real_artifacts.py`:
+
+| Command | Required flags | Notes |
+|---|---|---|
+| `write` | `--results`, `--fixture`, `--out`, `--teardown` | Extracts only `{title, outcome, durationMs}` per scenario; records git/tool versions, fixture checksum, skipped count, teardown; checksums **allowlisted companions only** (P2-20 allowlist is empty — `manifest.json` alone) |
+| `validate` | `--manifest`, `--artifact-dir` | Fail-closed: exact inventory of the 15 required Playwright titles, every outcome `passed`, no duplicates, `skippedCount == 0`, teardown `ok`, exact 40-hex git SHA + nonempty ref (rejects `unknown`), 64-hex fixture checksum, nonempty `toolVersions` values, **no unallowlisted companions**, checksum/inventory match, secret/content canaries |
+
+Optional canary env (comma- or newline-separated):
+
+- `WEB_E2E_REAL_SECRET_CANARIES` — tokens/passwords/capability strings that must not appear in staged artifacts
+- `WEB_E2E_REAL_CONTENT_CANARIES` — document/preview body markers that must not be retained
+
+### Output location
+
+| Path | Contents |
+|---|---|
+| `$WEB_E2E_REAL_ARTIFACT_DIR` (default: temp under `/tmp/markhand-web-e2e-real-artifacts.*`) | Staged sanitized `manifest.json` only (no unreviewed companions) |
+| `$WEB_E2E_REAL_RUNTIME_DIR` (default: temp under `/tmp/markhand-web-e2e-real-runtime.*`) | Fixture manifest, credentials (0600), raw Playwright JSON — **outside** the uploaded artifact dir |
+
+**Retention:** when `WEB_E2E_REAL_ARTIFACT_DIR` is unset, the orchestrator creates a temp directory and **deletes it after a fully successful run**. Task 8 / CI evidence must set an explicit stable path so `manifest.json` is retained:
+
+```bash
+export WEB_E2E_REAL_ARTIFACT_DIR=/tmp/markhand-p2-20-artifacts
+mkdir -p "$WEB_E2E_REAL_ARTIFACT_DIR"
+DEV_STACK_MODE=full bash deploy/scripts/dev-stack-ci.sh
+# retained: $WEB_E2E_REAL_ARTIFACT_DIR/manifest.json
+```
+
+Caller-provided artifact dirs are never auto-deleted. Override `WEB_E2E_REAL_RUNTIME_DIR` the same way when CI needs a stable runtime path.
+
+### Production refusal
+
+Fixture setup/cleanup/verify-clean exit non-zero when `MARKHAND_PROFILE` is
+production. There is no production test route, auth bypass, or fixed seed
+authority path in this harness.
+
+### Sanitization warning
+
+Retained artifacts must never include document bodies, prompts, PII, tokens,
+keys, signed URLs, cookies, or passwords. Playwright traces/screenshots are
+restricted; log dumps go through `redact_secrets.py` fail-closed. Secret or
+content canary matches fail the job. Reviewers should treat any raw credential
+or preview body in CI uploads as a security finding.
+

@@ -366,9 +366,14 @@ async fn run_producer(
     }
 
     let extractive_forced = force_extractive_only_runtime();
-    let use_provider_stream = provider
-        .as_ref()
-        .is_some_and(|p| p.supports_incremental_stream() && !extractive_forced);
+    // Real LLM providers stay fail-closed to extractive while structured
+    // entailment is unavailable. Hermetic `StreamingStatic` doubles are not
+    // product LLM backends — they must keep incremental production so
+    // mid-stream ACL revoke tests can observe durable ask.token before close.
+    let use_provider_stream = provider.as_ref().is_some_and(|p| match p {
+        ChatProvider::StreamingStatic(_) => true,
+        other => other.supports_incremental_stream() && !extractive_forced,
+    });
 
     let mut answer_mode = AnswerMode::OfflineExtractive;
     let mut streamed_any = false;
@@ -989,5 +994,21 @@ mod tests {
         assert!(!text.contains("extractiveAnswer"));
         assert!(!text.contains("\"body\""));
         assert!(text.contains("questionSha256"));
+    }
+
+    #[test]
+    fn hermetic_streaming_static_stays_enabled_under_extractive_fail_closed() {
+        // Mid-stream ACL revoke tests wire StreamingStatic; extractive-only
+        // fail-closed must not suppress that hermetic path (real LLM providers
+        // remain gated by `!extractive_forced` in the same match).
+        let source = include_str!("ask_stream.rs");
+        assert!(
+            source.contains("ChatProvider::StreamingStatic(_) => true"),
+            "StreamingStatic must keep incremental production while entailment is unavailable"
+        );
+        assert!(
+            source.contains("other => other.supports_incremental_stream() && !extractive_forced"),
+            "non-hermetic providers must stay extractive-gated"
+        );
     }
 }
