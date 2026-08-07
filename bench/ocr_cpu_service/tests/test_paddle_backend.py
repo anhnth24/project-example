@@ -123,7 +123,9 @@ def test_rejects_mismatched_documented_result_lengths(
         adapt_result(result)
 
 
-def test_backend_initializes_cpu_pipeline_once_and_adapts_predict_result() -> None:
+def test_backend_initializes_cpu_pipeline_once_and_adapts_predict_result(
+    tmp_path: Path,
+) -> None:
     calls: list[dict[str, object]] = []
 
     class FakeResult(dict[str, object]):
@@ -150,7 +152,13 @@ def test_backend_initializes_cpu_pipeline_once_and_adapts_predict_result() -> No
         calls.append(kwargs)
         return pipeline
 
-    backend = PaddleOcrBackend(pipeline_factory=factory)
+    detection_dir = _write_model_assets(tmp_path / "detection")
+    recognition_dir = _write_model_assets(tmp_path / "recognition")
+    backend = PaddleOcrBackend(
+        pipeline_factory=factory,
+        text_detection_model_dir=detection_dir,
+        text_recognition_model_dir=recognition_dir,
+    )
     image = Image.new("RGB", (10, 10), "white")
     try:
         first = backend.recognize(image)
@@ -164,6 +172,8 @@ def test_backend_initializes_cpu_pipeline_once_and_adapts_predict_result() -> No
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
+            "text_detection_model_dir": str(detection_dir.resolve()),
+            "text_recognition_model_dir": str(recognition_dir.resolve()),
         }
     ]
     assert len(pipeline.images) == 2
@@ -173,7 +183,7 @@ def test_backend_initializes_cpu_pipeline_once_and_adapts_predict_result() -> No
     assert backend.name == "paddle"
 
 
-def test_backend_serializes_concurrent_predict_calls() -> None:
+def test_backend_serializes_concurrent_predict_calls(tmp_path: Path) -> None:
     state_lock = threading.Lock()
     start_barrier = threading.Barrier(2)
     active_calls = 0
@@ -199,7 +209,13 @@ def test_backend_serializes_concurrent_predict_calls() -> None:
             ]
 
     pipeline = OverlapDetectingPipeline()
-    backend = PaddleOcrBackend(pipeline_factory=lambda **kwargs: pipeline)
+    backend = PaddleOcrBackend(
+        pipeline_factory=lambda **kwargs: pipeline,
+        text_detection_model_dir=_write_model_assets(tmp_path / "detection"),
+        text_recognition_model_dir=_write_model_assets(
+            tmp_path / "recognition"
+        ),
+    )
     image = Image.new("RGB", (10, 10), "white")
 
     def recognize_after_barrier() -> list[OcrSpan]:
@@ -218,7 +234,7 @@ def test_backend_serializes_concurrent_predict_calls() -> None:
     assert maximum_active_calls == 1
 
 
-def test_backend_uses_explicit_local_model_directories() -> None:
+def test_backend_uses_explicit_local_model_directories(tmp_path: Path) -> None:
     calls: list[dict[str, object]] = []
 
     class FakePipeline:
@@ -226,8 +242,8 @@ def test_backend_uses_explicit_local_model_directories() -> None:
             del image
             return []
 
-    detection_dir = Path("/cached/detection")
-    recognition_dir = Path("/cached/recognition")
+    detection_dir = _write_model_assets(tmp_path / "detection")
+    recognition_dir = _write_model_assets(tmp_path / "recognition")
     PaddleOcrBackend(
         pipeline_factory=lambda **kwargs: (
             calls.append(kwargs) or FakePipeline()
@@ -242,19 +258,45 @@ def test_backend_uses_explicit_local_model_directories() -> None:
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
-            "text_detection_model_dir": str(detection_dir),
-            "text_recognition_model_dir": str(recognition_dir),
+            "text_detection_model_dir": str(detection_dir.resolve()),
+            "text_recognition_model_dir": str(recognition_dir.resolve()),
         }
     ]
 
 
-def test_backend_rejects_partial_local_model_configuration() -> None:
-    with pytest.raises(ValueError, match="both local model directories"):
+@pytest.mark.parametrize("configured", ["neither", "detection-only"])
+def test_backend_rejects_any_non_cache_only_configuration(
+    configured: str,
+    tmp_path: Path,
+) -> None:
+    detection_dir = (
+        _write_model_assets(tmp_path / "detection")
+        if configured == "detection-only"
+        else None
+    )
+    with pytest.raises(ValueError, match="local model directories are required"):
         PaddleOcrBackend(
             pipeline_factory=lambda **kwargs: pytest.fail(
                 "pipeline must not initialize"
             ),
-            text_detection_model_dir=Path("/cached/detection"),
+            text_detection_model_dir=detection_dir,
+        )
+
+
+def test_backend_rejects_incomplete_cache_before_pipeline_construction(
+    tmp_path: Path,
+) -> None:
+    detection_dir = _write_model_assets(tmp_path / "detection")
+    recognition_dir = _write_model_assets(tmp_path / "recognition")
+    (recognition_dir / "inference.pdiparams").unlink()
+
+    with pytest.raises(ValueError, match="cache is incomplete"):
+        PaddleOcrBackend(
+            pipeline_factory=lambda **kwargs: pytest.fail(
+                "pipeline must not initialize"
+            ),
+            text_detection_model_dir=detection_dir,
+            text_recognition_model_dir=recognition_dir,
         )
 
 
