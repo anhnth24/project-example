@@ -248,7 +248,7 @@ def render_markdown(data: dict[str, Any]) -> str:
         "interval is claimed.",
         "- The synthetic receipt stratum is reported separately and must not "
         "be treated as additional real-document evidence.",
-        "- The official mixed PDF sample has no human-verified transcription, "
+        "- The official PDF sample has no human-verified transcription, "
         "so it contributes runtime/failure context only and cannot reduce "
         "quality uncertainty.",
         "",
@@ -384,7 +384,8 @@ def render_markdown(data: dict[str, Any]) -> str:
             "## Official 89/2026/TT-BTC bounded sample",
             "",
             f"- Classification: **{official['classification']}**.",
-            "- Benchmark stratum: **mixed**; gate-included: **false**.",
+            "- Benchmark schema stratum: **mixed** (non-gate context); "
+            "gate-included: **false**.",
             "- Manifest/inspection mismatch: "
             f"**{str(official.get('classification_mismatch', False)).lower()}**.",
             f"- Inspection: {evidence['pages']} physical PDF pages; "
@@ -484,10 +485,13 @@ def render_markdown(data: dict[str, Any]) -> str:
             "|---|---|--:|--:|--:|--:|--:|--:|",
         ]
     )
-    reading_ids = {case["source_id"] for case in reading_cases}
+    reading_pages = {
+        (case["source_id"], case.get("page_number", 1))
+        for case in reading_cases
+    }
     for candidate in data["candidates"]:
         for page in candidate.get("pages", []):
-            if page["source_id"] not in reading_ids:
+            if (page["source_id"], page["page_number"]) not in reading_pages:
                 continue
             metric = page.get("reading_order")
             if metric is None:

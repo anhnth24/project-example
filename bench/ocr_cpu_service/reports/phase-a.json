@@ -4,27 +4,27 @@
       "aggregate": {
         "cer": 0.1108275197096024,
         "failures": 0,
-        "median_seconds_per_page": 1.113690679499996,
-        "p95_seconds_per_page": 1.4018013116990913,
+        "median_seconds_per_page": 1.1336008375001256,
+        "p95_seconds_per_page": 1.471673539149924,
         "pages": 12,
-        "peak_rss_bytes": 121217024,
+        "peak_rss_bytes": 121585664,
         "wer": 0.19178440607012034
       },
       "id": "markhand-default",
       "label": "Markhand default",
       "metadata": {
         "cold_initialization": {
-          "candidate_seconds": 1.5290006558643654e-06,
+          "candidate_seconds": 1.479000275139697e-06,
           "process_startup_included": true,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 18911232,
+            "peak_rss_bytes": 19197952,
             "sample_count": 5,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.044731312000294565
+            "wall_seconds": 0.04416615000081947
           },
           "timing_scope": "worker_process_invocation_to_ready",
-          "wall_seconds": 0.04524615199989057
+          "wall_seconds": 0.04475256899968372
         },
         "environment": {
           "LANG": "C.UTF-8",
@@ -60,24 +60,24 @@
       },
       "pages": [
         {
-          "candidate_seconds": 1.0869262960004562,
+          "candidate_seconds": 1.0982201890001306,
           "cer": 0.18787878787878787,
           "character_edits": 279,
-          "elapsed_seconds": 1.0874534710001171,
+          "elapsed_seconds": 1.0986482919997798,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 116375552,
+          "peak_rss_bytes": 116768768,
           "process_startup_included": false,
           "reference_characters": 1485,
           "reference_words": 329,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 116375552,
-            "sample_count": 103,
+            "peak_rss_bytes": 116768768,
+            "sample_count": 104,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.0874534710001171
+            "wall_seconds": 1.0986482919997798
           },
           "source_id": "vnocr-real-cv-3722-metro-p1",
           "source_sha256": "28dfe93886dae75fbcc17251b6f330f526da18c05394872243659325478a5cf6",
@@ -88,24 +88,24 @@
           "word_edits": 94
         },
         {
-          "candidate_seconds": 1.3546067320003203,
+          "candidate_seconds": 1.4133703480001714,
           "cer": 0.10592025775271849,
           "character_edits": 263,
-          "elapsed_seconds": 1.3550381819986796,
+          "elapsed_seconds": 1.4138928970005509,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 121217024,
+          "peak_rss_bytes": 121585664,
           "process_startup_included": false,
           "reference_characters": 2483,
           "reference_words": 535,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 121217024,
-            "sample_count": 128,
+            "peak_rss_bytes": 121585664,
+            "sample_count": 133,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.3550381819986796
+            "wall_seconds": 1.4138928970005509
           },
           "source_id": "vnocr-real-hanoi-kh-173-festival-p1",
           "source_sha256": "cafe628510a11875f22e857115819b036df273de38a42f6569fbd111c6fbd3dd",
@@ -116,24 +116,24 @@
           "word_edits": 84
         },
         {
-          "candidate_seconds": 1.1394737950013223,
+          "candidate_seconds": 1.168060541000159,
           "cer": 0.1269185360094451,
           "character_edits": 215,
-          "elapsed_seconds": 1.1399278879998747,
+          "elapsed_seconds": 1.1685533830004715,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 117587968,
+          "peak_rss_bytes": 117919744,
           "process_startup_included": false,
           "reference_characters": 1694,
           "reference_words": 364,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 117587968,
-            "sample_count": 108,
+            "peak_rss_bytes": 117919744,
+            "sample_count": 110,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.1399278879998747
+            "wall_seconds": 1.1685533830004715
           },
           "source_id": "vnocr-real-hanoi-qd-2280-water-p1",
           "source_sha256": "03b1203eb034925e1cca0001a688621025c4832f03355a6f66a8d0a0b3c20ddd",
@@ -144,24 +144,24 @@
           "word_edits": 88
         },
         {
-          "candidate_seconds": 0.8671665740002936,
+          "candidate_seconds": 0.8914800210004614,
           "cer": 0.19424460431654678,
           "character_edits": 216,
-          "elapsed_seconds": 0.8676233240003057,
+          "elapsed_seconds": 0.891772815000877,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 114089984,
+          "peak_rss_bytes": 114135040,
           "process_startup_included": false,
           "reference_characters": 1112,
           "reference_words": 248,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 114089984,
-            "sample_count": 82,
+            "peak_rss_bytes": 114135040,
+            "sample_count": 85,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.8676233240003057
+            "wall_seconds": 0.891772815000877
           },
           "source_id": "vnocr-real-hanoi-tb-453-flag-p1",
           "source_sha256": "22872f8cedd422a629e5932e742905b096e582303482b3376d6a575a75465d08",
@@ -172,24 +172,24 @@
           "word_edits": 64
         },
         {
-          "candidate_seconds": 1.3102087489987753,
+          "candidate_seconds": 1.3435585899987927,
           "cer": 0.09511015583019881,
           "character_edits": 177,
-          "elapsed_seconds": 1.3106774779989792,
+          "elapsed_seconds": 1.3439903250000498,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 118988800,
+          "peak_rss_bytes": 119222272,
           "process_startup_included": false,
           "reference_characters": 1861,
           "reference_words": 402,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 118988800,
-            "sample_count": 124,
+            "peak_rss_bytes": 119222272,
+            "sample_count": 127,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.3106774779989792
+            "wall_seconds": 1.3439903250000498
           },
           "source_id": "vnocr-real-nq-115-ba-vi-p1",
           "source_sha256": "bb1d2824cf789b6d3c1f76e2999251a57f0aeda9088d733de122483c8a570e98",
@@ -200,24 +200,24 @@
           "word_edits": 64
         },
         {
-          "candidate_seconds": 0.9621491369998694,
+          "candidate_seconds": 0.9643583279994346,
           "cer": 0.07782101167315175,
           "character_edits": 100,
-          "elapsed_seconds": 0.9625971620007476,
+          "elapsed_seconds": 0.9647831860002043,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 115871744,
+          "peak_rss_bytes": 115908608,
           "process_startup_included": false,
           "reference_characters": 1285,
           "reference_words": 284,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 115871744,
+            "peak_rss_bytes": 115908608,
             "sample_count": 91,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.9625971620007476
+            "wall_seconds": 0.9647831860002043
           },
           "source_id": "vnocr-real-qd-707-ttg-p1",
           "source_sha256": "bf6851f475dea358f2dc0136a9dced4d1dff9b7dfd5aac762d4b789e98f36295",
@@ -228,24 +228,24 @@
           "word_edits": 48
         },
         {
-          "candidate_seconds": 1.1881390220005414,
+          "candidate_seconds": 1.2262722960003885,
           "cer": 0.1654228855721393,
           "character_edits": 266,
-          "elapsed_seconds": 1.1885924390007858,
+          "elapsed_seconds": 1.2266530840006453,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 117731328,
+          "peak_rss_bytes": 117809152,
           "process_startup_included": false,
           "reference_characters": 1608,
           "reference_words": 356,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 117731328,
-            "sample_count": 113,
+            "peak_rss_bytes": 117809152,
+            "sample_count": 116,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.1885924390007858
+            "wall_seconds": 1.2266530840006453
           },
           "source_id": "vnocr-real-qd-729-ttg-p1",
           "source_sha256": "081bef468ca7c09ed8415b5d34435c75e2580eb4c16191f9d8bfba004c7014a4",
@@ -256,24 +256,24 @@
           "word_edits": 82
         },
         {
-          "candidate_seconds": 1.4584722729996429,
+          "candidate_seconds": 1.541861046998747,
           "cer": 0.12101143889223359,
           "character_edits": 201,
-          "elapsed_seconds": 1.4589562479995948,
+          "elapsed_seconds": 1.5422943239991582,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 117985280,
+          "peak_rss_bytes": 117948416,
           "process_startup_included": false,
           "reference_characters": 1661,
           "reference_words": 354,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 117985280,
-            "sample_count": 138,
+            "peak_rss_bytes": 117948416,
+            "sample_count": 145,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.4589562479995948
+            "wall_seconds": 1.5422943239991582
           },
           "source_id": "vnocr-real-tt-21-bct-fuel-p1",
           "source_sha256": "11dedc2e0c3e03cabc0a1f7f18c29f773aa4b6077e957aca0f47573b067d309d",
@@ -284,24 +284,24 @@
           "word_edits": 90
         },
         {
-          "candidate_seconds": 1.2336703310011217,
+          "candidate_seconds": 1.264174207999531,
           "cer": 0.11441765007696254,
           "character_edits": 223,
-          "elapsed_seconds": 1.2341586940001434,
+          "elapsed_seconds": 1.2646490580009413,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 108277760,
+          "peak_rss_bytes": 108429312,
           "process_startup_included": false,
           "reference_characters": 1949,
           "reference_words": 416,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 108277760,
-            "sample_count": 117,
+            "peak_rss_bytes": 108429312,
+            "sample_count": 119,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.2341586940001434
+            "wall_seconds": 1.2646490580009413
           },
           "source_id": "vnocr-real-tt-37-bca-vehicle-p1",
           "source_sha256": "87b23f9f6b7bb0a382e380ddaf12f18389436f624a525d77e8628678c798d626",
@@ -312,24 +312,24 @@
           "word_edits": 108
         },
         {
-          "candidate_seconds": 0.5636653309993562,
+          "candidate_seconds": 0.5926210219986388,
           "cer": 0.0015455950540958269,
           "character_edits": 1,
-          "elapsed_seconds": 0.5640770330010128,
+          "elapsed_seconds": 0.5931180869993113,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 109121536,
+          "peak_rss_bytes": 109387776,
           "process_startup_included": false,
           "reference_characters": 647,
           "reference_words": 140,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 109121536,
-            "sample_count": 54,
+            "peak_rss_bytes": 109387776,
+            "sample_count": 56,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.5640770330010128
+            "wall_seconds": 0.5931180869993113
           },
           "source_id": "vnocr-synthetic-scan-bien-lai-p1",
           "source_sha256": "370e519da2492ea9f938448a920e465a7f504befc28421f13e4c596535e4245e",
@@ -340,24 +340,24 @@
           "word_edits": 1
         },
         {
-          "candidate_seconds": 0.7718411189998733,
+          "candidate_seconds": 0.8144090349996986,
           "cer": 0.008100810081008101,
           "character_edits": 9,
-          "elapsed_seconds": 0.7721654520009906,
+          "elapsed_seconds": 0.8151707779998105,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 111845376,
+          "peak_rss_bytes": 112017408,
           "process_startup_included": false,
           "reference_characters": 1111,
           "reference_words": 239,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 111845376,
-            "sample_count": 73,
+            "peak_rss_bytes": 112017408,
+            "sample_count": 77,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.7721654520009906
+            "wall_seconds": 0.8151707779998105
           },
           "source_id": "vnocr-synthetic-scan-hoa-don-p1",
           "source_sha256": "83758171e5f2e1b1e55e968e06a564cc08c30b243c9feec3f9cc3581ed93504d",
@@ -368,24 +368,24 @@
           "word_edits": 8
         },
         {
-          "candidate_seconds": 0.5831327529995178,
+          "candidate_seconds": 0.6123335829997814,
           "cer": 0.005442176870748299,
           "character_edits": 4,
-          "elapsed_seconds": 0.5835513919992081,
+          "elapsed_seconds": 0.6127910879986302,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 108392448,
+          "peak_rss_bytes": 108949504,
           "process_startup_included": false,
           "reference_characters": 735,
           "reference_words": 155,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 108392448,
-            "sample_count": 56,
+            "peak_rss_bytes": 108949504,
+            "sample_count": 58,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.5835513919992081
+            "wall_seconds": 0.6127910879986302
           },
           "source_id": "vnocr-synthetic-scan-phieu-chi-p1",
           "source_sha256": "667167e998c9aaef5049e4b1ad66a17d39843de0b12ddb7b1c2086a0ff247c54",
@@ -396,20 +396,20 @@
           "word_edits": 2
         },
         {
-          "candidate_seconds": 1.1862657819983724,
-          "elapsed_seconds": 1.186550594999062,
+          "candidate_seconds": 1.2523773360007908,
+          "elapsed_seconds": 1.2528316220013949,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 118292480,
+          "peak_rss_bytes": 118321152,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 118292480,
-            "sample_count": 113,
+            "peak_rss_bytes": 118321152,
+            "sample_count": 118,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.186550594999062
+            "wall_seconds": 1.2528316220013949
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -418,20 +418,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 1.4114516699992237,
-          "elapsed_seconds": 1.411747011999978,
+          "candidate_seconds": 1.4291894920006598,
+          "elapsed_seconds": 1.4295111949995771,
           "error_kind": null,
           "gate_included": false,
           "page_number": 420,
-          "peak_rss_bytes": 115449856,
+          "peak_rss_bytes": 115802112,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 115449856,
-            "sample_count": 134,
+            "peak_rss_bytes": 115802112,
+            "sample_count": 135,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.411747011999978
+            "wall_seconds": 1.4295111949995771
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -440,20 +440,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 0.8194825509999646,
-          "elapsed_seconds": 0.8197624280001037,
+          "candidate_seconds": 0.8480863829990994,
+          "elapsed_seconds": 0.848269801999777,
           "error_kind": null,
           "gate_included": false,
           "page_number": 839,
-          "peak_rss_bytes": 112410624,
+          "peak_rss_bytes": 112738304,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 112410624,
-            "sample_count": 78,
+            "peak_rss_bytes": 112738304,
+            "sample_count": 80,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.8197624280001037
+            "wall_seconds": 0.848269801999777
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -462,20 +462,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 6.471643782999308,
-          "elapsed_seconds": 6.4720137209988025,
+          "candidate_seconds": 6.643999119,
+          "elapsed_seconds": 6.644553890999305,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 208404480,
+          "peak_rss_bytes": 208621568,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 208404480,
-            "sample_count": 612,
+            "peak_rss_bytes": 208621568,
+            "sample_count": 625,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 6.4720137209988025
+            "wall_seconds": 6.644553890999305
           },
           "source_id": "wikimedia-cuu-quoc-1945-09-05",
           "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
@@ -484,20 +484,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 9.630235835998974,
-          "elapsed_seconds": 9.630725791999794,
+          "candidate_seconds": 9.885862926999835,
+          "elapsed_seconds": 9.886539500999788,
           "error_kind": null,
           "gate_included": false,
           "page_number": 2,
-          "peak_rss_bytes": 208314368,
+          "peak_rss_bytes": 208539648,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 208314368,
-            "sample_count": 910,
+            "peak_rss_bytes": 208539648,
+            "sample_count": 927,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 9.630725791999794
+            "wall_seconds": 9.886539500999788
           },
           "source_id": "wikimedia-cuu-quoc-1945-09-05",
           "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
@@ -506,20 +506,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 2.0810901780005224,
-          "elapsed_seconds": 2.0815007359997253,
+          "candidate_seconds": 2.092004194000765,
+          "elapsed_seconds": 2.09217962799994,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 110026752,
+          "peak_rss_bytes": 110129152,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 110026752,
+            "peak_rss_bytes": 110129152,
             "sample_count": 197,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 2.0815007359997253
+            "wall_seconds": 2.09217962799994
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -528,20 +528,27 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 2.4469591310007672,
-          "elapsed_seconds": 2.4472437809999974,
+          "candidate_seconds": 2.4965218659999664,
+          "elapsed_seconds": 2.4967343700009224,
           "error_kind": null,
           "gate_included": false,
           "page_number": 4,
-          "peak_rss_bytes": 111681536,
+          "peak_rss_bytes": 112091136,
           "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 10,
+            "expected_anchors": 5,
+            "missing_anchors": 0,
+            "observed_anchors": 5,
+            "violations": 0
+          },
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 111681536,
-            "sample_count": 232,
+            "peak_rss_bytes": 112091136,
+            "sample_count": 235,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 2.4472437809999974
+            "wall_seconds": 2.4967343700009224
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -550,20 +557,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 2.5139389079995453,
-          "elapsed_seconds": 2.5142278599996644,
+          "candidate_seconds": 2.5928144629997405,
+          "elapsed_seconds": 2.5932830389992887,
           "error_kind": null,
           "gate_included": false,
           "page_number": 8,
-          "peak_rss_bytes": 111742976,
+          "peak_rss_bytes": 111779840,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 111742976,
-            "sample_count": 238,
+            "peak_rss_bytes": 111779840,
+            "sample_count": 244,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 2.5142278599996644
+            "wall_seconds": 2.5932830389992887
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -572,12 +579,12 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 0.5456795150003018,
-          "elapsed_seconds": 0.5459793459995126,
+          "candidate_seconds": 0.5596150399996986,
+          "elapsed_seconds": 0.5598761269993702,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 87621632,
+          "peak_rss_bytes": 87924736,
           "process_startup_included": false,
           "reading_order": {
             "comparable_pairs": 15,
@@ -589,10 +596,10 @@
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 87621632,
-            "sample_count": 52,
+            "peak_rss_bytes": 87924736,
+            "sample_count": 53,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.5459793459995126
+            "wall_seconds": 0.5598761269993702
           },
           "source_id": "reviewed-multicolumn-v1",
           "source_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
@@ -605,19 +612,19 @@
         "real-scan": {
           "cer": 0.12815431364777383,
           "failures": 0,
-          "median_seconds_per_page": 1.1885924390007858,
-          "p95_seconds_per_page": 1.4173890215992286,
+          "median_seconds_per_page": 1.2266530840006453,
+          "p95_seconds_per_page": 1.4909337531997153,
           "pages": 9,
-          "peak_rss_bytes": 121217024,
+          "peak_rss_bytes": 121585664,
           "wer": 0.21958637469586376
         },
         "synthetic-scan": {
           "cer": 0.005615724027276374,
           "failures": 0,
-          "median_seconds_per_page": 0.5835513919992081,
-          "p95_seconds_per_page": 0.7533040460008124,
+          "median_seconds_per_page": 0.6127910879986302,
+          "p95_seconds_per_page": 0.7949328089996925,
           "pages": 3,
-          "peak_rss_bytes": 111845376,
+          "peak_rss_bytes": 112017408,
           "wer": 0.020599250936329586
         }
       }
@@ -626,27 +633,27 @@
       "aggregate": {
         "cer": 0.10260336906584992,
         "failures": 0,
-        "median_seconds_per_page": 1.521497317500689,
-        "p95_seconds_per_page": 1.8310846632507491,
+        "median_seconds_per_page": 1.5371178329996837,
+        "p95_seconds_per_page": 1.8425851880499067,
         "pages": 12,
-        "peak_rss_bytes": 144797696,
+        "peak_rss_bytes": 144834560,
         "wer": 0.17032967032967034
       },
       "id": "markhand-tessdata-best",
       "label": "Markhand tessdata_best",
       "metadata": {
         "cold_initialization": {
-          "candidate_seconds": 1.5639998309779912e-06,
+          "candidate_seconds": 1.868000254034996e-06,
           "process_startup_included": true,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 16109568,
-            "sample_count": 4,
+            "peak_rss_bytes": 19431424,
+            "sample_count": 5,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.04190533900145965
+            "wall_seconds": 0.04344798400052241
           },
           "timing_scope": "worker_process_invocation_to_ready",
-          "wall_seconds": 0.04223920299955353
+          "wall_seconds": 0.043871576999663375
         },
         "environment": {
           "LANG": "C.UTF-8",
@@ -682,24 +689,24 @@
       },
       "pages": [
         {
-          "candidate_seconds": 1.4759861700003967,
+          "candidate_seconds": 1.5172537799990096,
           "cer": 0.1717171717171717,
           "character_edits": 255,
-          "elapsed_seconds": 1.4763858010010154,
+          "elapsed_seconds": 1.517697462999422,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 136335360,
+          "peak_rss_bytes": 136712192,
           "process_startup_included": false,
           "reference_characters": 1485,
           "reference_words": 329,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 136335360,
-            "sample_count": 140,
+            "peak_rss_bytes": 136712192,
+            "sample_count": 143,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.4763858010010154
+            "wall_seconds": 1.517697462999422
           },
           "source_id": "vnocr-real-cv-3722-metro-p1",
           "source_sha256": "28dfe93886dae75fbcc17251b6f330f526da18c05394872243659325478a5cf6",
@@ -710,24 +717,24 @@
           "word_edits": 82
         },
         {
-          "candidate_seconds": 1.80073046400139,
+          "candidate_seconds": 1.7896486299996468,
           "cer": 0.10350382601691502,
           "character_edits": 257,
-          "elapsed_seconds": 1.8011118800004624,
+          "elapsed_seconds": 1.7900833959993179,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 144797696,
+          "peak_rss_bytes": 144834560,
           "process_startup_included": false,
           "reference_characters": 2483,
           "reference_words": 535,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 144797696,
-            "sample_count": 170,
+            "peak_rss_bytes": 144834560,
+            "sample_count": 169,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.8011118800004624
+            "wall_seconds": 1.7900833959993179
           },
           "source_id": "vnocr-real-hanoi-kh-173-festival-p1",
           "source_sha256": "cafe628510a11875f22e857115819b036df273de38a42f6569fbd111c6fbd3dd",
@@ -738,24 +745,24 @@
           "word_edits": 80
         },
         {
-          "candidate_seconds": 1.6085977049988287,
+          "candidate_seconds": 1.5807706150008016,
           "cer": 0.1127508854781582,
           "character_edits": 191,
-          "elapsed_seconds": 1.6090739439987374,
+          "elapsed_seconds": 1.581203309000557,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 143814656,
+          "peak_rss_bytes": 144084992,
           "process_startup_included": false,
           "reference_characters": 1694,
           "reference_words": 364,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 143814656,
-            "sample_count": 152,
+            "peak_rss_bytes": 144084992,
+            "sample_count": 149,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.6090739439987374
+            "wall_seconds": 1.581203309000557
           },
           "source_id": "vnocr-real-hanoi-qd-2280-water-p1",
           "source_sha256": "03b1203eb034925e1cca0001a688621025c4832f03355a6f66a8d0a0b3c20ddd",
@@ -766,24 +773,24 @@
           "word_edits": 72
         },
         {
-          "candidate_seconds": 1.1288689299999533,
+          "candidate_seconds": 1.1381081609997636,
           "cer": 0.18794964028776978,
           "character_edits": 209,
-          "elapsed_seconds": 1.1292431700003362,
+          "elapsed_seconds": 1.1385783240002638,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 137854976,
+          "peak_rss_bytes": 138076160,
           "process_startup_included": false,
           "reference_characters": 1112,
           "reference_words": 248,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 137854976,
-            "sample_count": 107,
+            "peak_rss_bytes": 138076160,
+            "sample_count": 108,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.1292431700003362
+            "wall_seconds": 1.1385783240002638
           },
           "source_id": "vnocr-real-hanoi-tb-453-flag-p1",
           "source_sha256": "22872f8cedd422a629e5932e742905b096e582303482b3376d6a575a75465d08",
@@ -794,24 +801,24 @@
           "word_edits": 60
         },
         {
-          "candidate_seconds": 1.7876195649987494,
+          "candidate_seconds": 1.8135436959983053,
           "cer": 0.09081139172487909,
           "character_edits": 169,
-          "elapsed_seconds": 1.7880667289991834,
+          "elapsed_seconds": 1.813981788998717,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 142929920,
+          "peak_rss_bytes": 142991360,
           "process_startup_included": false,
           "reference_characters": 1861,
           "reference_words": 402,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 142929920,
-            "sample_count": 169,
+            "peak_rss_bytes": 142991360,
+            "sample_count": 171,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.7880667289991834
+            "wall_seconds": 1.813981788998717
           },
           "source_id": "vnocr-real-nq-115-ba-vi-p1",
           "source_sha256": "bb1d2824cf789b6d3c1f76e2999251a57f0aeda9088d733de122483c8a570e98",
@@ -822,24 +829,24 @@
           "word_edits": 55
         },
         {
-          "candidate_seconds": 1.357858467999904,
+          "candidate_seconds": 1.387053062000632,
           "cer": 0.07315175097276265,
           "character_edits": 94,
-          "elapsed_seconds": 1.3583399810013361,
+          "elapsed_seconds": 1.387496571000156,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 137576448,
+          "peak_rss_bytes": 137830400,
           "process_startup_included": false,
           "reference_characters": 1285,
           "reference_words": 284,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 137576448,
-            "sample_count": 128,
+            "peak_rss_bytes": 137830400,
+            "sample_count": 131,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.3583399810013361
+            "wall_seconds": 1.387496571000156
           },
           "source_id": "vnocr-real-qd-707-ttg-p1",
           "source_sha256": "bf6851f475dea358f2dc0136a9dced4d1dff9b7dfd5aac762d4b789e98f36295",
@@ -850,24 +857,24 @@
           "word_edits": 41
         },
         {
-          "candidate_seconds": 1.5662666860007448,
+          "candidate_seconds": 1.5560368719998223,
           "cer": 0.15049751243781095,
           "character_edits": 242,
-          "elapsed_seconds": 1.5666088340003625,
+          "elapsed_seconds": 1.5565382029999455,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 139198464,
+          "peak_rss_bytes": 139313152,
           "process_startup_included": false,
           "reference_characters": 1608,
           "reference_words": 356,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 139198464,
-            "sample_count": 148,
+            "peak_rss_bytes": 139313152,
+            "sample_count": 147,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.5666088340003625
+            "wall_seconds": 1.5565382029999455
           },
           "source_id": "vnocr-real-qd-729-ttg-p1",
           "source_sha256": "081bef468ca7c09ed8415b5d34435c75e2580eb4c16191f9d8bfba004c7014a4",
@@ -878,24 +885,24 @@
           "word_edits": 70
         },
         {
-          "candidate_seconds": 1.8672850759994617,
+          "candidate_seconds": 1.8771059219998278,
           "cer": 0.10295003010234799,
           "character_edits": 171,
-          "elapsed_seconds": 1.8677180650010996,
+          "elapsed_seconds": 1.8775448980013607,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 138125312,
+          "peak_rss_bytes": 138280960,
           "process_startup_included": false,
           "reference_characters": 1661,
           "reference_words": 354,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 138125312,
+            "peak_rss_bytes": 138280960,
             "sample_count": 177,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.8677180650010996
+            "wall_seconds": 1.8775448980013607
           },
           "source_id": "vnocr-real-tt-21-bct-fuel-p1",
           "source_sha256": "11dedc2e0c3e03cabc0a1f7f18c29f773aa4b6077e957aca0f47573b067d309d",
@@ -906,24 +913,24 @@
           "word_edits": 81
         },
         {
-          "candidate_seconds": 1.7228011739989597,
+          "candidate_seconds": 1.7172974379991501,
           "cer": 0.10723447922011288,
           "character_edits": 209,
-          "elapsed_seconds": 1.7232784099996934,
+          "elapsed_seconds": 1.7177031730007002,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 130256896,
+          "peak_rss_bytes": 129630208,
           "process_startup_included": false,
           "reference_characters": 1949,
           "reference_words": 416,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 130256896,
-            "sample_count": 163,
+            "peak_rss_bytes": 129630208,
+            "sample_count": 162,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.7232784099996934
+            "wall_seconds": 1.7177031730007002
           },
           "source_id": "vnocr-real-tt-37-bca-vehicle-p1",
           "source_sha256": "87b23f9f6b7bb0a382e380ddaf12f18389436f624a525d77e8628678c798d626",
@@ -934,24 +941,24 @@
           "word_edits": 98
         },
         {
-          "candidate_seconds": 0.6821886129982886,
+          "candidate_seconds": 0.6767128640003648,
           "cer": 0.0,
           "character_edits": 0,
-          "elapsed_seconds": 0.6825069930000609,
+          "elapsed_seconds": 0.6771881789991312,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 125456384,
+          "peak_rss_bytes": 125841408,
           "process_startup_included": false,
           "reference_characters": 647,
           "reference_words": 140,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 125456384,
-            "sample_count": 65,
+            "peak_rss_bytes": 125841408,
+            "sample_count": 64,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.6825069930000609
+            "wall_seconds": 0.6771881789991312
           },
           "source_id": "vnocr-synthetic-scan-bien-lai-p1",
           "source_sha256": "370e519da2492ea9f938448a920e465a7f504befc28421f13e4c596535e4245e",
@@ -962,24 +969,24 @@
           "word_edits": 0
         },
         {
-          "candidate_seconds": 0.9898204999990412,
+          "candidate_seconds": 0.9819462010000279,
           "cer": 0.0054005400540054005,
           "character_edits": 6,
-          "elapsed_seconds": 0.9902269009999145,
+          "elapsed_seconds": 0.9823807910015603,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 128835584,
+          "peak_rss_bytes": 128794624,
           "process_startup_included": false,
           "reference_characters": 1111,
           "reference_words": 239,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 128835584,
-            "sample_count": 94,
+            "peak_rss_bytes": 128794624,
+            "sample_count": 93,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.9902269009999145
+            "wall_seconds": 0.9823807910015603
           },
           "source_id": "vnocr-synthetic-scan-hoa-don-p1",
           "source_sha256": "83758171e5f2e1b1e55e968e06a564cc08c30b243c9feec3f9cc3581ed93504d",
@@ -990,24 +997,24 @@
           "word_edits": 6
         },
         {
-          "candidate_seconds": 0.7776338340008806,
+          "candidate_seconds": 0.7760084420006024,
           "cer": 0.00816326530612245,
           "character_edits": 6,
-          "elapsed_seconds": 0.7780457429998933,
+          "elapsed_seconds": 0.7764320679998491,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 125554688,
+          "peak_rss_bytes": 127897600,
           "process_startup_included": false,
           "reference_characters": 735,
           "reference_words": 155,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 125554688,
-            "sample_count": 74,
+            "peak_rss_bytes": 127897600,
+            "sample_count": 73,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.7780457429998933
+            "wall_seconds": 0.7764320679998491
           },
           "source_id": "vnocr-synthetic-scan-phieu-chi-p1",
           "source_sha256": "667167e998c9aaef5049e4b1ad66a17d39843de0b12ddb7b1c2086a0ff247c54",
@@ -1018,20 +1025,20 @@
           "word_edits": 6
         },
         {
-          "candidate_seconds": 1.4460835350000707,
-          "elapsed_seconds": 1.4465306960009912,
+          "candidate_seconds": 1.4403771289998986,
+          "elapsed_seconds": 1.4409416010003042,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 143032320,
+          "peak_rss_bytes": 143314944,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 143032320,
-            "sample_count": 137,
+            "peak_rss_bytes": 143314944,
+            "sample_count": 136,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.4465306960009912
+            "wall_seconds": 1.4409416010003042
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -1040,20 +1047,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 2.0735551039997517,
-          "elapsed_seconds": 2.073988215999634,
+          "candidate_seconds": 2.1192581260002044,
+          "elapsed_seconds": 2.1197181530005764,
           "error_kind": null,
           "gate_included": false,
           "page_number": 420,
-          "peak_rss_bytes": 136212480,
+          "peak_rss_bytes": 136536064,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 136212480,
-            "sample_count": 196,
+            "peak_rss_bytes": 136536064,
+            "sample_count": 200,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 2.073988215999634
+            "wall_seconds": 2.1197181530005764
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -1062,20 +1069,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 1.0730506170002627,
-          "elapsed_seconds": 1.0735422019988619,
+          "candidate_seconds": 1.0631527109999297,
+          "elapsed_seconds": 1.0636130769999,
           "error_kind": null,
           "gate_included": false,
           "page_number": 839,
-          "peak_rss_bytes": 132235264,
+          "peak_rss_bytes": 132227072,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 132235264,
-            "sample_count": 102,
+            "peak_rss_bytes": 132227072,
+            "sample_count": 100,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.0735422019988619
+            "wall_seconds": 1.0636130769999
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -1084,20 +1091,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 9.239137317999848,
-          "elapsed_seconds": 9.239706746999218,
+          "candidate_seconds": 9.110698993001279,
+          "elapsed_seconds": 9.111196720999942,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 208564224,
+          "peak_rss_bytes": 208728064,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 208564224,
-            "sample_count": 873,
+            "peak_rss_bytes": 208728064,
+            "sample_count": 857,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 9.239706746999218
+            "wall_seconds": 9.111196720999942
           },
           "source_id": "wikimedia-cuu-quoc-1945-09-05",
           "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
@@ -1106,20 +1113,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 12.942970879999848,
-          "elapsed_seconds": 12.94364437600052,
+          "candidate_seconds": 13.18965020199903,
+          "elapsed_seconds": 13.190325801000654,
           "error_kind": null,
           "gate_included": false,
           "page_number": 2,
-          "peak_rss_bytes": 208498688,
+          "peak_rss_bytes": 208642048,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 208498688,
-            "sample_count": 1219,
+            "peak_rss_bytes": 208642048,
+            "sample_count": 1239,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 12.94364437600052
+            "wall_seconds": 13.190325801000654
           },
           "source_id": "wikimedia-cuu-quoc-1945-09-05",
           "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
@@ -1128,20 +1135,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 2.8451233619998675,
-          "elapsed_seconds": 2.8453842039998563,
+          "candidate_seconds": 2.895796748000066,
+          "elapsed_seconds": 2.8962206529995456,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 132034560,
+          "peak_rss_bytes": 132308992,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 132034560,
-            "sample_count": 269,
+            "peak_rss_bytes": 132308992,
+            "sample_count": 272,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 2.8453842039998563
+            "wall_seconds": 2.8962206529995456
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -1150,20 +1157,27 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 3.5543430109992187,
-          "elapsed_seconds": 3.554937279999649,
+          "candidate_seconds": 3.5401830099999643,
+          "elapsed_seconds": 3.5406658240008255,
           "error_kind": null,
           "gate_included": false,
           "page_number": 4,
-          "peak_rss_bytes": 129454080,
+          "peak_rss_bytes": 129589248,
           "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 10,
+            "expected_anchors": 5,
+            "missing_anchors": 0,
+            "observed_anchors": 5,
+            "violations": 0
+          },
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 129454080,
-            "sample_count": 336,
+            "peak_rss_bytes": 129589248,
+            "sample_count": 333,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.554937279999649
+            "wall_seconds": 3.5406658240008255
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -1172,20 +1186,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 3.6005614120003884,
-          "elapsed_seconds": 3.6011039660006645,
+          "candidate_seconds": 3.5186477930001274,
+          "elapsed_seconds": 3.5192231700002594,
           "error_kind": null,
           "gate_included": false,
           "page_number": 8,
-          "peak_rss_bytes": 129511424,
+          "peak_rss_bytes": 129822720,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 129511424,
-            "sample_count": 340,
+            "peak_rss_bytes": 129822720,
+            "sample_count": 331,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.6011039660006645
+            "wall_seconds": 3.5192231700002594
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -1194,12 +1208,12 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 0.7332870280006318,
-          "elapsed_seconds": 0.7335778850010684,
+          "candidate_seconds": 0.7009875810017547,
+          "elapsed_seconds": 0.7013997459998791,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 116834304,
+          "peak_rss_bytes": 116744192,
           "process_startup_included": false,
           "reading_order": {
             "comparable_pairs": 15,
@@ -1211,10 +1225,10 @@
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 116834304,
-            "sample_count": 70,
+            "peak_rss_bytes": 116744192,
+            "sample_count": 66,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.7335778850010684
+            "wall_seconds": 0.7013997459998791
           },
           "source_id": "reviewed-multicolumn-v1",
           "source_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
@@ -1227,19 +1241,19 @@
         "real-scan": {
           "cer": 0.11870788743559255,
           "failures": 0,
-          "median_seconds_per_page": 1.6090739439987374,
-          "p95_seconds_per_page": 1.8410755910008447,
+          "median_seconds_per_page": 1.581203309000557,
+          "p95_seconds_per_page": 1.8521196544003034,
           "pages": 9,
-          "peak_rss_bytes": 144797696,
+          "peak_rss_bytes": 144834560,
           "wer": 0.19434306569343066
         },
         "synthetic-scan": {
           "cer": 0.0048134777376654635,
           "failures": 0,
-          "median_seconds_per_page": 0.7780457429998933,
-          "p95_seconds_per_page": 0.9690087851999124,
+          "median_seconds_per_page": 0.7764320679998491,
+          "p95_seconds_per_page": 0.9617859187013892,
           "pages": 3,
-          "peak_rss_bytes": 128835584,
+          "peak_rss_bytes": 128794624,
           "wer": 0.02247191011235955
         }
       }
@@ -1248,27 +1262,27 @@
       "aggregate": {
         "cer": 0.39935341160456017,
         "failures": 0,
-        "median_seconds_per_page": 4.061781174999851,
-        "p95_seconds_per_page": 4.701388352549475,
+        "median_seconds_per_page": 4.369445503500174,
+        "p95_seconds_per_page": 5.06713496470029,
         "pages": 12,
-        "peak_rss_bytes": 3428208640,
+        "peak_rss_bytes": 3498352640,
         "wer": 0.7205651491365777
       },
       "id": "pp-ocrv6",
       "label": "PP-OCRv6",
       "metadata": {
         "cold_initialization": {
-          "candidate_seconds": 1.7082915310002136,
+          "candidate_seconds": 1.8891004710003472,
           "process_startup_included": true,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 593448960,
-            "sample_count": 167,
+            "peak_rss_bytes": 595365888,
+            "sample_count": 182,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 1.750225092000619
+            "wall_seconds": 1.9319022500003484
           },
           "timing_scope": "worker_process_invocation_to_ready",
-          "wall_seconds": 1.7507870919998823
+          "wall_seconds": 1.9324758499988093
         },
         "environment": {
           "LANG": "C.UTF-8",
@@ -1302,24 +1316,24 @@
       },
       "pages": [
         {
-          "candidate_seconds": 4.295672200998524,
+          "candidate_seconds": 4.709517003000656,
           "cer": 0.5124579124579125,
           "character_edits": 761,
-          "elapsed_seconds": 4.296307759001138,
+          "elapsed_seconds": 4.706504203000804,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 2233229312,
+          "peak_rss_bytes": 1965318144,
           "process_startup_included": false,
           "reference_characters": 1485,
           "reference_words": 329,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 2233229312,
-            "sample_count": 408,
+            "peak_rss_bytes": 1965318144,
+            "sample_count": 442,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 4.296307759001138
+            "wall_seconds": 4.706504203000804
           },
           "source_id": "vnocr-real-cv-3722-metro-p1",
           "source_sha256": "28dfe93886dae75fbcc17251b6f330f526da18c05394872243659325478a5cf6",
@@ -1330,24 +1344,24 @@
           "word_edits": 267
         },
         {
-          "candidate_seconds": 5.121124220999263,
+          "candidate_seconds": 5.3897703450002155,
           "cer": 0.33225936367297626,
           "character_edits": 825,
-          "elapsed_seconds": 5.121473952000088,
+          "elapsed_seconds": 5.390109983000002,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3114106880,
+          "peak_rss_bytes": 2860126208,
           "process_startup_included": false,
           "reference_characters": 2483,
           "reference_words": 535,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3114106880,
-            "sample_count": 482,
+            "peak_rss_bytes": 2860126208,
+            "sample_count": 501,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 5.121473952000088
+            "wall_seconds": 5.390109983000002
           },
           "source_id": "vnocr-real-hanoi-kh-173-festival-p1",
           "source_sha256": "cafe628510a11875f22e857115819b036df273de38a42f6569fbd111c6fbd3dd",
@@ -1358,24 +1372,24 @@
           "word_edits": 364
         },
         {
-          "candidate_seconds": 4.3416261300008046,
+          "candidate_seconds": 4.41394473499895,
           "cer": 0.3795749704840614,
           "character_edits": 643,
-          "elapsed_seconds": 4.341967035001289,
+          "elapsed_seconds": 4.414301064000028,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3295449088,
+          "peak_rss_bytes": 3361689600,
           "process_startup_included": false,
           "reference_characters": 1694,
           "reference_words": 364,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3295449088,
-            "sample_count": 408,
+            "peak_rss_bytes": 3361689600,
+            "sample_count": 413,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 4.341967035001289
+            "wall_seconds": 4.414301064000028
           },
           "source_id": "vnocr-real-hanoi-qd-2280-water-p1",
           "source_sha256": "03b1203eb034925e1cca0001a688621025c4832f03355a6f66a8d0a0b3c20ddd",
@@ -1386,24 +1400,24 @@
           "word_edits": 244
         },
         {
-          "candidate_seconds": 3.511635488999673,
+          "candidate_seconds": 3.7648529739999503,
           "cer": 0.4226618705035971,
           "character_edits": 470,
-          "elapsed_seconds": 3.511950612999499,
+          "elapsed_seconds": 3.765188252000371,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3219398656,
+          "peak_rss_bytes": 3328585728,
           "process_startup_included": false,
           "reference_characters": 1112,
           "reference_words": 248,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3219398656,
-            "sample_count": 331,
+            "peak_rss_bytes": 3328585728,
+            "sample_count": 352,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.511950612999499
+            "wall_seconds": 3.765188252000371
           },
           "source_id": "vnocr-real-hanoi-tb-453-flag-p1",
           "source_sha256": "22872f8cedd422a629e5932e742905b096e582303482b3376d6a575a75465d08",
@@ -1414,24 +1428,24 @@
           "word_edits": 176
         },
         {
-          "candidate_seconds": 4.36223775399958,
+          "candidate_seconds": 4.703578710999864,
           "cer": 0.4228909188608275,
           "character_edits": 787,
-          "elapsed_seconds": 4.357681952998973,
+          "elapsed_seconds": 4.702924319999511,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3318849536,
+          "peak_rss_bytes": 3410190336,
           "process_startup_included": false,
           "reference_characters": 1861,
           "reference_words": 402,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3318849536,
-            "sample_count": 408,
+            "peak_rss_bytes": 3410190336,
+            "sample_count": 441,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 4.357681952998973
+            "wall_seconds": 4.702924319999511
           },
           "source_id": "vnocr-real-nq-115-ba-vi-p1",
           "source_sha256": "bb1d2824cf789b6d3c1f76e2999251a57f0aeda9088d733de122483c8a570e98",
@@ -1442,24 +1456,24 @@
           "word_edits": 281
         },
         {
-          "candidate_seconds": 3.7075327829988964,
+          "candidate_seconds": 3.8043694329990103,
           "cer": 0.4832684824902724,
           "character_edits": 621,
-          "elapsed_seconds": 3.7078556950000348,
+          "elapsed_seconds": 3.8046951400010585,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3320918016,
+          "peak_rss_bytes": 3419254784,
           "process_startup_included": false,
           "reference_characters": 1285,
           "reference_words": 284,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3320918016,
-            "sample_count": 345,
+            "peak_rss_bytes": 3419254784,
+            "sample_count": 354,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.7078556950000348
+            "wall_seconds": 3.8046951400010585
           },
           "source_id": "vnocr-real-qd-707-ttg-p1",
           "source_sha256": "bf6851f475dea358f2dc0136a9dced4d1dff9b7dfd5aac762d4b789e98f36295",
@@ -1470,24 +1484,24 @@
           "word_edits": 228
         },
         {
-          "candidate_seconds": 4.291404479999983,
+          "candidate_seconds": 4.802537843999744,
           "cer": 0.4496268656716418,
           "character_edits": 723,
-          "elapsed_seconds": 4.291732497000339,
+          "elapsed_seconds": 4.802882677000525,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3312304128,
+          "peak_rss_bytes": 3406438400,
           "process_startup_included": false,
           "reference_characters": 1608,
           "reference_words": 356,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3312304128,
-            "sample_count": 402,
+            "peak_rss_bytes": 3406438400,
+            "sample_count": 448,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 4.291732497000339
+            "wall_seconds": 4.802882677000525
           },
           "source_id": "vnocr-real-qd-729-ttg-p1",
           "source_sha256": "081bef468ca7c09ed8415b5d34435c75e2580eb4c16191f9d8bfba004c7014a4",
@@ -1498,24 +1512,24 @@
           "word_edits": 276
         },
         {
-          "candidate_seconds": 4.1279974980006955,
+          "candidate_seconds": 4.636035134000849,
           "cer": 0.4647802528597231,
           "character_edits": 772,
-          "elapsed_seconds": 4.12829902500016,
+          "elapsed_seconds": 4.636381696000171,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3353751552,
+          "peak_rss_bytes": 3498352640,
           "process_startup_included": false,
           "reference_characters": 1661,
           "reference_words": 354,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3353751552,
-            "sample_count": 386,
+            "peak_rss_bytes": 3498352640,
+            "sample_count": 428,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 4.12829902500016
+            "wall_seconds": 4.636381696000171
           },
           "source_id": "vnocr-real-tt-21-bct-fuel-p1",
           "source_sha256": "11dedc2e0c3e03cabc0a1f7f18c29f773aa4b6077e957aca0f47573b067d309d",
@@ -1526,24 +1540,24 @@
           "word_edits": 294
         },
         {
-          "candidate_seconds": 3.994916869998633,
+          "candidate_seconds": 4.3242446840013145,
           "cer": 0.4930733709594664,
           "character_edits": 961,
-          "elapsed_seconds": 3.9952633249995415,
+          "elapsed_seconds": 4.324589943000319,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 2943053824,
+          "peak_rss_bytes": 3000913920,
           "process_startup_included": false,
           "reference_characters": 1949,
           "reference_words": 416,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 2943053824,
-            "sample_count": 375,
+            "peak_rss_bytes": 3000913920,
+            "sample_count": 401,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.9952633249995415
+            "wall_seconds": 4.324589943000319
           },
           "source_id": "vnocr-real-tt-37-bca-vehicle-p1",
           "source_sha256": "87b23f9f6b7bb0a382e380ddaf12f18389436f624a525d77e8628678c798d626",
@@ -1554,24 +1568,24 @@
           "word_edits": 363
         },
         {
-          "candidate_seconds": 2.800732250998408,
+          "candidate_seconds": 3.142375407000145,
           "cer": 0.15146831530139104,
           "character_edits": 98,
-          "elapsed_seconds": 2.8010609699995257,
+          "elapsed_seconds": 3.1427098479998676,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3428208640,
+          "peak_rss_bytes": 3333926912,
           "process_startup_included": false,
           "reference_characters": 647,
           "reference_words": 140,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3428208640,
-            "sample_count": 263,
+            "peak_rss_bytes": 3333926912,
+            "sample_count": 292,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 2.8010609699995257
+            "wall_seconds": 3.1427098479998676
           },
           "source_id": "vnocr-synthetic-scan-bien-lai-p1",
           "source_sha256": "370e519da2492ea9f938448a920e465a7f504befc28421f13e4c596535e4245e",
@@ -1582,24 +1596,24 @@
           "word_edits": 73
         },
         {
-          "candidate_seconds": 3.4178926940003294,
+          "candidate_seconds": 3.8632223099994007,
           "cer": 0.0747074707470747,
           "character_edits": 83,
-          "elapsed_seconds": 3.4184098900004756,
+          "elapsed_seconds": 3.8597112970001035,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3326504960,
+          "peak_rss_bytes": 3286953984,
           "process_startup_included": false,
           "reference_characters": 1111,
           "reference_words": 239,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3326504960,
-            "sample_count": 321,
+            "peak_rss_bytes": 3286953984,
+            "sample_count": 357,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.4184098900004756
+            "wall_seconds": 3.8597112970001035
           },
           "source_id": "vnocr-synthetic-scan-hoa-don-p1",
           "source_sha256": "83758171e5f2e1b1e55e968e06a564cc08c30b243c9feec3f9cc3581ed93504d",
@@ -1610,24 +1624,24 @@
           "word_edits": 82
         },
         {
-          "candidate_seconds": 2.903501114999017,
+          "candidate_seconds": 3.207818717999544,
           "cer": 0.40408163265306124,
           "character_edits": 297,
-          "elapsed_seconds": 2.9038546230003703,
+          "elapsed_seconds": 3.207130769000287,
           "error_kind": null,
           "gate_included": true,
           "page_number": 1,
-          "peak_rss_bytes": 3296370688,
+          "peak_rss_bytes": 3308466176,
           "process_startup_included": false,
           "reference_characters": 735,
           "reference_words": 155,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3296370688,
-            "sample_count": 273,
+            "peak_rss_bytes": 3308466176,
+            "sample_count": 299,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 2.9038546230003703
+            "wall_seconds": 3.207130769000287
           },
           "source_id": "vnocr-synthetic-scan-phieu-chi-p1",
           "source_sha256": "667167e998c9aaef5049e4b1ad66a17d39843de0b12ddb7b1c2086a0ff247c54",
@@ -1638,20 +1652,20 @@
           "word_edits": 106
         },
         {
-          "candidate_seconds": 4.2477846250003495,
-          "elapsed_seconds": 4.242117570998744,
+          "candidate_seconds": 4.733400298999186,
+          "elapsed_seconds": 4.734075929000028,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 3419684864,
+          "peak_rss_bytes": 3419181056,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3419684864,
-            "sample_count": 396,
+            "peak_rss_bytes": 3419181056,
+            "sample_count": 437,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 4.242117570998744
+            "wall_seconds": 4.734075929000028
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -1660,20 +1674,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 4.830454285000087,
-          "elapsed_seconds": 4.8287476990008145,
+          "candidate_seconds": 5.196822369998699,
+          "elapsed_seconds": 5.198111853998853,
           "error_kind": null,
           "gate_included": false,
           "page_number": 420,
-          "peak_rss_bytes": 3379277824,
+          "peak_rss_bytes": 3385389056,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3379277824,
-            "sample_count": 450,
+            "peak_rss_bytes": 3385389056,
+            "sample_count": 481,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 4.8287476990008145
+            "wall_seconds": 5.198111853998853
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -1682,20 +1696,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 3.3763656229984917,
-          "elapsed_seconds": 3.376900207998915,
+          "candidate_seconds": 3.5987757769999007,
+          "elapsed_seconds": 3.599419164998835,
           "error_kind": null,
           "gate_included": false,
           "page_number": 839,
-          "peak_rss_bytes": 3458236416,
+          "peak_rss_bytes": 3401310208,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3458236416,
-            "sample_count": 316,
+            "peak_rss_bytes": 3401310208,
+            "sample_count": 334,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.376900207998915
+            "wall_seconds": 3.599419164998835
           },
           "source_id": "official-89-2026-tt-btc",
           "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
@@ -1704,20 +1718,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 23.187885380000807,
-          "elapsed_seconds": 23.188180737999573,
+          "candidate_seconds": 23.884359457000755,
+          "elapsed_seconds": 23.885203730000285,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 5483270144,
+          "peak_rss_bytes": 5424857088,
           "process_startup_included": false,
           "resource_limit_violation": true,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 5483270144,
-            "sample_count": 2170,
+            "peak_rss_bytes": 5424857088,
+            "sample_count": 2233,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 23.188180737999573
+            "wall_seconds": 23.885203730000285
           },
           "source_id": "wikimedia-cuu-quoc-1945-09-05",
           "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
@@ -1726,20 +1740,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 24.184048501001598,
-          "elapsed_seconds": 24.184764384999653,
+          "candidate_seconds": 26.308077986999706,
+          "elapsed_seconds": 26.305221425000127,
           "error_kind": null,
           "gate_included": false,
           "page_number": 2,
-          "peak_rss_bytes": 5553868800,
+          "peak_rss_bytes": 5469872128,
           "process_startup_included": false,
           "resource_limit_violation": true,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 5553868800,
-            "sample_count": 2276,
+            "peak_rss_bytes": 5469872128,
+            "sample_count": 2442,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 24.184764384999653
+            "wall_seconds": 26.305221425000127
           },
           "source_id": "wikimedia-cuu-quoc-1945-09-05",
           "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
@@ -1748,20 +1762,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 3.519405977000133,
-          "elapsed_seconds": 3.51452863600025,
+          "candidate_seconds": 4.0064336260002165,
+          "elapsed_seconds": 4.007827215000361,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 3279347712,
+          "peak_rss_bytes": 3130355712,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3279347712,
-            "sample_count": 331,
+            "peak_rss_bytes": 3130355712,
+            "sample_count": 368,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 3.51452863600025
+            "wall_seconds": 4.007827215000361
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -1770,20 +1784,27 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 5.157571065999946,
-          "elapsed_seconds": 5.158180832999278,
+          "candidate_seconds": 5.726245947998905,
+          "elapsed_seconds": 5.726935083999706,
           "error_kind": null,
           "gate_included": false,
           "page_number": 4,
-          "peak_rss_bytes": 3160592384,
+          "peak_rss_bytes": 2982866944,
           "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 3,
+            "expected_anchors": 5,
+            "missing_anchors": 2,
+            "observed_anchors": 3,
+            "violations": 0
+          },
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3160592384,
-            "sample_count": 485,
+            "peak_rss_bytes": 2982866944,
+            "sample_count": 528,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 5.158180832999278
+            "wall_seconds": 5.726935083999706
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -1792,20 +1813,20 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 5.744526717999179,
-          "elapsed_seconds": 5.7447045859989885,
+          "candidate_seconds": 6.260915590000877,
+          "elapsed_seconds": 6.261608335000346,
           "error_kind": null,
           "gate_included": false,
           "page_number": 8,
-          "peak_rss_bytes": 3209052160,
+          "peak_rss_bytes": 3011846144,
           "process_startup_included": false,
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 3209052160,
-            "sample_count": 543,
+            "peak_rss_bytes": 3011846144,
+            "sample_count": 586,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 5.7447045859989885
+            "wall_seconds": 6.261608335000346
           },
           "source_id": "wikimedia-dai-nam-1907-804",
           "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
@@ -1814,12 +1835,12 @@
           "timing_scope": "warm_worker_request_wall"
         },
         {
-          "candidate_seconds": 0.9852960030002578,
-          "elapsed_seconds": 0.98589398400145,
+          "candidate_seconds": 1.0759805500001676,
+          "elapsed_seconds": 1.0773277359985514,
           "error_kind": null,
           "gate_included": false,
           "page_number": 1,
-          "peak_rss_bytes": 2866122752,
+          "peak_rss_bytes": 2714750976,
           "process_startup_included": false,
           "reading_order": {
             "comparable_pairs": 15,
@@ -1831,10 +1852,10 @@
           "resource_limit_violation": false,
           "rss_measurement": {
             "method": "sampled_process_tree_rss",
-            "peak_rss_bytes": 2866122752,
-            "sample_count": 93,
+            "peak_rss_bytes": 2714750976,
+            "sample_count": 100,
             "sample_interval_seconds": 0.01,
-            "wall_seconds": 0.98589398400145
+            "wall_seconds": 1.0773277359985514
           },
           "source_id": "reviewed-multicolumn-v1",
           "source_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
@@ -1847,19 +1868,19 @@
         "real-scan": {
           "cer": 0.4335447218919276,
           "failures": 0,
-          "median_seconds_per_page": 4.291732497000339,
-          "p95_seconds_per_page": 4.815957152399641,
+          "median_seconds_per_page": 4.636381696000171,
+          "p95_seconds_per_page": 5.155219060600211,
           "pages": 9,
-          "peak_rss_bytes": 3353751552,
+          "peak_rss_bytes": 3498352640,
           "wer": 0.7582116788321168
         },
         "synthetic-scan": {
           "cer": 0.1917368632170076,
           "failures": 0,
-          "median_seconds_per_page": 2.9038546230003703,
-          "p95_seconds_per_page": 3.366954363300465,
+          "median_seconds_per_page": 3.207130769000287,
+          "p95_seconds_per_page": 3.7944532442001218,
           "pages": 3,
-          "peak_rss_bytes": 3428208640,
+          "peak_rss_bytes": 3333926912,
           "wer": 0.4887640449438202
         }
       }
@@ -1908,6 +1929,19 @@
         "classification_mismatch": false,
         "evidence_mode": "qualitative-only",
         "manifest_classification": "scan",
+        "reading_order_review": {
+          "expected_anchors": 5,
+          "expected_sequence": [
+            "NHỜI ĐÀN BÀ",
+            "RAO HẸN",
+            "TẬP THƠ, PHÚ, CA, RAO",
+            "CÁO BẠCH",
+            "HIỆN BÁO HOÀN CẦU"
+          ],
+          "matching": "accent/punctuation folded; <=25% character edits",
+          "page_number": 4,
+          "review_status": "human-reviewed-short-anchors"
+        },
         "rendered_page_sha256": {
           "1": "52e2cafb2274d3e82444d94e9a749986347dbbb06ddf84e9642e72650f11d8b8",
           "4": "c54b6777ba9b6e89416eb0ec093d8ee30729f2ea51cccb4980120db966c13f38",
@@ -1973,13 +2007,38 @@
       {
         "classification": "synthetic-scan",
         "expected_anchors": 6,
+        "expected_sequence": [
+          "L1",
+          "L2",
+          "L3",
+          "R1",
+          "R2",
+          "R3"
+        ],
         "font_sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
         "generator": "Pillow fixed canvas, coordinates, font, and PNG settings",
         "ground_truth": "deterministic-source",
         "image_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
         "layout": "two-column-column-major",
+        "page_number": 1,
         "review_status": "reviewed-fixture-contract",
         "source_id": "reviewed-multicolumn-v1"
+      },
+      {
+        "classification": "scan",
+        "expected_anchors": 5,
+        "expected_sequence": [
+          "NHỜI ĐÀN BÀ",
+          "RAO HẸN",
+          "TẬP THƠ, PHÚ, CA, RAO",
+          "CÁO BẠCH",
+          "HIỆN BÁO HOÀN CẦU"
+        ],
+        "ground_truth": "human-reviewed-short-anchors",
+        "matching": "accent/punctuation folded; <=25% character edits",
+        "page_number": 4,
+        "review_status": "human-reviewed-short-anchors",
+        "source_id": "wikimedia-dai-nam-1907-804"
       }
     ],
     "representativeness": {
@@ -2007,9 +2066,9 @@
     "relative_improvement": -2.652198107957707,
     "threshold": 0.2
   },
-  "generated_at_utc": "2026-08-07T15:12:36Z",
+  "generated_at_utc": "2026-08-07T16:01:26Z",
   "run": {
-    "commit": "42cc64bfbf05da97ed4ca78494711b63c2774898",
+    "commit": "bc7194a56dcca952633ab145edb18d211d2835a5",
     "host": {
       "architecture": "x86_64",
       "logical_cpus": 8,
