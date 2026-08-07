@@ -37,6 +37,7 @@ pdfium/
 /bench/edge/
 /bench/sample10/
 /bench/corpus10/
+/bench/ocr_cpu_service/.data/corpus/
 # O03 backup bundles must live outside the workspace (mktemp); never commit local copies
 /tmp/markhand-backup*/
 /tmp/o03-toolbin-*/
