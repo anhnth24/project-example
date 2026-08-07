@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import threading
+import time
 from concurrent.futures import (
     Future,
     ThreadPoolExecutor,
@@ -36,47 +38,183 @@ class ConversionDeadline(RuntimeError):
     """The response deadline elapsed while conversion remains admitted."""
 
 
-class ConversionAdmission:
-    """Admit one process-local conversion and retain its slot until completion."""
+class ConversionLease:
+    """Hold one request slot through body handling, conversion, and response."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self, admission: ConversionAdmission, *, request_deadline_seconds: float
+    ) -> None:
+        self._admission = admission
+        self._deadline = time.monotonic() + request_deadline_seconds
+        self._lock = threading.Lock()
+        self._future: Future[object] | None = None
+        self._request_finished = False
+        self._released = False
+
+    @property
+    def remaining_seconds(self) -> float:
+        return max(0.0, self._deadline - time.monotonic())
+
+    def run(self, operation: object) -> object:
+        if not callable(operation):
+            raise TypeError("operation must be callable")
+        with self._lock:
+            if self._future is not None:
+                raise RuntimeError("conversion lease already used")
+            if self.remaining_seconds <= 0:
+                raise ConversionDeadline("conversion deadline exceeded")
+            try:
+                future = self._admission._executor.submit(operation)
+            except BaseException:
+                self._request_finished = True
+                self._release_locked()
+                raise
+            self._future = future
+        future.add_done_callback(self._operation_finished)
+        try:
+            return future.result(timeout=self.remaining_seconds)
+        except FutureTimeout as error:
+            raise ConversionDeadline("conversion deadline exceeded") from error
+
+    def finish_request(self) -> None:
+        """Release now if idle/done, otherwise defer until conversion exits."""
+        with self._lock:
+            self._request_finished = True
+            if self._future is None or self._future.done():
+                self._release_locked()
+
+    def _operation_finished(self, future: Future[object]) -> None:
+        del future
+        with self._lock:
+            if self._request_finished:
+                self._release_locked()
+
+    def _release_locked(self) -> None:
+        if not self._released:
+            self._released = True
+            self._admission._capacity.release()
+
+
+class ConversionAdmission:
+    """Admit one process-local request with a strictly bounded waiting queue."""
+
+    def __init__(self, *, max_waiters: int = 1) -> None:
+        if max_waiters < 0:
+            raise ValueError("max_waiters must not be negative")
         self._capacity = threading.BoundedSemaphore(value=1)
         self._executor = ThreadPoolExecutor(
             max_workers=1,
             thread_name_prefix="markhand-ocr-conversion",
         )
+        self._max_waiters = max_waiters
+        self._waiting = 0
+        self._waiting_lock = threading.Lock()
 
-    def run(
+    @property
+    def waiting_count(self) -> int:
+        with self._waiting_lock:
+            return self._waiting
+
+    def acquire(
         self,
-        operation: object,
         *,
         acquisition_timeout_seconds: float,
-        conversion_deadline_seconds: float,
-    ) -> object:
-        if not callable(operation):
-            raise TypeError("operation must be callable")
-        acquired = self._capacity.acquire(
-            timeout=acquisition_timeout_seconds
-        )
+        request_deadline_seconds: float,
+    ) -> ConversionLease:
+        if self._capacity.acquire(blocking=False):
+            return ConversionLease(
+                self, request_deadline_seconds=request_deadline_seconds
+            )
+
+        with self._waiting_lock:
+            if self._waiting >= self._max_waiters:
+                raise AdmissionUnavailable("conversion queue is full")
+            self._waiting += 1
+        try:
+            acquired = self._capacity.acquire(
+                timeout=acquisition_timeout_seconds
+            )
+        finally:
+            with self._waiting_lock:
+                self._waiting -= 1
         if not acquired:
             raise AdmissionUnavailable("conversion capacity unavailable")
-        try:
-            future: Future[object] = self._executor.submit(operation)
-        except BaseException:
-            self._capacity.release()
-            raise
-        future.add_done_callback(self._release)
-        try:
-            return future.result(timeout=conversion_deadline_seconds)
-        except FutureTimeout as error:
-            raise ConversionDeadline("conversion deadline exceeded") from error
-
-    def _release(self, future: Future[object]) -> None:
-        del future
-        self._capacity.release()
+        return ConversionLease(
+            self, request_deadline_seconds=request_deadline_seconds
+        )
 
 
 _PROCESS_CONVERSION_ADMISSION = ConversionAdmission()
+
+
+class _ConversionAdmissionMiddleware:
+    """Acquire before ASGI body reads and enforce one whole-request deadline."""
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        *,
+        admission: ConversionAdmission,
+        acquisition_timeout_seconds: float,
+        request_deadline_seconds: float,
+    ) -> None:
+        self.app = app
+        self.admission = admission
+        self.acquisition_timeout_seconds = acquisition_timeout_seconds
+        self.request_deadline_seconds = request_deadline_seconds
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope["type"] != "http"
+            or scope.get("method") != "POST"
+            or scope.get("path") != "/v1/convert"
+        ):
+            await self.app(scope, receive, send)
+            return
+
+        try:
+            lease = await asyncio.to_thread(
+                self.admission.acquire,
+                acquisition_timeout_seconds=self.acquisition_timeout_seconds,
+                request_deadline_seconds=self.request_deadline_seconds,
+            )
+        except AdmissionUnavailable:
+            await _json_error(503, "conversion capacity unavailable")(
+                scope, receive, send
+            )
+            return
+
+        state = scope.setdefault("state", {})
+        state["conversion_lease"] = lease
+        response_started = False
+
+        async def receive_before_deadline() -> Message:
+            remaining = lease.remaining_seconds
+            if remaining <= 0:
+                raise ConversionDeadline("conversion deadline exceeded")
+            try:
+                return await asyncio.wait_for(receive(), timeout=remaining)
+            except TimeoutError as error:
+                raise ConversionDeadline(
+                    "conversion deadline exceeded"
+                ) from error
+
+        async def track_send(message: Message) -> None:
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive_before_deadline, track_send)
+        except ConversionDeadline:
+            if response_started:
+                raise
+            await _json_error(504, "conversion deadline exceeded")(
+                scope, receive, send
+            )
+        finally:
+            lease.finish_request()
 
 
 class _BodyLimitMiddleware:
@@ -163,6 +301,12 @@ def create_app(
     if body_limit <= 0:
         raise ValueError("max_body_bytes must be positive")
     app.add_middleware(_BodyLimitMiddleware, max_body_bytes=body_limit)
+    app.add_middleware(
+        _ConversionAdmissionMiddleware,
+        admission=conversion_admission,
+        acquisition_timeout_seconds=acquisition_timeout_seconds,
+        request_deadline_seconds=conversion_deadline_seconds,
+    )
 
     @app.exception_handler(RequestValidationError)
     async def invalid_request(
@@ -177,6 +321,7 @@ def create_app(
 
     @app.post("/v1/convert")
     def convert(
+        http_request: Request,
         file: Annotated[UploadFile, File()],
         pages: Annotated[list[int] | None, Form()] = None,
         dpi: Annotated[int | None, Form()] = None,
@@ -201,15 +346,10 @@ def create_app(
             dpi=dpi if dpi is not None else base_request.dpi,
         )
         try:
-            result = conversion_admission.run(
+            lease = http_request.scope["state"]["conversion_lease"]
+            result = lease.run(
                 lambda: convert_pdf(data, request, backend),
-                acquisition_timeout_seconds=acquisition_timeout_seconds,
-                conversion_deadline_seconds=conversion_deadline_seconds,
             )
-        except AdmissionUnavailable as error:
-            raise HTTPException(
-                status_code=503, detail="conversion capacity unavailable"
-            ) from error
         except ConversionDeadline as error:
             raise HTTPException(
                 status_code=504, detail="conversion deadline exceeded"
