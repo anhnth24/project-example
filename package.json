@@ -10,6 +10,7 @@
       "ignoreGhsas": ["GHSA-52cp-r559-cp3m"]
     },
     "overrides": {
+      "js-yaml": "4.3.1",
       "undici": "7.29.0"
     }
   }
