@@ -19,9 +19,18 @@ test = [
     "httpx2>=2.9.1",
     "pytest>=9.1.1",
 ]
+model = [
+    "numpy>=2.3.5,<2.4",
+    "paddleocr>=3.7.0",
+    "paddlepaddle==3.2.2",
+    "uvicorn>=0.40.0",
+]
 
 [tool.setuptools.packages.find]
 include = ["markhand_ocr*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "live: runs the real cached PaddleOCR models",
+]
