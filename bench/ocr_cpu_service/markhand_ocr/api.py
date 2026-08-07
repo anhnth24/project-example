@@ -71,4 +71,3 @@ def create_app(
         return asdict(result)
 
     return app
-

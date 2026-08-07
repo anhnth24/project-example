@@ -16,4 +16,3 @@ class OcrBackend(Protocol):
 
     def recognize(self, image: Image.Image) -> list[OcrSpan]:
         """Return OCR spans using coordinates in rendered-image pixels."""
-

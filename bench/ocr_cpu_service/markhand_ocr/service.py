@@ -135,4 +135,3 @@ def _selected_pages(pages: Sequence[int] | None, page_count: int) -> tuple[int, 
 def _peak_rss_bytes() -> int:
     peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     return int(peak_rss if sys.platform == "darwin" else peak_rss * 1024)
-

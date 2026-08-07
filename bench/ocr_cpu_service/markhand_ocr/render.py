@@ -64,4 +64,3 @@ def render_page(page: pymupdf.Page, limits: RenderLimits) -> Image.Image:
         alpha=False,
     )
     return Image.frombytes("RGB", (pixmap.width, pixmap.height), pixmap.samples)
-
