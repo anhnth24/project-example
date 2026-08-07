@@ -366,9 +366,14 @@ async fn run_producer(
     }
 
     let extractive_forced = force_extractive_only_runtime();
-    let use_provider_stream = provider
-        .as_ref()
-        .is_some_and(|p| p.supports_incremental_stream() && !extractive_forced);
+    // Real LLM providers stay fail-closed to extractive while structured
+    // entailment is unavailable. Hermetic `StreamingStatic` doubles are not
+    // product LLM backends — they must keep incremental production so
+    // mid-stream ACL revoke tests can observe durable ask.token before close.
+    let use_provider_stream = provider.as_ref().is_some_and(|p| match p {
+        ChatProvider::StreamingStatic(_) => true,
+        other => other.supports_incremental_stream() && !extractive_forced,
+    });
 
     let mut answer_mode = AnswerMode::OfflineExtractive;
     let mut streamed_any = false;
