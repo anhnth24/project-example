@@ -95,6 +95,14 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                         "wer": 0.3,
                         "elapsed_seconds": 1.0,
                         "peak_rss_bytes": 100,
+                    },
+                    {
+                        "source_id": "official-89-2026-tt-btc",
+                        "stratum": "official-government",
+                        "page_number": 420,
+                        "success": True,
+                        "elapsed_seconds": 2.5,
+                        "peak_rss_bytes": 200,
                     }
                 ],
             }
@@ -118,6 +126,8 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
     assert "1, 420, 839" in first
     assert "## Per-page quantitative metrics" in first
     assert "sample-1" in first
+    assert "## Official sample runtime evidence" in first
+    assert "| Markhand default | 420 | 2.500" in first
     assert "complete OCR output" not in first
 
 

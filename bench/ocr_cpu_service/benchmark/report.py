@@ -183,6 +183,26 @@ def render_markdown(data: dict[str, Any]) -> str:
             "- This source has no pinned human-verified page transcription and "
             "is excluded from CER/WER and the quality gate.",
             "",
+            "## Official sample runtime evidence",
+            "",
+            "| Candidate | Page | Seconds | Peak RSS MiB | Status |",
+            "|---|--:|--:|--:|---|",
+        ]
+    )
+    for candidate in data["candidates"]:
+        for page in candidate.get("pages", []):
+            if page["stratum"] != "official-government":
+                continue
+            status = "ok" if page["success"] else page.get("error_kind", "failed")
+            lines.append(
+                f"| {candidate['label']} | {page['page_number']} | "
+                f"{page['elapsed_seconds']:.3f} | "
+                f"{_mib(page['peak_rss_bytes'])} | {status} |"
+            )
+
+    lines.extend(
+        [
+            "",
             "## Gate",
             "",
             f"- Better Tesseract real-scan CER: {_rate(gate['baseline_cer'])}",
