@@ -14,7 +14,7 @@ use common::multi_org_denial_world::{
     ask_token_sequences_after, await_ask_stream_pre_revoke_evidence, await_ask_stream_terminal,
     BootedOrg, IndexedDenialRuntime,
 };
-use common::phase1c_probe::{elapsed_ms, emit_probe_result};
+use common::phase1c_probe::emit_probe_result;
 use common::{
     admin_database_url, app_database_url, login_tokens, seed_user_with_permissions,
     test_minio_client, test_qdrant_url,
@@ -1320,6 +1320,58 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         .document_id;
     let app = world.app();
 
+    // Retrieval can trail drained worker jobs under parallel suite load; without
+    // a cited hit the durable session never matches indexed_document_id and the
+    // pre-revoke poll times out ("no cited session observed").
+    let query = alpha.marker.clone();
+    let deadline = tokio::time::Instant::now() + SEARCH_VISIBILITY_POLL_TIMEOUT;
+    loop {
+        let (status, body, headers) = json_request(
+            app,
+            "POST",
+            "/api/v1/search",
+            Some(token),
+            Some(json!({
+                "query": query,
+                "mode": "current",
+                "limit": 10,
+                "collectionIds": [collection_id]
+            })),
+        )
+        .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "in-flight ask search visibility stayed rate-limited past {}s",
+                SEARCH_VISIBILITY_POLL_TIMEOUT.as_secs()
+            );
+            tokio::time::sleep(SEARCH_VISIBILITY_POLL_BACKOFF).await;
+            continue;
+        }
+        assert_denial_no_leak(
+            &denial_response(status, &body, &headers),
+            &foreign,
+            DenialExpectation::AllowSuccess,
+        );
+        let search: serde_json::Value = serde_json::from_slice(&body).expect("search json");
+        let hits = search["hits"].as_array().expect("hits array");
+        let own_marker_visible = hits.iter().any(|hit| {
+            hit["documentId"].as_str() == Some(indexed_document_id.to_string().as_str())
+                || hit["quote"]
+                    .as_str()
+                    .is_some_and(|quote| quote.contains(&alpha.marker))
+        });
+        if own_marker_visible {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            panic!(
+                "in-flight ask requires own indexed marker visible before stream; last: {search}"
+            );
+        }
+        tokio::time::sleep(SEARCH_VISIBILITY_POLL_BACKOFF).await;
+    }
+
     let response = app
         .clone()
         .oneshot(
@@ -1350,7 +1402,9 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
         indexed_document_id,
     )
     .await
-    .expect("open cited session with durable pre-revoke ask.token");
+    .unwrap_or_else(|error| {
+        panic!("open cited session with durable pre-revoke ask.token: {error}")
+    });
     assert!(
         !pre_revoke.token_sequences.is_empty(),
         "in-flight proof requires durable content before revoke"

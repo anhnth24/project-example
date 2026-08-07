@@ -35,9 +35,15 @@ use crate::services::upload::{
 };
 
 pub fn router(max_upload_bytes: usize) -> Router<Arc<AppState>> {
+    // Multipart framing (boundaries, collectionId, part headers) sits outside
+    // the file bytes counted by `max_upload_bytes`. Keep absolute headroom on
+    // DefaultBodyLimit so oversize files reach the handler's UploadTooLarge
+    // (413) path instead of truncating mid-parse into MultipartInvalid (400).
+    const MULTIPART_FRAMING_HEADROOM_BYTES: usize = 64 * 1024;
+    let request_body_limit = max_upload_bytes.saturating_add(MULTIPART_FRAMING_HEADROOM_BYTES);
     Router::new().route(
         "/api/v1/uploads",
-        post(create_upload).layer(DefaultBodyLimit::max(max_upload_bytes)),
+        post(create_upload).layer(DefaultBodyLimit::max(request_body_limit)),
     )
 }
 

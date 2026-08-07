@@ -124,7 +124,10 @@ impl IndexedDenialRuntime {
 
         let pipeline = WorkerPipeline::boot(pool.clone(), store.clone(), &app_database_url).await;
         let chat_provider = ChatProvider::StreamingStatic(StreamingStaticProvider::new(
-            std::iter::repeat_n("denial ".to_string(), 4_096).collect(),
+            // Long enough that mid-stream ACL revoke can observe durable
+            // ask.token while status is still open (extractive-only fail-closed
+            // no longer suppresses hermetic StreamingStatic production).
+            std::iter::repeat_n("denial ".to_string(), 256).collect(),
             AnswerMode::LocalLlm,
         ));
         let runtime = Self {
