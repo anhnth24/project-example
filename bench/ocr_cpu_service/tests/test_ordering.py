@@ -25,6 +25,14 @@ def wide_span(text: str, y: int) -> OcrSpan:
     )
 
 
+def column_span(text: str, x: int, y: int) -> OcrSpan:
+    return OcrSpan(
+        text=text,
+        confidence=0.9,
+        polygon=((x, y), (x + 400, y), (x + 400, y + 30), (x, y + 30)),
+    )
+
+
 def texts(spans: list[OcrSpan]) -> list[str]:
     return [item.text for item in spans]
 
@@ -50,3 +58,14 @@ def test_orders_y_overlapping_spans_left_to_right_within_a_line() -> None:
     spans = [span("A-right", 300, 105), span("Z-left", 100, 100)]
 
     assert texts(order_spans(spans, page_width=1000)) == ["Z-left", "A-right"]
+
+
+def test_separated_wide_column_spans_are_not_a_full_width_block() -> None:
+    spans = [
+        column_span("R2", 550, 200),
+        column_span("L2", 50, 200),
+        column_span("R1", 550, 100),
+        column_span("L1", 50, 100),
+    ]
+
+    assert texts(order_spans(spans, page_width=1000)) == ["L1", "L2", "R1", "R2"]

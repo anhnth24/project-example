@@ -32,7 +32,7 @@ def order_spans(spans: Sequence[OcrSpan], page_width: int) -> list[OcrSpan]:
     region: list[_BoxedSpan] = []
 
     for line in lines:
-        if _horizontal_coverage(line) >= page_width * _FULL_WIDTH_COVERAGE:
+        if _is_full_width_block(line, page_width):
             ordered.extend(_order_region(region, page_width))
             ordered.extend(sorted(line, key=_horizontal_key))
             region = []
@@ -104,17 +104,14 @@ def _order_top_to_bottom(spans: Sequence[_BoxedSpan]) -> list[_BoxedSpan]:
     return [item for line in _group_lines(spans) for item in line]
 
 
-def _horizontal_coverage(spans: Sequence[_BoxedSpan]) -> float:
-    intervals = sorted((item.left, item.right) for item in spans)
-    coverage = 0.0
-    start, end = intervals[0]
-    for left, right in intervals[1:]:
-        if left <= end:
-            end = max(end, right)
-        else:
-            coverage += end - start
-            start, end = left, right
-    return coverage + end - start
+def _is_full_width_block(spans: Sequence[_BoxedSpan], page_width: int) -> bool:
+    page_center = page_width / 2
+    minimum_width = page_width * _FULL_WIDTH_COVERAGE
+    return any(
+        item.right - item.left >= minimum_width
+        and item.left <= page_center <= item.right
+        for item in spans
+    )
 
 
 def _overlaps_vertically(left: _BoxedSpan, right: _BoxedSpan) -> bool:
