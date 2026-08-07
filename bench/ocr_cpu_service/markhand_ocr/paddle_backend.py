@@ -55,6 +55,28 @@ def adapt_result(result: Mapping[str, Any]) -> list[OcrSpan]:
     ]
 
 
+def _validated_model_directory(
+    value: os.PathLike[str] | str,
+    *,
+    label: str,
+) -> Path:
+    try:
+        directory = Path(value).expanduser().resolve(strict=True)
+    except OSError as error:
+        raise ValueError(f"{label} is not a local directory") from error
+    if not directory.is_dir():
+        raise ValueError(f"{label} is not a local directory")
+    missing = [
+        asset
+        for asset in _MODEL_ASSETS
+        if not (directory / asset).is_file()
+        or (directory / asset).stat().st_size <= 0
+    ]
+    if missing:
+        raise ValueError(f"{label} cache is incomplete")
+    return directory
+
+
 def _runtime_model_directories() -> tuple[Path, Path]:
     names = (
         "MARKHAND_OCR_DETECTION_MODEL_DIR",
@@ -67,21 +89,9 @@ def _runtime_model_directories() -> tuple[Path, Path]:
     directories: list[Path] = []
     for name, value in zip(names, values, strict=True):
         assert value is not None
-        try:
-            directory = Path(value).expanduser().resolve(strict=True)
-        except OSError as error:
-            raise ValueError(f"{name} is not a local directory") from error
-        if not directory.is_dir():
-            raise ValueError(f"{name} is not a local directory")
-        missing = [
-            asset
-            for asset in _MODEL_ASSETS
-            if not (directory / asset).is_file()
-            or (directory / asset).stat().st_size <= 0
-        ]
-        if missing:
-            raise ValueError(f"{name} cache is incomplete")
-        directories.append(directory)
+        directories.append(
+            _validated_model_directory(value, label=name)
+        )
     return directories[0], directories[1]
 
 
@@ -108,24 +118,28 @@ class PaddleOcrBackend:
         text_detection_model_dir: os.PathLike[str] | str | None = None,
         text_recognition_model_dir: os.PathLike[str] | str | None = None,
     ) -> None:
-        if (text_detection_model_dir is None) != (
-            text_recognition_model_dir is None
+        if (
+            text_detection_model_dir is None
+            or text_recognition_model_dir is None
         ):
-            raise ValueError("both local model directories must be provided")
+            raise ValueError("local model directories are required")
+        detection_dir = _validated_model_directory(
+            text_detection_model_dir,
+            label="text detection model directory",
+        )
+        recognition_dir = _validated_model_directory(
+            text_recognition_model_dir,
+            label="text recognition model directory",
+        )
 
         pipeline_options: dict[str, object] = {
             "device": "cpu",
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": False,
+            "text_detection_model_dir": os.fspath(detection_dir),
+            "text_recognition_model_dir": os.fspath(recognition_dir),
         }
-        if text_detection_model_dir is not None:
-            pipeline_options.update(
-                text_detection_model_dir=os.fspath(text_detection_model_dir),
-                text_recognition_model_dir=os.fspath(
-                    text_recognition_model_dir
-                ),
-            )
         self._pipeline = pipeline_factory(**pipeline_options)
         self._predict_lock = threading.Lock()
 
