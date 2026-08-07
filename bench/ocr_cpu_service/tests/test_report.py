@@ -128,6 +128,11 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                     "sampled_pages": [1],
                     "evidence_mode": "qualitative-only",
                     "transcription": "none-trustworthy-available",
+                    "reading_order_review": {
+                        "page_number": 1,
+                        "review_status": "human-reviewed-short-anchors",
+                        "expected_sequence": ["MỤC TRÁI", "MỤC PHẢI"],
+                    },
                 }
             ],
             "reading_order_cases": [
@@ -136,6 +141,16 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                     "classification": "synthetic-scan",
                     "ground_truth": "deterministic-source",
                     "expected_anchors": 6,
+                    "page_number": 1,
+                    "expected_sequence": ["L1", "L2", "L3", "R1", "R2", "R3"],
+                },
+                {
+                    "source_id": "wikimedia-history",
+                    "classification": "scan",
+                    "ground_truth": "human-reviewed-short-anchors",
+                    "expected_anchors": 2,
+                    "page_number": 1,
+                    "expected_sequence": ["MỤC TRÁI", "MỤC PHẢI"],
                 }
             ],
         },
@@ -180,6 +195,13 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
                         "success": True,
                         "elapsed_seconds": 3.0,
                         "peak_rss_bytes": 220,
+                        "reading_order": {
+                            "expected_anchors": 2,
+                            "observed_anchors": 2,
+                            "comparable_pairs": 1,
+                            "violations": 0,
+                            "missing_anchors": 0,
+                        },
                     },
                     {
                         "source_id": "reviewed-multicolumn-v1",
@@ -272,7 +294,16 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
     assert "`wikimedia-history`" in first
     assert "no trustworthy transcription" in first
     assert "## Reviewed multi-column reading order" in first
-    assert "| Markhand default | 6 | 6 | 15 | 1 | 0 |" in first
+    assert "qualitative and limited" in first
+    assert "MỤC TRÁI → MỤC PHẢI" in first
+    assert (
+        "| Markhand default | `wikimedia-history` | 1 | 2 | 2 | 1 | 0 | 0 |"
+        in first
+    )
+    assert (
+        "| Markhand default | `reviewed-multicolumn-v1` | 1 | 6 | 6 | 15 | 1 | 0 |"
+        in first
+    )
     assert "## Sample-size and representativeness limits" in first
     assert "9 real-scan pages" in first
     assert "not a population estimate" in first

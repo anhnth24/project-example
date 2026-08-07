@@ -54,3 +54,16 @@ def test_reading_order_metric_counts_inversions_and_missing_anchors() -> None:
     assert result.comparable_pairs == 3
     assert result.violations == 1
     assert result.missing_anchors == 1
+
+
+def test_reading_order_matches_reviewed_anchors_with_bounded_ocr_noise() -> None:
+    result = reading_order_violations(
+        ("NHỜI ĐÀN BÀ", "RAO HẸN", "CÁO BẠCH", "HIỆN BÁO HOÀN CẦU"),
+        "NHOI BAN BA ... RAO HEN ... CAO BACH ... BIEN BAO HOAN GAU",
+    )
+
+    assert result.expected_anchors == 4
+    assert result.observed_anchors == 4
+    assert result.comparable_pairs == 6
+    assert result.violations == 0
+    assert result.missing_anchors == 0

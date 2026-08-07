@@ -12,6 +12,7 @@ import benchmark.run as benchmark_run  # noqa: E402
 from benchmark.run import (  # noqa: E402
     bounded_sample_render_limits,
     generate_reviewed_multicolumn_case,
+    historical_reading_order_anchors,
 )
 from markhand_ocr.render import RenderLimits, open_pdf, render_page  # noqa: E402
 
@@ -91,3 +92,21 @@ def test_historical_sample_render_limits_reduce_extreme_page_dimensions() -> Non
         int(6_210 * limits.dpi / 72 + 0.999) ** 2
         <= limits.max_pixels
     )
+
+
+def test_historical_multicolumn_anchors_are_short_human_reviewed_sequences() -> None:
+    anchors = historical_reading_order_anchors(
+        "wikimedia-dai-nam-1907-804", 4
+    )
+
+    assert anchors == (
+        "NHỜI ĐÀN BÀ",
+        "RAO HẸN",
+        "TẬP THƠ, PHÚ, CA, RAO",
+        "CÁO BẠCH",
+        "HIỆN BÁO HOÀN CẦU",
+    )
+    assert all(len(anchor) <= 24 for anchor in anchors)
+    assert historical_reading_order_anchors(
+        "wikimedia-dai-nam-1907-804", 1
+    ) == ()
