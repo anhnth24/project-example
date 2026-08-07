@@ -353,7 +353,7 @@ def render_markdown(data: dict[str, Any]) -> str:
             "",
             "## Per-page quantitative metrics",
             "",
-            "| Candidate | Source ID | Stratum | Page | CER | WER | Seconds | Peak RSS MiB | Status |",
+            "| Candidate | Source ID | Stratum | Page | CER | WER | Warm seconds | Sampled process-tree RSS MiB | Status |",
             "|---|---|---|--:|--:|--:|--:|--:|---|",
         ]
     )
@@ -395,7 +395,7 @@ def render_markdown(data: dict[str, Any]) -> str:
             "",
             "## Official sample runtime evidence",
             "",
-            "| Candidate | Page | Seconds | Peak RSS MiB | Status |",
+            "| Candidate | Page | Warm seconds | Sampled process-tree RSS MiB | Status |",
             "|---|--:|--:|--:|---|",
         ]
     )
