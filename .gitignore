@@ -15,6 +15,7 @@ web/dist/
 /deploy/.env.poc-smoke.tmp
 **/*.rs.bk
 # Dữ liệu tải/sinh ra (tái tạo bằng script) — không commit nhị phân nặng
+/*.pdf
 /bench/corpus/
 /bench/corpus_external/
 /bench/vn_corpus/fonts/
