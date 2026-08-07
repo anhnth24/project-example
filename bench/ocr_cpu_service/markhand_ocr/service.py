@@ -33,6 +33,10 @@ class InvalidPdf(ValueError):
     """The document is malformed, unsupported, or encrypted."""
 
 
+class BackendFailure(RuntimeError):
+    """The injected OCR backend failed while recognizing a rendered page."""
+
+
 @dataclass(frozen=True, slots=True)
 class ConvertRequest:
     pages: Sequence[int] | None = None
@@ -69,19 +73,28 @@ def convert_pdf(
     pages: list[PageResult] = []
     try:
         with open_pdf(data) as document:
-            if document.page_count > request.max_pages:
+            try:
+                page_count = document.page_count
+            except Exception as error:
+                raise InvalidPdf("invalid PDF") from error
+            if page_count > request.max_pages:
                 raise ConversionRejected("page limit exceeded", kind="page_limit")
-            selected_pages = _selected_pages(request.pages, document.page_count)
+            selected_pages = _selected_pages(request.pages, page_count)
 
             for page_number in selected_pages:
-                page = document.load_page(page_number - 1)
                 try:
+                    page = document.load_page(page_number - 1)
                     image = render_page(page, limits)
                 except PageRenderRejected as error:
                     raise ConversionRejected(str(error), kind="render_bound") from error
+                except Exception as error:
+                    raise InvalidPdf("invalid PDF") from error
 
                 try:
-                    spans = backend.recognize(image)
+                    try:
+                        spans = backend.recognize(image)
+                    except Exception as error:
+                        raise BackendFailure("OCR backend failed") from error
                     ordered = order_spans(spans, page_width=image.width)
                     pages.append(
                         PageResult(

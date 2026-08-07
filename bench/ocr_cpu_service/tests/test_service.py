@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 import pymupdf
 import pytest
@@ -11,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from markhand_ocr.models import OcrSpan  # noqa: E402
 from markhand_ocr.service import (  # noqa: E402
+    BackendFailure,
     ConversionRejected,
     ConvertRequest,
     InvalidPdf,
@@ -172,9 +175,55 @@ def test_rejects_malformed_and_encrypted_pdfs(fake_backend: FakeBackend) -> None
 def test_closes_page_image_when_backend_fails(tiny_pdf: bytes) -> None:
     backend = FakeBackend(failure=RuntimeError("secret document text"))
 
-    with pytest.raises(RuntimeError, match="secret document text"):
+    with pytest.raises(BackendFailure, match="OCR backend failed"):
         convert_pdf(tiny_pdf, ConvertRequest(), backend)
 
     assert len(backend.images) == 1
     with pytest.raises(ValueError, match="closed"):
         backend.images[0].getpixel((0, 0))
+
+
+@pytest.mark.parametrize("failure_point", ["load", "geometry", "render"])
+def test_maps_pdf_page_failures_to_invalid_pdf(
+    tiny_pdf: bytes,
+    fake_backend: FakeBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_point: str,
+) -> None:
+    import markhand_ocr.service as service
+
+    class BrokenPage:
+        @property
+        def rect(self) -> object:
+            raise RuntimeError("secret geometry details")
+
+    class BrokenDocument:
+        page_count = 1
+
+        def load_page(self, index: int) -> object:
+            assert index == 0
+            if failure_point == "load":
+                raise RuntimeError("secret page load details")
+            if failure_point == "geometry":
+                return BrokenPage()
+            return object()
+
+    @contextmanager
+    def broken_pdf(data: bytes) -> Iterator[BrokenDocument]:
+        assert data == tiny_pdf
+        yield BrokenDocument()
+
+    monkeypatch.setattr(service, "open_pdf", broken_pdf)
+    if failure_point == "render":
+        monkeypatch.setattr(
+            service,
+            "render_page",
+            lambda page, limits: (_ for _ in ()).throw(
+                RuntimeError("secret renderer details")
+            ),
+        )
+
+    with pytest.raises(InvalidPdf, match=r"^invalid PDF$"):
+        convert_pdf(tiny_pdf, ConvertRequest(), fake_backend)
+
+    assert fake_backend.images == []
