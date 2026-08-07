@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import math
+import threading
+from concurrent.futures import (
+    Future,
+    ThreadPoolExecutor,
+    TimeoutError as FutureTimeout,
+)
 from dataclasses import asdict, replace
 from typing import Annotated
 
@@ -19,6 +26,57 @@ from .service import (
     InvalidPdf,
     convert_pdf,
 )
+
+
+class AdmissionUnavailable(RuntimeError):
+    """No conversion slot became available within the bounded wait."""
+
+
+class ConversionDeadline(RuntimeError):
+    """The response deadline elapsed while conversion remains admitted."""
+
+
+class ConversionAdmission:
+    """Admit one process-local conversion and retain its slot until completion."""
+
+    def __init__(self) -> None:
+        self._capacity = threading.BoundedSemaphore(value=1)
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="markhand-ocr-conversion",
+        )
+
+    def run(
+        self,
+        operation: object,
+        *,
+        acquisition_timeout_seconds: float,
+        conversion_deadline_seconds: float,
+    ) -> object:
+        if not callable(operation):
+            raise TypeError("operation must be callable")
+        acquired = self._capacity.acquire(
+            timeout=acquisition_timeout_seconds
+        )
+        if not acquired:
+            raise AdmissionUnavailable("conversion capacity unavailable")
+        try:
+            future: Future[object] = self._executor.submit(operation)
+        except BaseException:
+            self._capacity.release()
+            raise
+        future.add_done_callback(self._release)
+        try:
+            return future.result(timeout=conversion_deadline_seconds)
+        except FutureTimeout as error:
+            raise ConversionDeadline("conversion deadline exceeded") from error
+
+    def _release(self, future: Future[object]) -> None:
+        del future
+        self._capacity.release()
+
+
+_PROCESS_CONVERSION_ADMISSION = ConversionAdmission()
 
 
 class _BodyLimitMiddleware:
@@ -83,10 +141,20 @@ def create_app(
     *,
     limits: ConvertRequest | None = None,
     max_body_bytes: int | None = None,
+    admission: ConversionAdmission | None = None,
+    acquisition_timeout_seconds: float = 0.1,
+    conversion_deadline_seconds: float = 120.0,
 ) -> FastAPI:
     """Create an app whose OCR implementation is supplied by the caller."""
     app = FastAPI(title="Markhand OCR benchmark", docs_url=None, redoc_url=None)
     base_request = limits or ConvertRequest()
+    conversion_admission = admission or _PROCESS_CONVERSION_ADMISSION
+    for name, value in (
+        ("acquisition_timeout_seconds", acquisition_timeout_seconds),
+        ("conversion_deadline_seconds", conversion_deadline_seconds),
+    ):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{name} must be finite and positive")
     body_limit = (
         max_body_bytes
         if max_body_bytes is not None
@@ -133,7 +201,19 @@ def create_app(
             dpi=dpi if dpi is not None else base_request.dpi,
         )
         try:
-            result = convert_pdf(data, request, backend)
+            result = conversion_admission.run(
+                lambda: convert_pdf(data, request, backend),
+                acquisition_timeout_seconds=acquisition_timeout_seconds,
+                conversion_deadline_seconds=conversion_deadline_seconds,
+            )
+        except AdmissionUnavailable as error:
+            raise HTTPException(
+                status_code=503, detail="conversion capacity unavailable"
+            ) from error
+        except ConversionDeadline as error:
+            raise HTTPException(
+                status_code=504, detail="conversion deadline exceeded"
+            ) from error
         except BackendFailure as error:
             raise HTTPException(status_code=502, detail="OCR backend failed") from error
         except InvalidPdf as error:

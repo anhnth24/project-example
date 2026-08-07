@@ -106,13 +106,32 @@ Start one service process, and therefore one initialized model pipeline:
 
 ```bash
 cd bench/ocr_cpu_service
-MARKHAND_OCR_BACKEND=paddle scripts/run_service.sh
+MARKHAND_OCR_BACKEND=paddle \
+MARKHAND_OCR_DETECTION_MODEL_DIR="$PWD/.data/models/detection" \
+MARKHAND_OCR_RECOGNITION_MODEL_DIR="$PWD/.data/models/recognition" \
+MARKHAND_OCR_ACQUISITION_TIMEOUT_SECONDS=0.1 \
+MARKHAND_OCR_CONVERSION_DEADLINE_SECONDS=120 \
+scripts/run_service.sh
 ```
 
 The default bind address is `127.0.0.1:8765`. Override it with
 `MARKHAND_OCR_HOST` and `MARKHAND_OCR_PORT`. The health response reports only
-the stable backend name (`paddle`), not model identifiers. Calls sharing that
-pipeline are serialized because the PaddleOCR predictor is not thread-safe.
+the stable backend name (`paddle`), not model identifiers. Startup fails before
+PaddleOCR construction unless both configured local model directories exist
+and contain non-empty `inference.json`, `inference.yml`, and
+`inference.pdiparams` assets. The real service therefore has no model-download
+fallback.
+
+Conversion admission is process-wide, allows exactly one active conversion,
+and has no unbounded waiting queue. A request waits at most the configured
+acquisition timeout, then receives `503`. Once admitted, a request receives
+`504` when its response deadline expires. Python cannot safely terminate an
+inference thread, so a timed-out conversion deliberately retains the sole
+capacity slot until its underlying work actually exits; later requests remain
+bounded/rejected during that interval. The completion callback eventually
+releases the slot. Both timeout settings must be finite positive seconds, and
+the process uses one Uvicorn worker so these bounds cannot be multiplied by
+worker count.
 
 ## Reviewed Phase A result and decision
 

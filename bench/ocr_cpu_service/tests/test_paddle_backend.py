@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+import markhand_ocr.paddle_backend as paddle_backend  # noqa: E402
 from markhand_ocr.paddle_backend import (  # noqa: E402
     PaddleOcrBackend,
     adapt_result,
@@ -29,6 +30,13 @@ class InjectedBackend:
     def recognize(self, image: Image.Image) -> list[OcrSpan]:
         del image
         return []
+
+
+def _write_model_assets(model_dir: Path) -> Path:
+    model_dir.mkdir()
+    for asset in ("inference.json", "inference.yml", "inference.pdiparams"):
+        (model_dir / asset).write_bytes(b"reviewed-local-asset")
+    return model_dir
 
 
 def _require_cached_model_dirs() -> tuple[Path, Path]:
@@ -251,17 +259,37 @@ def test_backend_rejects_partial_local_model_configuration() -> None:
 
 
 def test_runtime_selection_preserves_backend_injection_and_safe_health(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MARKHAND_OCR_BACKEND", "paddle")
+    detection_dir = _write_model_assets(tmp_path / "detection")
+    recognition_dir = _write_model_assets(tmp_path / "recognition")
+    monkeypatch.setenv(
+        "MARKHAND_OCR_DETECTION_MODEL_DIR", str(detection_dir)
+    )
+    monkeypatch.setenv(
+        "MARKHAND_OCR_RECOGNITION_MODEL_DIR", str(recognition_dir)
+    )
     backend = InjectedBackend()
+    options: list[dict[str, object]] = []
 
     response = TestClient(
-        create_runtime_app(backend_factory=lambda: backend)
+        create_runtime_app(
+            backend_factory=lambda **kwargs: (
+                options.append(kwargs) or backend
+            )
+        )
     ).get("/healthz")
 
     assert response.status_code == 200
     assert response.json() == {"status": "ready", "backend": "fake"}
+    assert options == [
+        {
+            "text_detection_model_dir": detection_dir.resolve(),
+            "text_recognition_model_dir": recognition_dir.resolve(),
+        }
+    ]
 
 
 def test_runtime_rejects_unselected_backend(
@@ -271,6 +299,89 @@ def test_runtime_rejects_unselected_backend(
 
     with pytest.raises(ValueError, match="MARKHAND_OCR_BACKEND"):
         create_runtime_app()
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    [
+        ("both", "must be set"),
+        ("recognition", "must be set"),
+        ("asset", "incomplete"),
+    ],
+)
+def test_runtime_fails_before_backend_construction_without_complete_local_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    missing: str,
+    message: str,
+) -> None:
+    monkeypatch.setenv("MARKHAND_OCR_BACKEND", "paddle")
+    detection_dir = _write_model_assets(tmp_path / "detection")
+    recognition_dir = _write_model_assets(tmp_path / "recognition")
+    if missing != "both":
+        monkeypatch.setenv(
+            "MARKHAND_OCR_DETECTION_MODEL_DIR", str(detection_dir)
+        )
+    if missing not in {"both", "recognition"}:
+        monkeypatch.setenv(
+            "MARKHAND_OCR_RECOGNITION_MODEL_DIR", str(recognition_dir)
+        )
+    if missing == "asset":
+        monkeypatch.setenv(
+            "MARKHAND_OCR_RECOGNITION_MODEL_DIR", str(recognition_dir)
+        )
+        (recognition_dir / "inference.pdiparams").unlink()
+
+    constructed = False
+
+    def backend_factory(**kwargs: object) -> InjectedBackend:
+        del kwargs
+        nonlocal constructed
+        constructed = True
+        return InjectedBackend()
+
+    with pytest.raises(ValueError, match=message):
+        create_runtime_app(backend_factory=backend_factory)
+
+    assert constructed is False
+
+
+def test_runtime_applies_bounded_admission_timeouts_from_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detection_dir = _write_model_assets(tmp_path / "detection")
+    recognition_dir = _write_model_assets(tmp_path / "recognition")
+    monkeypatch.setenv("MARKHAND_OCR_BACKEND", "paddle")
+    monkeypatch.setenv(
+        "MARKHAND_OCR_DETECTION_MODEL_DIR", str(detection_dir)
+    )
+    monkeypatch.setenv(
+        "MARKHAND_OCR_RECOGNITION_MODEL_DIR", str(recognition_dir)
+    )
+    monkeypatch.setenv("MARKHAND_OCR_ACQUISITION_TIMEOUT_SECONDS", "0.25")
+    monkeypatch.setenv("MARKHAND_OCR_CONVERSION_DEADLINE_SECONDS", "45")
+    app_options: list[dict[str, object]] = []
+    sentinel = object()
+    monkeypatch.setattr(
+        paddle_backend,
+        "create_app",
+        lambda backend, **kwargs: (
+            app_options.append({"backend": backend, **kwargs}) or sentinel
+        ),
+    )
+    backend = InjectedBackend()
+
+    result = create_runtime_app(backend_factory=lambda **kwargs: backend)
+
+    assert result is sentinel
+    assert app_options == [
+        {
+            "backend": backend,
+            "acquisition_timeout_seconds": 0.25,
+            "conversion_deadline_seconds": 45.0,
+        }
+    ]
 
 
 @pytest.mark.live

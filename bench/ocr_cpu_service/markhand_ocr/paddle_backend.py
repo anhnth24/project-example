@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -23,6 +25,7 @@ class _PaddlePipeline(Protocol):
 
 
 PipelineFactory = Callable[..., _PaddlePipeline]
+_MODEL_ASSETS = ("inference.json", "inference.yml", "inference.pdiparams")
 
 
 def _default_pipeline_factory(**kwargs: object) -> _PaddlePipeline:
@@ -50,6 +53,47 @@ def adapt_result(result: Mapping[str, Any]) -> list[OcrSpan]:
         )
         for polygon, text, score in zip(polygons, texts, scores, strict=True)
     ]
+
+
+def _runtime_model_directories() -> tuple[Path, Path]:
+    names = (
+        "MARKHAND_OCR_DETECTION_MODEL_DIR",
+        "MARKHAND_OCR_RECOGNITION_MODEL_DIR",
+    )
+    values = tuple(os.environ.get(name) for name in names)
+    if not all(values):
+        raise ValueError(f"{' and '.join(names)} must be set")
+
+    directories: list[Path] = []
+    for name, value in zip(names, values, strict=True):
+        assert value is not None
+        try:
+            directory = Path(value).expanduser().resolve(strict=True)
+        except OSError as error:
+            raise ValueError(f"{name} is not a local directory") from error
+        if not directory.is_dir():
+            raise ValueError(f"{name} is not a local directory")
+        missing = [
+            asset
+            for asset in _MODEL_ASSETS
+            if not (directory / asset).is_file()
+            or (directory / asset).stat().st_size <= 0
+        ]
+        if missing:
+            raise ValueError(f"{name} cache is incomplete")
+        directories.append(directory)
+    return directories[0], directories[1]
+
+
+def _runtime_positive_seconds(name: str, default: float) -> float:
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise ValueError(f"{name} must be finite and positive") from error
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be finite and positive")
+    return value
 
 
 class PaddleOcrBackend:
@@ -96,9 +140,23 @@ class PaddleOcrBackend:
 
 def create_runtime_app(
     *,
-    backend_factory: Callable[[], OcrBackend] = PaddleOcrBackend,
+    backend_factory: Callable[..., OcrBackend] = PaddleOcrBackend,
 ) -> FastAPI:
     """Select and initialize the configured runtime backend exactly once."""
     if os.environ.get("MARKHAND_OCR_BACKEND") != "paddle":
         raise ValueError("MARKHAND_OCR_BACKEND must be set to paddle")
-    return create_app(backend_factory())
+    detection_dir, recognition_dir = _runtime_model_directories()
+    acquisition_timeout = _runtime_positive_seconds(
+        "MARKHAND_OCR_ACQUISITION_TIMEOUT_SECONDS", 0.1
+    )
+    conversion_deadline = _runtime_positive_seconds(
+        "MARKHAND_OCR_CONVERSION_DEADLINE_SECONDS", 120.0
+    )
+    return create_app(
+        backend_factory(
+            text_detection_model_dir=detection_dir,
+            text_recognition_model_dir=recognition_dir,
+        ),
+        acquisition_timeout_seconds=acquisition_timeout,
+        conversion_deadline_seconds=conversion_deadline,
+    )

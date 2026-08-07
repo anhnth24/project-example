@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import inspect
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +16,7 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from markhand_ocr.api import create_app  # noqa: E402
+from markhand_ocr.api import ConversionAdmission, create_app  # noqa: E402
 from markhand_ocr.models import OcrSpan  # noqa: E402
 from markhand_ocr.service import ConvertRequest, InvalidPdf  # noqa: E402
 
@@ -47,6 +50,19 @@ class FakeBackend:
                 polygon=((1, 1), (20, 1), (20, 10), (1, 10)),
             )
         ]
+
+
+class BlockingBackend(FakeBackend):
+    def __init__(self) -> None:
+        super().__init__()
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def recognize(self, image: Image.Image) -> list[OcrSpan]:
+        self.started.set()
+        if not self.release.wait(timeout=5):
+            raise RuntimeError("test backend was not released")
+        return super().recognize(image)
 
 
 @pytest.fixture
@@ -257,3 +273,48 @@ def test_conversion_endpoint_is_synchronous() -> None:
     )
 
     assert inspect.iscoroutinefunction(endpoint) is False
+
+
+def test_conversion_deadline_retains_capacity_until_underlying_work_finishes() -> None:
+    backend = BlockingBackend()
+    admission = ConversionAdmission()
+    app = create_app(
+        backend,
+        admission=admission,
+        acquisition_timeout_seconds=0.03,
+        conversion_deadline_seconds=0.05,
+    )
+
+    with TestClient(app) as client:
+        timed_out = client.post(
+            "/v1/convert",
+            files={"file": ("first.pdf", make_pdf(), "application/pdf")},
+        )
+        assert backend.started.is_set()
+        assert timed_out.status_code == 504
+        assert timed_out.json() == {"detail": "conversion deadline exceeded"}
+
+        saturated_started = time.monotonic()
+        saturated = client.post(
+            "/v1/convert",
+            files={"file": ("second.pdf", make_pdf(), "application/pdf")},
+        )
+        saturated_elapsed = time.monotonic() - saturated_started
+        assert saturated.status_code == 503
+        assert saturated.json() == {"detail": "conversion capacity unavailable"}
+        assert saturated_elapsed < 0.5
+        assert backend.calls == 0
+
+        backend.release.set()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            eventual = executor.submit(
+                client.post,
+                "/v1/convert",
+                files={
+                    "file": ("eventual.pdf", make_pdf(), "application/pdf")
+                },
+            )
+            response = eventual.result(timeout=2)
+
+        assert response.status_code == 200
+        assert backend.calls == 2
