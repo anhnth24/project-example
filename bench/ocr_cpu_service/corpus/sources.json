@@ -5,7 +5,8 @@
     "license": "CC0-1.0",
     "sha256": "7aef621342af14a1681f6ff465d257a8e829ca6c0e30da046552991aed6d9c41",
     "max_bytes": 65536,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "metadata"
   },
   {
     "id": "vnocr-real-cv-3722-metro-p1",
@@ -13,7 +14,8 @@
     "license": "CC0-1.0",
     "sha256": "28dfe93886dae75fbcc17251b6f330f526da18c05394872243659325478a5cf6",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-hanoi-kh-173-festival-p1",
@@ -21,7 +23,8 @@
     "license": "CC0-1.0",
     "sha256": "cafe628510a11875f22e857115819b036df273de38a42f6569fbd111c6fbd3dd",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-hanoi-qd-2280-water-p1",
@@ -29,7 +32,8 @@
     "license": "CC0-1.0",
     "sha256": "03b1203eb034925e1cca0001a688621025c4832f03355a6f66a8d0a0b3c20ddd",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-hanoi-tb-453-flag-p1",
@@ -37,7 +41,8 @@
     "license": "CC0-1.0",
     "sha256": "22872f8cedd422a629e5932e742905b096e582303482b3376d6a575a75465d08",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-nq-115-ba-vi-p1",
@@ -45,7 +50,8 @@
     "license": "CC0-1.0",
     "sha256": "bb1d2824cf789b6d3c1f76e2999251a57f0aeda9088d733de122483c8a570e98",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-qd-707-ttg-p1",
@@ -53,7 +59,8 @@
     "license": "CC0-1.0",
     "sha256": "bf6851f475dea358f2dc0136a9dced4d1dff9b7dfd5aac762d4b789e98f36295",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-qd-729-ttg-p1",
@@ -61,7 +68,8 @@
     "license": "CC0-1.0",
     "sha256": "081bef468ca7c09ed8415b5d34435c75e2580eb4c16191f9d8bfba004c7014a4",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-tt-21-bct-fuel-p1",
@@ -69,7 +77,8 @@
     "license": "CC0-1.0",
     "sha256": "11dedc2e0c3e03cabc0a1f7f18c29f773aa4b6077e957aca0f47573b067d309d",
     "max_bytes": 1048576,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-real-tt-37-bca-vehicle-p1",
@@ -77,7 +86,8 @@
     "license": "CC0-1.0",
     "sha256": "87b23f9f6b7bb0a382e380ddaf12f18389436f624a525d77e8628678c798d626",
     "max_bytes": 2097152,
-    "kind": "real-scan"
+    "kind": "real-scan",
+    "classification": "scan"
   },
   {
     "id": "vnocr-synthetic-scan-metadata",
@@ -85,7 +95,8 @@
     "license": "CC0-1.0",
     "sha256": "c86951dbc265bc6820f04ead164b4b838bd5743521d431e9dba88144a901db24",
     "max_bytes": 65536,
-    "kind": "synthetic-scan"
+    "kind": "synthetic-scan",
+    "classification": "metadata"
   },
   {
     "id": "vnocr-synthetic-scan-bien-lai-p1",
@@ -93,7 +104,8 @@
     "license": "CC0-1.0",
     "sha256": "370e519da2492ea9f938448a920e465a7f504befc28421f13e4c596535e4245e",
     "max_bytes": 3145728,
-    "kind": "synthetic-scan"
+    "kind": "synthetic-scan",
+    "classification": "synthetic-scan"
   },
   {
     "id": "vnocr-synthetic-scan-hoa-don-p1",
@@ -101,7 +113,8 @@
     "license": "CC0-1.0",
     "sha256": "83758171e5f2e1b1e55e968e06a564cc08c30b243c9feec3f9cc3581ed93504d",
     "max_bytes": 3145728,
-    "kind": "synthetic-scan"
+    "kind": "synthetic-scan",
+    "classification": "synthetic-scan"
   },
   {
     "id": "vnocr-synthetic-scan-phieu-chi-p1",
@@ -109,6 +122,34 @@
     "license": "CC0-1.0",
     "sha256": "667167e998c9aaef5049e4b1ad66a17d39843de0b12ddb7b1c2086a0ff247c54",
     "max_bytes": 3145728,
-    "kind": "synthetic-scan"
+    "kind": "synthetic-scan",
+    "classification": "synthetic-scan"
+  },
+  {
+    "id": "wikimedia-cuu-quoc-1945-09-05",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/28/Cuu_Quoc_5_Sep_1945.pdf",
+    "license": "Public domain in Vietnam (Wikimedia Commons PD-Vietnam; US status not asserted)",
+    "sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+    "max_bytes": 16715312,
+    "kind": "wikimedia-scan",
+    "classification": "scan"
+  },
+  {
+    "id": "wikimedia-dai-nam-1907-804",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/4/4b/%C4%90%E1%BA%A1i_Nam_%C4%90%C4%83ng_C%E1%BB%95_T%C3%B9ng_B%C3%A1o%2C_s%E1%BB%91_804%2C_ng%C3%A0y_13.06.1907.pdf",
+    "license": "Creative Commons Public Domain Mark 1.0",
+    "sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+    "max_bytes": 1382200,
+    "kind": "wikimedia-scan",
+    "classification": "scan"
+  },
+  {
+    "id": "official-89-2026-tt-btc",
+    "url": "https://datafiles.chinhphu.vn/cpp/files/vbpq/2026/7/89-btc.signed.pdf",
+    "license": "Public domain legal text — Vietnam Intellectual Property Law Article 15(2)",
+    "sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+    "max_bytes": 17281751,
+    "kind": "official-government",
+    "classification": "scan"
   }
 ]

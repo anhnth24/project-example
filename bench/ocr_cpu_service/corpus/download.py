@@ -3,18 +3,39 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import socket
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.parse import urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-_SOURCE_FIELDS = ("id", "url", "license", "sha256", "max_bytes", "kind")
+_SOURCE_FIELDS = (
+    "id",
+    "url",
+    "license",
+    "sha256",
+    "max_bytes",
+    "kind",
+    "classification",
+)
 _CHUNK_BYTES = 64 * 1024
+_DOWNLOAD_TIMEOUT_SECONDS = 30.0
+_APPROVED_HOSTS = frozenset(
+    {
+        "cas-bridge.xethub.hf.co",
+        "cdn-lfs-us-1.hf.co",
+        "datafiles.chinhphu.vn",
+        "huggingface.co",
+        "upload.wikimedia.org",
+        "us.aws.cdn.hf.co",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -25,6 +46,7 @@ class CorpusSource:
     sha256: str
     max_bytes: int
     kind: str
+    classification: str
 
 
 @dataclass(frozen=True)
@@ -32,6 +54,25 @@ class DownloadedSource:
     source: CorpusSource
     path: Path
     bytes_downloaded: int
+
+
+class _ValidatedRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Request | None:
+        absolute_url = urljoin(req.full_url, newurl)
+        _validate_download_url(absolute_url)
+        return super().redirect_request(req, fp, code, msg, headers, absolute_url)
+
+
+def urlopen(request: Request, timeout: float) -> Any:
+    return build_opener(_ValidatedRedirectHandler()).open(request, timeout=timeout)
 
 
 def validate_source(source: CorpusSource) -> None:
@@ -47,6 +88,10 @@ def validate_source(source: CorpusSource) -> None:
         raise ValueError(f"{source.id}: only HTTPS sources are allowed")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError(f"{source.id}: URL credentials are not allowed")
+    if parsed.hostname not in _APPROVED_HOSTS:
+        raise ValueError(f"{source.id}: URL must use an approved host")
+    if parsed.port not in (None, 443):
+        raise ValueError(f"{source.id}: HTTPS URL must use port 443")
 
     if not isinstance(source.license, str) or not source.license.strip():
         raise ValueError(f"{source.id}: license is required")
@@ -62,6 +107,14 @@ def validate_source(source: CorpusSource) -> None:
         raise ValueError(f"{source.id}: sha256 must be lowercase hex")
     if not isinstance(source.kind, str) or not source.kind.strip():
         raise ValueError(f"{source.id}: kind is required")
+    if source.classification not in {
+        "metadata",
+        "mixed",
+        "native",
+        "scan",
+        "synthetic-scan",
+    }:
+        raise ValueError(f"{source.id}: classification is invalid")
 
 
 def load_sources(path: Path) -> list[CorpusSource]:
@@ -141,6 +194,7 @@ def _source_from_mapping(item: dict[str, Any]) -> CorpusSource:
         sha256=item["sha256"],
         max_bytes=item["max_bytes"],
         kind=item["kind"],
+        classification=item["classification"],
     )
 
 
@@ -158,10 +212,10 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
     digest = hashlib.sha256()
     bytes_downloaded = 0
 
-    with urlopen(request) as response:
+    _validate_download_url(source.url)
+    with urlopen(request, timeout=_DOWNLOAD_TIMEOUT_SECONDS) as response:
         final_url = response.geturl()
-        if urlsplit(final_url).scheme != "https":
-            raise ValueError(f"{source.id}: download redirected to a non-HTTPS URL")
+        _validate_download_url(final_url)
 
         content_length = response.headers.get("Content-Length")
         if content_length is not None:
@@ -190,3 +244,34 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
             f"received {actual_sha256}"
         )
     return bytes_downloaded
+
+
+def _validate_download_url(url: str) -> None:
+    parsed = urlsplit(url)
+    if parsed.scheme != "https":
+        raise ValueError("download redirected to a non-HTTPS URL")
+    if parsed.hostname not in _APPROVED_HOSTS:
+        raise ValueError("download URL must use an approved host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("download URL credentials are not allowed")
+    if parsed.port not in (None, 443):
+        raise ValueError("download HTTPS URL must use port 443")
+
+    assert parsed.hostname is not None
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            443,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError as error:
+        raise ValueError(f"download host could not be resolved: {parsed.hostname}") from error
+    if not addresses:
+        raise ValueError(f"download host could not be resolved: {parsed.hostname}")
+
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+        if not ip.is_global:
+            raise ValueError(
+                f"download host must resolve only to public addresses: {parsed.hostname}"
+            )

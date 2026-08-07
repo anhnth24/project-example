@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import socket
 import sys
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+import corpus.download as corpus_download  # noqa: E402
 from corpus.download import (  # noqa: E402
     CorpusSource,
     download_sources,
@@ -18,14 +20,26 @@ from corpus.download import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def public_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))
+        ],
+    )
+
+
 def valid_source(**overrides: object) -> CorpusSource:
     values: dict[str, object] = {
         "id": "fixture",
-        "url": "https://example.com/fixture.pdf",
+        "url": "https://huggingface.co/fixture.pdf",
         "license": "CC0-1.0",
         "sha256": "0" * 64,
         "max_bytes": 1024,
         "kind": "real-scan",
+        "classification": "scan",
     }
     values.update(overrides)
     return CorpusSource(**values)  # type: ignore[arg-type]
@@ -42,6 +56,7 @@ def write_manifest(path: Path, sources: list[CorpusSource]) -> None:
                     "sha256": source.sha256,
                     "max_bytes": source.max_bytes,
                     "kind": source.kind,
+                    "classification": source.classification,
                 }
                 for source in sources
             ]
@@ -65,6 +80,8 @@ def test_rejects_source_without_license(tmp_path: Path) -> None:
     ("overrides", "message"),
     [
         ({"url": "http://example.com/a.pdf"}, "HTTPS"),
+        ({"url": "https://example.com/a.pdf"}, "approved host"),
+        ({"url": "https://127.0.0.1/a.pdf"}, "approved host"),
         ({"max_bytes": 0}, "positive"),
         ({"license": "  "}, "license"),
         ({"sha256": "A" * 64}, "lowercase hex"),
@@ -82,7 +99,10 @@ def test_rejects_invalid_source(
 
 def test_load_sources_rejects_duplicate_ids(tmp_path: Path) -> None:
     manifest = tmp_path / "sources.json"
-    write_manifest(manifest, [valid_source(), valid_source(url="https://example.com/b.pdf")])
+    write_manifest(
+        manifest,
+        [valid_source(), valid_source(url="https://huggingface.co/b.pdf")],
+    )
 
     with pytest.raises(ValueError, match="duplicate"):
         load_sources(manifest)
@@ -97,11 +117,28 @@ def test_load_sources_rejects_unknown_fields(tmp_path: Path) -> None:
         "sha256": "0" * 64,
         "max_bytes": 1024,
         "kind": "real-scan",
+        "classification": "scan",
         "redirect_url": "https://example.net/unreviewed.pdf",
     }
     manifest.write_text(json.dumps([source]), encoding="utf-8")
 
     with pytest.raises(ValueError, match="unexpected"):
+        load_sources(manifest)
+
+
+def test_load_sources_requires_classification(tmp_path: Path) -> None:
+    manifest = tmp_path / "sources.json"
+    source = {
+        "id": "fixture",
+        "url": "https://huggingface.co/fixture.pdf",
+        "license": "CC0-1.0",
+        "sha256": "0" * 64,
+        "max_bytes": 1024,
+        "kind": "real-scan",
+    }
+    manifest.write_text(json.dumps([source]), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="classification"):
         load_sources(manifest)
 
 
@@ -113,9 +150,17 @@ def test_checked_in_manifest_is_valid_and_pinned() -> None:
     assert sources
     assert any(source.kind == "real-scan" for source in sources)
     assert any(source.kind == "synthetic-scan" for source in sources)
+    wikimedia = [source for source in sources if source.kind == "wikimedia-scan"]
+    official = [source for source in sources if source.kind == "official-government"]
+    assert len(wikimedia) >= 2
+    assert all(source.classification == "scan" for source in wikimedia)
+    assert len(official) == 1
+    assert official[0].classification in {"scan", "native", "mixed"}
+    assert official[0].url.startswith("https://datafiles.chinhphu.vn/")
     assert all(
         "/resolve/36f3060fd7628937c77c1b1e2a95892f24f562e0/" in source.url
         for source in sources
+        if source.url.startswith("https://huggingface.co/")
     )
 
 
@@ -124,7 +169,7 @@ class FakeResponse(BytesIO):
         self,
         body: bytes,
         content_length: int | None = None,
-        url: str = "https://example.com/fixture.pdf",
+        url: str = "https://huggingface.co/fixture.pdf",
     ) -> None:
         super().__init__(body)
         self.headers = (
@@ -152,7 +197,7 @@ def test_download_sources_streams_verifies_and_atomically_installs(
     write_manifest(manifest, [source])
     monkeypatch.setattr(
         "corpus.download.urlopen",
-        lambda request: FakeResponse(body, len(body)),
+        lambda request, timeout=None: FakeResponse(body, len(body)),
     )
 
     downloaded = download_sources(manifest, output)
@@ -174,7 +219,7 @@ def test_download_sources_rejects_oversized_content_length(
     write_manifest(manifest, [source])
     monkeypatch.setattr(
         "corpus.download.urlopen",
-        lambda request: FakeResponse(b"small", 5),
+        lambda request, timeout=None: FakeResponse(b"small", 5),
     )
 
     with pytest.raises(ValueError, match="Content-Length"):
@@ -192,7 +237,7 @@ def test_download_sources_enforces_streamed_byte_limit(
     write_manifest(manifest, [source])
     monkeypatch.setattr(
         "corpus.download.urlopen",
-        lambda request: FakeResponse(b"large"),
+        lambda request, timeout=None: FakeResponse(b"large"),
     )
 
     with pytest.raises(ValueError, match="exceeds"):
@@ -211,13 +256,107 @@ def test_download_sources_rejects_redirect_to_non_https(
     write_manifest(manifest, [source])
     monkeypatch.setattr(
         "corpus.download.urlopen",
-        lambda request: FakeResponse(b"", url="http://example.com/fixture.pdf"),
+        lambda request, timeout=None: FakeResponse(
+            b"", url="http://example.com/fixture.pdf"
+        ),
     )
 
     with pytest.raises(ValueError, match="redirected"):
         download_sources(manifest, output)
 
     assert not (output / "fixture.pdf").exists()
+
+
+def test_download_sources_rejects_redirect_to_unapproved_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty_sha256 = hashlib.sha256(b"").hexdigest()
+    source = valid_source(sha256=empty_sha256)
+    manifest = tmp_path / "sources.json"
+    output = tmp_path / "corpus"
+    write_manifest(manifest, [source])
+    monkeypatch.setattr(
+        "corpus.download.urlopen",
+        lambda request, timeout=None: FakeResponse(
+            b"", url="https://attacker.example/fixture.pdf"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="approved host"):
+        download_sources(manifest, output)
+
+
+def test_download_sources_rejects_approved_host_resolving_to_private_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    empty_sha256 = hashlib.sha256(b"").hexdigest()
+    source = valid_source(sha256=empty_sha256)
+    manifest = tmp_path / "sources.json"
+    output = tmp_path / "corpus"
+    write_manifest(manifest, [source])
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+        ],
+    )
+    monkeypatch.setattr(
+        "corpus.download.urlopen",
+        lambda request, timeout=None: FakeResponse(b""),
+    )
+
+    with pytest.raises(ValueError, match="public address"):
+        download_sources(manifest, output)
+
+
+def test_download_sources_uses_bounded_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = b"bounded"
+    source = valid_source(sha256=hashlib.sha256(body).hexdigest())
+    manifest = tmp_path / "sources.json"
+    output = tmp_path / "corpus"
+    write_manifest(manifest, [source])
+    observed: dict[str, float | None] = {"timeout": None}
+
+    def open_with_timeout(request: object, timeout: float | None = None) -> FakeResponse:
+        observed["timeout"] = timeout
+        return FakeResponse(body)
+
+    monkeypatch.setattr("corpus.download.urlopen", open_with_timeout)
+
+    download_sources(manifest, output)
+
+    assert observed["timeout"] is not None
+    assert 0 < observed["timeout"] <= 60
+
+
+def test_redirect_handler_resolves_relative_location_before_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        corpus_download.HTTPRedirectHandler,
+        "redirect_request",
+        lambda self, req, fp, code, msg, headers, newurl: req,
+    )
+    handler = corpus_download._ValidatedRedirectHandler()
+    request = corpus_download.Request("https://huggingface.co/original")
+
+    redirected = handler.redirect_request(
+        request,
+        None,
+        307,
+        "Temporary Redirect",
+        {},
+        "/api/resolve-cache/artifact",
+    )
+
+    assert redirected is request
+
+
+def test_hugging_face_regional_cdn_is_an_approved_redirect_host() -> None:
+    corpus_download._validate_download_url("https://us.aws.cdn.hf.co/artifact")
 
 
 def test_download_sources_rejects_checksum_mismatch_without_replacing_existing(
@@ -232,7 +371,7 @@ def test_download_sources_rejects_checksum_mismatch_without_replacing_existing(
     write_manifest(manifest, [source])
     monkeypatch.setattr(
         "corpus.download.urlopen",
-        lambda request: FakeResponse(b"wrong"),
+        lambda request, timeout=None: FakeResponse(b"wrong"),
     )
 
     with pytest.raises(ValueError, match="SHA-256"):
