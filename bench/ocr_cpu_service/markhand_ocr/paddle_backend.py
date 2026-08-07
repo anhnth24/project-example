@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import unicodedata
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Protocol
@@ -57,20 +58,39 @@ class PaddleOcrBackend:
     name = "paddle"
 
     def __init__(
-        self, *, pipeline_factory: PipelineFactory = _default_pipeline_factory
+        self,
+        *,
+        pipeline_factory: PipelineFactory = _default_pipeline_factory,
+        text_detection_model_dir: os.PathLike[str] | str | None = None,
+        text_recognition_model_dir: os.PathLike[str] | str | None = None,
     ) -> None:
-        self._pipeline = pipeline_factory(
-            device="cpu",
-            use_doc_orientation_classify=False,
-            use_doc_unwarping=False,
-            use_textline_orientation=False,
-        )
+        if (text_detection_model_dir is None) != (
+            text_recognition_model_dir is None
+        ):
+            raise ValueError("both local model directories must be provided")
+
+        pipeline_options: dict[str, object] = {
+            "device": "cpu",
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+        }
+        if text_detection_model_dir is not None:
+            pipeline_options.update(
+                text_detection_model_dir=os.fspath(text_detection_model_dir),
+                text_recognition_model_dir=os.fspath(
+                    text_recognition_model_dir
+                ),
+            )
+        self._pipeline = pipeline_factory(**pipeline_options)
+        self._predict_lock = threading.Lock()
 
     def recognize(self, image: Image.Image) -> list[OcrSpan]:
         page = np.asarray(image)
-        spans: list[OcrSpan] = []
-        for result in self._pipeline.predict(page):
-            spans.extend(adapt_result(result))
+        with self._predict_lock:
+            spans: list[OcrSpan] = []
+            for result in self._pipeline.predict(page):
+                spans.extend(adapt_result(result))
         return spans
 
 

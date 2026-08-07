@@ -28,9 +28,10 @@ install this package without resolving dependencies:
 .venv/bin/python -m pip install --no-deps -e .
 ```
 
-PaddleOCR 3.7.0 installs with PaddlePaddle 3.3.1, but that runtime has a
-confirmed CPU/oneDNN inference regression. The model extra therefore pins
-PaddlePaddle 3.2.2, the latest upstream-recommended compatible CPU release.
+PaddleOCR does not install or pin the PaddlePaddle framework. At investigation
+time, 3.3.1 was the newest wheel on the official CPU index, but that runtime has
+a confirmed CPU/oneDNN inference regression. The model extra therefore pins
+PaddlePaddle 3.2.2, the newest upstream-recommended compatible CPU release.
 PaddleX also requires NumPy below 2.4, so the latest compatible NumPy line is
 constrained explicitly.
 
@@ -42,13 +43,22 @@ The fast suite does not initialize or download models:
 .venv/bin/python -m pytest tests -q
 ```
 
-The opt-in live test generates its own Vietnamese image. Model files are cached
-outside the repository by PaddleOCR and are never committed:
+The opt-in live test generates its own Vietnamese image and is strictly
+cache-only. Point both variables at complete local PaddleOCR model directories.
+Each directory must contain `inference.json`, `inference.yml`, and
+`inference.pdiparams`. The test skips before PaddleOCR initialization if either
+directory or any required asset is unavailable, and passes the directories
+through PaddleOCR's documented local-model arguments so it cannot download:
 
 ```bash
-MARKHAND_OCR_LIVE=1 .venv/bin/python -m pytest \
+MARKHAND_OCR_LIVE=1 \
+MARKHAND_OCR_LIVE_DETECTION_MODEL_DIR=/path/to/cached/detection \
+MARKHAND_OCR_LIVE_RECOGNITION_MODEL_DIR=/path/to/cached/recognition \
+.venv/bin/python -m pytest \
   tests/test_paddle_backend.py -m live -q
 ```
+
+Cached models remain outside the repository and are never committed.
 
 Start one service process, and therefore one initialized model pipeline:
 
@@ -58,7 +68,8 @@ MARKHAND_OCR_BACKEND=paddle scripts/run_service.sh
 
 The default bind address is `127.0.0.1:8765`. Override it with
 `MARKHAND_OCR_HOST` and `MARKHAND_OCR_PORT`. The health response reports only
-the stable backend name (`paddle`), not model identifiers.
+the stable backend name (`paddle`), not model identifiers. Calls sharing that
+pipeline are serialized because the PaddleOCR predictor is not thread-safe.
 
 ## Dependency and license notes
 

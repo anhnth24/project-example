@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,28 @@ class InjectedBackend:
     def recognize(self, image: Image.Image) -> list[OcrSpan]:
         del image
         return []
+
+
+def _require_cached_model_dirs() -> tuple[Path, Path]:
+    environment_names = (
+        "MARKHAND_OCR_LIVE_DETECTION_MODEL_DIR",
+        "MARKHAND_OCR_LIVE_RECOGNITION_MODEL_DIR",
+    )
+    raw_dirs = tuple(os.environ.get(name) for name in environment_names)
+    if not all(raw_dirs):
+        pytest.skip("cached local PaddleOCR model directories are not configured")
+
+    model_dirs = tuple(Path(value) for value in raw_dirs if value is not None)
+    required_assets = ("inference.json", "inference.yml", "inference.pdiparams")
+    missing = [
+        model_dir / asset
+        for model_dir in model_dirs
+        for asset in required_assets
+        if not (model_dir / asset).is_file()
+    ]
+    if missing:
+        pytest.skip("cached local PaddleOCR model assets are incomplete")
+    return model_dirs[0], model_dirs[1]
 
 
 def test_adapts_paddle_result_without_numpy_values() -> None:
@@ -119,6 +144,84 @@ def test_backend_initializes_cpu_pipeline_once_and_adapts_predict_result() -> No
     assert backend.name == "paddle"
 
 
+def test_backend_serializes_concurrent_predict_calls() -> None:
+    state_lock = threading.Lock()
+    start_barrier = threading.Barrier(2)
+    active_calls = 0
+    maximum_active_calls = 0
+
+    class OverlapDetectingPipeline:
+        def predict(self, image: object) -> list[dict[str, object]]:
+            del image
+            nonlocal active_calls, maximum_active_calls
+            with state_lock:
+                active_calls += 1
+                maximum_active_calls = max(maximum_active_calls, active_calls)
+            time.sleep(0.05)
+            with state_lock:
+                active_calls -= 1
+            return [{"dt_polys": [], "rec_texts": [], "rec_scores": []}]
+
+    pipeline = OverlapDetectingPipeline()
+    backend = PaddleOcrBackend(pipeline_factory=lambda **kwargs: pipeline)
+    image = Image.new("RGB", (10, 10), "white")
+
+    def recognize_after_barrier() -> list[OcrSpan]:
+        start_barrier.wait()
+        return backend.recognize(image)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(lambda _: recognize_after_barrier(), range(2))
+            )
+    finally:
+        image.close()
+
+    assert results == [[], []]
+    assert maximum_active_calls == 1
+
+
+def test_backend_uses_explicit_local_model_directories() -> None:
+    calls: list[dict[str, object]] = []
+
+    class FakePipeline:
+        def predict(self, image: object) -> list[dict[str, object]]:
+            del image
+            return []
+
+    detection_dir = Path("/cached/detection")
+    recognition_dir = Path("/cached/recognition")
+    PaddleOcrBackend(
+        pipeline_factory=lambda **kwargs: (
+            calls.append(kwargs) or FakePipeline()
+        ),
+        text_detection_model_dir=detection_dir,
+        text_recognition_model_dir=recognition_dir,
+    )
+
+    assert calls == [
+        {
+            "device": "cpu",
+            "use_doc_orientation_classify": False,
+            "use_doc_unwarping": False,
+            "use_textline_orientation": False,
+            "text_detection_model_dir": str(detection_dir),
+            "text_recognition_model_dir": str(recognition_dir),
+        }
+    ]
+
+
+def test_backend_rejects_partial_local_model_configuration() -> None:
+    with pytest.raises(ValueError, match="both local model directories"):
+        PaddleOcrBackend(
+            pipeline_factory=lambda **kwargs: pytest.fail(
+                "pipeline must not initialize"
+            ),
+            text_detection_model_dir=Path("/cached/detection"),
+        )
+
+
 def test_runtime_selection_preserves_backend_injection_and_safe_health(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -148,6 +251,7 @@ def test_runtime_rejects_unselected_backend(
     reason="set MARKHAND_OCR_LIVE=1 to run the cached-model smoke",
 )
 def test_live_generated_vietnamese_page_returns_nfc_text_on_cpu() -> None:
+    detection_dir, recognition_dir = _require_cached_model_dirs()
     image = Image.new("RGB", (1400, 260), "white")
     draw = ImageDraw.Draw(image)
     font = ImageFont.truetype(
@@ -156,7 +260,10 @@ def test_live_generated_vietnamese_page_returns_nfc_text_on_cpu() -> None:
     draw.text((40, 70), "Cộng hòa Việt Nam", fill="black", font=font)
 
     try:
-        spans = PaddleOcrBackend().recognize(image)
+        spans = PaddleOcrBackend(
+            text_detection_model_dir=detection_dir,
+            text_recognition_model_dir=recognition_dir,
+        ).recognize(image)
     finally:
         image.close()
 
