@@ -46,6 +46,14 @@ bench/ocr_cpu_service/.venv/bin/python -c \
 'from pathlib import Path; from corpus.download import download_sources; items = download_sources(Path("bench/ocr_cpu_service/corpus/sources.json"), Path("bench/ocr_cpu_service/.data/corpus")); print(f"verified {len(items)} sources, {sum(item.bytes_downloaded for item in items)} bytes")'
 ```
 
+The downloader keeps the strict hostname allowlist, rejects any DNS answer
+containing a non-public address, and binds each TLS connection to the exact
+validated IP set while retaining the allowlisted hostname for SNI/certificate
+verification. Redirects are revalidated and re-resolved per hop. A monotonic
+120-second whole-download deadline and shorter connection deadline are enforced
+in addition to byte/checksum limits; `read1()` keeps slow-drip progress visible
+to the total-deadline check.
+
 Place complete official PaddleOCR detection and recognition directories at
 `bench/ocr_cpu_service/.data/models/detection` and
 `bench/ocr_cpu_service/.data/models/recognition`. Each directory must contain
@@ -144,26 +152,44 @@ and no confidence interval is claimed.
 
 | Candidate | Aggregate CER | Aggregate WER | Real-scan CER | Synthetic CER | Warm median s/page | Warm p95 s/page | Warm sampled RSS MiB |
 |---|--:|--:|--:|--:|--:|--:|--:|
-| Markhand default | 0.110828 | 0.191784 | 0.128154 | 0.005616 | 1.145 | 1.433 | 115.7 |
-| Markhand `tessdata_best` | 0.102603 | 0.170330 | 0.118708 | 0.004813 | 1.520 | 1.844 | 137.7 |
-| PP-OCRv6 | 0.399353 | 0.720565 | 0.433545 | 0.191737 | 4.198 | 4.872 | 3553.2 |
+| Markhand default | 0.110828 | 0.191784 | 0.128154 | 0.005616 | 1.114 | 1.402 | 115.6 |
+| Markhand `tessdata_best` | 0.102603 | 0.170330 | 0.118708 | 0.004813 | 1.521 | 1.831 | 138.1 |
+| PP-OCRv6 | 0.399353 | 0.720565 | 0.433545 | 0.191737 | 4.062 | 4.701 | 3269.4 |
 
 The better Tesseract real-scan CER is `0.118708`; PP-OCRv6 is `0.433545`.
 Relative improvement is `-265.22%`, below the required `20%`, and both strata
-regress by more than 0.05 absolute CER. There were no failures, timeouts, or
-resource-limit violations.
+regress by more than 0.05 absolute CER. There were no candidate failures or
+timeouts. PP-OCRv6 exceeded the 4 GiB sampled process-tree RSS bound on both
+bounded `Cứu Quốc` historical pages (5.11–5.17 GiB), adding two
+resource-limit violations and independently reinforcing STOP.
 
 Warm latency is parent wall time from request flush through the result event
-with an initialized worker. RSS is not an OS high-water mark: it is the maximum
-of 10 ms samples of the worker plus descendant-process RSS during each labeled
-interval. Cold worker initialization was measured separately.
+with an initialized worker. For both Markhand candidates that interval includes
+a fresh `fileconv`/Tesseract subprocess spawn, execution, and output collection
+for every page; it is not in-process Tesseract-only time. RSS is not an OS
+high-water mark: it is the maximum of 10 ms samples of the worker plus
+descendant-process RSS during each labeled interval. Cold worker initialization
+was measured separately.
 
-The official `89/2026/TT-BTC` PDF is **mixed**. Inspection produced 840
-overlapping page-type observations across 839 physical PDF pages: 839
-image-bearing observations and 1 text-bearing observation, because page 1 has
-both. Deterministic pages 1, 420, and 839 were sampled. They have no pinned
-human-verified transcription, so they provide runtime/failure context only and
-are excluded from CER/WER and the gate.
+PDFium classifies the official `89/2026/TT-BTC` PDF as **scan**: all 839
+physical pages are image-bearing and PDFium exposes no text-layer characters.
+This differs from the manifest's earlier PyMuPDF-derived `mixed`
+classification, and the generated report records that mismatch. Deterministic
+pages 1, 420, and 839 were sampled. They have no pinned human-verified
+transcription, so they provide runtime/failure context only and are excluded
+from CER/WER and the quality calculation.
+
+The complete rerun also processed deterministic bounded pages 1–2 from
+`Cứu Quốc` (5 September 1945) and pages 1, 4, and 8 from `Đại Nam Đăng Cổ
+Tùng Báo` (13 June 1907) for every candidate. No trustworthy transcription was
+available, so these historical pages are qualitative/runtime evidence only;
+the report makes no CER/WER claim for them.
+
+The deterministic source-ground-truth two-column case uses six reviewed anchor
+positions in column-major order. Both Tesseract configurations observed all six
+with `0/15` pairwise reading-order violations; PP-OCRv6 observed all six with
+`3/15` violations. The metric reports missing anchors separately (zero for all
+three) and stores no recognized text in the report.
 
 Phase B was correctly not run after the STOP decision. This spike does not
 adopt PP-OCRv6 or this Python service in production; any future production

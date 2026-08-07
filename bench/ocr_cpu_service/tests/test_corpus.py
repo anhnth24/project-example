@@ -4,6 +4,8 @@ import hashlib
 import json
 import socket
 import sys
+import threading
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -310,6 +312,40 @@ def test_download_sources_rejects_approved_host_resolving_to_private_address(
         download_sources(manifest, output)
 
 
+def test_dns_resolution_is_bounded_by_connection_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = threading.Event()
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: (
+            release.wait(timeout=1)
+            or [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    6,
+                    "",
+                    ("93.184.216.34", 443),
+                )
+            ]
+        ),
+    )
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError, match="DNS"):
+            corpus_download._validate_download_url(
+                "https://huggingface.co/fixture.pdf",
+                timeout_seconds=0.01,
+            )
+    finally:
+        release.set()
+
+    assert time.monotonic() - started < 0.5
+
+
 def test_download_sources_uses_bounded_timeout(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -409,7 +445,7 @@ def test_urlopen_resolves_relative_redirect_before_validating_next_hop(
     monkeypatch.setattr(
         corpus_download,
         "_validate_download_url",
-        lambda url: validated.append(url) or ("203.0.113.10",),
+        lambda url, **kwargs: validated.append(url) or ("203.0.113.10",),
     )
     monkeypatch.setattr(
         corpus_download, "_PinnedHTTPSConnection", Connection
@@ -469,7 +505,7 @@ def test_urlopen_binds_connection_to_prevalidated_address(
     monkeypatch.setattr(
         corpus_download,
         "_validate_download_url",
-        lambda url: ("203.0.113.10",),
+        lambda url, **kwargs: ("203.0.113.10",),
     )
     monkeypatch.setattr(
         corpus_download, "_PinnedHTTPSConnection", Connection, raising=False

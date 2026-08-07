@@ -289,6 +289,9 @@ def render_markdown(data: dict[str, Any]) -> str:
             f"- {candidate['label']} sanitized environment: "
             f"`{rendered_environment or 'not recorded'}`."
         )
+        timing_note = candidate.get("metadata", {}).get("timing_note")
+        if timing_note:
+            lines.append(f"- {candidate['label']} timing: {timing_note}.")
     fileconv_build = next(
         (
             candidate.get("metadata", {}).get("fileconv_build")

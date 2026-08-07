@@ -7,10 +7,12 @@ import http.client
 import ipaddress
 import json
 import os
+import queue
 import re
 import socket
 import ssl
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -146,7 +148,9 @@ def urlopen(request: Request, timeout: float) -> _PinnedResponse:
             raise TimeoutError("download connection deadline exceeded")
         parsed = urlsplit(current_url)
         assert parsed.hostname is not None
-        addresses = _validate_download_url(current_url)
+        addresses = _validate_download_url(
+            current_url, timeout_seconds=remaining
+        )
         connection = _PinnedHTTPSConnection(
             parsed.hostname, addresses, remaining
         )
@@ -171,7 +175,10 @@ def urlopen(request: Request, timeout: float) -> _PinnedResponse:
         if not location:
             raise ValueError("download redirect is missing Location")
         current_url = urljoin(current_url, location)
-        _validate_download_url(current_url)
+        remaining = timeout - (_monotonic() - started)
+        if remaining <= 0:
+            raise TimeoutError("download connection deadline exceeded")
+        _validate_download_url(current_url, timeout_seconds=remaining)
     raise ValueError("download redirect limit exceeded")
 
 
@@ -313,7 +320,14 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
     digest = hashlib.sha256()
     bytes_downloaded = 0
 
-    _validate_download_url(source.url)
+    initial_remaining = _DOWNLOAD_TOTAL_DEADLINE_SECONDS - (
+        _monotonic() - started
+    )
+    if initial_remaining <= 0:
+        raise TimeoutError(f"{source.id}: download deadline exceeded")
+    _validate_download_url(
+        source.url, timeout_seconds=initial_remaining
+    )
     remaining = _DOWNLOAD_TOTAL_DEADLINE_SECONDS - (_monotonic() - started)
     if remaining <= 0:
         raise TimeoutError(f"{source.id}: download deadline exceeded")
@@ -358,7 +372,44 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
     return bytes_downloaded
 
 
-def _validate_download_url(url: str) -> tuple[str, ...]:
+def _resolve_host(hostname: str, timeout_seconds: float) -> list[Any]:
+    results: queue.Queue[tuple[bool, object]] = queue.Queue(maxsize=1)
+
+    def resolve() -> None:
+        try:
+            addresses = socket.getaddrinfo(
+                hostname,
+                443,
+                type=socket.SOCK_STREAM,
+            )
+        except OSError as error:
+            results.put((False, error))
+        else:
+            results.put((True, addresses))
+
+    threading.Thread(
+        target=resolve,
+        name="markhand-corpus-dns",
+        daemon=True,
+    ).start()
+    try:
+        success, value = results.get(timeout=timeout_seconds)
+    except queue.Empty as error:
+        raise TimeoutError(
+            f"download DNS resolution deadline exceeded: {hostname}"
+        ) from error
+    if not success:
+        assert isinstance(value, OSError)
+        raise ValueError(f"download host could not be resolved: {hostname}") from value
+    assert isinstance(value, list)
+    return value
+
+
+def _validate_download_url(
+    url: str,
+    *,
+    timeout_seconds: float = _DOWNLOAD_TIMEOUT_SECONDS,
+) -> tuple[str, ...]:
     parsed = urlsplit(url)
     if parsed.scheme != "https":
         raise ValueError("download redirected to a non-HTTPS URL")
@@ -370,14 +421,7 @@ def _validate_download_url(url: str) -> tuple[str, ...]:
         raise ValueError("download HTTPS URL must use port 443")
 
     assert parsed.hostname is not None
-    try:
-        addresses = socket.getaddrinfo(
-            parsed.hostname,
-            443,
-            type=socket.SOCK_STREAM,
-        )
-    except OSError as error:
-        raise ValueError(f"download host could not be resolved: {parsed.hostname}") from error
+    addresses = _resolve_host(parsed.hostname, timeout_seconds)
     if not addresses:
         raise ValueError(f"download host could not be resolved: {parsed.hostname}")
 

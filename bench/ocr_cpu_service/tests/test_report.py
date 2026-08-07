@@ -243,6 +243,9 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
             "PYTHONNOUSERSITE": "1",
         }
     for candidate in data["candidates"][:2]:
+        candidate["metadata"]["timing_note"] = (
+            "warm timing includes a fresh fileconv/Tesseract subprocess"
+        )
         candidate["metadata"]["fileconv_build"] = {
             "binary_sha256": "b" * 64,
             "build_command": (
@@ -279,6 +282,7 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
     assert "## Candidate environment and build provenance" in first
     assert f"`{'b' * 64}`" in first
     assert "PYTHONNOUSERSITE=1" in first
+    assert "fresh fileconv/Tesseract subprocess" in first
     assert "complete OCR output" not in first
 
 

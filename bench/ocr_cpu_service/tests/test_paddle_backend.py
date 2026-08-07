@@ -409,3 +409,27 @@ def test_live_generated_vietnamese_page_returns_nfc_text_on_cpu() -> None:
     text = " ".join(span.text for span in spans).strip()
     assert text
     assert unicodedata.is_normalized("NFC", text)
+
+
+@pytest.mark.live
+@pytest.mark.skipif(
+    os.environ.get("MARKHAND_OCR_LIVE") != "1",
+    reason="set MARKHAND_OCR_LIVE=1 to run the cached-model smoke",
+)
+def test_live_runtime_app_starts_from_validated_cache_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    detection_dir, recognition_dir = _require_cached_model_dirs()
+    monkeypatch.setenv("MARKHAND_OCR_BACKEND", "paddle")
+    monkeypatch.setenv(
+        "MARKHAND_OCR_DETECTION_MODEL_DIR", str(detection_dir)
+    )
+    monkeypatch.setenv(
+        "MARKHAND_OCR_RECOGNITION_MODEL_DIR", str(recognition_dir)
+    )
+
+    with TestClient(create_runtime_app()) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "backend": "paddle"}
