@@ -264,6 +264,18 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "PYTHONNOUSERSITE": "1",
         }
+        candidate["pages"].append(
+            {
+                "source_id": "wikimedia-history",
+                "stratum": "historical-scan",
+                "gate_included": False,
+                "page_number": 2,
+                "success": True,
+                "elapsed_seconds": 2.0,
+                "peak_rss_bytes": 200,
+                "resource_limit_violation": False,
+            }
+        )
     for candidate in data["candidates"][:2]:
         candidate["metadata"]["timing_note"] = (
             "warm timing includes a fresh fileconv/Tesseract subprocess"
@@ -304,6 +316,10 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
         "| Markhand default | `reviewed-multicolumn-v1` | 1 | 6 | 6 | 15 | 1 | 0 |"
         in first
     )
+    reading_section = first.split(
+        "## Reviewed multi-column reading order", maxsplit=1
+    )[1].split("## Gate", maxsplit=1)[0]
+    assert "| `wikimedia-history` | 2 |" not in reading_section
     assert "## Sample-size and representativeness limits" in first
     assert "9 real-scan pages" in first
     assert "not a population estimate" in first
