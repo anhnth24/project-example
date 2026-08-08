@@ -20,15 +20,18 @@ from experiments.bitonal_pdf import (  # noqa: E402
     EXPECTED_CANDIDATE_IDS,
     _DIAGNOSTIC_FIELDS,
     _PLAN_LIMITS,
+    _parser,
     aggregate_calibration_records,
     allocate_calibration_work_dir,
     build_calibration_candidates,
+    derive_calibration_gate,
     load_calibration_config,
     load_canonical_official_source,
     page_diagnostics,
     recognize_calibration_page,
     reference_disagreement_counts,
     release_calibration_work_dir,
+    render_calibration_report,
     render_calibration_pages,
     strip_for_disagreement,
     validate_calibration_artifact,
@@ -209,6 +212,27 @@ def valid_artifact() -> dict[str, object]:
         "candidates": candidates,
         "records": records,
     }
+
+
+def _set_reference_character_edits(
+    payload: dict[str, object], candidate_id: str, edits_by_page: dict[int, int]
+) -> None:
+    for record in payload["records"]:
+        if (
+            record["candidate_id"] == candidate_id
+            and record["page_number"] in edits_by_page
+        ):
+            record["character_edits"] = edits_by_page[record["page_number"]]
+    candidate = next(
+        item for item in payload["candidates"] if item["id"] == candidate_id
+    )
+    candidate["aggregate"] = aggregate_calibration_records(
+        [
+            record
+            for record in payload["records"]
+            if record["candidate_id"] == candidate_id
+        ]
+    )
 
 
 def test_calibration_config_loads_four_exact_candidates() -> None:
@@ -879,3 +903,82 @@ def test_recognize_calibration_page_worker_startup_failure_returns_bounded_recor
         "peak_rss_bytes": 0,
         "resource_limit_violation": False,
     }
+
+
+def test_gate_selects_the_only_improving_candidate_from_values() -> None:
+    payload = valid_artifact()
+    improving_id = EXPECTED_CANDIDATE_IDS[1]
+    _set_reference_character_edits(
+        payload, improving_id, {page: 1 for page in range(1, 21)}
+    )
+
+    gate = derive_calibration_gate(payload)
+
+    assert gate["winner_id"] == improving_id
+    assert gate["tied_ids"] == []
+    assert gate["candidates"][improving_id]["eligible"] is True
+
+
+def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page() -> None:
+    payload = valid_artifact()
+    regressing_id = EXPECTED_CANDIDATE_IDS[1]
+    eligible_id = EXPECTED_CANDIDATE_IDS[2]
+    _set_reference_character_edits(
+        payload,
+        regressing_id,
+        {page: (3 if page == 1 else 0) for page in range(1, 21)},
+    )
+    _set_reference_character_edits(
+        payload, eligible_id, {page: 1 for page in range(1, 21)}
+    )
+
+    gate = derive_calibration_gate(payload)
+
+    assert gate["candidates"][regressing_id]["eligible"] is False
+    assert (
+        "page_1_character_disagreement_regressed_gt_2pp"
+        in gate["candidates"][regressing_id]["disqualifications"]
+    )
+    assert gate["winner_id"] == eligible_id
+
+
+def test_gate_reports_value_tie_without_candidate_id_tiebreak() -> None:
+    payload = valid_artifact()
+    tied_ids = EXPECTED_CANDIDATE_IDS[1:3]
+    for candidate_id in tied_ids:
+        _set_reference_character_edits(
+            payload, candidate_id, {page: 1 for page in range(1, 21)}
+        )
+
+    gate = derive_calibration_gate(payload)
+
+    assert gate["winner_id"] is None
+    assert gate["tied_ids"] == list(tied_ids)
+
+
+def test_report_command_and_markdown_are_deterministic_and_text_free(
+    tmp_path: Path,
+) -> None:
+    payload = valid_artifact()
+    improving_id = EXPECTED_CANDIDATE_IDS[1]
+    _set_reference_character_edits(
+        payload, improving_id, {page: 1 for page in range(1, 21)}
+    )
+    first = render_calibration_report(payload)
+    second = render_calibration_report(copy.deepcopy(payload))
+
+    args = _parser().parse_args(
+        [
+            "report",
+            "--input",
+            str(tmp_path / "calibration.json"),
+            "--output",
+            str(tmp_path / "report.md"),
+        ]
+    )
+
+    assert args.command == "report"
+    assert first == second
+    assert f"`winner_id`: `{improving_id}`" in first
+    assert "secret recognized content" not in first
+    assert "secret reference content" not in first
