@@ -8,12 +8,14 @@ import time
 from pathlib import Path
 
 import psutil
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from benchmark.candidates import CommandCandidateSpec  # noqa: E402
 from benchmark.corpus import BenchmarkPage  # noqa: E402
 from benchmark.run import (  # noqa: E402
+    _isolated_worker,
     run_candidate,
     sanitized_candidate_environment,
 )
@@ -82,6 +84,79 @@ def test_candidate_result_keeps_recognized_text_memory_only(tmp_path: Path) -> N
     serialized = json.dumps(result.record)
     assert "private recognized text" not in serialized
     assert "text" not in result.record
+
+
+def test_normal_unicode_output_within_hard_cap(tmp_path: Path) -> None:
+    recognizer = tmp_path / "unicode-recognizer.py"
+    recognizer.write_text(
+        "print('Tiếng Việt có dấu: Trường Sa')\n",
+        encoding="utf-8",
+    )
+    spec = CommandCandidateSpec(
+        id="unicode",
+        label="Unicode",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+
+    result = run_candidate(
+        spec,
+        _benchmark_page(
+            tmp_path / "page.png",
+            reference="Tiếng Việt có dấu: Trường Sa",
+        ),
+        timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
+        max_output_bytes=4096,
+    )
+
+    assert result.success
+    assert result.record["cer"] == 0.0
+    assert result.metadata["output_limits"]["stdout_bytes"] == 4096
+    assert result.metadata["output_limits"]["stderr_bytes"] == 4096
+
+
+@pytest.mark.parametrize("stream", [1, 2], ids=["stdout", "stderr"])
+def test_unlimited_candidate_output_is_hard_bounded_and_sanitized(
+    tmp_path: Path, stream: int
+) -> None:
+    canary = "OUTPUT_CANARY_MUST_NOT_ESCAPE"
+    recognizer = tmp_path / "unlimited-output.py"
+    recognizer.write_text(
+        "import os\n"
+        f"chunk = ({canary!r} * 128).encode()\n"
+        "while True:\n"
+        f"    os.write({stream}, chunk)\n",
+        encoding="utf-8",
+    )
+    spec = CommandCandidateSpec(
+        id="unlimited-output",
+        label="Unlimited output",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment={
+            **sanitized_candidate_environment(cpu_threads=1),
+            "OCR_CANARY_SECRET": canary,
+        },
+        provenance={},
+    )
+
+    result = run_candidate(
+        spec,
+        _benchmark_page(tmp_path / "page.png"),
+        timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
+        max_output_bytes=4096,
+    )
+    serialized = json.dumps(
+        {"record": result.record, "metadata": result.metadata},
+        ensure_ascii=False,
+    )
+
+    assert not result.success
+    assert result.record["error_kind"] == "output_limit"
+    assert canary not in serialized
+    assert "OCR_CANARY_SECRET" in result.metadata["environment_variable_names"]
 
 
 def test_candidate_provenance_is_thawed_only_for_json_output(
@@ -226,3 +301,60 @@ def test_timeout_sigkills_descendant_that_ignores_sigterm(tmp_path: Path) -> Non
         for pid in pids.values():
             if psutil.pid_exists(pid):
                 os.kill(pid, signal.SIGKILL)
+
+
+def test_normal_close_kills_daemonized_candidate_descendant_and_is_idempotent(
+    tmp_path: Path,
+) -> None:
+    child_pid_path = tmp_path / "child.pid"
+    recognizer = tmp_path / "daemonizing-recognizer.py"
+    recognizer.write_text(
+        "from pathlib import Path\n"
+        "import subprocess\n"
+        "import sys\n"
+        "import time\n"
+        "ready = Path(str(sys.argv[1]) + '.ready')\n"
+        "child = subprocess.Popen([\n"
+        "    sys.executable, '-c',\n"
+        "    'import signal, sys, time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "Path(sys.argv[1]).write_text(\"ready\"); time.sleep(60)', str(ready),\n"
+        "], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        "while not ready.exists():\n"
+        "    time.sleep(0.005)\n"
+        "Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')\n"
+        "print('xin chào')\n",
+        encoding="utf-8",
+    )
+    spec = CommandCandidateSpec(
+        id="daemonizing",
+        label="Daemonizing",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    worker = _isolated_worker(
+        spec,
+        timeout_seconds=5.0,
+        max_output_bytes=4096,
+    )
+    child_pid = 0
+
+    try:
+        measurement = worker.recognize(
+            _benchmark_page(child_pid_path, reference="xin chào")
+        )
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        assert measurement.text.strip() == "xin chào"
+
+        worker.close()
+        worker.close()
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and psutil.pid_exists(child_pid):
+            time.sleep(0.02)
+        assert not psutil.pid_exists(child_pid)
+    finally:
+        worker.close()
+        if child_pid and psutil.pid_exists(child_pid):
+            os.kill(child_pid, signal.SIGKILL)

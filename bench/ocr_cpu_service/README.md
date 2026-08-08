@@ -76,7 +76,8 @@ bench/ocr_cpu_service/.venv/bin/python -m benchmark.run \
   --system-tessdata /usr/share/tesseract-ocr/5/tessdata \
   --best-tessdata tessdata_best \
   --cpu-threads 8 \
-  --max-rss-bytes 4294967296
+  --max-rss-bytes 4294967296 \
+  --max-output-bytes 1048576
 
 PYTHONPATH=bench/ocr_cpu_service \
 bench/ocr_cpu_service/.venv/bin/python -m benchmark.report \
@@ -86,7 +87,9 @@ bench/ocr_cpu_service/.venv/bin/python -m benchmark.report \
 The retained candidate engine executes argv arrays without a shell, uses an
 allowlisted environment, serializes candidates, separates cold initialization
 from warm page timing, samples process-tree RSS, and kills timed-out process
-groups. It does not initialize or download models.
+groups. Candidate stdout and stderr each have a hard per-stream byte bound.
+`--max-rss-bytes` is a measured gate applied to sampled process-tree RSS, not
+an OS-enforced memory limit. It does not initialize or download models.
 
 ## Tests
 

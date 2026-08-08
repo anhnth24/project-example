@@ -366,6 +366,12 @@ def render_markdown(data: dict[str, Any]) -> str:
         "| Candidate | Cold wall seconds | Cold candidate seconds | Cold sampled process-tree RSS MiB |",
         "|---|--:|--:|--:|",
     ]
+    if not legacy_phase_a:
+        lines[-3:-3] = [
+            "Configured max RSS is a measured gate, not an OS-enforced limit. "
+            "Candidate stdout and stderr are hard bounded per stream.",
+            "",
+        ]
     for candidate in data["candidates"]:
         cold = candidate.get("metadata", {}).get("cold_initialization")
         if cold:
@@ -384,15 +390,24 @@ def render_markdown(data: dict[str, Any]) -> str:
         ]
     )
     for candidate in data["candidates"]:
-        environment = candidate.get("metadata", {}).get("environment", {})
-        rendered_environment = ", ".join(
-            f"{key}={value}" for key, value in sorted(environment.items())
-        )
-        lines.append(
-            f"- {candidate['label']} sanitized environment: "
-            f"`{rendered_environment or 'not recorded'}`."
-        )
-        timing_note = candidate.get("metadata", {}).get("timing_note")
+        metadata = candidate.get("metadata", {})
+        if legacy_phase_a:
+            environment = metadata.get("environment", {})
+            rendered_environment = ", ".join(
+                f"{key}={value}" for key, value in sorted(environment.items())
+            )
+            lines.append(
+                f"- {candidate['label']} sanitized environment: "
+                f"`{rendered_environment or 'not recorded'}`."
+            )
+        else:
+            variable_names = metadata.get("environment_variable_names", [])
+            rendered_names = ", ".join(sorted(variable_names))
+            lines.append(
+                f"- {candidate['label']} environment variable names: "
+                f"`{rendered_names or 'not recorded'}`."
+            )
+        timing_note = metadata.get("timing_note")
         if timing_note:
             lines.append(f"- {candidate['label']} timing: {timing_note}.")
     fileconv_build = next(

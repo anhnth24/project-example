@@ -10,19 +10,21 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from benchmark.report import (  # noqa: E402
+    aggregate_records,
     evaluate_gate,
     recompute_and_validate_summary,
     render_markdown,
 )
-from benchmark.run import (  # noqa: E402
+from benchmark.corpus import (  # noqa: E402
     BenchmarkPage,
+    deterministic_page_sample,
+)
+from benchmark.run import (  # noqa: E402
     IsolatedCandidateWorker,
     RecognitionMeasurement,
     _fileconv_provenance,
     _read_event_with_process_tree_rss,
     _run_candidate,
-    aggregate_records,
-    deterministic_page_sample,
     sanitized_candidate_environment,
 )
 
@@ -196,6 +198,26 @@ def test_report_without_challenger_states_no_adoption_gate() -> None:
 
     assert "no adoption gate was configured" in markdown.lower()
     assert "Gate decision:" not in markdown
+    assert "measured gate, not an OS-enforced limit" in markdown
+    assert "stdout and stderr are hard bounded" in markdown
+
+
+def test_generic_report_lists_environment_names_without_values() -> None:
+    canary = "REPORT_CANARY_MUST_NOT_ESCAPE"
+    payload = _generic_report_payload(comparison=None)
+    candidates = payload["candidates"]
+    assert isinstance(candidates, list)
+    for candidate in candidates:
+        candidate["metadata"] = {
+            "environment": {"OCR_CANARY_SECRET": canary},
+            "environment_variable_names": ["LANG", "OCR_CANARY_SECRET"],
+        }
+
+    markdown = render_markdown(payload)
+
+    assert "OCR_CANARY_SECRET" in markdown
+    assert canary not in markdown
+    assert "OCR_CANARY_SECRET=" not in markdown
 
 
 def test_same_candidate_ids_without_archived_metadata_remain_generic() -> None:
@@ -643,7 +665,8 @@ for line in sys.stdin:
     finally:
         worker.close()
 
-    assert worker.metadata["environment"] == environment
+    assert worker.metadata["environment_variable_names"] == sorted(environment)
+    assert "environment" not in worker.metadata
     assert worker.metadata["cold_initialization"]["candidate_seconds"] == 0.02
     assert (
         worker.metadata["cold_initialization"]["timing_scope"]

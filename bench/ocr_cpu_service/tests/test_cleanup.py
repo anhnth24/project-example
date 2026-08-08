@@ -80,6 +80,55 @@ def test_rejected_service_model_and_launcher_paths_are_untracked() -> None:
     assert not rejected, "rejected tracked paths remain:\n" + "\n".join(rejected)
 
 
+def test_runner_uses_canonical_corpus_and_render_helpers_only() -> None:
+    runner = BENCHMARK_ROOT / "benchmark" / "run.py"
+    tree = ast.parse(runner.read_text(encoding="utf-8"), filename=str(runner))
+    forbidden_definitions = {
+        "_destination",
+        "_verified_path",
+        "load_quantitative_pages",
+        "deterministic_page_sample",
+        "historical_reading_order_anchors",
+        "bounded_sample_render_limits",
+        "generate_reviewed_multicolumn_case",
+        "inspect_and_render_official",
+        "inspect_and_render_historical",
+    }
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    imported_modules = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+
+    assert not (defined & forbidden_definitions)
+    assert "pypdfium2" not in imported_modules
+    assert "PIL" not in imported_modules
+    assert any(
+        isinstance(node, ast.ImportFrom) and node.module == "benchmark.corpus"
+        for node in tree.body
+    )
+
+
+def test_readme_states_output_and_rss_enforcement_truthfully() -> None:
+    readme = " ".join(
+        (BENCHMARK_ROOT / "README.md")
+        .read_text(encoding="utf-8")
+        .lower()
+        .split()
+    )
+
+    assert "hard per-stream" in readme
+    assert "stdout" in readme and "stderr" in readme
+    assert "measured gate" in readme
+    assert "not an os-enforced memory limit" in readme
+
+
 def _normalized_dependency_name(requirement: str) -> str:
     name = requirement.split("[", 1)[0]
     for separator in ("<", ">", "=", "!", "~", ";", " "):
