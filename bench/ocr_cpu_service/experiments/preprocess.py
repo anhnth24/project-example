@@ -893,6 +893,15 @@ def _require_expected_baseline_counts(
         raise ValueError("baseline raw artifact counts do not match matrix calibration")
 
 
+def validate_baseline_provenance(
+    artifact: dict[str, Any], baseline_path: Path
+) -> None:
+    baseline, baseline_sha256 = _load_validated_baseline_raw(baseline_path)
+    if artifact["provenance"].get("baseline_artifact_sha256") != baseline_sha256:
+        raise ValueError("baseline raw artifact checksum does not match provenance")
+    _require_expected_baseline_counts(baseline, artifact["baseline_calibration"])
+
+
 def migrate_baseline_provenance(
     artifact: dict[str, Any],
     *,
@@ -909,6 +918,7 @@ def migrate_baseline_provenance(
         raise ValueError("baseline raw artifact checksum conflicts with matrix provenance")
     migrated["provenance"]["baseline_artifact_sha256"] = baseline_sha256
     validate_matrix_artifact(migrated, configs)
+    validate_baseline_provenance(migrated, baseline_path)
     if matrix_measurement_sha256(migrated) != before:
         raise ValueError("matrix measurements changed during provenance migration")
     return migrated
@@ -1683,6 +1693,7 @@ def matrix_main(argv: list[str] | None = None) -> int:
             _write_json_atomic(args.output, migrated)
             return 0
         validate_matrix_artifact(artifact, load_experiment_configs(args.configs))
+        validate_baseline_provenance(artifact, args.baseline_run.resolve())
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(render_matrix_report(artifact), encoding="utf-8")
         return 0
