@@ -18,6 +18,12 @@ Ranks use tuning-set micro-average CER. Document-type and difficulty small strat
 
 Tracked rows contain additive edit counts and transform checksums, never document content. Only environment variable names are published; arbitrary values are omitted.
 
+## Decision
+
+**No candidate improved overall CER.** `grayscale-normalization` only tied the Rust control at 0.122174 CER while its median latency was much worse (3.750047 versus 1.805239 seconds/page).
+
+**No policy was selected or frozen. Holdout was not run.** These are tuning-only measurements; Task 4 may evaluate observable retry signals without changing this Task 3 decision.
+
 ## Ranked overall tuning measurements
 
 | Rank | Config | Changed factor | Character edits / chars | CER | Word edits / words | WER | CER change vs Rust control | CER change vs direct transfer | Median s/page | p95 s/page | Peak RSS MiB | Failures |
@@ -855,6 +861,7 @@ Environment variable names: `BENCH_OCR_EXPERIMENT_CONFIGS`, `BENCH_OCR_EXPERIMEN
 - Fileconv SHA-256: `d85b911c08b8c26f37995f5609f92f50ac0ec49fdacc5014ef49a6e8f8500d50`.
 - Tesseract binary SHA-256: `9f831cab7525c3dab04af41bda35182af7ea1df9dceeaaa2f3bf207ac45c06a5`.
 - Baseline config SHA-256: `cf8adcc67ab185389281a2f94ac5bdf496de30f625ba3badcf179f67f9d1f247`.
+- Baseline raw artifact SHA-256: `def32d08599e45840f7d43a1e47f16130d6480d9aee53d7362c006d9dcac6303`.
 - Host descriptor SHA-256: `8ca757958ffada32e3ba5c9cb68bce1b207227debc3523bf61a5470224f91e6a`.
 - Toolchain descriptor SHA-256: `a9d0bc52a196cc48bf225145983e260dc79939f3bed8b57e390689051f167033`.
 - Tessdata SHA-256: `{"best":{"eng":"8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba","vie":"b6b49293d95d0b6dbd8780174627e82c75be957b6f4ed9862155540d6b00bb45"},"system-fast":{"eng":"7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2","vie":"79df64caf7bcfb2a27df5042ecb6121e196eada34da774956995747636d5bfa1"}}`.
