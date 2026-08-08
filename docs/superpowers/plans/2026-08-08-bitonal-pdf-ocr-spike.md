@@ -348,7 +348,7 @@ PYTHONPATH=bench/ocr_cpu_service \
 bench/ocr_cpu_service/.venv/bin/python \
   -m experiments.bitonal_pdf calibrate \
   --pdf bench/ocr_cpu_service/.data/corpus/official-89-2026-tt-btc.signed.pdf \
-  --reference /home/ubuntu/.cursor/projects/workspace/uploads/Tho_ng-tu_-89-2026-TT-BTC_opencode-qwen3.7-plus_0b58.md \
+  --reference '<private-reference.md>' \
   --fileconv target/release/fileconv \
   --pdfium-lib pdfium/lib \
   --best-tessdata tessdata_best \
@@ -379,7 +379,7 @@ PYTHONPATH=bench/ocr_cpu_service \
 bench/ocr_cpu_service/.venv/bin/python \
   -m experiments.bitonal_pdf report \
   --input bench/ocr_cpu_service/.data/bitonal-pdf/calibration.json \
-  --reference /home/ubuntu/.cursor/projects/workspace/uploads/Tho_ng-tu_-89-2026-TT-BTC_opencode-qwen3.7-plus_0b58.md \
+  --reference '<private-reference.md>' \
   --output bench/ocr_cpu_service/reports/bitonal-pdf-calibration.md
 ```
 
