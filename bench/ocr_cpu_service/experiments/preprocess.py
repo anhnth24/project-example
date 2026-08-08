@@ -431,7 +431,9 @@ def _run_real_tesseract(command: list[str]) -> int:
     previous: dict[int, Any] = {}
 
     def forward(signum: int, _frame: Any) -> None:
-        if child is not None and child.poll() is None:
+        if child is None:
+            raise SystemExit(128 + signum)
+        if child.poll() is None:
             child.send_signal(signum)
 
     for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
