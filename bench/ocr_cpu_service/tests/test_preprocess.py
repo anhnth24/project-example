@@ -571,17 +571,17 @@ def test_matrix_artifact_requires_calibrated_control_exact_pages_and_checksums()
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
     broken = deepcopy(artifact)
-    broken["candidates"][0]["records"][0]["transform_sha256"] = "bad"
+    broken["candidates"][1]["records"][0]["transform_sha256"] = "bad"
     with pytest.raises(ValueError, match="transform checksum"):
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
     broken = deepcopy(artifact)
-    broken["candidates"][0]["records"][0]["transform_sha256"] = "b" * 64
+    broken["candidates"][1]["records"][0]["transform_sha256"] = "b" * 64
     with pytest.raises(ValueError, match="transform checksum"):
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
     broken = deepcopy(artifact)
-    broken["candidates"][0]["records"][0]["input_sha256s"] = []
+    broken["candidates"][1]["records"][0]["input_sha256s"] = []
     with pytest.raises(ValueError, match="input checksum"):
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
