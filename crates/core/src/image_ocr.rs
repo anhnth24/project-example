@@ -46,6 +46,14 @@ impl OcrEngine {
 pub enum OcrPreprocessMode {
     #[default]
     Legacy,
+    /// Experimental, default-off bypass for large near-bitonal renders.
+    ///
+    /// The 92.0% extreme-pixel threshold was calibrated only on 22 pages from
+    /// one Thông tư PDF (lowest observed ratio about 92.21%), so it is not
+    /// general evidence. Although all 22 pages activated, character
+    /// disagreement worsened by about 40–44% versus matched legacy controls.
+    /// Do not enable in production without broader evidence; see
+    /// `bench/ocr_cpu_service/reports/bitonal-pdf-calibration.md`.
     PreserveNearBitonal,
 }
 
@@ -210,6 +218,11 @@ fn active_engine() -> OcrEngine {
 const UPSCALE_IF_AREA_BELOW: u64 = 500_000;
 /// Cạnh dài tối đa; lớn hơn ⇒ thu xuống để OCR không quá chậm.
 const MAX_LONG_SIDE: u32 = 2400;
+// Experimental near-bitonal constants for the default-off mode above. The
+// 920/1000 threshold comes only from the 22-page, single-document calibration
+// (minimum observed extreme ratio about 92.21%), where activation was 22/22
+// but character disagreement was about 40–44% worse. This is not a production
+// recommendation; see bench/ocr_cpu_service/reports/bitonal-pdf-calibration.md.
 const BITONAL_DARK_MAX: u8 = 32;
 const BITONAL_LIGHT_MIN: u8 = 223;
 const BITONAL_EXTREME_MIN_PER_MILLE: u64 = 920;
