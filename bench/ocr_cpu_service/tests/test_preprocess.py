@@ -79,6 +79,8 @@ def _record(
         "elapsed_seconds": 0.5,
         "peak_rss_bytes": 100,
         "resource_limit_violation": False,
+        "input_sha256s": ["d" * 64],
+        "transform_sha256s": ["a" * 64],
         "transform_sha256": "a" * 64,
         "transform_attempts": 1,
     }
@@ -139,6 +141,7 @@ def _artifact() -> dict[str, object]:
             "configs_sha256": "3" * 64,
             "binary_sha256": "4" * 64,
             "shim_sha256": "5" * 64,
+            "tesseract_binary_sha256": "d" * 64,
             "baseline_config_sha256": "6" * 64,
             "host_sha256": "7" * 64,
             "toolchain_sha256": "8" * 64,
@@ -397,6 +400,11 @@ def test_matrix_artifact_requires_calibrated_control_exact_pages_and_checksums()
     with pytest.raises(ValueError, match="transform checksum"):
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
+    broken = deepcopy(artifact)
+    broken["candidates"][0]["records"][0]["input_sha256s"] = []
+    with pytest.raises(ValueError, match="input checksum"):
+        validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
+
 
 def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> None:
     artifact = _artifact()
@@ -426,5 +434,9 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
     assert "DPI hint" in report
     assert "not a 300/400 PDF rerender comparison" in report
     assert "No holdout result" in report
+    assert "Transfer gap: **0 character edits" in report
+    assert "CER change vs control" in report
+    assert "Tesseract binary SHA-256" in report
+    assert artifact["provenance"]["tesseract_binary_sha256"] in report
     assert "recognized_text" not in report
     assert "reference text" not in report.lower()
