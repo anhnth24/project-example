@@ -216,6 +216,29 @@ def _artifact() -> dict[str, object]:
     }
 
 
+def _recompute_candidate(candidate: dict[str, object]) -> None:
+    records = candidate["records"]
+    candidate["aggregate"] = aggregate_matrix_records(records)
+    candidate["strata"] = {
+        stratum: aggregate_matrix_records(
+            [record for record in records if stratum in record["difficulty_strata"]]
+        )
+        for stratum in sorted(
+            {
+                stratum
+                for record in records
+                for stratum in record["difficulty_strata"]
+            }
+        )
+    }
+    candidate["document_types"] = {
+        kind: aggregate_matrix_records(
+            [record for record in records if record["document_type"] == kind]
+        )
+        for kind in sorted({record["document_type"] for record in records})
+    }
+
+
 def test_checked_in_configs_are_unique_one_factor_changes_with_exact_checksums() -> None:
     payload = load_experiment_configs(CONFIGS)
 
@@ -713,8 +736,10 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
         "## Ranked overall tuning measurements", 1
     )[0]
     assert "No candidate improved overall CER" in decision
-    assert "grayscale-normalization" in decision
-    assert "tied" in decision and "latency" in decision
+    assert "Accuracy ties (not improvements)" in decision
+    assert "`direct-tesseract-transfer-control`" in decision
+    assert "`grayscale-normalization`" in decision
+    assert "median latency" in decision
     assert "No policy was selected or frozen" in decision
     assert "Holdout was not run" in decision
 
@@ -768,3 +793,21 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
     assert artifact["provenance"]["baseline_artifact_sha256"] in report
     assert "recognized_text" not in report
     assert "reference text" not in report.lower()
+
+
+def test_report_derives_measured_improvement_winner_from_valid_aggregate() -> None:
+    artifact = _artifact()
+    candidate = artifact["candidates"][2]
+    candidate["records"][0]["character_edits"] = 1
+    _recompute_candidate(candidate)
+    validate_matrix_artifact(artifact, load_experiment_configs(CONFIGS))
+
+    report = render_matrix_report(artifact)
+    decision = report.split("## Decision", 1)[1].split(
+        "## Ranked overall tuning measurements", 1
+    )[0]
+
+    assert "Measured tuning accuracy winner" in decision
+    assert "`dpi-hint-400`" in decision
+    assert "strictly below Rust control" in decision
+    assert "No candidate improved overall CER" not in decision
