@@ -606,4 +606,3 @@ def test_report_is_raw_recomputable_and_states_holdout_blocker() -> None:
     assert "production remains blocked" in markdown
     assert "recognized_text" not in markdown
     assert "reference" not in markdown.lower()
-
