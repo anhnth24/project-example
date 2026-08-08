@@ -14,12 +14,17 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from benchmark.candidates import CommandCandidateSpec
 from experiments.bitonal_pdf import (  # noqa: E402
     CALIBRATION_RUN_ROOT,
+    CANONICAL_CONFIG_SHA256,
+    DEFAULT_CONFIG,
+    DEFAULT_SOURCES,
     EXPECTED_CANDIDATE_IDS,
     _DIAGNOSTIC_FIELDS,
     _PLAN_LIMITS,
+    aggregate_calibration_records,
     allocate_calibration_work_dir,
     build_calibration_candidates,
     load_calibration_config,
+    load_canonical_official_source,
     page_diagnostics,
     recognize_calibration_page,
     reference_disagreement_counts,
@@ -109,6 +114,7 @@ def _record(
 
 def valid_artifact() -> dict[str, object]:
     config = load_calibration_config(CONFIGS)
+    canonical_source = load_canonical_official_source()
     host = {
         "platform": "linux",
         "architecture": "x86_64",
@@ -124,8 +130,8 @@ def valid_artifact() -> dict[str, object]:
         "tesseract": "tesseract 5.3.4",
     }
     provenance = {
-        "source_sha256": config["source"]["expected_sha256"],
-        "config_sha256": _checksum(),
+        "source_sha256": canonical_source.sha256,
+        "config_sha256": CANONICAL_CONFIG_SHA256,
         "binary_sha256": _checksum(),
         "tessdata_sha256": {
             "system": {"vie": _checksum(), "eng": _checksum()},
@@ -146,38 +152,6 @@ def valid_artifact() -> dict[str, object]:
         str(page_number): shared_render
         for page_number in list(range(1, 21)) + [60, 450]
     }
-    candidates = []
-    for candidate in config["candidates"]:
-        candidates.append(
-            {
-                "id": candidate["id"],
-                "mode": candidate["mode"],
-                "tessdata": candidate["tessdata"],
-                "langs": candidate["langs"],
-                "argv": [
-                    "{fileconv}",
-                    "one",
-                    "{input}",
-                    "--lang",
-                    candidate["langs"],
-                ],
-                "environment_variable_names": candidate["environment_variable_names"],
-                "aggregate": {
-                    "pages": 22,
-                    "successes": 22,
-                    "failures": 0,
-                    "latency_seconds": {"median": 1.0, "total": 22.0},
-                    "peak_rss_bytes": 100,
-                    "resource_limit_violations": 0,
-                    "raw_counts": {
-                        "character_edits": 40,
-                        "reference_characters": 400,
-                        "word_edits": 20,
-                        "reference_words": 80,
-                    },
-                },
-            }
-        )
     records = [
         _record(
             candidate_id,
@@ -193,6 +167,30 @@ def valid_artifact() -> dict[str, object]:
         for candidate_id in EXPECTED_CANDIDATE_IDS
         for page_number in list(range(1, 21)) + [60, 450]
     ]
+    candidates = []
+    for candidate in config["candidates"]:
+        candidate_records = [
+            record
+            for record in records
+            if record["candidate_id"] == candidate["id"]
+        ]
+        candidates.append(
+            {
+                "id": candidate["id"],
+                "mode": candidate["mode"],
+                "tessdata": candidate["tessdata"],
+                "langs": candidate["langs"],
+                "argv": [
+                    "{fileconv}",
+                    "one",
+                    "{input}",
+                    "--lang",
+                    candidate["langs"],
+                ],
+                "environment_variable_names": candidate["environment_variable_names"],
+                "aggregate": aggregate_calibration_records(candidate_records),
+            }
+        )
     return {
         "schema_version": 1,
         "split": "calibration",
@@ -388,8 +386,14 @@ def test_calibration_accepts_bounded_failure_record() -> None:
         success=False,
         render_sha256=str(payload["render_hashes"]["1"]),
     )
-    payload["candidates"][0]["aggregate"]["successes"] = 21
-    payload["candidates"][0]["aggregate"]["failures"] = 1
+    candidate_records = [
+        record
+        for record in payload["records"]
+        if record["candidate_id"] == EXPECTED_CANDIDATE_IDS[0]
+    ]
+    payload["candidates"][0]["aggregate"] = aggregate_calibration_records(
+        candidate_records
+    )
     validate_calibration_artifact(payload)
 
 
@@ -671,3 +675,158 @@ def test_calibration_uses_bounded_worker_contract(tmp_path: Path) -> None:
 def test_sandbox_excludes_fileconv_ocr_preprocess_mode() -> None:
     sandbox = (ROOT / "crates/server/src/workers/sandbox.rs").read_text(encoding="utf-8")
     assert "FILECONV_OCR_PREPROCESS_MODE" not in sandbox
+
+
+def test_canonical_official_source_matches_checked_in_manifest() -> None:
+    source = load_canonical_official_source()
+    assert source.id == "official-89-2026-tt-btc"
+    assert source.sha256 == "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc"
+    assert source.max_bytes == 17_281_751
+
+
+def test_calibration_rejects_non_canonical_config_checksum() -> None:
+    payload = valid_artifact()
+    payload["provenance"]["config_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="config checksum is not canonical"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_non_canonical_source_checksum() -> None:
+    payload = valid_artifact()
+    payload["provenance"]["source_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="source checksum is not canonical"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_stale_candidate_aggregate() -> None:
+    payload = valid_artifact()
+    payload["candidates"][0]["aggregate"]["successes"] = 0
+    with pytest.raises(ValueError, match="aggregate is stale"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_string_in_numeric_record_field() -> None:
+    payload = valid_artifact()
+    payload["records"][0]["elapsed_seconds"] = "1.0"
+    with pytest.raises(ValueError, match="elapsed_seconds"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_unknown_tessdata_language_key() -> None:
+    payload = valid_artifact()
+    payload["provenance"]["tessdata_sha256"]["system"]["deu"] = "b" * 64
+    with pytest.raises(ValueError, match="unknown field"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_unknown_accent_proxy_key() -> None:
+    payload = valid_artifact()
+    payload["records"][-1]["diagnostics"]["accent_proxy_counts"]["extra"] = 0
+    with pytest.raises(ValueError, match="unknown field"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_expanded_argv_element_zero() -> None:
+    payload = valid_artifact()
+    payload["candidates"][0]["argv"][0] = "/usr/bin/fileconv"
+    with pytest.raises(ValueError, match="argv element zero"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_argv_template_drift() -> None:
+    payload = valid_artifact()
+    payload["candidates"][0]["argv"][1] = "convert"
+    with pytest.raises(ValueError, match="argv template drifted"):
+        validate_calibration_artifact(payload)
+
+
+def test_run_calibration_rejects_custom_agreeing_config(tmp_path: Path) -> None:
+    from argparse import Namespace
+
+    from experiments.bitonal_pdf import run_calibration
+
+    custom_config = tmp_path / "bitonal-configs.json"
+    custom_config.write_text(DEFAULT_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+    args = Namespace(
+        config=custom_config,
+        sources=DEFAULT_SOURCES,
+        pdf=tmp_path / "official.pdf",
+        reference=tmp_path / "reference.md",
+        note=tmp_path / "note.md",
+        fileconv=Path("/bin/true"),
+        pdfium_lib=tmp_path,
+        system_tessdata=tmp_path,
+        best_tessdata=tmp_path,
+        output=tmp_path / "out.json",
+    )
+    with pytest.raises(ValueError, match="canonical"):
+        run_calibration(args)
+
+
+def test_run_calibration_rejects_custom_agreeing_sources(tmp_path: Path) -> None:
+    from argparse import Namespace
+
+    from experiments.bitonal_pdf import run_calibration
+
+    custom_sources = tmp_path / "sources.json"
+    custom_sources.write_text(DEFAULT_SOURCES.read_text(encoding="utf-8"), encoding="utf-8")
+    args = Namespace(
+        config=DEFAULT_CONFIG,
+        sources=custom_sources,
+        pdf=tmp_path / "official.pdf",
+        reference=tmp_path / "reference.md",
+        note=tmp_path / "note.md",
+        fileconv=Path("/bin/true"),
+        pdfium_lib=tmp_path,
+        system_tessdata=tmp_path,
+        best_tessdata=tmp_path,
+        output=tmp_path / "out.json",
+    )
+    with pytest.raises(ValueError, match="canonical"):
+        run_calibration(args)
+
+
+def test_recognize_calibration_page_worker_startup_failure_returns_bounded_record(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace
+
+    config = load_calibration_config(CONFIGS)
+    candidates = build_calibration_candidates(
+        config,
+        fileconv=Path("/bin/true"),
+        system_tessdata=tmp_path,
+        best_tessdata=tmp_path,
+        pdfium_lib=tmp_path,
+    )
+    page_path = tmp_path / "page.png"
+    page_path.write_bytes(b"png")
+    broken = replace(
+        candidates[0],
+        spec=CommandCandidateSpec(
+            id=candidates[0].id,
+            label=candidates[0].id,
+            argv=("/definitely/missing/binary", "one", "{input}"),
+            environment=candidates[0].spec.environment,
+            provenance={},
+        ),
+    )
+    with patch(
+        "experiments.bitonal_pdf._isolated_worker",
+        side_effect=RuntimeError("worker startup failed"),
+    ):
+        text, resource, error_kind = recognize_calibration_page(
+            broken,
+            page_path=page_path,
+            page_number=1,
+            timeout_seconds=5.0,
+            max_output_bytes=4096,
+            max_rss_bytes=1024 * 1024,
+        )
+    assert text is None
+    assert error_kind == "candidate_error"
+    assert resource == {
+        "elapsed_seconds": 0.0,
+        "peak_rss_bytes": 0,
+        "resource_limit_violation": False,
+    }

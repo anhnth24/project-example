@@ -798,7 +798,6 @@ pub(crate) fn parse_ocr_preprocess_mode(raw: Option<&str>) -> Result<OcrPreproce
     }
 }
 
-#[cfg(unix)]
 pub(crate) fn parse_ocr_preprocess_mode_from_os(
     value: Option<&std::ffi::OsStr>,
 ) -> Result<OcrPreprocessMode, String> {
@@ -814,27 +813,14 @@ pub(crate) fn parse_ocr_preprocess_mode_from_os(
 }
 
 fn ocr_run_config_from_environment() -> Result<OcrRunConfig, anyhow::Error> {
-    #[cfg(unix)]
-    {
-        let preprocess_mode = parse_ocr_preprocess_mode_from_os(
-            std::env::var_os("FILECONV_OCR_PREPROCESS_MODE").as_deref(),
-        )
-        .map_err(anyhow::Error::msg)?;
-        return Ok(OcrRunConfig {
-            preprocess_mode,
-            ..OcrRunConfig::default()
-        });
-    }
-    #[cfg(not(unix))]
-    {
-        let raw = std::env::var("FILECONV_OCR_PREPROCESS_MODE").ok();
-        let preprocess_mode =
-            parse_ocr_preprocess_mode(raw.as_deref()).map_err(anyhow::Error::msg)?;
-        Ok(OcrRunConfig {
-            preprocess_mode,
-            ..OcrRunConfig::default()
-        })
-    }
+    let preprocess_mode = parse_ocr_preprocess_mode_from_os(
+        std::env::var_os("FILECONV_OCR_PREPROCESS_MODE").as_deref(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok(OcrRunConfig {
+        preprocess_mode,
+        ..OcrRunConfig::default()
+    })
 }
 
 fn rel(base: &Path, p: &Path) -> String {
@@ -882,6 +868,8 @@ mod tests {
     };
     use fileconv_core::{ConvertErrorKind, DetailedConvertError, OcrPreprocessMode};
     use std::ffi::OsString;
+
+    #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt;
 
     #[test]
@@ -905,11 +893,31 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn preprocess_mode_invalid_bytes_are_sanitized() {
         let invalid = OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
         let error = parse_ocr_preprocess_mode_from_os(Some(invalid.as_os_str())).unwrap_err();
         assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);
         assert!(!error.contains("ff"));
+    }
+
+    #[test]
+    fn preprocess_mode_empty_os_string_defaults_to_legacy() {
+        use std::ffi::OsStr;
+
+        assert_eq!(
+            parse_ocr_preprocess_mode_from_os(Some(OsStr::new(""))).unwrap(),
+            OcrPreprocessMode::Legacy,
+        );
+    }
+
+    #[test]
+    fn preprocess_mode_invalid_os_string_is_sanitized() {
+        use std::ffi::OsStr;
+
+        let error = parse_ocr_preprocess_mode_from_os(Some(OsStr::new("secret-mode"))).unwrap_err();
+        assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);
+        assert!(!error.contains("secret-mode"));
     }
 
     #[test]

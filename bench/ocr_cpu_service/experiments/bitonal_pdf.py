@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 import platform
 import re
 import shutil
@@ -30,7 +31,7 @@ from benchmark.run import (
     _isolated_worker,
     sanitized_candidate_environment,
 )
-from corpus.download import load_sources
+from corpus.download import CorpusSource, load_sources
 
 ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = ROOT / "bench" / "ocr_cpu_service"
@@ -39,6 +40,13 @@ DEFAULT_SOURCES = SERVICE_ROOT / "corpus" / "sources.json"
 DEFAULT_OUTPUT = SERVICE_ROOT / ".data" / "bitonal-pdf" / "calibration.json"
 CALIBRATION_RUN_ROOT = SERVICE_ROOT / ".data" / "bitonal-pdf" / "runs"
 OFFICIAL_SOURCE_ID = "official-89-2026-tt-btc"
+CANONICAL_CONFIG_SHA256 = (
+    "e37f2f60eb94211656e8c41d0a9ef438ee0dd0f9f6902388b9009d2332568758"
+)
+CANONICAL_OFFICIAL_SOURCE_SHA256 = (
+    "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc"
+)
+CANONICAL_OFFICIAL_SOURCE_MAX_BYTES = 17_281_751
 FILECONV_BUILD_COMMAND = (
     "CC=gcc CXX=g++ cargo build --release "
     "-p fileconv-cli --no-default-features"
@@ -158,7 +166,16 @@ _AGGREGATE_FIELDS = frozenset(
         "resource_limit_violations",
     }
 )
-_LATENCY_FIELDS = frozenset({"median", "total"})
+_LATENCY_FIELDS = frozenset({"median", "p95", "total"})
+_TESSDATA_ROLE_FIELDS = frozenset({"system", "best"})
+_TESSDATA_LANGUAGE_FIELDS = frozenset({"vie", "eng"})
+_ACCENT_PROXY_IDS = frozenset(
+    {
+        "latin-o-for-o-with-hook",
+        "latin-u-for-u-with-hook",
+        "latin-a-for-a-with-breve",
+    }
+)
 _RECORD_BASE_FIELDS = frozenset(
     {
         "candidate_id",
@@ -254,6 +271,116 @@ def _canonical_sha256(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _require_sha256_string(value: Any, *, path: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{path} must be a string hash")
+    if len(value) != 64 or not all(character in "0123456789abcdef" for character in value):
+        raise ValueError(f"{path} contains an invalid checksum")
+    return value
+
+
+def _require_nonnegative_int(value: Any, *, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{path} must be a non-negative integer")
+    if value < 0:
+        raise ValueError(f"{path} must be a non-negative integer")
+    return value
+
+
+def _require_finite_float(value: Any, *, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path} must be a finite number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{path} must be a finite number")
+    return number
+
+
+def _validate_tessdata_provenance(value: Any, *, path: str) -> None:
+    _validate_closed_mapping(value, allowed=_TESSDATA_ROLE_FIELDS, path=path)
+    for role in _TESSDATA_ROLE_FIELDS:
+        role_path = f"{path}.{role}"
+        _validate_closed_mapping(
+            value[role], allowed=_TESSDATA_LANGUAGE_FIELDS, path=role_path
+        )
+        for language in _TESSDATA_LANGUAGE_FIELDS:
+            _require_sha256_string(
+                value[role][language], path=f"{role_path}.{language}"
+            )
+
+
+def _validate_raw_counts(value: Any, *, path: str) -> None:
+    _validate_closed_mapping(value, allowed=_COUNT_FIELDS, path=path)
+    for field in _COUNT_FIELDS:
+        _require_nonnegative_int(value[field], path=f"{path}.{field}")
+
+
+def _validate_accent_proxy_counts(value: Any, *, path: str) -> None:
+    _validate_closed_mapping(value, allowed=_ACCENT_PROXY_IDS, path=path)
+    for proxy_id in _ACCENT_PROXY_IDS:
+        _require_nonnegative_int(value[proxy_id], path=f"{path}.{proxy_id}")
+
+
+def _validate_record_diagnostics(
+    value: Any, *, path: str, page_number: int
+) -> None:
+    _validate_closed_mapping(value, allowed=_DIAGNOSTIC_FIELDS, path=path)
+    _require_nonnegative_int(
+        value["digit_sequence_count"], path=f"{path}.digit_sequence_count"
+    )
+    _require_sha256_string(
+        value["digit_sequence_checksum"], path=f"{path}.digit_sequence_checksum"
+    )
+    _require_nonnegative_int(
+        value["legal_identifier_count"], path=f"{path}.legal_identifier_count"
+    )
+    _require_nonnegative_int(
+        value["non_whitespace_character_count"],
+        path=f"{path}.non_whitespace_character_count",
+    )
+    _require_nonnegative_int(
+        value["suspicious_character_count"], path=f"{path}.suspicious_character_count"
+    )
+    accent_path = f"{path}.accent_proxy_counts"
+    if page_number == 60:
+        _validate_accent_proxy_counts(value["accent_proxy_counts"], path=accent_path)
+    else:
+        _validate_closed_mapping(
+            value["accent_proxy_counts"], allowed=frozenset(), path=accent_path
+        )
+
+
+def _percentile(values: list[float], quantile: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    index = max(0, math.ceil(quantile * len(sorted_values)) - 1)
+    return sorted_values[index]
+
+
+def load_canonical_official_source() -> CorpusSource:
+    sources = load_sources(DEFAULT_SOURCES)
+    official = next(source for source in sources if source.id == OFFICIAL_SOURCE_ID)
+    if official.sha256 != CANONICAL_OFFICIAL_SOURCE_SHA256:
+        raise ValueError("canonical source checksum is invalid")
+    if official.max_bytes != CANONICAL_OFFICIAL_SOURCE_MAX_BYTES:
+        raise ValueError("canonical source byte cap is invalid")
+    return official
+
+
+def _require_canonical_config_path(path: Path) -> None:
+    resolved = path.resolve()
+    if resolved != DEFAULT_CONFIG.resolve():
+        raise ValueError("calibration config must use the canonical frozen config")
+    if _sha256(resolved) != CANONICAL_CONFIG_SHA256:
+        raise ValueError("calibration config bytes do not match canonical hash")
+
+
+def _require_canonical_sources_path(path: Path) -> None:
+    if path.resolve() != DEFAULT_SOURCES.resolve():
+        raise ValueError("calibration sources manifest must be canonical")
+
+
 def _valid_checksum(value: Any) -> bool:
     if isinstance(value, str):
         return len(value) == 64 and all(
@@ -303,6 +430,7 @@ def approved_calibration_pages(config: dict[str, Any]) -> tuple[int, ...]:
 
 
 def load_calibration_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
+    _require_canonical_config_path(path)
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -316,6 +444,10 @@ def load_calibration_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     _validate_closed_mapping(config["source"], allowed=_SOURCE_FIELDS, path="config.source")
     if config["source"]["id"] != OFFICIAL_SOURCE_ID:
         raise ValueError("calibration source identity is invalid")
+    if config["source"]["expected_sha256"] != CANONICAL_OFFICIAL_SOURCE_SHA256:
+        raise ValueError("calibration source checksum is not canonical")
+    if config["source"]["max_bytes"] != CANONICAL_OFFICIAL_SOURCE_MAX_BYTES:
+        raise ValueError("calibration source byte cap is not canonical")
     _validate_closed_mapping(config["render"], allowed=_RENDER_FIELDS, path="config.render")
     if config["render"] != _PLAN_RENDER:
         raise ValueError("render bounds exceed approved calibration limits")
@@ -691,11 +823,20 @@ def recognize_calibration_page(
     max_rss_bytes: int,
 ) -> tuple[str | None, dict[str, Any], str | None]:
     """Run one page through the reviewed bounded worker contract."""
-    worker = _isolated_worker(
-        candidate.spec,
-        timeout_seconds=timeout_seconds,
-        max_output_bytes=max_output_bytes,
-    )
+    failure_resource = {
+        "elapsed_seconds": 0.0,
+        "peak_rss_bytes": 0,
+        "resource_limit_violation": False,
+    }
+    worker = None
+    try:
+        worker = _isolated_worker(
+            candidate.spec,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        )
+    except Exception:
+        return None, dict(failure_resource), "candidate_error"
     try:
         measurement = worker.recognize(
             BenchmarkPage(
@@ -715,13 +856,14 @@ def recognize_calibration_page(
         }
         return measurement.text, resource, None
     except TimeoutError:
-        return None, {"elapsed_seconds": 0.0, "peak_rss_bytes": 0, "resource_limit_violation": False}, "timeout"
+        return None, dict(failure_resource), "timeout"
     except CandidateOutputLimitError:
-        return None, {"elapsed_seconds": 0.0, "peak_rss_bytes": 0, "resource_limit_violation": False}, "output_limit"
+        return None, dict(failure_resource), "output_limit"
     except Exception:
-        return None, {"elapsed_seconds": 0.0, "peak_rss_bytes": 0, "resource_limit_violation": False}, "candidate_error"
+        return None, dict(failure_resource), "candidate_error"
     finally:
-        worker.close()
+        if worker is not None:
+            worker.close()
 
 
 def _record_bindings(
@@ -752,6 +894,7 @@ def aggregate_calibration_records(records: list[dict[str, Any]]) -> dict[str, An
         "failures": len(failures),
         "latency_seconds": {
             "median": statistics.median(elapsed) if elapsed else 0.0,
+            "p95": _percentile(elapsed, 0.95),
             "total": sum(elapsed),
         },
         "peak_rss_bytes": max(rss, default=0),
@@ -759,17 +902,16 @@ def aggregate_calibration_records(records: list[dict[str, Any]]) -> dict[str, An
             bool(record["resource_limit_violation"]) for record in records
         ),
     }
-    if successes and all(
-        _COUNT_FIELDS <= set(record) for record in successes if record["page_number"] <= 20
+    reference_successes = [
+        record for record in successes if record["page_number"] <= 20
+    ]
+    if reference_successes and all(
+        _COUNT_FIELDS <= set(record) for record in reference_successes
     ):
-        reference_successes = [
-            record for record in successes if record["page_number"] <= 20
-        ]
-        if reference_successes:
-            aggregate["raw_counts"] = {
-                field: sum(int(record[field]) for record in reference_successes)
-                for field in _COUNT_FIELDS
-            }
+        aggregate["raw_counts"] = {
+            field: sum(int(record[field]) for record in reference_successes)
+            for field in _COUNT_FIELDS
+        }
     return aggregate
 
 
@@ -777,6 +919,24 @@ def _validate_bindings(
     bindings: Any, *, provenance: dict[str, Any], tessdata_role: str, render_sha256: str
 ) -> None:
     _validate_closed_mapping(bindings, allowed=_BINDINGS_FIELDS, path="record.bindings")
+    _require_sha256_string(bindings["source_sha256"], path="record.bindings.source_sha256")
+    _require_sha256_string(bindings["config_sha256"], path="record.bindings.config_sha256")
+    _require_sha256_string(bindings["binary_sha256"], path="record.bindings.binary_sha256")
+    _require_sha256_string(bindings["pdfium_sha256"], path="record.bindings.pdfium_sha256")
+    _require_sha256_string(
+        bindings["toolchain_sha256"], path="record.bindings.toolchain_sha256"
+    )
+    _validate_closed_mapping(
+        bindings["tessdata_sha256"],
+        allowed=_TESSDATA_LANGUAGE_FIELDS,
+        path="record.bindings.tessdata_sha256",
+    )
+    for language in _TESSDATA_LANGUAGE_FIELDS:
+        _require_sha256_string(
+            bindings["tessdata_sha256"][language],
+            path=f"record.bindings.tessdata_sha256.{language}",
+        )
+    _require_sha256_string(bindings["render_sha256"], path="record.bindings.render_sha256")
     if bindings["source_sha256"] != provenance["source_sha256"]:
         raise ValueError("record source binding is inconsistent")
     if bindings["config_sha256"] != provenance["config_sha256"]:
@@ -793,6 +953,104 @@ def _validate_bindings(
         raise ValueError("record render binding is inconsistent")
 
 
+def _validate_candidate_argv(argv: Any, *, expected_template: list[str]) -> None:
+    if not isinstance(argv, list):
+        raise ValueError("candidate argv must be a list")
+    if not argv or argv[0] != "{fileconv}":
+        raise ValueError("candidate argv element zero must remain the fileconv template")
+    if argv != expected_template:
+        raise ValueError("candidate argv template drifted from frozen config")
+
+
+def _validate_candidate_aggregate(aggregate: Any, *, records: list[dict[str, Any]]) -> None:
+    aggregate_fields = frozenset(aggregate)
+    allowed_aggregate = (
+        _AGGREGATE_FIELDS | frozenset({"raw_counts"})
+        if "raw_counts" in aggregate_fields
+        else _AGGREGATE_FIELDS
+    )
+    _validate_closed_mapping(
+        aggregate, allowed=allowed_aggregate, path="artifact.candidate.aggregate"
+    )
+    _require_nonnegative_int(aggregate["pages"], path="artifact.candidate.aggregate.pages")
+    _require_nonnegative_int(
+        aggregate["successes"], path="artifact.candidate.aggregate.successes"
+    )
+    _require_nonnegative_int(
+        aggregate["failures"], path="artifact.candidate.aggregate.failures"
+    )
+    _validate_closed_mapping(
+        aggregate["latency_seconds"],
+        allowed=_LATENCY_FIELDS,
+        path="artifact.candidate.aggregate.latency_seconds",
+    )
+    for field in _LATENCY_FIELDS:
+        _require_finite_float(
+            aggregate["latency_seconds"][field],
+            path=f"artifact.candidate.aggregate.latency_seconds.{field}",
+        )
+    _require_nonnegative_int(
+        aggregate["peak_rss_bytes"], path="artifact.candidate.aggregate.peak_rss_bytes"
+    )
+    _require_nonnegative_int(
+        aggregate["resource_limit_violations"],
+        path="artifact.candidate.aggregate.resource_limit_violations",
+    )
+    if "raw_counts" in aggregate:
+        _validate_raw_counts(
+            aggregate["raw_counts"], path="artifact.candidate.aggregate.raw_counts"
+        )
+    recomputed = aggregate_calibration_records(records)
+    if aggregate != recomputed:
+        raise ValueError("candidate aggregate is stale relative to records")
+
+
+def _validate_calibration_record(
+    record: dict[str, Any],
+    *,
+    provenance: dict[str, Any],
+    tessdata_role: str,
+    render_sha256: str,
+) -> None:
+    _reject_forbidden_keys(record, path="record")
+    candidate_id = record.get("candidate_id")
+    page_number = record.get("page_number")
+    if candidate_id not in EXPECTED_CANDIDATE_IDS:
+        raise ValueError("calibration record candidate is invalid")
+    approved_pages = set(range(1, 21)) | {60, 450}
+    if page_number not in approved_pages:
+        raise ValueError("approved calibration pages only")
+    _validate_bindings(
+        record["bindings"],
+        provenance=provenance,
+        tessdata_role=tessdata_role,
+        render_sha256=render_sha256,
+    )
+    _require_finite_float(record["elapsed_seconds"], path="record.elapsed_seconds")
+    _require_nonnegative_int(record["peak_rss_bytes"], path="record.peak_rss_bytes")
+    if not isinstance(record["resource_limit_violation"], bool):
+        raise ValueError("record.resource_limit_violation must be a boolean")
+    if record["success"]:
+        allowed = _RECORD_BASE_FIELDS | (
+            _COUNT_FIELDS if page_number <= 20 else frozenset({"diagnostics"})
+        )
+        _validate_closed_mapping(record, allowed=allowed, path="record")
+        if page_number <= 20:
+            _validate_raw_counts(
+                {key: record[key] for key in _COUNT_FIELDS},
+                path="record.counts",
+            )
+        else:
+            _validate_record_diagnostics(
+                record["diagnostics"], path="record.diagnostics", page_number=page_number
+            )
+    else:
+        allowed = _RECORD_BASE_FIELDS | frozenset({"error_kind"})
+        _validate_closed_mapping(record, allowed=allowed, path="record")
+        if record["error_kind"] not in ALLOWED_ERROR_KINDS:
+            raise ValueError("failure record error_kind is invalid")
+
+
 def validate_calibration_artifact(payload: dict[str, Any]) -> None:
     _validate_closed_mapping(payload, allowed=_ARTIFACT_FIELDS, path="artifact")
     if payload["schema_version"] != 1:
@@ -805,10 +1063,32 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
         payload["provenance"], allowed=_PROVENANCE_FIELDS, path="artifact.provenance"
     )
     provenance = payload["provenance"]
-    if not all(_valid_checksum(value) for value in provenance.values()):
-        raise ValueError("calibration provenance contains an invalid checksum")
-    if set(provenance["tessdata_sha256"]) != {"system", "best"}:
-        raise ValueError("tessdata provenance roles are invalid")
+    canonical_source = load_canonical_official_source()
+    _require_sha256_string(
+        provenance["source_sha256"], path="artifact.provenance.source_sha256"
+    )
+    _require_sha256_string(
+        provenance["config_sha256"], path="artifact.provenance.config_sha256"
+    )
+    _require_sha256_string(
+        provenance["binary_sha256"], path="artifact.provenance.binary_sha256"
+    )
+    _require_sha256_string(
+        provenance["pdfium_sha256"], path="artifact.provenance.pdfium_sha256"
+    )
+    _require_sha256_string(
+        provenance["host_sha256"], path="artifact.provenance.host_sha256"
+    )
+    _require_sha256_string(
+        provenance["toolchain_sha256"], path="artifact.provenance.toolchain_sha256"
+    )
+    if provenance["source_sha256"] != canonical_source.sha256:
+        raise ValueError("calibration source checksum is not canonical")
+    if provenance["config_sha256"] != CANONICAL_CONFIG_SHA256:
+        raise ValueError("calibration config checksum is not canonical")
+    _validate_tessdata_provenance(
+        provenance["tessdata_sha256"], path="artifact.provenance.tessdata_sha256"
+    )
     _validate_closed_mapping(payload["host"], allowed=_HOST_FIELDS, path="artifact.host")
     _validate_closed_mapping(
         payload["toolchain"], allowed=_TOOLCHAIN_FIELDS, path="artifact.toolchain"
@@ -834,14 +1114,17 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
     expected_render_pages = {str(page) for page in range(1, 21)} | {"60", "450"}
     if set(render_hashes) != expected_render_pages:
         raise ValueError("render hashes must cover approved pages only")
-    if not all(_valid_checksum(value) for value in render_hashes.values()):
-        raise ValueError("render hashes contain an invalid checksum")
+    for page, checksum in render_hashes.items():
+        _require_sha256_string(checksum, path=f"artifact.render_hashes.{page}")
     _reject_forbidden_keys(payload)
     candidates = payload["candidates"]
     if tuple(candidate["id"] for candidate in candidates) != EXPECTED_CANDIDATE_IDS:
         raise ValueError("calibration candidate IDs are invalid")
     config = load_calibration_config()
     config_by_id = {candidate["id"]: candidate for candidate in config["candidates"]}
+    records = payload["records"]
+    if not isinstance(records, list):
+        raise ValueError("calibration records cardinality is invalid")
     for candidate in candidates:
         _validate_closed_mapping(
             candidate, allowed=_CANDIDATE_FIELDS, path="artifact.candidate"
@@ -853,80 +1136,33 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
             or candidate["langs"] != expected["langs"]
         ):
             raise ValueError("candidate semantics drifted from frozen config")
-        if candidate["argv"][1:] != [
-            "one",
-            "{input}",
-            "--lang",
-            expected["langs"],
-        ]:
-            raise ValueError("candidate argv template drifted from frozen config")
+        expected_argv = list(expected["argv_template"])
+        _validate_candidate_argv(candidate["argv"], expected_template=expected_argv)
         if candidate["environment_variable_names"] != expected["environment_variable_names"]:
             raise ValueError("candidate environment variable names drifted")
-        aggregate_fields = frozenset(candidate["aggregate"])
-        allowed_aggregate = (
-            _AGGREGATE_FIELDS | frozenset({"raw_counts"})
-            if "raw_counts" in aggregate_fields
-            else _AGGREGATE_FIELDS
-        )
-        _validate_closed_mapping(
-            candidate["aggregate"],
-            allowed=allowed_aggregate,
-            path="artifact.candidate.aggregate",
-        )
-        _validate_closed_mapping(
-            candidate["aggregate"]["latency_seconds"],
-            allowed=_LATENCY_FIELDS,
-            path="artifact.candidate.aggregate.latency_seconds",
-        )
-    records = payload["records"]
-    if not isinstance(records, list):
-        raise ValueError("calibration records cardinality is invalid")
     approved_pages = set(range(1, 21)) | {60, 450}
     seen: set[tuple[str, int]] = set()
     for record in records:
         if not isinstance(record, dict):
             raise ValueError("calibration record must be a mapping")
-        _reject_forbidden_keys(record, path="record")
         candidate_id = record.get("candidate_id")
         page_number = record.get("page_number")
-        if candidate_id not in EXPECTED_CANDIDATE_IDS:
-            raise ValueError("calibration record candidate is invalid")
-        if page_number not in approved_pages:
-            raise ValueError("approved calibration pages only")
         key = (candidate_id, page_number)
         if key in seen:
             raise ValueError("duplicate candidate-page record")
         seen.add(key)
+        if candidate_id not in config_by_id:
+            raise ValueError("calibration record candidate is invalid")
+        if page_number not in approved_pages:
+            raise ValueError("approved calibration pages only")
         tessdata_role = config_by_id[candidate_id]["tessdata"]
         render_sha256 = render_hashes[str(page_number)]
-        _validate_bindings(
-            record["bindings"],
+        _validate_calibration_record(
+            record,
             provenance=provenance,
             tessdata_role=tessdata_role,
             render_sha256=render_sha256,
         )
-        if record["success"]:
-            allowed = _RECORD_BASE_FIELDS | (
-                _COUNT_FIELDS if page_number <= 20 else frozenset({"diagnostics"})
-            )
-            _validate_closed_mapping(record, allowed=allowed, path="record")
-            if page_number <= 20:
-                _validate_closed_mapping(
-                    {key: record[key] for key in _COUNT_FIELDS},
-                    allowed=_COUNT_FIELDS,
-                    path="record.counts",
-                )
-            else:
-                _validate_closed_mapping(
-                    record["diagnostics"],
-                    allowed=_DIAGNOSTIC_FIELDS,
-                    path="record.diagnostics",
-                )
-        else:
-            allowed = _RECORD_BASE_FIELDS | frozenset({"error_kind"})
-            _validate_closed_mapping(record, allowed=allowed, path="record")
-            if record["error_kind"] not in ALLOWED_ERROR_KINDS:
-                raise ValueError("failure record error_kind is invalid")
     if len(records) != 88:
         raise ValueError("calibration records cardinality is invalid")
     expected_keys = {
@@ -936,6 +1172,13 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
     }
     if seen != expected_keys:
         raise ValueError("candidate-page records are missing")
+    for candidate in candidates:
+        candidate_records = [
+            record for record in records if record["candidate_id"] == candidate["id"]
+        ]
+        _validate_candidate_aggregate(
+            candidate["aggregate"], records=candidate_records
+        )
     per_page_renders = {
         page: {
             record["bindings"]["render_sha256"]
@@ -949,9 +1192,10 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
 
 
 def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
-    config = load_calibration_config(args.config.resolve())
-    sources = load_sources(args.sources.resolve())
-    official = next(source for source in sources if source.id == OFFICIAL_SOURCE_ID)
+    _require_canonical_config_path(args.config.resolve())
+    _require_canonical_sources_path(args.sources.resolve())
+    config = load_calibration_config()
+    official = load_canonical_official_source()
     if official.sha256 != config["source"]["expected_sha256"]:
         raise ValueError("manifest source checksum does not match frozen config")
     pdf_path = args.pdf.resolve()
@@ -973,7 +1217,7 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
     toolchain = _toolchain_description()
     provenance = build_calibration_provenance(
         source_sha256=official.sha256,
-        config_path=args.config.resolve(),
+        config_path=DEFAULT_CONFIG,
         fileconv=fileconv,
         system_tessdata=system_tessdata,
         best_tessdata=best_tessdata,
