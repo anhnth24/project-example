@@ -237,6 +237,9 @@ _PLAN_RENDER = {
     "max_pixels": 50_000_000,
     "max_dimension": 10_000,
 }
+_REFERENCE_PAGES = tuple(range(1, 21))
+_DIAGNOSTIC_PAGES = (60, 450)
+_MAX_PAGE_DISAGREEMENT_REGRESSION = 0.02
 _SUSPICIOUS_CHARACTER_RE = re.compile(
     r"[^\w\s\u00C0-\u024F\u1E00-\u1EFF.,;:!?()\-+/%\"'“”‘’]"
 )
@@ -1260,6 +1263,447 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
         raise ValueError("all candidates for a page must share one render hash")
 
 
+def _candidate_configuration_sha256(candidate: dict[str, Any]) -> str:
+    return _canonical_sha256(
+        {
+            field: candidate[field]
+            for field in (
+                "mode",
+                "tessdata",
+                "langs",
+                "argv",
+                "environment_variable_names",
+            )
+        }
+    )
+
+
+def _disagreement_ratio(edits: int, reference_units: int) -> float:
+    if reference_units <= 0:
+        return math.inf
+    return edits / reference_units
+
+
+def _current_baseline(payload: dict[str, Any]) -> dict[str, Any]:
+    matches = [
+        candidate
+        for candidate in payload["candidates"]
+        if candidate["mode"] == "legacy"
+        and candidate["tessdata"] == "system"
+        and candidate["langs"] == "vie+eng"
+    ]
+    if len(matches) != 1:
+        raise ValueError("calibration artifact must contain one current baseline")
+    return matches[0]
+
+
+def _records_by_candidate(
+    payload: dict[str, Any],
+) -> dict[str, dict[int, dict[str, Any]]]:
+    grouped = {candidate["id"]: {} for candidate in payload["candidates"]}
+    for record in payload["records"]:
+        grouped[record["candidate_id"]][record["page_number"]] = record
+    return grouped
+
+
+def _append_once(items: list[str], value: str) -> None:
+    if value not in items:
+        items.append(value)
+
+
+def derive_calibration_gate(payload: dict[str, Any]) -> dict[str, Any]:
+    """Derive the calibration decision only from validated additive measurements."""
+    validate_calibration_artifact(payload)
+    baseline = _current_baseline(payload)
+    baseline_id = baseline["id"]
+    records = _records_by_candidate(payload)
+    baseline_records = records[baseline_id]
+    baseline_aggregate = baseline["aggregate"]
+    baseline_counts = baseline_aggregate.get("raw_counts")
+    baseline_complete = (
+        baseline_aggregate["successes"] == payload["page_count"]
+        and baseline_aggregate["failures"] == 0
+        and baseline_aggregate["resource_limit_violations"] == 0
+        and baseline_counts is not None
+    )
+    baseline_character_ratio = (
+        _disagreement_ratio(
+            baseline_counts["character_edits"],
+            baseline_counts["reference_characters"],
+        )
+        if baseline_counts is not None
+        else math.inf
+    )
+    baseline_word_ratio = (
+        _disagreement_ratio(
+            baseline_counts["word_edits"], baseline_counts["reference_words"]
+        )
+        if baseline_counts is not None
+        else math.inf
+    )
+    baseline_latency = float(baseline_aggregate["latency_seconds"]["median"])
+    expected_pages = set(_REFERENCE_PAGES + _DIAGNOSTIC_PAGES)
+    candidate_results: dict[str, dict[str, Any]] = {}
+
+    for candidate in payload["candidates"]:
+        candidate_id = candidate["id"]
+        aggregate = candidate["aggregate"]
+        candidate_records = records[candidate_id]
+        disqualifications: list[str] = []
+        successful_pages = {
+            page_number
+            for page_number, record in candidate_records.items()
+            if record["success"]
+        }
+        counts = aggregate.get("raw_counts")
+        character_ratio = (
+            _disagreement_ratio(
+                counts["character_edits"], counts["reference_characters"]
+            )
+            if counts is not None
+            else math.inf
+        )
+        word_ratio = (
+            _disagreement_ratio(counts["word_edits"], counts["reference_words"])
+            if counts is not None
+            else math.inf
+        )
+        if successful_pages != expected_pages:
+            _append_once(disqualifications, "incomplete_successful_page_marker_coverage")
+        if aggregate["failures"] > 0:
+            _append_once(disqualifications, "candidate_page_failure")
+        if aggregate["resource_limit_violations"] > 0:
+            _append_once(disqualifications, "resource_limit_violation")
+        if aggregate["peak_rss_bytes"] >= payload["limits"]["max_rss_bytes"]:
+            _append_once(disqualifications, "peak_rss_not_below_limit")
+        if not baseline_complete:
+            _append_once(disqualifications, "baseline_not_comparable")
+        elif counts is None or not character_ratio < baseline_character_ratio:
+            _append_once(
+                disqualifications,
+                "aggregate_character_disagreement_not_lower_than_baseline",
+            )
+
+        if baseline_complete and counts is not None:
+            for page_number in _REFERENCE_PAGES:
+                baseline_record = baseline_records[page_number]
+                candidate_record = candidate_records[page_number]
+                if not baseline_record["success"] or not candidate_record["success"]:
+                    continue
+                baseline_page_ratio = _disagreement_ratio(
+                    baseline_record["character_edits"],
+                    baseline_record["reference_characters"],
+                )
+                candidate_page_ratio = _disagreement_ratio(
+                    candidate_record["character_edits"],
+                    candidate_record["reference_characters"],
+                )
+                if (
+                    candidate_page_ratio - baseline_page_ratio
+                    > _MAX_PAGE_DISAGREEMENT_REGRESSION
+                ):
+                    _append_once(
+                        disqualifications,
+                        f"page_{page_number}_character_disagreement_regressed_gt_2pp",
+                    )
+
+            baseline_page_60 = baseline_records[60]
+            candidate_page_60 = candidate_records[60]
+            if baseline_page_60["success"] and candidate_page_60["success"]:
+                baseline_proxies = baseline_page_60["diagnostics"][
+                    "accent_proxy_counts"
+                ]
+                candidate_proxies = candidate_page_60["diagnostics"][
+                    "accent_proxy_counts"
+                ]
+                if any(
+                    candidate_proxies[proxy_id] > baseline_proxies[proxy_id]
+                    for proxy_id in _ACCENT_PROXY_IDS
+                ):
+                    _append_once(disqualifications, "page_60_accent_proxy_regression")
+
+            baseline_page_450 = baseline_records[450]
+            candidate_page_450 = candidate_records[450]
+            if baseline_page_450["success"] and candidate_page_450["success"]:
+                for field in (
+                    "digit_sequence_count",
+                    "legal_identifier_count",
+                    "non_whitespace_character_count",
+                ):
+                    if (
+                        candidate_page_450["diagnostics"][field]
+                        < baseline_page_450["diagnostics"][field]
+                    ):
+                        _append_once(
+                            disqualifications, f"page_450_{field}_regression"
+                        )
+
+            if (
+                float(aggregate["latency_seconds"]["median"])
+                > 2.0 * baseline_latency
+            ):
+                _append_once(disqualifications, "median_latency_exceeds_2x_baseline")
+
+        candidate_results[candidate_id] = {
+            "eligible": not disqualifications,
+            "disqualifications": disqualifications,
+            "successful_page_markers": len(successful_pages),
+            "configuration_sha256": _candidate_configuration_sha256(candidate),
+            "aggregate_character_disagreement": character_ratio,
+            "aggregate_word_disagreement": word_ratio,
+            "median_latency_seconds": float(
+                aggregate["latency_seconds"]["median"]
+            ),
+            "peak_rss_bytes": int(aggregate["peak_rss_bytes"]),
+        }
+
+    eligible = [
+        (candidate_id, result)
+        for candidate_id, result in candidate_results.items()
+        if result["eligible"]
+    ]
+    winner_id: str | None = None
+    tied_ids: list[str] = []
+    if eligible:
+        best_key = min(
+            (
+                result["aggregate_character_disagreement"],
+                result["aggregate_word_disagreement"],
+                result["median_latency_seconds"],
+            )
+            for _, result in eligible
+        )
+        tied_ids = [
+            candidate_id
+            for candidate_id, result in eligible
+            if (
+                result["aggregate_character_disagreement"],
+                result["aggregate_word_disagreement"],
+                result["median_latency_seconds"],
+            )
+            == best_key
+        ]
+        if len(tied_ids) == 1:
+            winner_id = tied_ids[0]
+            tied_ids = []
+
+    return {
+        "baseline_id": baseline_id,
+        "baseline_character_disagreement": baseline_character_ratio,
+        "baseline_word_disagreement": baseline_word_ratio,
+        "winner_id": winner_id,
+        "tied_ids": tied_ids,
+        "winner_configuration_sha256": (
+            candidate_results[winner_id]["configuration_sha256"]
+            if winner_id is not None
+            else None
+        ),
+        "candidates": candidate_results,
+    }
+
+
+def _format_ratio(value: float) -> str:
+    return "n/a" if not math.isfinite(value) else f"{100.0 * value:.6f}%"
+
+
+def _format_hash(value: str | None) -> str:
+    return value if value is not None else "null"
+
+
+def render_calibration_report(payload: dict[str, Any]) -> str:
+    """Render deterministic aggregate evidence without recognized/reference text."""
+    gate = derive_calibration_gate(payload)
+    records = _records_by_candidate(payload)
+    candidate_by_id = {
+        candidate["id"]: candidate for candidate in payload["candidates"]
+    }
+    baseline_records = records[gate["baseline_id"]]
+    lines = [
+        "# Bitonal PDF OCR calibration",
+        "",
+        "This report contains additive counts and hashes only. It does not contain "
+        "recognized or private-reference text.",
+        "",
+        "## Provenance",
+        "",
+        f"- Source SHA-256: `{payload['provenance']['source_sha256']}`",
+        f"- Config SHA-256: `{payload['provenance']['config_sha256']}`",
+        f"- Binary SHA-256: `{payload['provenance']['binary_sha256']}`",
+        f"- PDFium SHA-256: `{payload['provenance']['pdfium_sha256']}`",
+        f"- Host descriptor SHA-256: `{payload['provenance']['host_sha256']}`",
+        f"- Toolchain descriptor SHA-256: `{payload['provenance']['toolchain_sha256']}`",
+        f"- Build command: `{FILECONV_BUILD_COMMAND}`",
+        f"- Approved pages opened: {payload['access']['approved_pages_opened']}",
+        f"- Holdout pages opened: {payload['access']['holdout_pages_opened']}",
+        f"- OCR executions: {payload['access']['ocr_executions']}",
+        "",
+        "## Fixed bounds",
+        "",
+        f"- CPU threads: {payload['limits']['cpu_threads']}",
+        "- Timeout per page: "
+        f"{payload['limits']['timeout_seconds_per_page']} seconds",
+        "- Maximum output bytes per stream: "
+        f"{payload['limits']['max_output_bytes_per_stream']}",
+        f"- Maximum sampled RSS bytes: {payload['limits']['max_rss_bytes']}",
+        "- Process-tree sample interval: "
+        f"{payload['limits']['process_tree_sample_interval_ms']} ms",
+        "",
+        "A successful page marker below means one unique successful candidate-page "
+        "record for an approved page; OCR text is not retained.",
+        "",
+        "## Gate summary",
+        "",
+        f"- `baseline_id`: `{gate['baseline_id']}`",
+        f"- `winner_id`: `{_format_hash(gate['winner_id'])}`",
+        "- `tied_ids`: "
+        + (
+            ", ".join(f"`{candidate_id}`" for candidate_id in gate["tied_ids"])
+            if gate["tied_ids"]
+            else "none"
+        ),
+        "- `winner_configuration_sha256`: "
+        f"`{_format_hash(gate['winner_configuration_sha256'])}`",
+        "",
+        "| Candidate | Eligible | Character disagreement | Word disagreement | "
+        "Median seconds | Peak RSS bytes | Successful page markers | Failures | "
+        "Resource violations | Configuration SHA-256 | Disqualifications |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
+    ]
+    for candidate in payload["candidates"]:
+        candidate_id = candidate["id"]
+        result = gate["candidates"][candidate_id]
+        aggregate = candidate["aggregate"]
+        reasons = (
+            ", ".join(result["disqualifications"])
+            if result["disqualifications"]
+            else "none"
+        )
+        lines.append(
+            f"| `{candidate_id}` | {'yes' if result['eligible'] else 'no'} | "
+            f"{_format_ratio(result['aggregate_character_disagreement'])} | "
+            f"{_format_ratio(result['aggregate_word_disagreement'])} | "
+            f"{result['median_latency_seconds']:.6f} | "
+            f"{result['peak_rss_bytes']} | "
+            f"{result['successful_page_markers']} | "
+            f"{aggregate['failures']} | "
+            f"{aggregate['resource_limit_violations']} | "
+            f"`{result['configuration_sha256']}` | {reasons} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Pages 1–20 additive disagreement counts",
+            "",
+            "| Page | Candidate | Character edits | Reference characters | "
+            "Character disagreement | Delta vs baseline (percentage points) | "
+            "Word edits | Reference words |",
+            "|---:|---|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for page_number in _REFERENCE_PAGES:
+        baseline_record = baseline_records[page_number]
+        baseline_ratio = (
+            _disagreement_ratio(
+                baseline_record["character_edits"],
+                baseline_record["reference_characters"],
+            )
+            if baseline_record["success"]
+            else math.inf
+        )
+        for candidate in payload["candidates"]:
+            record = records[candidate["id"]][page_number]
+            if record["success"]:
+                ratio = _disagreement_ratio(
+                    record["character_edits"], record["reference_characters"]
+                )
+                delta = (
+                    f"{100.0 * (ratio - baseline_ratio):.6f}"
+                    if math.isfinite(baseline_ratio)
+                    else "n/a"
+                )
+                lines.append(
+                    f"| {page_number} | `{candidate['id']}` | "
+                    f"{record['character_edits']} | "
+                    f"{record['reference_characters']} | "
+                    f"{_format_ratio(ratio)} | {delta} | "
+                    f"{record['word_edits']} | {record['reference_words']} |"
+                )
+            else:
+                lines.append(
+                    f"| {page_number} | `{candidate['id']}` | n/a | n/a | "
+                    "n/a | n/a | n/a | n/a |"
+                )
+
+    lines.extend(
+        [
+            "",
+            "## Page 60 accent-error proxies",
+            "",
+            "| Candidate | latin-o-for-o-with-hook | latin-u-for-u-with-hook | "
+            "latin-a-for-a-with-breve |",
+            "|---|---:|---:|---:|",
+        ]
+    )
+    for candidate in payload["candidates"]:
+        record = records[candidate["id"]][60]
+        if record["success"]:
+            proxies = record["diagnostics"]["accent_proxy_counts"]
+            lines.append(
+                f"| `{candidate['id']}` | "
+                f"{proxies['latin-o-for-o-with-hook']} | "
+                f"{proxies['latin-u-for-u-with-hook']} | "
+                f"{proxies['latin-a-for-a-with-breve']} |"
+            )
+        else:
+            lines.append(f"| `{candidate['id']}` | n/a | n/a | n/a |")
+
+    lines.extend(
+        [
+            "",
+            "## Page 450 coverage diagnostics",
+            "",
+            "| Candidate | Digit sequences | Digit-sequence SHA-256 | "
+            "Legal identifiers | Non-whitespace characters | Suspicious characters |",
+            "|---|---:|---|---:|---:|---:|",
+        ]
+    )
+    for candidate in payload["candidates"]:
+        record = records[candidate["id"]][450]
+        if record["success"]:
+            diagnostics = record["diagnostics"]
+            lines.append(
+                f"| `{candidate['id']}` | "
+                f"{diagnostics['digit_sequence_count']} | "
+                f"`{diagnostics['digit_sequence_checksum']}` | "
+                f"{diagnostics['legal_identifier_count']} | "
+                f"{diagnostics['non_whitespace_character_count']} | "
+                f"{diagnostics['suspicious_character_count']} |"
+            )
+        else:
+            lines.append(
+                f"| `{candidate['id']}` | n/a | n/a | n/a | n/a | n/a |"
+            )
+
+    lines.extend(
+        [
+            "",
+            "## Candidate semantics",
+            "",
+            "| Candidate | Mode | Tessdata | Languages |",
+            "|---|---|---|---|",
+        ]
+    )
+    for candidate_id in records:
+        candidate = candidate_by_id[candidate_id]
+        lines.append(
+            f"| `{candidate_id}` | `{candidate['mode']}` | "
+            f"`{candidate['tessdata']}` | `{candidate['langs']}` |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
     _require_canonical_config_path(args.config.resolve())
     _require_canonical_sources_path(args.sources.resolve())
@@ -1407,6 +1851,9 @@ def _parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     calibrate.add_argument("--sources", type=Path, default=DEFAULT_SOURCES)
     calibrate.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    report = subparsers.add_parser("report")
+    report.add_argument("--input", type=Path, required=True)
+    report.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -1419,6 +1866,14 @@ def main() -> None:
             json.dumps(artifact, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
+    elif args.command == "report":
+        try:
+            artifact = json.loads(args.input.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"{args.input}: invalid calibration artifact: {error}") from error
+        report = render_calibration_report(artifact)
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(report, encoding="utf-8")
 
 
 if __name__ == "__main__":
