@@ -10,6 +10,12 @@
     "timeout_seconds_per_page": 180,
     "max_dimension": 10000,
     "max_pixels": 50000000,
+    "max_input_bytes": 134217728,
+    "max_temp_output_bytes": 134217728,
+    "max_event_bytes": 65536,
+    "max_tesseract_args": 32,
+    "max_arg_bytes": 4096,
+    "max_transform_attempts": 8,
     "max_deskew_degrees": 3.0
   },
   "configs": [

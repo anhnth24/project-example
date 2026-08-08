@@ -68,6 +68,7 @@ def _record(
     strata: tuple[str, ...] = ("low-contrast",),
     edits: int = 2,
 ) -> dict[str, object]:
+    transform_sha256s = ["a" * 64]
     return {
         "page_id": page_id,
         "split": "tuning",
@@ -86,8 +87,15 @@ def _record(
         "peak_rss_bytes": 100,
         "resource_limit_violation": False,
         "input_sha256s": ["d" * 64],
-        "transform_sha256s": ["a" * 64],
-        "transform_sha256": "a" * 64,
+        "transform_sha256s": transform_sha256s,
+        "transform_sha256": hashlib.sha256(
+            json.dumps(
+                transform_sha256s,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
         "transform_attempts": 1,
     }
 
@@ -376,6 +384,7 @@ def test_matrix_candidate_environment_runs_shim_with_pinned_python(
     _write_fake_tesseract(real)
     specs, _, _ = _build_specs(
         load_experiment_configs(CONFIGS),
+        configs_path=CONFIGS,
         fileconv=tmp_path / "fileconv",
         shim=PREPROCESS,
         real_tesseract=real,

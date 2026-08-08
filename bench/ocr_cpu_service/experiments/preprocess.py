@@ -17,6 +17,7 @@ import os
 import platform
 import shutil
 import signal
+import stat
 import statistics
 import subprocess
 import sys
@@ -60,6 +61,12 @@ DEFAULT_SHIM = Path(__file__).resolve()
 
 MAX_DIMENSION = 10_000
 MAX_PIXELS = 50_000_000
+MAX_INPUT_BYTES = 134_217_728
+MAX_TEMP_OUTPUT_BYTES = 134_217_728
+MAX_EVENT_BYTES = 65_536
+MAX_TESSERACT_ARGS = 32
+MAX_ARG_BYTES = 4_096
+MAX_TRANSFORM_ATTEMPTS = 8
 MAX_DESKEW_DEGREES = 3.0
 PNG_COMPRESS_LEVEL = 9
 EXPECTED_CONFIG_IDS = (
@@ -193,6 +200,12 @@ def load_experiment_configs(path: Path = DEFAULT_CONFIGS) -> dict[str, Any]:
         "timeout_seconds_per_page": 180,
         "max_dimension": MAX_DIMENSION,
         "max_pixels": MAX_PIXELS,
+        "max_input_bytes": MAX_INPUT_BYTES,
+        "max_temp_output_bytes": MAX_TEMP_OUTPUT_BYTES,
+        "max_event_bytes": MAX_EVENT_BYTES,
+        "max_tesseract_args": MAX_TESSERACT_ARGS,
+        "max_arg_bytes": MAX_ARG_BYTES,
+        "max_transform_attempts": MAX_TRANSFORM_ATTEMPTS,
         "max_deskew_degrees": MAX_DESKEW_DEGREES,
     }:
         raise ValueError("experiment limits are invalid")
@@ -206,6 +219,19 @@ def _check_image_bounds(width: int, height: int) -> None:
         raise ValueError("image dimension exceeds experiment bound")
     if width * height > MAX_PIXELS:
         raise ValueError("image pixel count exceeds experiment bound")
+
+
+def _check_input_file(path: Path) -> None:
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("input must be a regular file")
+    if metadata.st_size > MAX_INPUT_BYTES:
+        raise ValueError("input byte count exceeds experiment bound")
+
+
+def _bounded_input_sha256(path: Path) -> str:
+    _check_input_file(path)
+    return _sha256(path)
 
 
 def _deterministic_grayscale(image: Image.Image) -> Image.Image:
@@ -358,6 +384,7 @@ def _apply_image_factor(
 def transform_image(
     source: Path, factor: dict[str, Any], *, work_dir: Path
 ) -> Iterator[TransformResult]:
+    _check_input_file(source)
     work_dir.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -377,6 +404,8 @@ def transform_image(
             optimize=False,
             compress_level=PNG_COMPRESS_LEVEL,
         )
+        if temporary.stat().st_size > MAX_TEMP_OUTPUT_BYTES:
+            raise ValueError("temporary output byte count exceeds experiment bound")
         yield TransformResult(
             path=temporary,
             sha256=_sha256(temporary),
@@ -393,6 +422,7 @@ def transform_image(
 def _passthrough_image(
     source: Path, *, work_dir: Path
 ) -> Iterator[TransformResult]:
+    _check_input_file(source)
     work_dir.mkdir(parents=True, exist_ok=True)
     with Image.open(source) as opened:
         _check_image_bounds(opened.width, opened.height)
@@ -454,8 +484,13 @@ def shim_main(argv: list[str] | None = None) -> int:
         raise ValueError("BENCH_OCR_REAL_TESSERACT is required")
     if args == ["--version"]:
         return _run_real_tesseract([real, *args])
-    if not args:
-        raise ValueError("Tesseract image argv is required")
+    if (
+        len(args) < 2
+        or len(args) > MAX_TESSERACT_ARGS
+        or args[1] != "stdout"
+        or any(len(argument.encode("utf-8")) > MAX_ARG_BYTES for argument in args)
+    ):
+        raise ValueError("Tesseract argv violates experiment bounds")
     config_id = os.environ.get("BENCH_OCR_EXPERIMENT_CONFIG_ID")
     if not config_id:
         raise ValueError("BENCH_OCR_EXPERIMENT_CONFIG_ID is required")
@@ -469,7 +504,7 @@ def shim_main(argv: list[str] | None = None) -> int:
     if config is None:
         raise ValueError("unknown experiment config ID")
     source = Path(args[0])
-    input_sha256 = _sha256(source)
+    input_sha256 = _bounded_input_sha256(source)
     factor = config["factor"]
     image_factor = (
         factor
@@ -569,6 +604,8 @@ def aggregate_matrix_records(records: list[dict[str, Any]]) -> dict[str, Any]:
 def _event_summary(events_path: Path) -> tuple[list[str], list[str], str, int, float]:
     if not events_path.exists():
         raise ValueError("shim emitted no transform event")
+    if events_path.stat().st_size > MAX_EVENT_BYTES:
+        raise ValueError("shim event log exceeds experiment bound")
     events = [
         json.loads(line)
         for line in events_path.read_text(encoding="utf-8").splitlines()
@@ -576,6 +613,8 @@ def _event_summary(events_path: Path) -> tuple[list[str], list[str], str, int, f
     ]
     if not events:
         raise ValueError("shim emitted no transform event")
+    if len(events) > MAX_TRANSFORM_ATTEMPTS:
+        raise ValueError("shim event attempts exceed experiment bound")
     input_sha256s = [event["input_sha256"] for event in events]
     transform_sha256s = [event["transform_sha256"] for event in events]
     checksum = hashlib.sha256(_canonical_json(transform_sha256s)).hexdigest()
@@ -615,6 +654,7 @@ def _run_matrix_candidate(
                 "page_id": page["page_id"],
                 "split": "tuning",
                 "source_id": page["source_id"],
+                "source_sha256": page["source_sha256"],
                 "page_number": page["page_number"],
                 "document_type": page["document_type"],
                 "difficulty_strata": sorted(page["difficulty_strata"]),
@@ -800,6 +840,8 @@ def validate_matrix_artifact(
         for record in records:
             if record.get("split") != "tuning":
                 raise ValueError("holdout matrix record is forbidden")
+            if not _valid_checksum(record.get("source_sha256")):
+                raise ValueError("source checksum is invalid")
             if record["success"]:
                 input_sha256s = record.get("input_sha256s")
                 transform_sha256s = record.get("transform_sha256s")
@@ -817,6 +859,11 @@ def validate_matrix_artifact(
                     raise ValueError("transform checksum list is invalid")
                 if not _valid_checksum(record.get("transform_sha256")):
                     raise ValueError("transform checksum is invalid")
+                expected_transform_checksum = hashlib.sha256(
+                    _canonical_json(transform_sha256s)
+                ).hexdigest()
+                if record["transform_sha256"] != expected_transform_checksum:
+                    raise ValueError("transform checksum does not match transforms")
                 if (
                     int(record.get("transform_attempts", 0)) <= 0
                     or len(input_sha256s) != record["transform_attempts"]
@@ -1020,8 +1067,8 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             "## Raw additive counts and transform checksums",
             "",
             "| Config | Page ID | Character edits | Chars | Word edits | Words | "
-            "Input SHA-256(s) | Transform SHA-256(s) | Attempts |",
-            "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: |",
+            "Source SHA-256 | Input SHA-256(s) | Transform SHA-256(s) | Attempts |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- | ---: |",
         ]
     )
     for candidate in artifact["candidates"]:
@@ -1032,6 +1079,7 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
                 f"{record.get('reference_characters', 0)} | "
                 f"{record.get('word_edits', 0)} | "
                 f"{record.get('reference_words', 0)} | "
+                f"`{record.get('source_sha256', '')}` | "
                 f"`{','.join(record.get('input_sha256s', []))}` | "
                 f"`{','.join(record.get('transform_sha256s', []))}` | "
                 f"{record.get('transform_attempts', 0)} |"
@@ -1068,8 +1116,12 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             "- Tessdata SHA-256: "
             f"`{json.dumps(artifact['provenance']['tessdata_sha256'], sort_keys=True, separators=(',', ':'))}`.",
             "- Maximum input/output dimensions: 10,000 px; maximum pixels: "
-            "50,000,000; maximum absolute deskew: 3.0 degrees; deskew expands "
-            "onto white padding and never crops.",
+            "50,000,000; maximum input and transformed temporary size: "
+            "134,217,728 bytes; maximum absolute deskew: 3.0 degrees; deskew "
+            "expands onto white padding and never crops.",
+            "- Tesseract argv is limited to 32 arguments of at most 4,096 UTF-8 "
+            "bytes each and must use stdout. Per-page transform events are capped "
+            "at 65,536 bytes and eight attempts.",
             "- Each page has a 180-second deadline. Candidate stdout and stderr "
             "are independently capped at 1,048,576 bytes; timeout/overflow "
             "terminates the process tree.",
@@ -1097,6 +1149,7 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
 def _build_specs(
     configs: dict[str, Any],
     *,
+    configs_path: Path,
     fileconv: Path,
     shim: Path,
     real_tesseract: Path,
@@ -1119,7 +1172,7 @@ def _build_specs(
             "FILECONV_TESSERACT": str(shim),
             "BENCH_OCR_REAL_TESSERACT": str(real_tesseract),
             "BENCH_OCR_EXPERIMENT_CONFIG_ID": config["id"],
-            "BENCH_OCR_EXPERIMENT_CONFIGS": str(DEFAULT_CONFIGS.resolve()),
+            "BENCH_OCR_EXPERIMENT_CONFIGS": str(configs_path.resolve()),
             "BENCH_OCR_EXPERIMENT_EVENTS": str(events),
             "BENCH_OCR_EXPERIMENT_WORK_DIR": str(
                 work_dir / "transforms" / config["id"]
@@ -1201,6 +1254,7 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
     }
     specs, public, event_paths = _build_specs(
         configs,
+        configs_path=configs_path,
         fileconv=fileconv,
         shim=shim,
         real_tesseract=real_tesseract,
