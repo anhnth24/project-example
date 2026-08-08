@@ -82,11 +82,28 @@ def test_report_recomputes_gate_and_rejects_inconsistent_stored_summary() -> Non
         }
 
     raw = {
+        "schema_version": 1,
+        "run": {
+            "versions": {
+                "paddleocr": "archived",
+                "paddlepaddle": "archived",
+                "paddlex": "archived",
+            }
+        },
         "candidates": [
             candidate("markhand-default", 2),
             candidate("markhand-tessdata-best", 1),
             candidate("pp-ocrv6", 0),
-        ]
+        ],
+        "gate": {
+            "passed": True,
+            "baseline_cer": 0.1,
+            "paddle_cer": 0.0,
+            "relative_improvement": 1.0,
+            "threshold": 0.2,
+            "reasons": [],
+            "decision": "PASS",
+        },
     }
 
     computed = recompute_and_validate_summary(raw)
@@ -130,7 +147,12 @@ def _generic_report_payload(
         "run": {
             "commit": "abc123",
             "host": {"logical_cpus": 2, "memory_bytes": 1024},
-            "versions": {"python": "3.12"},
+            "versions": {
+                "paddleocr": "archived",
+                "paddlepaddle": "archived",
+                "paddlex": "archived",
+                "python": "3.12",
+            },
         },
         "corpus": {
             "manifest_sha256": "a" * 64,
@@ -326,12 +348,16 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
             }
         ],
         "gate": {
+            "passed": False,
             "decision": "STOP",
             "baseline_cer": 0.1,
-            "paddle_cer": 0.09,
-            "relative_improvement": 0.1,
+            "paddle_cer": 0.9,
+            "relative_improvement": -8.0,
             "threshold": 0.2,
-            "reasons": ["relative CER improvement below 20%"],
+            "reasons": [
+                "relative real-scan CER improvement below 20%",
+                "real-scan: CER regression exceeds 0.05",
+            ],
         },
     }
     quantitative_page = data["candidates"][0]["pages"][0]
@@ -392,8 +418,6 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
             "build_features": ["no-default-features"],
             "profile": "release",
         }
-    data.pop("gate")
-
     first = render_markdown(data)
     second = render_markdown(json.loads(json.dumps(data)))
 
