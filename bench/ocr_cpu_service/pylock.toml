@@ -88,3 +88,14 @@ url = "https://files.pythonhosted.org/packages/24/25/1de2678b631f5a49215c6c96fff
 
 [packages.wheels.hashes]
 sha256 = "37a86b45efb9a47a61a36449063e8e18d0cab3161329fc099eb21783169c4f0c"
+
+[[packages]]
+name = "setuptools"
+version = "83.0.0"
+
+[[packages.wheels]]
+name = "setuptools-83.0.0-py3-none-any.whl"
+url = "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl"
+
+[packages.wheels.hashes]
+sha256 = "29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3"

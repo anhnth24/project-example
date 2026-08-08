@@ -22,11 +22,6 @@ PROHIBITED_IMPORTS = {
     "paddlex",
     "uvicorn",
 }
-PROHIBITED_DISTRIBUTIONS = PROHIBITED_IMPORTS | {
-    "httpx2",
-    "paddlepaddle",
-    "python-multipart",
-}
 EXPECTED_DIRECT_RUNTIME_DEPENDENCIES = {
     "pillow",
     "psutil",

@@ -16,7 +16,8 @@ Run from the repository root on CPython 3.12/Linux x86_64:
 
 ```bash
 python3.12 -m venv bench/ocr_cpu_service/.venv
-bench/ocr_cpu_service/.venv/bin/python -m pip install --upgrade pip
+bench/ocr_cpu_service/.venv/bin/python -m pip install \
+  --require-hashes -r bench/ocr_cpu_service/bootstrap-requirements.txt
 bench/ocr_cpu_service/.venv/bin/python -m pip install \
   -r bench/ocr_cpu_service/pylock.toml
 bench/ocr_cpu_service/.venv/bin/python -m pip install \
@@ -24,12 +25,16 @@ bench/ocr_cpu_service/.venv/bin/python -m pip install \
 ```
 
 `pylock.toml` is a platform-specific pip lock with exact wheel URLs and
-SHA-256 hashes. It contains only Pillow, psutil, pypdfium2, pytest, and the
-packages required by pytest. Regenerate it on the declared target with:
+SHA-256 hashes. It contains Pillow, psutil, pypdfium2, pytest, packages
+required by pytest, and the separately declared setuptools build backend.
+Setuptools is installed only through the `build` extra so it is not a runtime
+dependency. `bootstrap-requirements.txt` independently pins and hashes the pip
+version needed to consume the native lock. Regenerate the dependency lock on
+the declared target with:
 
 ```bash
 bench/ocr_cpu_service/.venv/bin/python -m pip lock --only-deps \
-  'bench/ocr_cpu_service[test]' \
+  'bench/ocr_cpu_service[build,test]' \
   -o bench/ocr_cpu_service/pylock.toml
 ```
 
