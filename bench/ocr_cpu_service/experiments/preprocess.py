@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import hashlib
 import importlib.metadata
 import json
@@ -49,6 +50,7 @@ from experiments.run_matrix import (
     _host_description,
     _sha256,
     _toolchain_description,
+    validate_run_artifact,
     select_tuning_pages,
 )
 
@@ -85,6 +87,68 @@ EXPECTED_CONFIG_IDS = (
     "psm-11",
     "system-fast-tessdata",
 )
+EXPECTED_CONFIG_SEMANTICS: dict[str, tuple[str | None, dict[str, Any]]] = {
+    "control": (None, {}),
+    "direct-tesseract-transfer-control": (
+        "execution_adapter",
+        {"execution_adapter": {"mode": "direct-tesseract-shim-passthrough"}},
+    ),
+    "dpi-hint-400": (
+        "dpi_hint",
+        {"dpi_hint": {"value": 400, "semantics": "tesseract-hint-not-rerender"}},
+    ),
+    "deskew-auto-bounded": (
+        "deskew",
+        {
+            "deskew": {
+                "method": "projection-auto",
+                "max_degrees": 3.0,
+                "step_degrees": 0.25,
+                "expand": True,
+                "fill": "white",
+            }
+        },
+    ),
+    "grayscale-normalization": (
+        "grayscale_normalization",
+        {
+            "grayscale_normalization": {
+                "method": "autocontrast",
+                "cutoff_percent": 0,
+            }
+        },
+    ),
+    "threshold-otsu": ("threshold", {"threshold": {"method": "otsu"}}),
+    "threshold-adaptive-pillow": (
+        "threshold",
+        {
+            "threshold": {
+                "method": "adaptive-pillow",
+                "window": 31,
+                "offset": 10,
+            }
+        },
+    ),
+    "median-denoise": ("denoise", {"denoise": {"method": "median", "size": 3}}),
+    "background-watermark-suppression": (
+        "background_suppression",
+        {
+            "background_suppression": {
+                "method": "light-tone-compress",
+                "preserve_below": 180,
+                "gain": 2,
+            }
+        },
+    ),
+    "psm-3": ("psm", {"psm": {"value": 3}}),
+    "psm-4": ("psm", {"psm": {"value": 4}}),
+    "psm-6": ("psm", {"psm": {"value": 6}}),
+    "psm-11": ("psm", {"psm": {"value": 11}}),
+    "system-fast-tessdata": (
+        "tessdata",
+        {"tessdata": {"role": "system-fast"}},
+    ),
+}
 _COUNT_FIELDS = (
     "character_edits",
     "reference_characters",
@@ -100,6 +164,7 @@ _CHECKSUM_FIELDS = (
     "python_binary_sha256",
     "tesseract_binary_sha256",
     "baseline_config_sha256",
+    "baseline_artifact_sha256",
     "host_sha256",
     "toolchain_sha256",
     "tessdata_sha256",
@@ -178,6 +243,13 @@ def load_experiment_configs(path: Path = DEFAULT_CONFIGS) -> dict[str, Any]:
         factor = item["factor"]
         if not isinstance(factor, dict):
             raise ValueError("factor must be an object")
+        if (
+            item["changed_factor"],
+            factor,
+        ) != EXPECTED_CONFIG_SEMANTICS[item["id"]]:
+            raise ValueError(
+                f"config violates exact semantic allowlist: {item['id']}"
+            )
         expected_count = 0 if item["id"] == "control" else 1
         if len(factor) != expected_count:
             raise ValueError("each config must change exactly one factor")
@@ -773,6 +845,73 @@ def _valid_checksum(value: Any) -> bool:
     )
 
 
+def matrix_measurement_sha256(artifact: dict[str, Any]) -> str:
+    """Bind all measured records/aggregates independently of metadata migration."""
+    return hashlib.sha256(
+        _canonical_json(
+            {
+                "schema_version": artifact["schema_version"],
+                "split": artifact["split"],
+                "page_count": artifact["page_count"],
+                "access": artifact["access"],
+                "baseline_calibration": artifact["baseline_calibration"],
+                "candidates": artifact["candidates"],
+            }
+        )
+    ).hexdigest()
+
+
+def _load_validated_baseline_raw(path: Path) -> tuple[dict[str, Any], str]:
+    try:
+        payload = path.read_bytes()
+        baseline = json.loads(payload)
+        validate_run_artifact(baseline)
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"baseline raw artifact is unavailable or invalid: {error}") from error
+    return baseline, hashlib.sha256(payload).hexdigest()
+
+
+def _require_expected_baseline_counts(
+    baseline: dict[str, Any], calibration: dict[str, Any]
+) -> None:
+    expected = {
+        "character_edits": calibration["expected_character_edits"],
+        "reference_characters": calibration["expected_reference_characters"],
+        "word_edits": calibration["expected_word_edits"],
+        "reference_words": calibration["expected_reference_words"],
+    }
+    counts = {
+        candidate["id"]: candidate["aggregate"]["raw_counts"]
+        for candidate in baseline["candidates"]
+    }
+    if (
+        counts.get("markhand-auto") != expected
+        or counts.get("tessdata-best") != expected
+    ):
+        raise ValueError("baseline raw artifact counts do not match matrix calibration")
+
+
+def migrate_baseline_provenance(
+    artifact: dict[str, Any],
+    *,
+    baseline_path: Path,
+    configs: dict[str, Any],
+) -> dict[str, Any]:
+    """Add an exact baseline-byte binding without changing measured matrix data."""
+    baseline, baseline_sha256 = _load_validated_baseline_raw(baseline_path)
+    _require_expected_baseline_counts(baseline, artifact["baseline_calibration"])
+    before = matrix_measurement_sha256(artifact)
+    migrated = copy.deepcopy(artifact)
+    existing = migrated["provenance"].get("baseline_artifact_sha256")
+    if existing is not None and existing != baseline_sha256:
+        raise ValueError("baseline raw artifact checksum conflicts with matrix provenance")
+    migrated["provenance"]["baseline_artifact_sha256"] = baseline_sha256
+    validate_matrix_artifact(migrated, configs)
+    if matrix_measurement_sha256(migrated) != before:
+        raise ValueError("matrix measurements changed during provenance migration")
+    return migrated
+
+
 def validate_matrix_artifact(
     artifact: dict[str, Any], configs: dict[str, Any]
 ) -> None:
@@ -1009,6 +1148,11 @@ def _format_aggregate_row(config_id: str, aggregate: dict[str, Any]) -> str:
 def render_matrix_report(artifact: dict[str, Any]) -> str:
     control = artifact["candidates"][0]
     transfer_control = artifact["candidates"][1]
+    grayscale = next(
+        candidate
+        for candidate in artifact["candidates"]
+        if candidate["id"] == "grayscale-normalization"
+    )
     control_counts = control["aggregate"]["raw_counts"]
     transfer_character_gap = (
         transfer_control["aggregate"]["raw_counts"]["character_edits"]
@@ -1058,6 +1202,18 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
         "Tracked rows contain additive edit counts and transform checksums, never "
         "document content. Only environment variable names are "
         "published; arbitrary values are omitted.",
+        "",
+        "## Decision",
+        "",
+        "**No candidate improved overall CER.** `grayscale-normalization` only "
+        f"tied the Rust control at {control['aggregate']['cer']:.6f} CER while "
+        "its median latency was much worse "
+        f"({grayscale['aggregate']['latency_seconds']['median']:.6f} versus "
+        f"{control['aggregate']['latency_seconds']['median']:.6f} seconds/page).",
+        "",
+        "**No policy was selected or frozen. Holdout was not run.** These are "
+        "tuning-only measurements; Task 4 may evaluate observable retry signals "
+        "without changing this Task 3 decision.",
         "",
         "## Ranked overall tuning measurements",
         "",
@@ -1205,6 +1361,8 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             f"`{artifact['provenance']['tesseract_binary_sha256']}`.",
             "- Baseline config SHA-256: "
             f"`{artifact['provenance']['baseline_config_sha256']}`.",
+            "- Baseline raw artifact SHA-256: "
+            f"`{artifact['provenance']['baseline_artifact_sha256']}`.",
             f"- Host descriptor SHA-256: `{artifact['provenance']['host_sha256']}`.",
             "- Toolchain descriptor SHA-256: "
             f"`{artifact['provenance']['toolchain_sha256']}`.",
@@ -1335,6 +1493,24 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
     real_tesseract = args.real_tesseract.resolve()
     system_tessdata = args.system_tessdata.resolve()
     best_tessdata = args.best_tessdata.resolve()
+    expected = {
+        "character_edits": 6707,
+        "reference_characters": 54897,
+        "word_edits": 3383,
+        "reference_words": 11959,
+    }
+    baseline, baseline_artifact_sha256 = _load_validated_baseline_raw(
+        args.baseline_run.resolve()
+    )
+    _require_expected_baseline_counts(
+        baseline,
+        {
+            "expected_character_edits": expected["character_edits"],
+            "expected_reference_characters": expected["reference_characters"],
+            "expected_word_edits": expected["word_edits"],
+            "expected_reference_words": expected["reference_words"],
+        },
+    )
     host = _host_description(configs["limits"]["max_rss_bytes"])
     toolchain = {
         **_toolchain_description(),
@@ -1354,6 +1530,7 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "baseline_config_sha256": _sha256(
             SERVICE_ROOT / "experiments" / "baseline.json"
         ),
+        "baseline_artifact_sha256": baseline_artifact_sha256,
         "host_sha256": _canonical_sha256(host),
         "toolchain_sha256": _canonical_sha256(toolchain),
         "tessdata_sha256": {
@@ -1392,16 +1569,9 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
             specs, public, event_paths, strict=True
         )
     ]
-    baseline = json.loads(args.baseline_run.read_text(encoding="utf-8"))
     baseline_counts = {
         candidate["id"]: candidate["aggregate"]["raw_counts"]
         for candidate in baseline["candidates"]
-    }
-    expected = {
-        "character_edits": 6707,
-        "reference_characters": 54897,
-        "word_edits": 3383,
-        "reference_words": 11959,
     }
     control_counts = candidates[0]["aggregate"]["raw_counts"]
     artifact = {
@@ -1445,9 +1615,27 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
     return artifact
 
 
+def _write_json_atomic(path: Path, artifact: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(artifact, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _matrix_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-matrix", action="store_true")
+    parser.add_argument("--migrate-baseline-provenance", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--report-from", type=Path)
     parser.add_argument("--configs", type=Path, default=DEFAULT_CONFIGS)
@@ -1484,6 +1672,14 @@ def matrix_main(argv: list[str] | None = None) -> int:
         if args.output is None:
             raise SystemExit("--output is required with --report-from")
         artifact = json.loads(args.report_from.read_text(encoding="utf-8"))
+        if args.migrate_baseline_provenance:
+            migrated = migrate_baseline_provenance(
+                artifact,
+                baseline_path=args.baseline_run.resolve(),
+                configs=load_experiment_configs(args.configs),
+            )
+            _write_json_atomic(args.output, migrated)
+            return 0
         validate_matrix_artifact(artifact, load_experiment_configs(args.configs))
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(render_matrix_report(artifact), encoding="utf-8")
@@ -1491,11 +1687,7 @@ def matrix_main(argv: list[str] | None = None) -> int:
     if not args.run_matrix or args.output is None:
         raise SystemExit("--run-matrix and --output are required")
     artifact = run_tuning_matrix(args)
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(
-        json.dumps(artifact, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_json_atomic(args.output, artifact)
     return 0
 
 

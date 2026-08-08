@@ -700,6 +700,16 @@ def test_matrix_artifact_requires_calibrated_control_exact_pages_and_checksums()
 
 def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> None:
     artifact = _artifact()
+    decision_report = render_matrix_report(artifact)
+    decision = decision_report.split("## Decision", 1)[1].split(
+        "## Ranked overall tuning measurements", 1
+    )[0]
+    assert "No candidate improved overall CER" in decision
+    assert "grayscale-normalization" in decision
+    assert "tied" in decision and "latency" in decision
+    assert "No policy was selected or frozen" in decision
+    assert "Holdout was not run" in decision
+
     artifact["candidates"][2]["records"][0]["character_edits"] = 1
     artifact["candidates"][2]["aggregate"] = aggregate_matrix_records(
         artifact["candidates"][2]["records"]
@@ -729,14 +739,6 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
     assert "DPI hint" in report
     assert "not a 300/400 PDF rerender comparison" in report
     assert "No holdout result" in report
-    decision = report.split("## Decision", 1)[1].split(
-        "## Ranked overall tuning measurements", 1
-    )[0]
-    assert "No candidate improved overall CER" in decision
-    assert "grayscale-normalization" in decision
-    assert "tied" in decision and "latency" in decision
-    assert "No policy was selected or frozen" in decision
-    assert "Holdout was not run" in decision
     assert "Transfer gap: **" in report
     assert "actual Rust control" in report
     assert "not directly production-equivalent" in report
