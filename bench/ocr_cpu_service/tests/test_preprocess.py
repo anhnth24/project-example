@@ -115,6 +115,12 @@ def _artifact() -> dict[str, object]:
             )
             for index in range(44)
         ]
+        records[0].update(
+            character_edits=6707 - 43 * 2,
+            reference_characters=54897 - 43 * 20,
+            word_edits=3383 - 43,
+            reference_words=11959 - 43 * 4,
+        )
         if config["id"] == "control":
             for record in records:
                 for key in (
@@ -253,18 +259,44 @@ def test_config_loader_fails_closed_on_missing_duplicate_multifactor_or_drift(
         load_experiment_configs(path)
 
 
-def test_transforms_are_deterministic_and_cleanup_context_temp_files(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "factor",
+    [
+        {"deskew": {
+            "method": "projection-auto",
+            "max_degrees": 3.0,
+            "step_degrees": 0.25,
+            "expand": True,
+            "fill": "white",
+        }},
+        {"grayscale_normalization": {
+            "method": "autocontrast",
+            "cutoff_percent": 0,
+        }},
+        {"threshold": {"method": "otsu"}},
+        {"threshold": {
+            "method": "adaptive-pillow",
+            "window": 31,
+            "offset": 10,
+        }},
+        {"denoise": {"method": "median", "size": 3}},
+        {"background_suppression": {
+            "method": "light-tone-compress",
+            "preserve_below": 180,
+            "gain": 2,
+        }},
+    ],
+)
+def test_transforms_are_deterministic_non_cropping_and_cleanup_temp_files(
+    tmp_path: Path, factor: dict[str, object],
 ) -> None:
     source = tmp_path / "source.png"
     _write_sample(source)
-    factor = {"threshold": {"method": "otsu"}}
-
     with transform_image(source, factor, work_dir=tmp_path / "work") as first:
         first_checksum = first.sha256
         assert first.path.is_file()
-        assert first.width == 180
-        assert first.height == 100
+        assert first.width >= 180
+        assert first.height >= 100
     assert not first.path.exists()
 
     with transform_image(source, factor, work_dir=tmp_path / "work") as second:
@@ -568,6 +600,25 @@ def test_matrix_artifact_requires_calibrated_control_exact_pages_and_checksums()
     broken = deepcopy(artifact)
     broken["baseline_calibration"]["rust_control_matches_task2_best"] = False
     with pytest.raises(ValueError, match="calibration"):
+        validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
+
+    broken = deepcopy(artifact)
+    broken["candidates"][1]["records"][0]["character_edits"] += 1
+    broken["candidates"][1]["aggregate"] = aggregate_matrix_records(
+        broken["candidates"][1]["records"]
+    )
+    broken["candidates"][1]["strata"]["low-contrast"] = aggregate_matrix_records(
+        broken["candidates"][1]["records"]
+    )
+    for kind in ("historical-old-print", "modern-government"):
+        broken["candidates"][1]["document_types"][kind] = aggregate_matrix_records(
+            [
+                record
+                for record in broken["candidates"][1]["records"]
+                if record["document_type"] == kind
+            ]
+        )
+    with pytest.raises(ValueError, match="transfer"):
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
     broken = deepcopy(artifact)
