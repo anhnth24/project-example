@@ -680,6 +680,17 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
     assert "not directly production-equivalent" in report
     assert "CER change vs Rust control" in report
     assert "CER change vs direct transfer" in report
+    document_section = report.split("## Document-type strata", 1)[1].split(
+        "## Overlapping difficulty strata", 1
+    )[0]
+    difficulty_section = report.split("## Overlapping difficulty strata", 1)[1].split(
+        "## Raw additive counts", 1
+    )[0]
+    for section in (document_section, difficulty_section):
+        assert "Median s/page" in section
+        assert "p95 s/page" in section
+        assert "Peak RSS MiB" in section
+        assert "Failures" in section
     assert "Tesseract binary SHA-256" in report
     assert artifact["provenance"]["tesseract_binary_sha256"] in report
     assert "recognized_text" not in report
