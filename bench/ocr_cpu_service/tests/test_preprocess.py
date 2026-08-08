@@ -18,8 +18,11 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from experiments.preprocess import (  # noqa: E402
     MAX_DESKEW_DEGREES,
     MAX_DIMENSION,
+    MAX_EVENT_BYTES,
+    MAX_INPUT_BYTES,
     MAX_PIXELS,
     _build_specs,
+    _event_summary,
     _rotate_expand_white,
     aggregate_matrix_records,
     canonical_config_checksum,
@@ -69,6 +72,7 @@ def _record(
         "page_id": page_id,
         "split": "tuning",
         "source_id": f"source-{page_id}",
+        "source_sha256": "f" * 64,
         "page_number": 1,
         "document_type": document_type,
         "difficulty_strata": list(strata),
@@ -250,6 +254,27 @@ def test_image_bounds_fail_closed_before_transform(tmp_path: Path) -> None:
     assert MAX_PIXELS < MAX_DIMENSION * MAX_DIMENSION
 
 
+def test_input_byte_bound_fails_before_image_decode(tmp_path: Path) -> None:
+    source = tmp_path / "oversized.bin"
+    with source.open("wb") as stream:
+        stream.truncate(MAX_INPUT_BYTES + 1)
+
+    with pytest.raises(ValueError, match="input byte"):
+        with transform_image(source, {}, work_dir=tmp_path / "work"):
+            pass
+
+
+def test_event_reader_rejects_unbounded_or_excessive_attempt_logs(
+    tmp_path: Path,
+) -> None:
+    events = tmp_path / "events.jsonl"
+    with events.open("wb") as stream:
+        stream.truncate(MAX_EVENT_BYTES + 1)
+
+    with pytest.raises(ValueError, match="event"):
+        _event_summary(events)
+
+
 def test_deskew_rotation_is_bounded_expands_and_uses_white_padding() -> None:
     image = Image.new("L", (100, 50), 255)
     ImageDraw.Draw(image).rectangle((0, 0, 99, 49), outline=0)
@@ -371,6 +396,48 @@ def test_matrix_candidate_environment_runs_shim_with_pinned_python(
     )
 
 
+def test_matrix_candidate_binds_the_exact_supplied_config_path(
+    tmp_path: Path,
+) -> None:
+    custom = tmp_path / "custom-configs.json"
+    custom.write_bytes(CONFIGS.read_bytes())
+    specs, _, _ = _build_specs(
+        load_experiment_configs(custom),
+        configs_path=custom,
+        fileconv=tmp_path / "fileconv",
+        shim=PREPROCESS,
+        real_tesseract=tmp_path / "tesseract",
+        system_tessdata=tmp_path / "tessdata",
+        work_dir=tmp_path / "work",
+    )
+
+    assert specs[0].environment["BENCH_OCR_EXPERIMENT_CONFIGS"] == str(
+        custom.resolve()
+    )
+
+
+def test_shim_rejects_non_stdout_output_target(tmp_path: Path) -> None:
+    source = tmp_path / "preprocessed.png"
+    _write_sample(source)
+    real = tmp_path / "fake-tesseract"
+    capture = tmp_path / "argv.json"
+    events = tmp_path / "events.jsonl"
+    _write_fake_tesseract(real)
+    env = _shim_environment(tmp_path, real, events, "control")
+    env["FAKE_CAPTURE"] = str(capture)
+
+    result = subprocess.run(
+        [sys.executable, str(PREPROCESS), str(source), str(tmp_path / "output")],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert not capture.exists()
+    assert not (tmp_path / "output.txt").exists()
+
+
 @pytest.mark.parametrize("exit_code", [0, 7])
 def test_shim_cleans_transformed_temp_on_success_and_failure(
     tmp_path: Path, exit_code: int
@@ -431,8 +498,18 @@ def test_matrix_artifact_requires_calibrated_control_exact_pages_and_checksums()
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
     broken = deepcopy(artifact)
+    broken["candidates"][0]["records"][0]["transform_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="transform checksum"):
+        validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
+
+    broken = deepcopy(artifact)
     broken["candidates"][0]["records"][0]["input_sha256s"] = []
     with pytest.raises(ValueError, match="input checksum"):
+        validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
+
+    broken = deepcopy(artifact)
+    broken["candidates"][0]["records"][0]["source_sha256"] = "bad"
+    with pytest.raises(ValueError, match="source checksum"):
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
 
