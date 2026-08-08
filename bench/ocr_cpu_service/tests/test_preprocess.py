@@ -452,6 +452,7 @@ def test_matrix_candidate_environment_runs_shim_with_pinned_python(
     assert "FILECONV_TESSDATA" in control.environment
     assert "FILECONV_TESSERACT" not in control.environment
     assert "BENCH_OCR_EXPERIMENT_CONFIG_ID" not in control.environment
+    assert control.environment["PATH"] == "/usr/local/bin:/usr/bin:/bin"
     assert "FILECONV_TESSERACT" in transfer.environment
     assert "BENCH_OCR_EXPERIMENT_CONFIG_ID" in transfer.environment
 
