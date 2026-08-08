@@ -288,8 +288,10 @@ def test_migration_binds_exact_valid_baseline_bytes_without_changing_measurement
 ) -> None:
     assert hasattr(preprocess_module, "matrix_measurement_sha256")
     assert hasattr(preprocess_module, "migrate_baseline_provenance")
+    assert hasattr(preprocess_module, "validate_baseline_provenance")
     matrix_measurement_sha256 = preprocess_module.matrix_measurement_sha256
     migrate_baseline_provenance = preprocess_module.migrate_baseline_provenance
+    validate_baseline_provenance = preprocess_module.validate_baseline_provenance
     artifact = _artifact()
     artifact["provenance"].pop("baseline_artifact_sha256")
     before = matrix_measurement_sha256(artifact)
@@ -305,6 +307,12 @@ def test_migration_binds_exact_valid_baseline_bytes_without_changing_measurement
         baseline.read_bytes()
     ).hexdigest()
     assert matrix_measurement_sha256(migrated) == before
+    validate_baseline_provenance(migrated, baseline)
+
+    changed_bytes = tmp_path / "changed-baseline.json"
+    changed_bytes.write_bytes(baseline.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="baseline raw artifact checksum"):
+        validate_baseline_provenance(migrated, changed_bytes)
 
     with pytest.raises(ValueError, match="baseline raw artifact"):
         migrate_baseline_provenance(
