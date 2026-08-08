@@ -786,22 +786,55 @@ fn render_audio_report(rows: &[AudioRow]) -> String {
 
 // ----------------------------- helpers -----------------------------
 
+/// Sanitized error returned for any invalid `FILECONV_OCR_PREPROCESS_MODE` value.
+pub(crate) const INVALID_PREPROCESS_MODE_MSG: &str = "unsupported OCR preprocess mode";
+
 /// Parse `FILECONV_OCR_PREPROCESS_MODE` for benchmark-only OCR preprocessing.
 pub(crate) fn parse_ocr_preprocess_mode(raw: Option<&str>) -> Result<OcrPreprocessMode, String> {
     match raw {
         None | Some("") => Ok(OcrPreprocessMode::Legacy),
         Some("preserve-near-bitonal") => Ok(OcrPreprocessMode::PreserveNearBitonal),
-        Some(other) => Err(format!("unsupported OCR preprocess mode: {other}")),
+        Some(_) => Err(INVALID_PREPROCESS_MODE_MSG.to_string()),
+    }
+}
+
+#[cfg(unix)]
+pub(crate) fn parse_ocr_preprocess_mode_from_os(
+    value: Option<&std::ffi::OsStr>,
+) -> Result<OcrPreprocessMode, String> {
+    match value {
+        None => Ok(OcrPreprocessMode::Legacy),
+        Some(raw) => {
+            let text = raw
+                .to_str()
+                .ok_or_else(|| INVALID_PREPROCESS_MODE_MSG.to_string())?;
+            parse_ocr_preprocess_mode(Some(text))
+        }
     }
 }
 
 fn ocr_run_config_from_environment() -> Result<OcrRunConfig, anyhow::Error> {
-    let raw = std::env::var("FILECONV_OCR_PREPROCESS_MODE").ok();
-    let preprocess_mode = parse_ocr_preprocess_mode(raw.as_deref()).map_err(anyhow::Error::msg)?;
-    Ok(OcrRunConfig {
-        preprocess_mode,
-        ..OcrRunConfig::default()
-    })
+    #[cfg(unix)]
+    {
+        let preprocess_mode = parse_ocr_preprocess_mode_from_os(
+            std::env::var_os("FILECONV_OCR_PREPROCESS_MODE").as_deref(),
+        )
+        .map_err(anyhow::Error::msg)?;
+        return Ok(OcrRunConfig {
+            preprocess_mode,
+            ..OcrRunConfig::default()
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let raw = std::env::var("FILECONV_OCR_PREPROCESS_MODE").ok();
+        let preprocess_mode =
+            parse_ocr_preprocess_mode(raw.as_deref()).map_err(anyhow::Error::msg)?;
+        Ok(OcrRunConfig {
+            preprocess_mode,
+            ..OcrRunConfig::default()
+        })
+    }
 }
 
 fn rel(base: &Path, p: &Path) -> String {
@@ -843,8 +876,13 @@ fn count_pages(path: &Path, fmt: FormatKind) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ocr_preprocess_mode, registered_commands};
+    use super::{
+        parse_ocr_preprocess_mode, parse_ocr_preprocess_mode_from_os, registered_commands,
+        INVALID_PREPROCESS_MODE_MSG,
+    };
     use fileconv_core::{ConvertErrorKind, DetailedConvertError, OcrPreprocessMode};
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
 
     #[test]
     fn parses_only_supported_preprocess_modes() {
@@ -857,6 +895,30 @@ mod tests {
             OcrPreprocessMode::PreserveNearBitonal,
         );
         assert!(parse_ocr_preprocess_mode(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn preprocess_mode_invalid_text_is_sanitized() {
+        let error = parse_ocr_preprocess_mode(Some("secret-mode")).unwrap_err();
+        assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);
+        assert!(!error.contains("secret-mode"));
+    }
+
+    #[test]
+    fn preprocess_mode_invalid_bytes_are_sanitized() {
+        let invalid = OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
+        let error = parse_ocr_preprocess_mode_from_os(Some(invalid.as_os_str())).unwrap_err();
+        assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);
+        assert!(!error.contains("ff"));
+    }
+
+    #[test]
+    fn sandbox_excludes_fileconv_ocr_preprocess_mode_allowlist() {
+        let sandbox = include_str!("../../server/src/workers/sandbox.rs");
+        assert!(
+            !sandbox.contains("FILECONV_OCR_PREPROCESS_MODE"),
+            "web sandbox must not allow benchmark-only OCR preprocess mode"
+        );
     }
 
     #[test]

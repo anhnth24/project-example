@@ -9,10 +9,10 @@ import importlib.metadata
 import json
 import platform
 import re
-import select
 import shutil
 import statistics
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,12 +21,13 @@ from typing import Any
 import psutil
 import pypdfium2 as pdfium
 
-from benchmark.candidates import CommandCandidateSpec, render_argv
+from benchmark.candidates import CommandCandidateSpec
+from benchmark.corpus import BenchmarkPage
 from benchmark.metrics import error_counts
 from benchmark.render import PageRenderRejected, RenderLimits, render_page
 from benchmark.run import (
     CandidateOutputLimitError,
-    _terminate_process_group,
+    _isolated_worker,
     sanitized_candidate_environment,
 )
 from corpus.download import load_sources
@@ -35,13 +36,14 @@ ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = ROOT / "bench" / "ocr_cpu_service"
 DEFAULT_CONFIG = SERVICE_ROOT / "experiments" / "bitonal-configs.json"
 DEFAULT_SOURCES = SERVICE_ROOT / "corpus" / "sources.json"
-DEFAULT_CORPUS = SERVICE_ROOT / ".data" / "corpus"
 DEFAULT_OUTPUT = SERVICE_ROOT / ".data" / "bitonal-pdf" / "calibration.json"
+CALIBRATION_RUN_ROOT = SERVICE_ROOT / ".data" / "bitonal-pdf" / "runs"
 OFFICIAL_SOURCE_ID = "official-89-2026-tt-btc"
 FILECONV_BUILD_COMMAND = (
     "CC=gcc CXX=g++ cargo build --release "
     "-p fileconv-cli --no-default-features"
 )
+INVALID_PREPROCESS_MODE_MSG = "unsupported OCR preprocess mode"
 
 EXPECTED_CANDIDATE_IDS = (
     "baseline-system-fast",
@@ -49,21 +51,37 @@ EXPECTED_CANDIDATE_IDS = (
     "bitonal-best-vie-eng",
     "bitonal-best-vie",
 )
-_COUNT_FIELDS = (
-    "character_edits",
-    "reference_characters",
-    "word_edits",
-    "reference_words",
+ALLOWED_ERROR_KINDS = frozenset({"timeout", "output_limit", "candidate_error"})
+_COUNT_FIELDS = frozenset(
+    {
+        "character_edits",
+        "reference_characters",
+        "word_edits",
+        "reference_words",
+    }
 )
-_DIAGNOSTIC_FIELDS = (
-    "digit_sequence_count",
-    "digit_sequence_checksum",
-    "legal_identifier_count",
-    "non_whitespace_character_count",
-    "suspicious_character_count",
-    "accent_proxy_counts",
+_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "digit_sequence_count",
+        "digit_sequence_checksum",
+        "legal_identifier_count",
+        "non_whitespace_character_count",
+        "suspicious_character_count",
+        "accent_proxy_counts",
+    }
 )
-_CHECKSUM_FIELDS = frozenset(
+_BINDINGS_FIELDS = frozenset(
+    {
+        "source_sha256",
+        "config_sha256",
+        "binary_sha256",
+        "pdfium_sha256",
+        "toolchain_sha256",
+        "tessdata_sha256",
+        "render_sha256",
+    }
+)
+_PROVENANCE_FIELDS = frozenset(
     {
         "source_sha256",
         "config_sha256",
@@ -74,29 +92,134 @@ _CHECKSUM_FIELDS = frozenset(
         "toolchain_sha256",
     }
 )
-_FORBIDDEN_TEXT_KEYS = frozenset(
+_ARTIFACT_FIELDS = frozenset(
     {
-        "recognized_text",
-        "recognised_text",
-        "hypothesis",
-        "transcription",
-        "reference",
-        "reference_text",
-        "text",
-        "stdout",
-        "stderr",
+        "schema_version",
+        "split",
+        "page_count",
+        "provenance",
+        "host",
+        "toolchain",
+        "limits",
+        "access",
+        "render_hashes",
+        "candidates",
+        "records",
     }
 )
-_ALLOWED_LIMIT_KEYS = frozenset(
+_LIMITS_FIELDS = frozenset(
     {
         "cpu_threads",
         "timeout_seconds_per_page",
         "max_output_bytes_per_stream",
         "max_rss_bytes",
+        "max_source_bytes",
         "process_tree_sample_interval_ms",
     }
 )
-_ALLOWED_RENDER_KEYS = frozenset({"dpi", "max_pixels", "max_dimension"})
+_RENDER_FIELDS = frozenset({"dpi", "max_pixels", "max_dimension"})
+_ACCESS_FIELDS = frozenset(
+    {
+        "approved_pages_opened",
+        "holdout_pages_opened",
+        "rendered_pages",
+        "ocr_executions",
+    }
+)
+_HOST_FIELDS = frozenset(
+    {
+        "platform",
+        "architecture",
+        "logical_cpus",
+        "memory_bytes",
+        "max_rss_bytes",
+        "max_rss_enforcement",
+    }
+)
+_TOOLCHAIN_FIELDS = frozenset({"cargo", "pypdfium2", "python", "tesseract"})
+_CANDIDATE_FIELDS = frozenset(
+    {
+        "id",
+        "mode",
+        "tessdata",
+        "langs",
+        "argv",
+        "environment_variable_names",
+        "aggregate",
+    }
+)
+_AGGREGATE_FIELDS = frozenset(
+    {
+        "pages",
+        "successes",
+        "failures",
+        "latency_seconds",
+        "peak_rss_bytes",
+        "resource_limit_violations",
+    }
+)
+_LATENCY_FIELDS = frozenset({"median", "total"})
+_RECORD_BASE_FIELDS = frozenset(
+    {
+        "candidate_id",
+        "page_number",
+        "success",
+        "bindings",
+        "elapsed_seconds",
+        "peak_rss_bytes",
+        "resource_limit_violation",
+    }
+)
+_CONFIG_FIELDS = frozenset(
+    {
+        "schema_version",
+        "split",
+        "expected_pages",
+        "approved_page_numbers",
+        "source",
+        "render",
+        "limits",
+        "candidates",
+        "page_diagnostics",
+        "reference_disagreement",
+    }
+)
+_SOURCE_FIELDS = frozenset({"id", "expected_sha256", "max_bytes"})
+_REFERENCE_DISAGREEMENT_FIELDS = frozenset({"metric_label", "forbidden_labels"})
+_FORBIDDEN_KEYS = frozenset(
+    {
+        "accuracy",
+        "cer",
+        "env",
+        "environment",
+        "environment_values",
+        "ground_truth",
+        "hypothesis",
+        "recognised_text",
+        "recognized_output",
+        "recognized_text",
+        "reference",
+        "reference_text",
+        "stderr",
+        "stdout",
+        "text",
+        "transcription",
+        "wer",
+    }
+)
+_PLAN_LIMITS = {
+    "cpu_threads": 1,
+    "timeout_seconds_per_page": 180,
+    "max_output_bytes_per_stream": 1_048_576,
+    "max_rss_bytes": 805_306_368,
+    "max_source_bytes": 17_281_751,
+    "process_tree_sample_interval_ms": 10,
+}
+_PLAN_RENDER = {
+    "dpi": 300,
+    "max_pixels": 50_000_000,
+    "max_dimension": 10_000,
+}
 _SUSPICIOUS_CHARACTER_RE = re.compile(
     r"[^\w\s\u00C0-\u024F\u1E00-\u1EFF.,;:!?()\-+/%\"'“”‘’]"
 )
@@ -113,7 +236,7 @@ class CalibrationCandidate:
     langs: str
     argv: tuple[str, ...]
     environment_variable_names: tuple[str, ...]
-    provenance: dict[str, Any]
+    spec: CommandCandidateSpec
 
 
 def _sha256(path: Path) -> str:
@@ -144,26 +267,32 @@ def _valid_checksum(value: Any) -> bool:
     return False
 
 
-def _assert_no_recognized_text(value: Any, path: str = "artifact") -> None:
+def _reject_forbidden_keys(value: Any, *, path: str = "artifact") -> None:
     if isinstance(value, dict):
         for key, item in value.items():
-            if key.lower() in _FORBIDDEN_TEXT_KEYS:
-                raise ValueError(f"recognized text field is forbidden at {path}.{key}")
-            _assert_no_recognized_text(item, f"{path}.{key}")
+            if key.lower() in _FORBIDDEN_KEYS:
+                raise ValueError(f"forbidden field at {path}.{key}")
+            _reject_forbidden_keys(item, path=f"{path}.{key}")
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            _assert_no_recognized_text(item, f"{path}[{index}]")
+            _reject_forbidden_keys(item, path=f"{path}[{index}]")
 
 
-def _assert_no_environment_values(value: Any, path: str = "artifact") -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in {"environment", "environment_values"}:
-                raise ValueError(f"environment values are forbidden at {path}.{key}")
-            _assert_no_environment_values(item, f"{path}.{key}")
-    elif isinstance(value, list):
-        for index, item in enumerate(value):
-            _assert_no_environment_values(item, f"{path}[{index}]")
+def _validate_closed_mapping(
+    value: Any,
+    *,
+    allowed: frozenset[str],
+    path: str,
+) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be a mapping")
+    actual = set(value)
+    if actual != allowed:
+        unknown = sorted(actual - allowed)
+        if unknown:
+            raise ValueError(f"unknown field at {path}: {unknown[0]}")
+        missing = sorted(allowed - actual)
+        raise ValueError(f"missing field at {path}: {missing[0]}")
 
 
 def approved_calibration_pages(config: dict[str, Any]) -> tuple[int, ...]:
@@ -178,58 +307,72 @@ def load_calibration_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
         config = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"{path}: invalid calibration config: {error}") from error
-    required = {
-        "schema_version",
-        "split",
-        "expected_pages",
-        "approved_page_numbers",
-        "render",
-        "limits",
-        "candidates",
-        "page_diagnostics",
-        "reference_disagreement",
-    }
-    if not isinstance(config, dict) or set(config) != required:
-        raise ValueError("calibration config fields are invalid")
+    _validate_closed_mapping(config, allowed=_CONFIG_FIELDS, path="config")
     if config["schema_version"] != 1 or config["split"] != "calibration":
         raise ValueError("calibration config must select schema 1 calibration only")
     if config["expected_pages"] != 22:
         raise ValueError("calibration config must lock 22 approved pages")
     approved_calibration_pages(config)
-    if set(config["render"]) != _ALLOWED_RENDER_KEYS:
-        raise ValueError("render bounds are not fully specified")
-    render = config["render"]
-    if (
-        render["dpi"] != 300
-        or render["max_pixels"] != 50_000_000
-        or render["max_dimension"] != 10_000
-    ):
+    _validate_closed_mapping(config["source"], allowed=_SOURCE_FIELDS, path="config.source")
+    if config["source"]["id"] != OFFICIAL_SOURCE_ID:
+        raise ValueError("calibration source identity is invalid")
+    _validate_closed_mapping(config["render"], allowed=_RENDER_FIELDS, path="config.render")
+    if config["render"] != _PLAN_RENDER:
         raise ValueError("render bounds exceed approved calibration limits")
-    if set(config["limits"]) != _ALLOWED_LIMIT_KEYS:
-        raise ValueError("resource limits are not fully bounded")
-    limits = config["limits"]
-    if (
-        limits["cpu_threads"] <= 0
-        or limits["timeout_seconds_per_page"] <= 0
-        or limits["max_output_bytes_per_stream"] <= 0
-        or limits["max_rss_bytes"] <= 0
-        or limits["process_tree_sample_interval_ms"] != 10
-    ):
-        raise ValueError("resource limits must remain positive and bounded")
+    _validate_closed_mapping(config["limits"], allowed=_LIMITS_FIELDS, path="config.limits")
+    if config["limits"] != _PLAN_LIMITS:
+        raise ValueError("resource limits must match approved calibration constants")
+    if config["source"]["max_bytes"] != config["limits"]["max_source_bytes"]:
+        raise ValueError("source byte cap does not match limits")
+    _validate_closed_mapping(
+        config["reference_disagreement"],
+        allowed=_REFERENCE_DISAGREEMENT_FIELDS,
+        path="config.reference_disagreement",
+    )
     candidate_ids = tuple(candidate["id"] for candidate in config["candidates"])
     if candidate_ids != EXPECTED_CANDIDATE_IDS:
         raise ValueError("calibration candidate IDs are invalid")
     for candidate in config["candidates"]:
-        if candidate["mode"] not in {"legacy", "preserve-near-bitonal"}:
-            raise ValueError("candidate preprocess mode is invalid")
-        if candidate["tessdata"] not in {"system", "best"}:
-            raise ValueError("candidate tessdata role is invalid")
-        if "environment" in candidate:
-            raise ValueError("calibration config must not serialize environment values")
+        _validate_candidate_config(candidate)
+    _reject_forbidden_keys(config)
     return config
 
 
-def strip_reference_for_disagreement(text: str) -> str:
+def _validate_candidate_config(candidate: dict[str, Any]) -> None:
+    allowed = frozenset(
+        {
+            "id",
+            "mode",
+            "tessdata",
+            "langs",
+            "argv_template",
+            "environment_variable_names",
+        }
+    )
+    _validate_closed_mapping(candidate, allowed=allowed, path="config.candidate")
+    if candidate["mode"] not in {"legacy", "preserve-near-bitonal"}:
+        raise ValueError("candidate preprocess mode is invalid")
+    if candidate["tessdata"] not in {"system", "best"}:
+        raise ValueError("candidate tessdata role is invalid")
+    template = candidate["argv_template"]
+    if (
+        template[:2] != ["{fileconv}", "one"]
+        or template[2] != "{input}"
+        or template[3] != "--lang"
+        or template[4] != candidate["langs"]
+    ):
+        raise ValueError("candidate argv template is invalid")
+    names = tuple(candidate["environment_variable_names"])
+    if list(names) != sorted(names):
+        raise ValueError("candidate environment variable names must be sorted")
+    if candidate["mode"] == "preserve-near-bitonal":
+        if "FILECONV_OCR_PREPROCESS_MODE" not in names:
+            raise ValueError("bitonal candidate must declare preprocess mode env name")
+    elif "FILECONV_OCR_PREPROCESS_MODE" in names:
+        raise ValueError("legacy candidate must not declare preprocess mode env name")
+
+
+def strip_for_disagreement(text: str) -> str:
     """Remove page comments, Markdown decoration, and standalone page numbers."""
     without_comments = _PAGE_COMMENT_RE.sub(" ", text)
     without_markdown = _MARKDOWN_DECORATION_RE.sub(" ", without_comments)
@@ -237,8 +380,10 @@ def strip_reference_for_disagreement(text: str) -> str:
     return " ".join(without_page_numbers.split())
 
 
+strip_reference_for_disagreement = strip_for_disagreement
+
+
 def load_private_reference_pages(path: Path, pages: tuple[int, ...]) -> dict[int, str]:
-    """Load per-page private reference text without retaining the full document."""
     if not path.is_file():
         raise ValueError("private reference path is required at runtime")
     sections: dict[int, list[str]] = {}
@@ -252,7 +397,7 @@ def load_private_reference_pages(path: Path, pages: tuple[int, ...]) -> dict[int
         if current_page is not None:
             sections[current_page].append(line)
     loaded = {
-        page: strip_reference_for_disagreement("\n".join(sections.get(page, [])))
+        page: "\n".join(sections.get(page, []))
         for page in pages
         if page <= 20
     }
@@ -270,10 +415,7 @@ def _digit_sequence_metrics(text: str) -> tuple[int, str]:
 
 
 def _legal_identifier_count(text: str, patterns: list[str]) -> int:
-    total = 0
-    for pattern in patterns:
-        total += len(re.findall(pattern, text, flags=re.MULTILINE))
-    return total
+    return sum(len(re.findall(pattern, text, flags=re.MULTILINE)) for pattern in patterns)
 
 
 def _non_whitespace_character_count(text: str) -> int:
@@ -333,13 +475,33 @@ def page_diagnostics(
 
 
 def reference_disagreement_counts(reference: str, hypothesis: str) -> dict[str, int]:
-    counts = error_counts(reference, hypothesis)
+    cleaned_reference = strip_for_disagreement(reference)
+    cleaned_hypothesis = strip_for_disagreement(hypothesis)
+    counts = error_counts(cleaned_reference, cleaned_hypothesis)
     return {
         "character_edits": counts.character_edits,
         "reference_characters": counts.reference_characters,
         "word_edits": counts.word_edits,
         "reference_words": counts.reference_words,
     }
+
+
+def allocate_calibration_work_dir() -> Path:
+    CALIBRATION_RUN_ROOT.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="run-", dir=CALIBRATION_RUN_ROOT))
+
+
+def release_calibration_work_dir(path: Path) -> None:
+    resolved = path.resolve()
+    root = CALIBRATION_RUN_ROOT.resolve()
+    if resolved == root:
+        raise ValueError("refusing to delete calibration run root")
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ValueError("refusing to delete path outside calibration run root") from error
+    if resolved.exists():
+        shutil.rmtree(resolved)
 
 
 def _tessdata_checksums(path: Path) -> dict[str, str]:
@@ -426,9 +588,6 @@ def build_calibration_candidates(
     system_tessdata: Path,
     best_tessdata: Path,
     pdfium_lib: Path,
-    binary_sha256: str,
-    tessdata_sha256: dict[str, dict[str, str]],
-    toolchain_sha256: str,
 ) -> list[CalibrationCandidate]:
     base_environment = sanitized_candidate_environment(
         cpu_threads=config["limits"]["cpu_threads"]
@@ -442,12 +601,22 @@ def build_calibration_candidates(
             best_tessdata=best_tessdata,
             pdfium_lib=pdfium_lib,
         )
-        argv = (
-            str(fileconv),
-            "one",
-            "{input}",
-            "--lang",
-            candidate["langs"],
+        expected_names = tuple(candidate["environment_variable_names"])
+        actual_names = tuple(sorted(environment))
+        if actual_names != expected_names:
+            raise ValueError(
+                f"candidate {candidate['id']} environment variable names drifted"
+            )
+        argv = tuple(
+            str(fileconv) if token == "{fileconv}" else token
+            for token in candidate["argv_template"]
+        )
+        spec = CommandCandidateSpec(
+            id=candidate["id"],
+            label=candidate["id"],
+            argv=argv,
+            environment=environment,
+            provenance={"mode": candidate["mode"], "tessdata": candidate["tessdata"]},
         )
         candidates.append(
             CalibrationCandidate(
@@ -456,27 +625,19 @@ def build_calibration_candidates(
                 tessdata=candidate["tessdata"],
                 langs=candidate["langs"],
                 argv=argv,
-                environment_variable_names=tuple(sorted(environment)),
-                provenance={
-                    "binary_sha256": binary_sha256,
-                    "toolchain_sha256": toolchain_sha256,
-                    "mode": candidate["mode"],
-                    "tessdata": {
-                        "role": candidate["tessdata"],
-                        "sha256": tessdata_sha256[
-                            "system" if candidate["tessdata"] == "system" else "best"
-                        ],
-                    },
-                    "invocation": (
-                        f"fileconv one <rendered-page.png> --lang {candidate['langs']}"
-                    ),
-                },
+                environment_variable_names=expected_names,
+                spec=spec,
             )
         )
     return candidates
 
 
-def _verify_pdf_checksum(pdf_path: Path, expected_sha256: str) -> None:
+def _verify_official_pdf(
+    pdf_path: Path, *, expected_sha256: str, max_bytes: int
+) -> None:
+    size = pdf_path.stat().st_size
+    if size > max_bytes:
+        raise ValueError("official PDF exceeds approved byte cap")
     actual = _sha256(pdf_path)
     if actual != expected_sha256:
         raise ValueError("official PDF checksum mismatch")
@@ -487,7 +648,7 @@ def render_calibration_pages(
     work_dir: Path,
     *,
     config: dict[str, Any],
-) -> dict[int, Path]:
+) -> dict[int, tuple[Path, str]]:
     render = config["render"]
     limits = RenderLimits(
         dpi=render["dpi"],
@@ -496,7 +657,7 @@ def render_calibration_pages(
     )
     pages = approved_calibration_pages(config)
     work_dir.mkdir(parents=True, exist_ok=True)
-    rendered: dict[int, Path] = {}
+    rendered: dict[int, tuple[Path, str]] = {}
     document = pdfium.PdfDocument(pdf_path)
     try:
         for page_number in pages:
@@ -514,105 +675,70 @@ def render_calibration_pages(
                 ) from error
             finally:
                 source_page.close()
-            rendered[page_number] = output
+            rendered[page_number] = (output, _sha256(output))
     finally:
         document.close()
     return rendered
 
 
-def _recognize_page_direct(
+def recognize_calibration_page(
     candidate: CalibrationCandidate,
     *,
-    input_path: Path,
-    environment: dict[str, str],
+    page_path: Path,
+    page_number: int,
     timeout_seconds: float,
     max_output_bytes: int,
-    sample_interval_seconds: float,
-) -> tuple[str, dict[str, Any]]:
-    command = render_argv(
-        CommandCandidateSpec(
-            id=candidate.id,
-            label=candidate.id,
-            argv=candidate.argv,
-            environment=environment,
-            provenance=candidate.provenance,
-        ),
-        input_path,
-    )
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=environment,
-        start_new_session=True,
+    max_rss_bytes: int,
+) -> tuple[str | None, dict[str, Any], str | None]:
+    """Run one page through the reviewed bounded worker contract."""
+    worker = _isolated_worker(
+        candidate.spec,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
     )
     try:
-        if process.stdout is None or process.stderr is None:
-            raise RuntimeError("candidate output pipes are unavailable")
-        started = time.perf_counter()
-        monitored = psutil.Process(process.pid)
-        peak_rss = 0
-        sample_count = 0
-        stdout_chunks: list[str] = []
-        stderr_chunks: list[str] = []
-        while True:
-            peak_rss = max(
-                peak_rss,
-                _process_tree_rss(monitored),
+        measurement = worker.recognize(
+            BenchmarkPage(
+                source_id=OFFICIAL_SOURCE_ID,
+                source_sha256="",
+                stratum="calibration",
+                page_number=page_number,
+                path=page_path,
+                reference=None,
             )
-            sample_count += 1
-            if time.perf_counter() - started > timeout_seconds:
-                _terminate_process_group(process)
-                raise TimeoutError("candidate page timeout")
-            readable, _, _ = select.select(
-                [process.stdout, process.stderr], [], [], sample_interval_seconds
-            )
-            for stream in readable:
-                chunk = stream.read(65536)
-                if not chunk:
-                    continue
-                if stream is process.stdout:
-                    stdout_chunks.append(chunk)
-                    if sum(len(item) for item in stdout_chunks) > max_output_bytes:
-                        _terminate_process_group(process)
-                        raise CandidateOutputLimitError
-                else:
-                    stderr_chunks.append(chunk)
-                    if sum(len(item) for item in stderr_chunks) > max_output_bytes:
-                        _terminate_process_group(process)
-                        raise CandidateOutputLimitError
-            if process.poll() is not None and not readable:
-                break
-        if process.returncode != 0:
-            raise RuntimeError("candidate command failed")
-        text = "".join(stdout_chunks)
+        )
+        peak_rss = int(measurement.resource["peak_rss_bytes"])
         resource = {
-            "method": "sampled_process_tree_rss",
+            "elapsed_seconds": float(measurement.resource["wall_seconds"]),
             "peak_rss_bytes": peak_rss,
-            "sample_count": sample_count,
-            "sample_interval_seconds": sample_interval_seconds,
-            "wall_seconds": time.perf_counter() - started,
+            "resource_limit_violation": peak_rss > max_rss_bytes,
         }
-        return text, resource
+        return measurement.text, resource, None
+    except TimeoutError:
+        return None, {"elapsed_seconds": 0.0, "peak_rss_bytes": 0, "resource_limit_violation": False}, "timeout"
+    except CandidateOutputLimitError:
+        return None, {"elapsed_seconds": 0.0, "peak_rss_bytes": 0, "resource_limit_violation": False}, "output_limit"
+    except Exception:
+        return None, {"elapsed_seconds": 0.0, "peak_rss_bytes": 0, "resource_limit_violation": False}, "candidate_error"
     finally:
-        if process.poll() is None:
-            _terminate_process_group(process)
+        worker.close()
 
 
-def _process_tree_rss(process: psutil.Process) -> int:
-    processes = [process]
-    try:
-        processes.extend(process.children(recursive=True))
-    except (psutil.Error, ProcessLookupError):
-        pass
-    total = 0
-    for item in processes:
-        try:
-            total += item.memory_info().rss
-        except (psutil.Error, ProcessLookupError):
-            pass
-    return total
+def _record_bindings(
+    *,
+    provenance: dict[str, Any],
+    tessdata_role: str,
+    render_sha256: str,
+) -> dict[str, Any]:
+    return {
+        "source_sha256": provenance["source_sha256"],
+        "config_sha256": provenance["config_sha256"],
+        "binary_sha256": provenance["binary_sha256"],
+        "pdfium_sha256": provenance["pdfium_sha256"],
+        "toolchain_sha256": provenance["toolchain_sha256"],
+        "tessdata_sha256": provenance["tessdata_sha256"][tessdata_role],
+        "render_sha256": render_sha256,
+    }
 
 
 def aggregate_calibration_records(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -633,82 +759,134 @@ def aggregate_calibration_records(records: list[dict[str, Any]]) -> dict[str, An
             bool(record["resource_limit_violation"]) for record in records
         ),
     }
-    if all(field in record for record in successes for field in _COUNT_FIELDS):
-        aggregate["raw_counts"] = {
-            field: sum(int(record[field]) for record in successes)
-            for field in _COUNT_FIELDS
-        }
+    if successes and all(
+        _COUNT_FIELDS <= set(record) for record in successes if record["page_number"] <= 20
+    ):
+        reference_successes = [
+            record for record in successes if record["page_number"] <= 20
+        ]
+        if reference_successes:
+            aggregate["raw_counts"] = {
+                field: sum(int(record[field]) for record in reference_successes)
+                for field in _COUNT_FIELDS
+            }
     return aggregate
 
 
+def _validate_bindings(
+    bindings: Any, *, provenance: dict[str, Any], tessdata_role: str, render_sha256: str
+) -> None:
+    _validate_closed_mapping(bindings, allowed=_BINDINGS_FIELDS, path="record.bindings")
+    if bindings["source_sha256"] != provenance["source_sha256"]:
+        raise ValueError("record source binding is inconsistent")
+    if bindings["config_sha256"] != provenance["config_sha256"]:
+        raise ValueError("record config binding is inconsistent")
+    if bindings["binary_sha256"] != provenance["binary_sha256"]:
+        raise ValueError("record binary binding is inconsistent")
+    if bindings["pdfium_sha256"] != provenance["pdfium_sha256"]:
+        raise ValueError("record pdfium binding is inconsistent")
+    if bindings["toolchain_sha256"] != provenance["toolchain_sha256"]:
+        raise ValueError("record toolchain binding is inconsistent")
+    if bindings["tessdata_sha256"] != provenance["tessdata_sha256"][tessdata_role]:
+        raise ValueError("record tessdata binding is inconsistent")
+    if bindings["render_sha256"] != render_sha256:
+        raise ValueError("record render binding is inconsistent")
+
+
 def validate_calibration_artifact(payload: dict[str, Any]) -> None:
-    expected_fields = {
-        "schema_version",
-        "split",
-        "page_count",
-        "provenance",
-        "host",
-        "toolchain",
-        "limits",
-        "access",
-        "candidates",
-        "records",
-    }
-    if set(payload) != expected_fields or payload.get("schema_version") != 1:
+    _validate_closed_mapping(payload, allowed=_ARTIFACT_FIELDS, path="artifact")
+    if payload["schema_version"] != 1:
         raise ValueError("calibration artifact schema is invalid")
-    if payload.get("split") != "calibration":
+    if payload["split"] != "calibration":
         raise ValueError("calibration artifact split is invalid")
-    if payload.get("page_count") != 22:
+    if payload["page_count"] != 22:
         raise ValueError("calibration artifact must contain exactly 22 pages")
-    provenance = payload.get("provenance")
-    if not isinstance(provenance, dict) or set(provenance) != _CHECKSUM_FIELDS:
-        raise ValueError("calibration provenance checksum set is incomplete")
+    _validate_closed_mapping(
+        payload["provenance"], allowed=_PROVENANCE_FIELDS, path="artifact.provenance"
+    )
+    provenance = payload["provenance"]
     if not all(_valid_checksum(value) for value in provenance.values()):
         raise ValueError("calibration provenance contains an invalid checksum")
     if set(provenance["tessdata_sha256"]) != {"system", "best"}:
         raise ValueError("tessdata provenance roles are invalid")
+    _validate_closed_mapping(payload["host"], allowed=_HOST_FIELDS, path="artifact.host")
+    _validate_closed_mapping(
+        payload["toolchain"], allowed=_TOOLCHAIN_FIELDS, path="artifact.toolchain"
+    )
     if provenance["host_sha256"] != _canonical_sha256(payload["host"]):
         raise ValueError("host checksum does not bind the host descriptor")
     if provenance["toolchain_sha256"] != _canonical_sha256(payload["toolchain"]):
         raise ValueError("toolchain checksum does not bind all versions")
-    _assert_no_recognized_text(payload)
-    _assert_no_environment_values(payload)
-    limits = payload.get("limits")
-    if not isinstance(limits, dict) or set(limits) != _ALLOWED_LIMIT_KEYS:
-        raise ValueError("calibration limits are not fully bounded")
-    if any(
-        not isinstance(limits[key], int) or limits[key] <= 0
-        for key in (
-            "cpu_threads",
-            "timeout_seconds_per_page",
-            "max_output_bytes_per_stream",
-            "max_rss_bytes",
-        )
-    ):
-        raise ValueError("calibration limits must remain positive and bounded")
-    if limits["process_tree_sample_interval_ms"] != 10:
-        raise ValueError("process-tree sampling interval must remain bounded")
-    access = payload.get("access")
-    if access != {
+    _validate_closed_mapping(payload["limits"], allowed=_LIMITS_FIELDS, path="artifact.limits")
+    if payload["limits"] != _PLAN_LIMITS:
+        raise ValueError("calibration limits must match approved constants")
+    _validate_closed_mapping(payload["access"], allowed=_ACCESS_FIELDS, path="artifact.access")
+    if payload["access"] != {
         "approved_pages_opened": 22,
         "holdout_pages_opened": 0,
         "rendered_pages": 22,
         "ocr_executions": 88,
     }:
         raise ValueError("calibration access evidence is invalid")
-    candidates = payload.get("candidates")
-    if (
-        not isinstance(candidates, list)
-        or tuple(candidate.get("id") for candidate in candidates)
-        != EXPECTED_CANDIDATE_IDS
-    ):
+    render_hashes = payload["render_hashes"]
+    if not isinstance(render_hashes, dict):
+        raise ValueError("render hashes are invalid")
+    expected_render_pages = {str(page) for page in range(1, 21)} | {"60", "450"}
+    if set(render_hashes) != expected_render_pages:
+        raise ValueError("render hashes must cover approved pages only")
+    if not all(_valid_checksum(value) for value in render_hashes.values()):
+        raise ValueError("render hashes contain an invalid checksum")
+    _reject_forbidden_keys(payload)
+    candidates = payload["candidates"]
+    if tuple(candidate["id"] for candidate in candidates) != EXPECTED_CANDIDATE_IDS:
         raise ValueError("calibration candidate IDs are invalid")
-    records = payload.get("records")
+    config = load_calibration_config()
+    config_by_id = {candidate["id"]: candidate for candidate in config["candidates"]}
+    for candidate in candidates:
+        _validate_closed_mapping(
+            candidate, allowed=_CANDIDATE_FIELDS, path="artifact.candidate"
+        )
+        expected = config_by_id[candidate["id"]]
+        if (
+            candidate["mode"] != expected["mode"]
+            or candidate["tessdata"] != expected["tessdata"]
+            or candidate["langs"] != expected["langs"]
+        ):
+            raise ValueError("candidate semantics drifted from frozen config")
+        if candidate["argv"][1:] != [
+            "one",
+            "{input}",
+            "--lang",
+            expected["langs"],
+        ]:
+            raise ValueError("candidate argv template drifted from frozen config")
+        if candidate["environment_variable_names"] != expected["environment_variable_names"]:
+            raise ValueError("candidate environment variable names drifted")
+        aggregate_fields = frozenset(candidate["aggregate"])
+        allowed_aggregate = (
+            _AGGREGATE_FIELDS | frozenset({"raw_counts"})
+            if "raw_counts" in aggregate_fields
+            else _AGGREGATE_FIELDS
+        )
+        _validate_closed_mapping(
+            candidate["aggregate"],
+            allowed=allowed_aggregate,
+            path="artifact.candidate.aggregate",
+        )
+        _validate_closed_mapping(
+            candidate["aggregate"]["latency_seconds"],
+            allowed=_LATENCY_FIELDS,
+            path="artifact.candidate.aggregate.latency_seconds",
+        )
+    records = payload["records"]
     if not isinstance(records, list):
         raise ValueError("calibration records cardinality is invalid")
     approved_pages = set(range(1, 21)) | {60, 450}
     seen: set[tuple[str, int]] = set()
     for record in records:
+        if not isinstance(record, dict):
+            raise ValueError("calibration record must be a mapping")
+        _reject_forbidden_keys(record, path="record")
         candidate_id = record.get("candidate_id")
         page_number = record.get("page_number")
         if candidate_id not in EXPECTED_CANDIDATE_IDS:
@@ -719,33 +897,38 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
         if key in seen:
             raise ValueError("duplicate candidate-page record")
         seen.add(key)
+        tessdata_role = config_by_id[candidate_id]["tessdata"]
+        render_sha256 = render_hashes[str(page_number)]
+        _validate_bindings(
+            record["bindings"],
+            provenance=provenance,
+            tessdata_role=tessdata_role,
+            render_sha256=render_sha256,
+        )
+        if record["success"]:
+            allowed = _RECORD_BASE_FIELDS | (
+                _COUNT_FIELDS if page_number <= 20 else frozenset({"diagnostics"})
+            )
+            _validate_closed_mapping(record, allowed=allowed, path="record")
+            if page_number <= 20:
+                _validate_closed_mapping(
+                    {key: record[key] for key in _COUNT_FIELDS},
+                    allowed=_COUNT_FIELDS,
+                    path="record.counts",
+                )
+            else:
+                _validate_closed_mapping(
+                    record["diagnostics"],
+                    allowed=_DIAGNOSTIC_FIELDS,
+                    path="record.diagnostics",
+                )
+        else:
+            allowed = _RECORD_BASE_FIELDS | frozenset({"error_kind"})
+            _validate_closed_mapping(record, allowed=allowed, path="record")
+            if record["error_kind"] not in ALLOWED_ERROR_KINDS:
+                raise ValueError("failure record error_kind is invalid")
     if len(records) != 88:
         raise ValueError("calibration records cardinality is invalid")
-    for record in records:
-        candidate_id = record.get("candidate_id")
-        page_number = record.get("page_number")
-        if not _valid_checksum(record.get("render_sha256")):
-            raise ValueError("render checksum is invalid")
-        for candidate in candidates:
-            if candidate["id"] != candidate_id:
-                continue
-            if record.get("mode") != candidate.get("mode"):
-                raise ValueError("record mode does not match candidate")
-            if record.get("langs") != candidate.get("langs"):
-                raise ValueError("record langs do not match candidate")
-        if page_number <= 20:
-            if any(field not in record for field in _COUNT_FIELDS):
-                raise ValueError("reference disagreement counts are incomplete")
-            if "diagnostics" in record:
-                raise ValueError("reference pages must not store diagnostics")
-        else:
-            diagnostics = record.get("diagnostics")
-            if not isinstance(diagnostics, dict) or set(diagnostics) != set(
-                _DIAGNOSTIC_FIELDS
-            ):
-                raise ValueError("diagnostic page fields are incomplete")
-            if any(field in record for field in _COUNT_FIELDS):
-                raise ValueError("diagnostic pages must not store reference counts")
     expected_keys = {
         (candidate_id, page_number)
         for candidate_id in EXPECTED_CANDIDATE_IDS
@@ -753,14 +936,30 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
     }
     if seen != expected_keys:
         raise ValueError("candidate-page records are missing")
+    per_page_renders = {
+        page: {
+            record["bindings"]["render_sha256"]
+            for record in records
+            if record["page_number"] == page
+        }
+        for page in approved_pages
+    }
+    if any(len(values) != 1 for values in per_page_renders.values()):
+        raise ValueError("all candidates for a page must share one render hash")
 
 
 def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
     config = load_calibration_config(args.config.resolve())
     sources = load_sources(args.sources.resolve())
     official = next(source for source in sources if source.id == OFFICIAL_SOURCE_ID)
+    if official.sha256 != config["source"]["expected_sha256"]:
+        raise ValueError("manifest source checksum does not match frozen config")
     pdf_path = args.pdf.resolve()
-    _verify_pdf_checksum(pdf_path, official.sha256)
+    _verify_official_pdf(
+        pdf_path,
+        expected_sha256=config["source"]["expected_sha256"],
+        max_bytes=config["limits"]["max_source_bytes"],
+    )
     reference_pages = load_private_reference_pages(
         args.reference.resolve(),
         approved_calibration_pages(config),
@@ -788,52 +987,44 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
         system_tessdata=system_tessdata,
         best_tessdata=best_tessdata,
         pdfium_lib=pdfium_lib,
-        binary_sha256=provenance["binary_sha256"],
-        tessdata_sha256=provenance["tessdata_sha256"],
-        toolchain_sha256=provenance["toolchain_sha256"],
     )
-    work_dir = args.work_dir.resolve()
-    rendered_pages = render_calibration_pages(pdf_path, work_dir, config=config)
+    work_dir = allocate_calibration_work_dir()
     records: list[dict[str, Any]] = []
+    render_hashes: dict[str, str] = {}
     try:
+        rendered_pages = render_calibration_pages(pdf_path, work_dir, config=config)
+        render_hashes = {
+            str(page_number): page_hash
+            for page_number, (_, page_hash) in rendered_pages.items()
+        }
         for candidate in candidates:
-            environment = _candidate_environment(
-                candidate={
-                    "mode": candidate.mode,
-                    "tessdata": candidate.tessdata,
-                    "langs": candidate.langs,
-                },
-                base_environment=sanitized_candidate_environment(
-                    cpu_threads=config["limits"]["cpu_threads"]
-                ),
-                system_tessdata=system_tessdata,
-                best_tessdata=best_tessdata,
-                pdfium_lib=pdfium_lib,
-            )
-            for page_number, page_path in sorted(rendered_pages.items()):
+            for page_number, (page_path, render_sha256) in sorted(
+                rendered_pages.items()
+            ):
+                bindings = _record_bindings(
+                    provenance=provenance,
+                    tessdata_role=candidate.tessdata,
+                    render_sha256=render_sha256,
+                )
+                text, resource, error_kind = recognize_calibration_page(
+                    candidate,
+                    page_path=page_path,
+                    page_number=page_number,
+                    timeout_seconds=config["limits"]["timeout_seconds_per_page"],
+                    max_output_bytes=config["limits"]["max_output_bytes_per_stream"],
+                    max_rss_bytes=config["limits"]["max_rss_bytes"],
+                )
                 record: dict[str, Any] = {
                     "candidate_id": candidate.id,
                     "page_number": page_number,
-                    "mode": candidate.mode,
-                    "langs": candidate.langs,
-                    "render_sha256": _sha256(page_path),
-                    "success": False,
-                    "error_kind": None,
-                    "elapsed_seconds": 0.0,
-                    "peak_rss_bytes": 0,
-                    "resource_limit_violation": False,
+                    "success": error_kind is None,
+                    "bindings": bindings,
+                    "elapsed_seconds": resource["elapsed_seconds"],
+                    "peak_rss_bytes": resource["peak_rss_bytes"],
+                    "resource_limit_violation": resource["resource_limit_violation"],
                 }
-                try:
-                    text, resource = _recognize_page_direct(
-                        candidate,
-                        input_path=page_path,
-                        environment=environment,
-                        timeout_seconds=config["limits"]["timeout_seconds_per_page"],
-                        max_output_bytes=config["limits"]["max_output_bytes_per_stream"],
-                        sample_interval_seconds=(
-                            config["limits"]["process_tree_sample_interval_ms"] / 1000
-                        ),
-                    )
+                if error_kind is None:
+                    assert text is not None
                     if page_number <= 20:
                         record.update(
                             reference_disagreement_counts(
@@ -847,33 +1038,20 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
                             config=config,
                             note_text=note_text,
                         )
-                    peak_rss = int(resource["peak_rss_bytes"])
-                    record.update(
-                        success=True,
-                        elapsed_seconds=float(resource["wall_seconds"]),
-                        peak_rss_bytes=peak_rss,
-                        resource_limit_violation=peak_rss
-                        > config["limits"]["max_rss_bytes"],
-                    )
                     del text
-                except TimeoutError:
-                    record["error_kind"] = "timeout"
-                except CandidateOutputLimitError:
-                    record["error_kind"] = "output_limit"
-                except Exception:
-                    record["error_kind"] = "candidate_error"
+                else:
+                    record["error_kind"] = error_kind
                 records.append(record)
     finally:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        release_calibration_work_dir(work_dir)
     public_candidates = [
         {
             "id": candidate.id,
             "mode": candidate.mode,
             "tessdata": candidate.tessdata,
             "langs": candidate.langs,
-            "argv": list(candidate.argv),
+            "argv": ["{fileconv}", "one", "{input}", "--lang", candidate.langs],
             "environment_variable_names": list(candidate.environment_variable_names),
-            "provenance": candidate.provenance,
             "aggregate": aggregate_calibration_records(
                 [record for record in records if record["candidate_id"] == candidate.id]
             ),
@@ -894,6 +1072,7 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
             "rendered_pages": 22,
             "ocr_executions": 88,
         },
+        "render_hashes": render_hashes,
         "candidates": public_candidates,
         "records": records,
     }
@@ -914,7 +1093,6 @@ def _parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--best-tessdata", type=Path, required=True)
     calibrate.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     calibrate.add_argument("--sources", type=Path, default=DEFAULT_SOURCES)
-    calibrate.add_argument("--work-dir", type=Path, default=DEFAULT_OUTPUT.parent / "work")
     calibrate.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser
 

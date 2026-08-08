@@ -7,6 +7,11 @@
     11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
     60, 450
   ],
+  "source": {
+    "id": "official-89-2026-tt-btc",
+    "expected_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+    "max_bytes": 17281751
+  },
   "render": {
     "dpi": 300,
     "max_pixels": 50000000,
@@ -17,6 +22,7 @@
     "timeout_seconds_per_page": 180,
     "max_output_bytes_per_stream": 1048576,
     "max_rss_bytes": 805306368,
+    "max_source_bytes": 17281751,
     "process_tree_sample_interval_ms": 10
   },
   "candidates": [
@@ -24,25 +30,75 @@
       "id": "baseline-system-fast",
       "mode": "legacy",
       "tessdata": "system",
-      "langs": "vie+eng"
+      "langs": "vie+eng",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie+eng"],
+      "environment_variable_names": [
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
     },
     {
       "id": "baseline-best",
       "mode": "legacy",
       "tessdata": "best",
-      "langs": "vie+eng"
+      "langs": "vie+eng",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie+eng"],
+      "environment_variable_names": [
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
     },
     {
       "id": "bitonal-best-vie-eng",
       "mode": "preserve-near-bitonal",
       "tessdata": "best",
-      "langs": "vie+eng"
+      "langs": "vie+eng",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie+eng"],
+      "environment_variable_names": [
+        "FILECONV_OCR_PREPROCESS_MODE",
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
     },
     {
       "id": "bitonal-best-vie",
       "mode": "preserve-near-bitonal",
       "tessdata": "best",
-      "langs": "vie"
+      "langs": "vie",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie"],
+      "environment_variable_names": [
+        "FILECONV_OCR_PREPROCESS_MODE",
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
     }
   ],
   "page_diagnostics": {
