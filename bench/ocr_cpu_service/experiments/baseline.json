@@ -12,8 +12,8 @@
   },
   "candidates": [
     {
-      "id": "markhand-default",
-      "label": "Markhand default",
+      "id": "worker-system-fast",
+      "label": "Worker deployment system-fast",
       "argv": [
         "{fileconv}",
         "one",
@@ -21,13 +21,11 @@
         "--lang",
         "vie+eng"
       ],
-      "environment": {
-        "FILECONV_TESSDATA": "{system_tessdata}"
-      }
+      "tessdata_mode": "system-fast"
     },
     {
-      "id": "markhand-tessdata-best",
-      "label": "Markhand tessdata_best",
+      "id": "markhand-auto",
+      "label": "Markhand checkout auto-discovery",
       "argv": [
         "{fileconv}",
         "one",
@@ -35,9 +33,19 @@
         "--lang",
         "vie+eng"
       ],
-      "environment": {
-        "FILECONV_TESSDATA": "{best_tessdata}"
-      }
+      "tessdata_mode": "auto"
+    },
+    {
+      "id": "tessdata-best",
+      "label": "Explicit repository tessdata_best",
+      "argv": [
+        "{fileconv}",
+        "one",
+        "{input}",
+        "--lang",
+        "vie+eng"
+      ],
+      "tessdata_mode": "best"
     }
   ],
   "determinism": {

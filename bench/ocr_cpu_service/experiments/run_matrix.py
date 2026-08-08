@@ -9,8 +9,8 @@ import math
 import platform
 import statistics
 import subprocess
+import tomllib
 from dataclasses import asdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -20,7 +20,6 @@ from benchmark.candidates import CommandCandidateSpec
 from benchmark.corpus import BenchmarkPage
 from benchmark.metrics import error_counts
 from benchmark.run import (
-    FILECONV_BUILD_COMMAND,
     CandidateOutputLimitError,
     _isolated_worker,
     sanitized_candidate_environment,
@@ -33,6 +32,11 @@ DEFAULT_CONFIG = SERVICE_ROOT / "experiments" / "baseline.json"
 DEFAULT_ANNOTATIONS = SERVICE_ROOT / "corpus" / "accuracy-annotations.jsonl"
 DEFAULT_SOURCES = SERVICE_ROOT / "corpus" / "accuracy-sources.json"
 DEFAULT_ASSETS = SERVICE_ROOT / ".data" / "corpus"
+EXPECTED_CANDIDATE_IDS = (
+    "worker-system-fast",
+    "markhand-auto",
+    "tessdata-best",
+)
 _CHECKSUM_FIELDS = frozenset(
     {
         "source_sha256",
@@ -41,6 +45,7 @@ _CHECKSUM_FIELDS = frozenset(
         "binary_sha256",
         "tessdata_sha256",
         "host_sha256",
+        "toolchain_sha256",
     }
 )
 _COUNT_FIELDS = (
@@ -98,6 +103,16 @@ def load_baseline_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
         raise ValueError("baseline config must select schema 1 tuning only")
     if config["expected_pages"] != 44 or config["repetitions"] != 2:
         raise ValueError("baseline config must lock 44 tuning pages and two repetitions")
+    if tuple(candidate.get("id") for candidate in config["candidates"]) != (
+        EXPECTED_CANDIDATE_IDS
+    ):
+        raise ValueError("baseline config candidate IDs are invalid")
+    if tuple(
+        candidate.get("tessdata_mode") for candidate in config["candidates"]
+    ) != ("system-fast", "auto", "best"):
+        raise ValueError("baseline config tessdata semantics are invalid")
+    if any("environment" in candidate for candidate in config["candidates"]):
+        raise ValueError("baseline config must not serialize environment values")
     return config
 
 
@@ -116,6 +131,7 @@ def build_run_provenance(
     fileconv: Path,
     tessdata_paths: dict[str, Path],
     host: dict[str, Any],
+    toolchain: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "source_sha256": _sha256(source_manifest),
@@ -127,7 +143,30 @@ def build_run_provenance(
             for role, path in sorted(tessdata_paths.items())
         },
         "host_sha256": _canonical_sha256(host),
+        "toolchain_sha256": _canonical_sha256(toolchain),
     }
+
+
+def resolve_auto_tessdata(
+    *,
+    cwd: Path,
+    executable: Path,
+    manifest_dir: Path,
+) -> Path:
+    """Mirror fileconv-core's no-override tessdata_best search order."""
+    roots = [
+        *list(cwd.resolve().parents)[:3],
+    ]
+    roots.insert(0, cwd.resolve())
+    executable_parent = executable.resolve().parent
+    roots.extend([executable_parent, *list(executable_parent.parents)[:3]])
+    manifest = manifest_dir.resolve()
+    roots.extend([manifest, *list(manifest.parents)[:3]])
+    for root in roots:
+        candidate = root / "tessdata_best"
+        if (candidate / "vie.traineddata").is_file():
+            return candidate
+    raise ValueError("Markhand auto-discovery did not resolve tessdata_best")
 
 
 def build_candidate_specs(
@@ -136,37 +175,41 @@ def build_candidate_specs(
     fileconv: Path,
     system_tessdata: Path,
     best_tessdata: Path,
+    auto_tessdata: Path,
     cpu_threads: int,
     binary_sha256: str,
     tessdata_sha256: dict[str, dict[str, str]],
+    toolchain_sha256: str,
 ) -> tuple[list[CommandCandidateSpec], list[dict[str, Any]]]:
     base_environment = sanitized_candidate_environment(cpu_threads=cpu_threads)
     substitutions = {
         "{fileconv}": str(fileconv),
-        "{system_tessdata}": str(system_tessdata),
-        "{best_tessdata}": str(best_tessdata),
+    }
+    role_paths = {
+        "system-fast": system_tessdata,
+        "auto": auto_tessdata,
+        "best": best_tessdata,
     }
     specs: list[CommandCandidateSpec] = []
     public: list[dict[str, Any]] = []
     for candidate in config["candidates"]:
         argv = tuple(substitutions.get(value, value) for value in candidate["argv"])
-        candidate_environment = {
-            name: substitutions[value]
-            for name, value in candidate["environment"].items()
-        }
-        environment = {**base_environment, **candidate_environment}
-        role = (
-            "best"
-            if candidate_environment["FILECONV_TESSDATA"] == str(best_tessdata)
-            else "system"
+        role = candidate["tessdata_mode"]
+        candidate_environment = (
+            {}
+            if role == "auto"
+            else {"FILECONV_TESSDATA": str(role_paths[role])}
         )
+        environment = {**base_environment, **candidate_environment}
+        tessdata = {
+            "mode": role,
+            "resolved_path": str(auto_tessdata) if role == "auto" else None,
+            "sha256": tessdata_sha256[role],
+        }
         provenance = {
             "binary_sha256": binary_sha256,
-            "tessdata_role": role,
-            "tessdata_sha256": tessdata_sha256[role],
-            "build_command": FILECONV_BUILD_COMMAND,
-            "build_features": ["no-default-features"],
-            "profile": "release",
+            "toolchain_sha256": toolchain_sha256,
+            "tessdata": tessdata,
         }
         specs.append(
             CommandCandidateSpec(
@@ -303,6 +346,7 @@ def _run_one_candidate(
             )
             record: dict[str, Any] = {
                 "page_id": page["page_id"],
+                "split": "tuning",
                 "source_id": page["source_id"],
                 "page_number": page["page_number"],
                 "difficulty_strata": sorted(page["difficulty_strata"]),
@@ -399,6 +443,17 @@ def _assert_no_recognized_text(value: Any, path: str = "artifact") -> None:
             _assert_no_recognized_text(item, f"{path}[{index}]")
 
 
+def _assert_no_environment_values(value: Any, path: str = "artifact") -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in {"environment", "environment_values"}:
+                raise ValueError(f"environment values are forbidden at {path}.{key}")
+            _assert_no_environment_values(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _assert_no_environment_values(item, f"{path}[{index}]")
+
+
 def _valid_checksum_value(value: Any) -> bool:
     if isinstance(value, str):
         return len(value) == 64 and all(
@@ -413,22 +468,127 @@ def _valid_checksum_value(value: Any) -> bool:
 
 
 def validate_run_artifact(artifact: dict[str, Any]) -> None:
+    expected_fields = {
+        "schema_version",
+        "repetition",
+        "split",
+        "page_count",
+        "provenance",
+        "host",
+        "toolchain",
+        "access",
+        "candidates",
+    }
+    if set(artifact) != expected_fields or artifact.get("schema_version") != 1:
+        raise ValueError("run artifact schema is invalid")
+    if artifact.get("repetition") not in {1, 2}:
+        raise ValueError("run artifact repetition must be 1 or 2")
     if artifact.get("split") != "tuning":
         raise ValueError("run artifact must contain tuning only")
+    if artifact.get("page_count") != 44:
+        raise ValueError("run artifact must contain exactly 44 tuning pages")
     provenance = artifact.get("provenance")
     if not isinstance(provenance, dict) or set(provenance) != _CHECKSUM_FIELDS:
         raise ValueError("run provenance checksum set is incomplete")
     if not all(_valid_checksum_value(value) for value in provenance.values()):
         raise ValueError("run provenance contains an invalid checksum")
+    if set(provenance["tessdata_sha256"]) != {"system-fast", "auto", "best"}:
+        raise ValueError("tessdata provenance roles are invalid")
+    if provenance["host_sha256"] != _canonical_sha256(artifact["host"]):
+        raise ValueError("host checksum does not bind the host descriptor")
+    if provenance["toolchain_sha256"] != _canonical_sha256(artifact["toolchain"]):
+        raise ValueError("toolchain checksum does not bind all versions")
     _assert_no_recognized_text(artifact)
-    for candidate in artifact.get("candidates", []):
-        if "environment" in candidate:
-            raise ValueError("candidate environment values must not be stored")
+    _assert_no_environment_values(artifact)
+    access = artifact.get("access")
+    if access != {
+        "selected_tuning_pages": 44,
+        "tuning_assets_checksummed": 44,
+        "holdout_assets_resolved": 0,
+        "holdout_assets_checksummed": 0,
+        "holdout_assets_opened": 0,
+        "holdout_ocr_executions": 0,
+    }:
+        raise ValueError("holdout non-access evidence or tuning access count is invalid")
+    candidates = artifact.get("candidates")
+    if (
+        not isinstance(candidates, list)
+        or tuple(candidate.get("id") for candidate in candidates)
+        != EXPECTED_CANDIDATE_IDS
+    ):
+        raise ValueError("run artifact candidate IDs are invalid")
+    expected_page_ids: set[str] | None = None
+    role_by_id = dict(
+        zip(EXPECTED_CANDIDATE_IDS, ("system-fast", "auto", "best"), strict=True)
+    )
+    for candidate in candidates:
         records = candidate["records"]
+        page_ids = [record.get("page_id") for record in records]
+        if len(records) != 44:
+            raise ValueError("candidate must contain 44 unique tuning records")
+        if len(set(page_ids)) != 44:
+            raise ValueError("candidate records contain a duplicate page")
+        if expected_page_ids is None:
+            expected_page_ids = set(page_ids)
+        elif set(page_ids) != expected_page_ids:
+            raise ValueError("candidate records have missing or unexpected pages")
+        if any(record.get("split") != "tuning" for record in records):
+            raise ValueError("holdout record evidence is forbidden")
+        successes = sum(record.get("success") is True for record in records)
+        failures = sum(record.get("success") is False for record in records)
+        aggregate = candidate["aggregate"]
+        if (
+            successes + failures != 44
+            or aggregate.get("pages") != 44
+            or aggregate.get("successes") != successes
+            or aggregate.get("failures") != failures
+        ):
+            raise ValueError("candidate success/failure cardinality is inconsistent")
+        for record in records:
+            if record["success"]:
+                if record.get("error_kind") is not None or any(
+                    field not in record for field in _COUNT_FIELDS
+                ):
+                    raise ValueError("success record fields are inconsistent")
+            elif (
+                not isinstance(record.get("error_kind"), str)
+                or not record["error_kind"]
+                or any(field in record for field in _COUNT_FIELDS)
+            ):
+                raise ValueError("failure record fields are inconsistent")
         if len(candidate["diagnostics"]) > 8:
             raise ValueError("bounded page diagnostics limit exceeded")
+        diagnostic_ids = [record.get("page_id") for record in candidate["diagnostics"]]
+        if len(diagnostic_ids) != len(set(diagnostic_ids)) or not set(
+            diagnostic_ids
+        ) <= set(page_ids):
+            raise ValueError("bounded diagnostics are not a unique page subset")
         if candidate["aggregate"] != aggregate_records(records):
             raise ValueError("candidate aggregate does not match raw records")
+        candidate_provenance = candidate["provenance"]
+        role = role_by_id[candidate["id"]]
+        if (
+            candidate_provenance.get("binary_sha256")
+            != provenance["binary_sha256"]
+            or candidate_provenance.get("toolchain_sha256")
+            != provenance["toolchain_sha256"]
+            or candidate_provenance.get("tessdata", {}).get("mode") != role
+            or candidate_provenance.get("tessdata", {}).get("sha256")
+            != provenance["tessdata_sha256"][role]
+        ):
+            raise ValueError("candidate provenance is inconsistent")
+        resolved_path = candidate_provenance["tessdata"].get("resolved_path")
+        if (role == "auto") != (
+            isinstance(resolved_path, str) and bool(resolved_path)
+        ):
+            raise ValueError("auto tessdata resolution provenance is invalid")
+        expected_strata = {
+            stratum
+            for record in records
+            for stratum in record["difficulty_strata"]
+        }
+        if set(candidate["strata"]) != expected_strata:
+            raise ValueError("candidate stratum aggregates are incomplete")
         for stratum, aggregate in candidate["strata"].items():
             expected = aggregate_records(
                 [
@@ -441,31 +601,66 @@ def validate_run_artifact(artifact: dict[str, Any]) -> None:
                 raise ValueError(f"stratum aggregate does not match raw records: {stratum}")
 
 
+def _deterministic_aggregate(aggregate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in aggregate.items()
+        if key not in {"latency_seconds", "peak_rss_bytes", "resource_limit_violations"}
+    }
+
+
+def _deterministic_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in record.items()
+        if key
+        not in {
+            "elapsed_seconds",
+            "candidate_seconds",
+            "peak_rss_bytes",
+            "rss_sample_count",
+            "resource_limit_violation",
+        }
+    }
+
+
 def _deterministic_projection(artifact: dict[str, Any]) -> dict[str, Any]:
     return {
+        "schema_version": artifact["schema_version"],
+        "repetition": artifact["repetition"],
         "split": artifact["split"],
         "page_count": artifact["page_count"],
         "provenance": artifact["provenance"],
+        "host": artifact["host"],
+        "toolchain": artifact["toolchain"],
+        "access": artifact["access"],
         "candidates": [
             {
                 "id": candidate["id"],
+                "label": candidate["label"],
                 "argv": candidate["argv"],
                 "environment_variable_names": candidate[
                     "environment_variable_names"
                 ],
                 "provenance": candidate["provenance"],
                 "records": [
-                    {
-                        "page_id": record["page_id"],
-                        "success": record["success"],
-                        "error_kind": record["error_kind"],
-                        **{
-                            field: record.get(field)
-                            for field in _COUNT_FIELDS
-                        },
-                    }
+                    _deterministic_record(record)
                     for record in candidate["records"]
                 ],
+                "aggregate": _deterministic_aggregate(candidate["aggregate"]),
+                "strata": {
+                    stratum: _deterministic_aggregate(aggregate)
+                    for stratum, aggregate in candidate["strata"].items()
+                },
+                "diagnostics": [
+                    _deterministic_record(record)
+                    for record in candidate["diagnostics"]
+                ],
+                "measurement": {
+                    key: value
+                    for key, value in candidate["measurement"].items()
+                    if key != "cold_initialization"
+                },
             }
             for candidate in artifact["candidates"]
         ],
@@ -477,10 +672,14 @@ def compare_repetitions(
 ) -> dict[str, Any]:
     validate_run_artifact(first)
     validate_run_artifact(second)
+    if (first["repetition"], second["repetition"]) != (1, 2):
+        raise ValueError("comparison requires repetitions 1 and 2 in order")
     if first["provenance"] != second["provenance"]:
         raise ValueError("candidate or run provenance changed between repetitions")
     left = _deterministic_projection(first)
     right = _deterministic_projection(second)
+    left["repetition"] = None
+    right["repetition"] = None
     if left != right:
         raise ValueError("nondeterministic OCR count or candidate interface detected")
     timing_variance: dict[str, Any] = {}
@@ -549,10 +748,21 @@ def render_baseline_report(
                 f"- Platform: `{first['host']['platform']}`",
                 f"- Architecture: `{first['host']['architecture']}`",
                 f"- Logical CPUs: {first['host']['logical_cpus']}",
+                f"- Physical CPUs: {first['host']['physical_cpus']}",
                 f"- Memory bytes: {first['host']['memory_bytes']}",
-                f"- Tesseract: `{first['versions']['tesseract']}`",
-                f"- Python: `{first['versions']['python']}`",
-                f"- Build: `{first['candidates'][0]['provenance']['build_command']}`",
+                f"- Tesseract: `{first['toolchain']['tesseract'][0]}`",
+                f"- Python: `{first['toolchain']['python']['implementation']} "
+                f"{first['toolchain']['python']['version']}`",
+                f"- fileconv package: "
+                f"`{first['toolchain']['fileconv']['version']}`",
+                f"- Cargo: `{first['toolchain']['cargo']}`",
+                f"- Rust: `{first['toolchain']['rustc'][0]}`",
+                f"- C compiler: `{first['toolchain']['cc']['tool']}` "
+                f"(`{first['toolchain']['cc']['version']}`)",
+                f"- C++ compiler: `{first['toolchain']['cxx']['tool']}` "
+                f"(`{first['toolchain']['cxx']['version']}`)",
+                "- Build environment variable names: `CC`, `CXX`; profile: "
+                "`release`; features: `no-default-features`.",
             ]
         )
     lines.extend(
@@ -560,20 +770,58 @@ def render_baseline_report(
             "",
             "## Candidate interfaces",
             "",
-            "| Candidate | Exact argv | Environment variable names |",
-            "| --- | --- | --- |",
+            "| Candidate | Semantics | Exact argv | Environment variable names |",
+            "| --- | --- | --- | --- |",
         ]
     )
+    semantics = {
+        "worker-system-fast": (
+            "Explicit system tessdata matching the current worker Docker "
+            "deployment without bundled tessdata_best"
+        ),
+        "markhand-auto": (
+            "No FILECONV_TESSDATA override; core checkout auto-discovery"
+        ),
+        "tessdata-best": "Explicit repository tessdata_best override",
+    }
     for candidate in first["candidates"]:
         argv = json.dumps(candidate["argv"], ensure_ascii=False)
         names = ", ".join(
             f"`{name}`" for name in candidate["environment_variable_names"]
         )
-        lines.append(f"| `{candidate['id']}` | `{argv}` | {names} |")
+        lines.append(
+            f"| `{candidate['id']}` | {semantics[candidate['id']]} | "
+            f"`{argv}` | {names} |"
+        )
+    auto = next(
+        candidate
+        for candidate in first["candidates"]
+        if candidate["id"] == "markhand-auto"
+    )
     lines.extend(
         [
             "",
             "Only variable names are recorded; environment values are omitted.",
+            "The auto-discovered tessdata path was "
+            f"`{auto['provenance']['tessdata']['resolved_path']}` and its "
+            "language-file checksums are bound in candidate provenance.",
+            "",
+            "Deployment and checkout behavior differ intentionally: the current "
+            "worker image has no bundled tessdata_best and explicitly selects "
+            "system-fast, while this repository checkout auto-discovers its local "
+            "tessdata_best when no override is present.",
+            "",
+            "## Holdout non-access evidence",
+            "",
+            "| Selected tuning | Tuning checksums | Holdout resolved | "
+            "Holdout checksums | Holdout opened | Holdout OCR |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: |",
+            f"| {first['access']['selected_tuning_pages']} | "
+            f"{first['access']['tuning_assets_checksummed']} | "
+            f"{first['access']['holdout_assets_resolved']} | "
+            f"{first['access']['holdout_assets_checksummed']} | "
+            f"{first['access']['holdout_assets_opened']} | "
+            f"{first['access']['holdout_ocr_executions']} |",
             "",
             "## Aggregate measurements",
             "",
@@ -690,21 +938,78 @@ def render_baseline_report(
             "",
             "The configured OCR-count tolerance is zero. Candidate order, argv, "
             "environment-variable names, source/split/config/binary/tessdata/host "
-            "checksums, per-page success state, and every additive edit count were "
-            "identical. Latency and RSS variance did not participate in acceptance.",
+            "and toolchain checksums, all host/tool versions, holdout non-access "
+            "evidence, per-page success state, and every additive edit count were "
+            "identical. Only measured latency and RSS values were excluded from "
+            "deterministic acceptance.",
             "",
         ]
     )
     return "\n".join(lines)
 
 
+def _command_output(command: list[str]) -> str:
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    return (result.stdout or result.stderr).strip()
+
+
+def _fileconv_package_version() -> str:
+    manifest = tomllib.loads((ROOT / "crates" / "cli" / "Cargo.toml").read_text())
+    package = manifest["package"]
+    if "version" in package:
+        return str(package["version"])
+    workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
+    return str(workspace["workspace"]["package"]["version"])
+
+
+def _toolchain_description() -> dict[str, Any]:
+    return {
+        "python": {
+            "implementation": platform.python_implementation(),
+            "version": platform.python_version(),
+        },
+        "tesseract": _command_output(["tesseract", "--version"]).splitlines(),
+        "fileconv": {
+            "package": "fileconv-cli",
+            "version": _fileconv_package_version(),
+        },
+        "cargo": _command_output(["cargo", "--version"]),
+        "rustc": _command_output(["rustc", "-Vv"]).splitlines(),
+        "cc": {
+            "tool": "gcc",
+            "version": _command_output(["gcc", "--version"]).splitlines()[0],
+        },
+        "cxx": {
+            "tool": "g++",
+            "version": _command_output(["g++", "--version"]).splitlines()[0],
+        },
+        "build": {
+            "profile": "release",
+            "features": ["no-default-features"],
+            "environment_variable_names": ["CC", "CXX"],
+        },
+    }
+
+
 def _host_description(max_rss_bytes: int) -> dict[str, Any]:
     memory = psutil.virtual_memory()
+    uname = platform.uname()
     return {
         "platform": platform.platform(),
+        "system": uname.system,
+        "kernel_release": uname.release,
+        "kernel_version": uname.version,
         "architecture": platform.machine(),
         "logical_cpus": psutil.cpu_count(logical=True),
+        "physical_cpus": psutil.cpu_count(logical=False),
         "memory_bytes": memory.total,
+        "libc": list(platform.libc_ver()),
         "max_rss_bytes": max_rss_bytes,
         "max_rss_enforcement": "measured_gate_only_not_os_enforced",
     }
@@ -722,11 +1027,18 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         expected_pages=config["expected_pages"],
     )
     fileconv = args.fileconv.resolve()
+    auto_tessdata = resolve_auto_tessdata(
+        cwd=Path.cwd(),
+        executable=fileconv,
+        manifest_dir=ROOT / "crates" / "core",
+    )
     tessdata_paths = {
-        "system": args.system_tessdata.resolve(),
+        "system-fast": args.system_tessdata.resolve(),
+        "auto": auto_tessdata,
         "best": args.best_tessdata.resolve(),
     }
     host = _host_description(config["limits"]["max_rss_bytes"])
+    toolchain = _toolchain_description()
     provenance = build_run_provenance(
         source_manifest=args.sources.resolve(),
         split_payload=split_payload,
@@ -734,15 +1046,18 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
         fileconv=fileconv,
         tessdata_paths=tessdata_paths,
         host=host,
+        toolchain=toolchain,
     )
     specs, public = build_candidate_specs(
         config,
         fileconv=fileconv,
-        system_tessdata=tessdata_paths["system"],
+        system_tessdata=tessdata_paths["system-fast"],
         best_tessdata=tessdata_paths["best"],
+        auto_tessdata=tessdata_paths["auto"],
         cpu_threads=config["limits"]["cpu_threads"],
         binary_sha256=provenance["binary_sha256"],
         tessdata_sha256=provenance["tessdata_sha256"],
+        toolchain_sha256=provenance["toolchain_sha256"],
     )
     candidates = [
         _run_one_candidate(
@@ -758,23 +1073,19 @@ def run_matrix(args: argparse.Namespace) -> dict[str, Any]:
     ]
     artifact = {
         "schema_version": 1,
-        "generated_at_utc": datetime.now(timezone.utc)
-        .isoformat(timespec="seconds")
-        .replace("+00:00", "Z"),
         "repetition": args.repetition,
         "split": "tuning",
         "page_count": len(pages),
         "provenance": provenance,
         "host": host,
-        "versions": {
-            "python": platform.python_version(),
-            "tesseract": subprocess.run(
-                ["tesseract", "--version"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=30,
-            ).stdout.splitlines()[0],
+        "toolchain": toolchain,
+        "access": {
+            "selected_tuning_pages": len(pages),
+            "tuning_assets_checksummed": len(pages),
+            "holdout_assets_resolved": 0,
+            "holdout_assets_checksummed": 0,
+            "holdout_assets_opened": 0,
+            "holdout_ocr_executions": 0,
         },
         "candidates": candidates,
     }
