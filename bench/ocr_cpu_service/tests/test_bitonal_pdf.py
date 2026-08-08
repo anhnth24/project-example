@@ -20,6 +20,7 @@ from experiments.bitonal_pdf import (  # noqa: E402
     DEFAULT_SOURCES,
     EXPECTED_CANDIDATE_IDS,
     _DIAGNOSTIC_FIELDS,
+    _PLAN_CLASSIFIER,
     _PLAN_LIMITS,
     aggregate_calibration_records,
     allocate_calibration_work_dir,
@@ -30,7 +31,6 @@ from experiments.bitonal_pdf import (  # noqa: E402
     recognize_calibration_page,
     reference_disagreement_counts,
     release_calibration_work_dir,
-    render_calibration_pages,
     strip_for_disagreement,
     validate_calibration_artifact,
 )
@@ -47,7 +47,6 @@ def _checksum() -> str:
 def _bindings_from_provenance(
     provenance: dict[str, object],
     *,
-    tessdata_role: str,
     render_sha256: str,
 ) -> dict[str, object]:
     return {
@@ -56,8 +55,9 @@ def _bindings_from_provenance(
         "binary_sha256": provenance["binary_sha256"],
         "pdfium_sha256": provenance["pdfium_sha256"],
         "toolchain_sha256": provenance["toolchain_sha256"],
-        "tessdata_sha256": provenance["tessdata_sha256"][tessdata_role],
+        "tessdata_sha256": provenance["tessdata_sha256"],
         "render_sha256": render_sha256,
+        "classifier_sha256": provenance["classifier_sha256"],
     }
 
 
@@ -66,7 +66,6 @@ def _record(
     page_number: int,
     *,
     provenance: dict[str, object],
-    tessdata_role: str,
     success: bool = True,
     render_sha256: str,
 ) -> dict[str, object]:
@@ -76,7 +75,6 @@ def _record(
         "success": success,
         "bindings": _bindings_from_provenance(
             provenance,
-            tessdata_role=tessdata_role,
             render_sha256=render_sha256,
         ),
         "elapsed_seconds": 1.0 if success else 0.0,
@@ -93,16 +91,24 @@ def _record(
             )
         else:
             record["diagnostics"] = {
-                "digit_sequence_count": 3,
-                "digit_sequence_checksum": _checksum(),
+                "digit_character_count": 6,
+                "digit_stream_checksum": _checksum(),
                 "legal_identifier_count": 1 if page_number == 450 else 0,
                 "non_whitespace_character_count": 120,
                 "suspicious_character_count": 0,
-                "accent_proxy_counts": (
+                "accent_pair_counts": (
                     {
-                        "latin-o-for-o-with-hook": 2,
-                        "latin-u-for-u-with-hook": 2,
-                        "latin-a-for-a-with-breve": 2,
+                        pair_id: {"accented_count": 2, "unaccented_count": 1}
+                        for pair_id in (
+                            "luat",
+                            "duoc",
+                            "nguoi",
+                            "nuoc",
+                            "truong",
+                            "dieu",
+                            "quyet",
+                            "nghiep",
+                        )
                     }
                     if page_number == 60
                     else {}
@@ -135,10 +141,7 @@ def valid_artifact() -> dict[str, object]:
         "reference_sha256": _checksum(),
         "config_sha256": CANONICAL_CONFIG_SHA256,
         "binary_sha256": _checksum(),
-        "tessdata_sha256": {
-            "system": {"vie": _checksum(), "eng": _checksum()},
-            "best": {"vie": _checksum(), "eng": _checksum()},
-        },
+        "tessdata_sha256": {"vie": _checksum(), "eng": _checksum()},
         "pdfium_sha256": _checksum(),
         "host_sha256": hashlib.sha256(
             json.dumps(host, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -148,10 +151,28 @@ def valid_artifact() -> dict[str, object]:
                 toolchain, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ).encode()
         ).hexdigest(),
+        "classifier_sha256": hashlib.sha256(
+            json.dumps(
+                _PLAN_CLASSIFIER,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest(),
     }
     shared_render = _checksum()
-    render_hashes = {
-        str(page_number): shared_render
+    render_evidence = {
+        str(page_number): {
+            "render_sha256": shared_render,
+            "classifier_sha256": provenance["classifier_sha256"],
+            "width": 2501,
+            "height": 1,
+            "total_pixels": 2501,
+            "extreme_pixels": 2301,
+            "dark_pixels": 20,
+            "qualifies": True,
+            "preserve_activated": True,
+        }
         for page_number in list(range(1, 21)) + [60, 450]
     }
     records = [
@@ -159,11 +180,6 @@ def valid_artifact() -> dict[str, object]:
             candidate_id,
             page_number,
             provenance=provenance,
-            tessdata_role=next(
-                item["tessdata"]
-                for item in config["candidates"]
-                if item["id"] == candidate_id
-            ),
             render_sha256=shared_render,
         )
         for candidate_id in EXPECTED_CANDIDATE_IDS
@@ -190,24 +206,29 @@ def valid_artifact() -> dict[str, object]:
                     candidate["langs"],
                 ],
                 "environment_variable_names": candidate["environment_variable_names"],
+                "activation_count": (
+                    22 if candidate["mode"] == "preserve-near-bitonal" else 0
+                ),
                 "aggregate": aggregate_calibration_records(candidate_records),
             }
         )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "split": "calibration",
         "page_count": 22,
         "provenance": provenance,
         "host": host,
         "toolchain": toolchain,
+        "classifier": dict(_PLAN_CLASSIFIER),
         "limits": dict(_PLAN_LIMITS),
         "access": {
             "approved_pages_opened": 22,
             "holdout_pages_opened": 0,
             "rendered_pages": 22,
             "ocr_executions": 88,
+            "classifier_diagnostics": 22,
         },
-        "render_hashes": render_hashes,
+        "render_evidence": render_evidence,
         "candidates": candidates,
         "records": records,
     }
@@ -234,23 +255,29 @@ def _set_reference_character_edits(
     )
 
 
-def _set_page_60_accent_proxies(
+def _set_page_60_unaccented_counts(
     payload: dict[str, object],
     candidate_id: str,
     *,
-    latin_o: int,
-    latin_u: int,
-    latin_a: int,
+    unaccented_count: int,
 ) -> None:
     record = next(
         record
         for record in payload["records"]
         if record["candidate_id"] == candidate_id and record["page_number"] == 60
     )
-    record["diagnostics"]["accent_proxy_counts"] = {
-        "latin-o-for-o-with-hook": latin_o,
-        "latin-u-for-u-with-hook": latin_u,
-        "latin-a-for-a-with-breve": latin_a,
+    record["diagnostics"]["accent_pair_counts"] = {
+        pair_id: {"accented_count": 2, "unaccented_count": unaccented_count}
+        for pair_id in (
+            "luat",
+            "duoc",
+            "nguoi",
+            "nuoc",
+            "truong",
+            "dieu",
+            "quyet",
+            "nghiep",
+        )
     }
 
 
@@ -268,6 +295,15 @@ def test_calibration_config_loads_four_exact_candidates() -> None:
     assert tuple(candidate["id"] for candidate in config["candidates"]) == (
         EXPECTED_CANDIDATE_IDS
     )
+    assert [
+        (candidate["mode"], candidate["tessdata"], candidate["langs"])
+        for candidate in config["candidates"]
+    ] == [
+        ("legacy", "best", "vie+eng"),
+        ("preserve-near-bitonal", "best", "vie+eng"),
+        ("legacy", "best", "vie"),
+        ("preserve-near-bitonal", "best", "vie"),
+    ]
 
 
 def test_calibration_rejects_holdout_or_unapproved_pages() -> None:
@@ -448,9 +484,8 @@ def test_calibration_accepts_bounded_failure_record() -> None:
         EXPECTED_CANDIDATE_IDS[0],
         1,
         provenance=payload["provenance"],
-        tessdata_role="system",
         success=False,
-        render_sha256=str(payload["render_hashes"]["1"]),
+        render_sha256=str(payload["render_evidence"]["1"]["render_sha256"]),
     )
     candidate_records = [
         record
@@ -469,9 +504,8 @@ def test_calibration_rejects_failure_record_with_text() -> None:
         EXPECTED_CANDIDATE_IDS[0],
         1,
         provenance=payload["provenance"],
-        tessdata_role="system",
         success=False,
-        render_sha256=str(payload["render_hashes"]["1"]),
+        render_sha256=str(payload["render_evidence"]["1"]["render_sha256"]),
     )
     failure["recognized_text"] = "secret"
     payload["records"][0] = failure
@@ -483,6 +517,40 @@ def test_calibration_rejects_success_record_without_metrics() -> None:
     payload = valid_artifact()
     del payload["records"][0]["character_edits"]
     with pytest.raises(ValueError, match="missing field at record"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_missing_record_binding_raises_value_error_not_key_error() -> None:
+    payload = valid_artifact()
+    del payload["records"][0]["bindings"]
+    with pytest.raises(ValueError, match="missing field at record.*bindings"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_zero_activation_for_preserve_candidates() -> None:
+    payload = valid_artifact()
+    for evidence in payload["render_evidence"].values():
+        evidence["extreme_pixels"] = 1000
+        evidence["qualifies"] = False
+        evidence["preserve_activated"] = False
+    for candidate in payload["candidates"]:
+        if candidate["mode"] == "preserve-near-bitonal":
+            candidate["activation_count"] = 0
+    with pytest.raises(ValueError, match="preserve candidate must have nonzero activation"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_access_evidence_is_derived_from_records() -> None:
+    payload = valid_artifact()
+    payload["access"]["ocr_executions"] = 87
+    with pytest.raises(ValueError, match="derived from recorded execution"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_classifier_hash_not_bound_to_constants() -> None:
+    payload = valid_artifact()
+    payload["provenance"]["classifier_sha256"] = "b" * 64
+    with pytest.raises(ValueError, match="classifier checksum"):
         validate_calibration_artifact(payload)
 
 
@@ -509,15 +577,18 @@ def test_reference_disagreement_page_number_decoration_does_not_inflate_counts()
     assert with_both_cleaned["character_edits"] == 0
 
 
-def test_page_diagnostics_include_frozen_accent_proxy_counts() -> None:
+def test_page_diagnostics_include_frozen_accent_pair_counts() -> None:
     config = load_calibration_config(CONFIGS)
     diagnostics = page_diagnostics(
-        "thong tu quy dinh",
+        "luật luat",
         page_number=60,
         config=config,
     )
     assert set(diagnostics) == set(_DIAGNOSTIC_FIELDS)
-    assert diagnostics["accent_proxy_counts"]["latin-o-for-o-with-hook"] >= 1
+    assert diagnostics["accent_pair_counts"]["luat"] == {
+        "accented_count": 1,
+        "unaccented_count": 1,
+    }
 
 
 def test_calibrate_parser_matches_task3_command_without_private_note() -> None:
@@ -532,8 +603,6 @@ def test_calibrate_parser_matches_task3_command_without_private_note() -> None:
             "fileconv",
             "--pdfium-lib",
             "pdfium/lib",
-            "--system-tessdata",
-            "system-tessdata",
             "--best-tessdata",
             "best-tessdata",
         ]
@@ -550,27 +619,6 @@ def test_calibration_work_dir_is_created_under_fixed_root() -> None:
         assert path.resolve().is_relative_to(CALIBRATION_RUN_ROOT.resolve())
     finally:
         release_calibration_work_dir(path)
-
-
-def test_calibration_work_dir_cleanup_on_render_failure(tmp_path: Path) -> None:
-    work_dir = allocate_calibration_work_dir()
-    config = load_calibration_config(CONFIGS)
-    pdf_path = tmp_path / "official.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n")
-
-    def fail_render(*_args, **_kwargs):
-        raise ValueError("render failed")
-
-    try:
-        with patch(
-            "test_bitonal_pdf.render_calibration_pages",
-            side_effect=fail_render,
-        ):
-            with pytest.raises(ValueError, match="render failed"):
-                render_calibration_pages(pdf_path, work_dir, config=config)
-    finally:
-        release_calibration_work_dir(work_dir)
-    assert not work_dir.exists()
 
 
 def test_run_calibration_cleans_work_dir_after_inference_failures(tmp_path: Path) -> None:
@@ -593,7 +641,6 @@ def test_run_calibration_cleans_work_dir_after_inference_failures(tmp_path: Path
         reference=tmp_path / "reference.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
-        system_tessdata=tmp_path,
         best_tessdata=tmp_path,
         output=tmp_path / "out.json",
     )
@@ -617,6 +664,10 @@ def test_run_calibration_cleans_work_dir_after_inference_failures(tmp_path: Path
         patch(
             "experiments.bitonal_pdf.render_calibration_pages",
             return_value=rendered,
+        ),
+        patch(
+            "experiments.bitonal_pdf.classify_calibration_render",
+            return_value=valid_artifact()["render_evidence"]["1"],
         ),
         patch(
             "experiments.bitonal_pdf.recognize_calibration_page",
@@ -673,7 +724,6 @@ def test_run_calibration_cleans_work_dir_on_render_failure(tmp_path: Path) -> No
         reference=tmp_path / "reference.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
-        system_tessdata=tmp_path,
         best_tessdata=tmp_path,
         output=tmp_path / "out.json",
     )
@@ -716,7 +766,6 @@ def test_calibration_uses_bounded_worker_contract(tmp_path: Path) -> None:
     candidates = build_calibration_candidates(
         config,
         fileconv=Path(sys.executable),
-        system_tessdata=tmp_path,
         best_tessdata=tmp_path,
         pdfium_lib=tmp_path,
     )
@@ -832,14 +881,17 @@ def test_calibration_rejects_bool_as_int_resource_limit_violation() -> None:
 
 def test_calibration_rejects_unknown_tessdata_language_key() -> None:
     payload = valid_artifact()
-    payload["provenance"]["tessdata_sha256"]["system"]["deu"] = "b" * 64
+    payload["provenance"]["tessdata_sha256"]["deu"] = "b" * 64
     with pytest.raises(ValueError, match="unknown field"):
         validate_calibration_artifact(payload)
 
 
-def test_calibration_rejects_unknown_accent_proxy_key() -> None:
+def test_calibration_rejects_unknown_accent_pair_key() -> None:
     payload = valid_artifact()
-    payload["records"][-1]["diagnostics"]["accent_proxy_counts"]["extra"] = 0
+    payload["records"][-1]["diagnostics"]["accent_pair_counts"]["extra"] = {
+        "accented_count": 0,
+        "unaccented_count": 0,
+    }
     with pytest.raises(ValueError, match="unknown field"):
         validate_calibration_artifact(payload)
 
@@ -872,7 +924,6 @@ def test_run_calibration_rejects_custom_agreeing_config(tmp_path: Path) -> None:
         reference=tmp_path / "reference.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
-        system_tessdata=tmp_path,
         best_tessdata=tmp_path,
         output=tmp_path / "out.json",
     )
@@ -894,7 +945,6 @@ def test_run_calibration_rejects_custom_agreeing_sources(tmp_path: Path) -> None
         reference=tmp_path / "reference.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
-        system_tessdata=tmp_path,
         best_tessdata=tmp_path,
         output=tmp_path / "out.json",
     )
@@ -911,7 +961,6 @@ def test_recognize_calibration_page_worker_startup_failure_returns_bounded_recor
     candidates = build_calibration_candidates(
         config,
         fileconv=Path("/bin/true"),
-        system_tessdata=tmp_path,
         best_tessdata=tmp_path,
         pdfium_lib=tmp_path,
     )
@@ -948,7 +997,46 @@ def test_recognize_calibration_page_worker_startup_failure_returns_bounded_recor
     }
 
 
-def test_gate_accepts_all_accent_proxies_nonincreasing_with_one_strictly_lower(
+def test_recognize_calibration_page_treats_equal_rss_limit_as_violation(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+
+    config = load_calibration_config(CONFIGS)
+    candidate = build_calibration_candidates(
+        config,
+        fileconv=Path("/bin/true"),
+        best_tessdata=tmp_path,
+        pdfium_lib=tmp_path,
+    )[0]
+    page_path = tmp_path / "page.png"
+    page_path.write_bytes(b"png")
+
+    class Worker:
+        def recognize(self, _page):
+            return SimpleNamespace(
+                text="bounded",
+                resource={"peak_rss_bytes": 100, "wall_seconds": 1.0},
+            )
+
+        def close(self):
+            return None
+
+    with patch("experiments.bitonal_pdf._isolated_worker", return_value=Worker()):
+        _, resource, error_kind = recognize_calibration_page(
+            candidate,
+            page_path=page_path,
+            page_number=1,
+            timeout_seconds=5.0,
+            max_output_bytes=4096,
+            max_rss_bytes=100,
+        )
+
+    assert error_kind is None
+    assert resource["resource_limit_violation"] is True
+
+
+def test_gate_accepts_all_unaccented_pair_ratios_nonincreasing(
     tmp_path: Path,
 ) -> None:
     payload = valid_artifact()
@@ -957,9 +1045,7 @@ def test_gate_accepts_all_accent_proxies_nonincreasing_with_one_strictly_lower(
     _set_reference_character_edits(
         payload, improving_id, {page: 1 for page in range(1, 21)}
     )
-    _set_page_60_accent_proxies(
-        payload, improving_id, latin_o=1, latin_u=2, latin_a=2
-    )
+    _set_page_60_unaccented_counts(payload, improving_id, unaccented_count=0)
 
     gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
@@ -968,29 +1054,7 @@ def test_gate_accepts_all_accent_proxies_nonincreasing_with_one_strictly_lower(
     assert gate["candidates"][improving_id]["eligible"] is True
 
 
-def test_gate_rejects_all_accent_proxies_equal_to_baseline(tmp_path: Path) -> None:
-    payload = valid_artifact()
-    reference = _bind_private_reference(payload, tmp_path)
-    candidate_id = EXPECTED_CANDIDATE_IDS[1]
-    _set_reference_character_edits(
-        payload, candidate_id, {page: 1 for page in range(1, 21)}
-    )
-
-    gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
-
-    assert gate["winner_id"] is None
-    assert gate["candidates"][candidate_id]["eligible"] is False
-    assert (
-        "page_60_accent_proxy_no_strict_improvement"
-        in gate["candidates"][candidate_id]["disqualifications"]
-    )
-    assert (
-        "page_60_accent_proxy_no_strict_improvement"
-        not in gate["candidates"][EXPECTED_CANDIDATE_IDS[0]]["disqualifications"]
-    )
-
-
-def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease(
+def test_gate_accepts_all_unaccented_pair_ratios_equal_to_matched_legacy(
     tmp_path: Path,
 ) -> None:
     payload = valid_artifact()
@@ -999,21 +1063,37 @@ def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease(
     _set_reference_character_edits(
         payload, candidate_id, {page: 1 for page in range(1, 21)}
     )
-    _set_page_60_accent_proxies(
-        payload, candidate_id, latin_o=1, latin_u=3, latin_a=2
+
+    gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
+
+    assert gate["winner_id"] == candidate_id
+    assert gate["candidates"][candidate_id]["eligible"] is True
+
+
+def test_gate_rejects_one_unaccented_pair_ratio_increase(
+    tmp_path: Path,
+) -> None:
+    payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
+    candidate_id = EXPECTED_CANDIDATE_IDS[1]
+    _set_reference_character_edits(
+        payload, candidate_id, {page: 1 for page in range(1, 21)}
     )
+    _set_page_60_unaccented_counts(payload, candidate_id, unaccented_count=0)
+    record = next(
+        record
+        for record in payload["records"]
+        if record["candidate_id"] == candidate_id and record["page_number"] == 60
+    )
+    record["diagnostics"]["accent_pair_counts"]["luat"]["unaccented_count"] = 2
 
     gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
     assert gate["winner_id"] is None
     assert gate["candidates"][candidate_id]["eligible"] is False
     assert (
-        "page_60_accent_proxy_regression"
+        "page_60_unaccented_pair_ratio_regression"
         in gate["candidates"][candidate_id]["disqualifications"]
-    )
-    assert (
-        "page_60_accent_proxy_no_strict_improvement"
-        not in gate["candidates"][candidate_id]["disqualifications"]
     )
 
 
@@ -1023,7 +1103,7 @@ def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page(
     payload = valid_artifact()
     reference = _bind_private_reference(payload, tmp_path)
     regressing_id = EXPECTED_CANDIDATE_IDS[1]
-    eligible_id = EXPECTED_CANDIDATE_IDS[2]
+    eligible_id = EXPECTED_CANDIDATE_IDS[3]
     _set_reference_character_edits(
         payload,
         regressing_id,
@@ -1032,12 +1112,8 @@ def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page(
     _set_reference_character_edits(
         payload, eligible_id, {page: 1 for page in range(1, 21)}
     )
-    _set_page_60_accent_proxies(
-        payload, regressing_id, latin_o=1, latin_u=2, latin_a=2
-    )
-    _set_page_60_accent_proxies(
-        payload, eligible_id, latin_o=1, latin_u=2, latin_a=2
-    )
+    _set_page_60_unaccented_counts(payload, regressing_id, unaccented_count=0)
+    _set_page_60_unaccented_counts(payload, eligible_id, unaccented_count=0)
 
     gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
@@ -1052,13 +1128,13 @@ def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page(
 def test_gate_reports_value_tie_without_candidate_id_tiebreak(tmp_path: Path) -> None:
     payload = valid_artifact()
     reference = _bind_private_reference(payload, tmp_path)
-    tied_ids = EXPECTED_CANDIDATE_IDS[1:3]
+    tied_ids = (EXPECTED_CANDIDATE_IDS[1], EXPECTED_CANDIDATE_IDS[3])
     for candidate_id in tied_ids:
         _set_reference_character_edits(
             payload, candidate_id, {page: 1 for page in range(1, 21)}
         )
-        _set_page_60_accent_proxies(
-            payload, candidate_id, latin_o=1, latin_u=2, latin_a=2
+        _set_page_60_unaccented_counts(
+            payload, candidate_id, unaccented_count=0
         )
 
     gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
@@ -1076,9 +1152,7 @@ def test_report_command_and_markdown_are_deterministic_and_text_free(
     _set_reference_character_edits(
         payload, improving_id, {page: 1 for page in range(1, 21)}
     )
-    _set_page_60_accent_proxies(
-        payload, improving_id, latin_o=1, latin_u=2, latin_a=2
-    )
+    _set_page_60_unaccented_counts(payload, improving_id, unaccented_count=0)
     first = bitonal_pdf.render_calibration_report(payload, reference=reference)
     second = bitonal_pdf.render_calibration_report(
         copy.deepcopy(payload), reference=reference
@@ -1099,10 +1173,7 @@ def test_report_command_and_markdown_are_deterministic_and_text_free(
     assert args.command == "report"
     assert first == second
     assert f"`winner_id`: `{improving_id}`" in first
-    assert (
-        f"- Private reference SHA-256: "
-        f"`{payload['provenance']['reference_sha256']}`" in first
-    )
+    assert payload["provenance"]["reference_sha256"] not in first
     assert str(reference) not in first
     assert "private fixture" not in first
     assert "secret recognized content" not in first

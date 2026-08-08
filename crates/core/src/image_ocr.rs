@@ -212,7 +212,7 @@ const UPSCALE_IF_AREA_BELOW: u64 = 500_000;
 const MAX_LONG_SIDE: u32 = 2400;
 const BITONAL_DARK_MAX: u8 = 32;
 const BITONAL_LIGHT_MIN: u8 = 223;
-const BITONAL_EXTREME_MIN_PER_MILLE: u64 = 985;
+const BITONAL_EXTREME_MIN_PER_MILLE: u64 = 920;
 const BITONAL_INK_MIN_PER_MILLE: u64 = 5;
 const BITONAL_INK_MAX_PER_MILLE: u64 = 400;
 /// Cạnh tối đa khi decode (strict, qua `image::Limits`). Cho phép trang lớn
@@ -267,8 +267,8 @@ fn write_ocr_temp_png(img: &DynamicImage) -> io::Result<NamedTempFile> {
     Ok(tmp)
 }
 
-fn write_ocr_temp_gray_png(img: &GrayImage) -> io::Result<NamedTempFile> {
-    write_ocr_temp_png(&DynamicImage::ImageLuma8(img.clone()))
+fn write_ocr_temp_gray_png(img: GrayImage) -> io::Result<NamedTempFile> {
+    write_ocr_temp_png(&DynamicImage::ImageLuma8(img))
 }
 
 /// OCR một file ảnh. `langs` ví dụ "vie+eng".
@@ -337,12 +337,27 @@ pub fn ocr_dynimage_detailed(
     text
 }
 
-/// Classify near-bitonal scans: extremes dominate and ink coverage is in range.
-pub fn is_effectively_bitonal(gray: &GrayImage) -> bool {
+/// Benchmark-only evidence emitted by the exact Rust classifier used by OCR.
+#[doc(hidden)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrBitonalDiagnostic {
+    pub width: u32,
+    pub height: u32,
+    pub total_pixels: u64,
+    pub extreme_pixels: u64,
+    pub dark_pixels: u64,
+    pub dark_max: u8,
+    pub light_min: u8,
+    pub extreme_min_per_mille: u64,
+    pub ink_min_per_mille: u64,
+    pub ink_max_per_mille: u64,
+    pub max_long_side: u32,
+    pub qualifies: bool,
+    pub preserve_activated: bool,
+}
+
+fn bitonal_diagnostic(gray: &GrayImage) -> OcrBitonalDiagnostic {
     let total = gray.width() as u64 * gray.height() as u64;
-    if total == 0 {
-        return false;
-    }
     let mut extreme = 0u64;
     let mut ink = 0u64;
     for p in gray.pixels() {
@@ -354,9 +369,38 @@ pub fn is_effectively_bitonal(gray: &GrayImage) -> bool {
             ink += 1;
         }
     }
-    per_mille_at_least(extreme, BITONAL_EXTREME_MIN_PER_MILLE, total)
+    let qualifies = total > 0
+        && per_mille_at_least(extreme, BITONAL_EXTREME_MIN_PER_MILLE, total)
         && per_mille_at_least(ink, BITONAL_INK_MIN_PER_MILLE, total)
-        && per_mille_at_most(ink, BITONAL_INK_MAX_PER_MILLE, total)
+        && per_mille_at_most(ink, BITONAL_INK_MAX_PER_MILLE, total);
+    OcrBitonalDiagnostic {
+        width: gray.width(),
+        height: gray.height(),
+        total_pixels: total,
+        extreme_pixels: extreme,
+        dark_pixels: ink,
+        dark_max: BITONAL_DARK_MAX,
+        light_min: BITONAL_LIGHT_MIN,
+        extreme_min_per_mille: BITONAL_EXTREME_MIN_PER_MILLE,
+        ink_min_per_mille: BITONAL_INK_MIN_PER_MILLE,
+        ink_max_per_mille: BITONAL_INK_MAX_PER_MILLE,
+        max_long_side: MAX_LONG_SIDE,
+        qualifies,
+        preserve_activated: qualifies && gray.width().max(gray.height()) > MAX_LONG_SIDE,
+    }
+}
+
+/// Read one bounded image and report benchmark-only classifier evidence.
+#[doc(hidden)]
+pub fn benchmark_bitonal_diagnostic_path(path: &Path) -> io::Result<OcrBitonalDiagnostic> {
+    let image = load_image_for_ocr(path).map_err(image_error_to_io)?;
+    ensure_ocr_image_bounds(image.width(), image.height())?;
+    Ok(bitonal_diagnostic(&image.to_luma8()))
+}
+
+/// Classify near-bitonal scans: extremes dominate and ink coverage is in range.
+pub(crate) fn is_effectively_bitonal(gray: &GrayImage) -> bool {
+    bitonal_diagnostic(gray).qualifies
 }
 
 fn per_mille_at_least(count: u64, threshold_per_mille: u64, total: u64) -> bool {
@@ -368,7 +412,7 @@ fn per_mille_at_most(count: u64, threshold_per_mille: u64, total: u64) -> bool {
 }
 
 /// Tiền xử lý theo chế độ: legacy hoặc giữ nguyên trang bitonal lớn.
-pub fn preprocess_with_mode(img: &DynamicImage, mode: OcrPreprocessMode) -> DynamicImage {
+pub(crate) fn preprocess_with_mode(img: &DynamicImage, mode: OcrPreprocessMode) -> DynamicImage {
     let gray = img.to_luma8();
     if matches!(mode, OcrPreprocessMode::PreserveNearBitonal) {
         let long = gray.width().max(gray.height());
@@ -376,30 +420,30 @@ pub fn preprocess_with_mode(img: &DynamicImage, mode: OcrPreprocessMode) -> Dyna
             return DynamicImage::ImageLuma8(gray);
         }
     }
-    preprocess_legacy(&gray)
+    preprocess_legacy(gray)
 }
 
 /// Tiền xử lý: grayscale → chuẩn hoá kích thước → unsharp → normalize.
-fn preprocess_legacy(gray: &GrayImage) -> DynamicImage {
+fn preprocess_legacy(gray: GrayImage) -> DynamicImage {
     let (w, h) = gray.dimensions();
     let area = w as u64 * h as u64;
     let long = w.max(h);
 
     let scaled = if area < UPSCALE_IF_AREA_BELOW {
         // Ảnh nhỏ/mờ → phóng ×2 (rẻ vì ảnh nhỏ), giúp OCR chính xác hơn.
-        imageops::resize(gray, w * 2, h * 2, imageops::FilterType::Lanczos3)
+        imageops::resize(&gray, w * 2, h * 2, imageops::FilterType::Lanczos3)
     } else if long > MAX_LONG_SIDE {
         // Ảnh quá lớn → thu xuống để giữ tốc độ.
         let f = MAX_LONG_SIDE as f32 / long as f32;
         imageops::resize(
-            gray,
+            &gray,
             (w as f32 * f).round() as u32,
             (h as f32 * f).round() as u32,
             imageops::FilterType::Lanczos3,
         )
     } else {
         // Trang giấy tờ đủ nét → giữ nguyên (không đội thời gian OCR).
-        gray.clone()
+        gray
     };
 
     // Làm nét nhẹ rồi kéo giãn tương phản về [0,255].
@@ -510,7 +554,7 @@ fn run_tesseract_with_columns_detailed(
     let mut columns = Vec::new();
     for (left, right) in ranges {
         let cropped = imageops::crop_imm(image, left, 0, right - left, image.height()).to_image();
-        let tmp = write_ocr_temp_gray_png(&cropped)
+        let tmp = write_ocr_temp_gray_png(cropped)
             .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
         let path = tmp.path();
         let automatic = run_tesseract_psm_detailed(path, langs, 4, config);
@@ -1192,7 +1236,7 @@ mod tests {
         let input = DynamicImage::ImageLuma8(page.clone());
         let original = page.as_raw().to_vec();
         let preserved = preprocess_with_mode(&input, OcrPreprocessMode::PreserveNearBitonal);
-        let legacy = preprocess_legacy(&page);
+        let legacy = preprocess_legacy(page);
 
         // Fails if small pages return raw grayscale (preservation bypass).
         assert_ne!(preserved.to_luma8().as_raw(), original.as_slice());
@@ -1213,7 +1257,7 @@ mod tests {
             image::Luma([((x + y) % 256) as u8])
         }));
         let via_mode = preprocess_with_mode(&photo_like, OcrPreprocessMode::Legacy);
-        let via_helper = preprocess_legacy(&photo_like.to_luma8());
+        let via_helper = preprocess_legacy(photo_like.to_luma8());
         assert_eq!(via_mode.to_luma8().as_raw(), via_helper.to_luma8().as_raw());
     }
 

@@ -22,6 +22,12 @@ mod imp {
     use super::super::limits::ResourceLimits;
 
     const INPUT_PLACEHOLDER: &str = "{input}";
+    const PASSTHROUGH_ENV_KEYS: [&str; 4] = [
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "TESSDATA_PREFIX",
+        "LANG",
+    ];
     const POLL_INTERVAL: Duration = Duration::from_millis(20);
     const DRAIN_GRACE: Duration = Duration::from_millis(250);
     const KILL_REAP_GRACE: Duration = Duration::from_millis(500);
@@ -234,12 +240,7 @@ mod imp {
             .stderr(Stdio::piped());
         // Allowlist-only passthrough so the converter can load pinned native deps
         // (PDFium / Tesseract) without inheriting worker secrets.
-        for key in [
-            "FILECONV_PDFIUM_LIB",
-            "FILECONV_TESSDATA",
-            "TESSDATA_PREFIX",
-            "LANG",
-        ] {
+        for key in PASSTHROUGH_ENV_KEYS {
             if let Ok(value) = std::env::var(key) {
                 if !value.is_empty() {
                     command.env(key, value);

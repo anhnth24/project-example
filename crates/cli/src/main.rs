@@ -33,6 +33,7 @@ fn registered_commands() -> &'static [&'static str] {
         "one-detailed",
         "handoff",
         "pptx-preview",
+        "bitonal-diagnostic",
         "info",
     ]
 }
@@ -219,6 +220,13 @@ fn main() -> Result<()> {
                     "slides": slides
                 }))?
             );
+            Ok(())
+        }
+        "bitonal-diagnostic" => {
+            let file = args.get(2).context("thiếu file ảnh")?;
+            let diagnostic =
+                fileconv_core::image_ocr::benchmark_bitonal_diagnostic_path(Path::new(file))?;
+            println!("{}", serde_json::to_string(&diagnostic)?);
             Ok(())
         }
         "info" => {
