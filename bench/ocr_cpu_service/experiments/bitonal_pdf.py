@@ -271,6 +271,27 @@ def _canonical_sha256(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _require_bool(value: Any, *, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{path} must be a boolean")
+    return value
+
+
+def _require_string(value: Any, *, path: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{path} must be a non-empty string")
+    return value
+
+
+def _require_nonnegative_finite_number(value: Any, *, path: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{path} must be a non-negative finite number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{path} must be a non-negative finite number")
+    return number
+
+
 def _require_sha256_string(value: Any, *, path: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{path} must be a string hash")
@@ -294,6 +315,34 @@ def _require_finite_float(value: Any, *, path: str) -> float:
     if not math.isfinite(number):
         raise ValueError(f"{path} must be a finite number")
     return number
+
+
+def _validate_host_descriptor(value: Any, *, path: str) -> None:
+    _validate_closed_mapping(value, allowed=_HOST_FIELDS, path=path)
+    _require_string(value["platform"], path=f"{path}.platform")
+    _require_string(value["architecture"], path=f"{path}.architecture")
+    _require_nonnegative_int(value["logical_cpus"], path=f"{path}.logical_cpus")
+    _require_nonnegative_int(value["memory_bytes"], path=f"{path}.memory_bytes")
+    _require_nonnegative_int(value["max_rss_bytes"], path=f"{path}.max_rss_bytes")
+    _require_string(value["max_rss_enforcement"], path=f"{path}.max_rss_enforcement")
+
+
+def _validate_toolchain_descriptor(value: Any, *, path: str) -> None:
+    _validate_closed_mapping(value, allowed=_TOOLCHAIN_FIELDS, path=path)
+    for field in _TOOLCHAIN_FIELDS:
+        _require_string(value[field], path=f"{path}.{field}")
+
+
+def _validate_limits_descriptor(value: Any, *, path: str) -> None:
+    _validate_closed_mapping(value, allowed=_LIMITS_FIELDS, path=path)
+    for field in _LIMITS_FIELDS:
+        _require_nonnegative_int(value[field], path=f"{path}.{field}")
+
+
+def _validate_access_evidence(value: Any, *, path: str) -> None:
+    _validate_closed_mapping(value, allowed=_ACCESS_FIELDS, path=path)
+    for field in _ACCESS_FIELDS:
+        _require_nonnegative_int(value[field], path=f"{path}.{field}")
 
 
 def _validate_tessdata_provenance(value: Any, *, path: str) -> None:
@@ -985,7 +1034,7 @@ def _validate_candidate_aggregate(aggregate: Any, *, records: list[dict[str, Any
         path="artifact.candidate.aggregate.latency_seconds",
     )
     for field in _LATENCY_FIELDS:
-        _require_finite_float(
+        _require_nonnegative_finite_number(
             aggregate["latency_seconds"][field],
             path=f"artifact.candidate.aggregate.latency_seconds.{field}",
         )
@@ -1026,10 +1075,16 @@ def _validate_calibration_record(
         tessdata_role=tessdata_role,
         render_sha256=render_sha256,
     )
-    _require_finite_float(record["elapsed_seconds"], path="record.elapsed_seconds")
+    _require_bool(record["success"], path="record.success")
+    _require_nonnegative_finite_number(
+        record["elapsed_seconds"], path="record.elapsed_seconds"
+    )
     _require_nonnegative_int(record["peak_rss_bytes"], path="record.peak_rss_bytes")
-    if not isinstance(record["resource_limit_violation"], bool):
-        raise ValueError("record.resource_limit_violation must be a boolean")
+    _require_bool(
+        record["resource_limit_violation"], path="record.resource_limit_violation"
+    )
+    if not isinstance(page_number, int) or isinstance(page_number, bool):
+        raise ValueError("record.page_number must be a positive integer")
     if record["success"]:
         allowed = _RECORD_BASE_FIELDS | (
             _COUNT_FIELDS if page_number <= 20 else frozenset({"diagnostics"})
@@ -1053,10 +1108,13 @@ def _validate_calibration_record(
 
 def validate_calibration_artifact(payload: dict[str, Any]) -> None:
     _validate_closed_mapping(payload, allowed=_ARTIFACT_FIELDS, path="artifact")
+    _require_nonnegative_int(payload["schema_version"], path="artifact.schema_version")
     if payload["schema_version"] != 1:
         raise ValueError("calibration artifact schema is invalid")
+    _require_string(payload["split"], path="artifact.split")
     if payload["split"] != "calibration":
         raise ValueError("calibration artifact split is invalid")
+    _require_nonnegative_int(payload["page_count"], path="artifact.page_count")
     if payload["page_count"] != 22:
         raise ValueError("calibration artifact must contain exactly 22 pages")
     _validate_closed_mapping(
@@ -1089,18 +1147,16 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
     _validate_tessdata_provenance(
         provenance["tessdata_sha256"], path="artifact.provenance.tessdata_sha256"
     )
-    _validate_closed_mapping(payload["host"], allowed=_HOST_FIELDS, path="artifact.host")
-    _validate_closed_mapping(
-        payload["toolchain"], allowed=_TOOLCHAIN_FIELDS, path="artifact.toolchain"
-    )
+    _validate_host_descriptor(payload["host"], path="artifact.host")
+    _validate_toolchain_descriptor(payload["toolchain"], path="artifact.toolchain")
     if provenance["host_sha256"] != _canonical_sha256(payload["host"]):
         raise ValueError("host checksum does not bind the host descriptor")
     if provenance["toolchain_sha256"] != _canonical_sha256(payload["toolchain"]):
         raise ValueError("toolchain checksum does not bind all versions")
-    _validate_closed_mapping(payload["limits"], allowed=_LIMITS_FIELDS, path="artifact.limits")
+    _validate_limits_descriptor(payload["limits"], path="artifact.limits")
     if payload["limits"] != _PLAN_LIMITS:
         raise ValueError("calibration limits must match approved constants")
-    _validate_closed_mapping(payload["access"], allowed=_ACCESS_FIELDS, path="artifact.access")
+    _validate_access_evidence(payload["access"], path="artifact.access")
     if payload["access"] != {
         "approved_pages_opened": 22,
         "holdout_pages_opened": 0,
@@ -1129,6 +1185,19 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
         _validate_closed_mapping(
             candidate, allowed=_CANDIDATE_FIELDS, path="artifact.candidate"
         )
+        _require_string(candidate["id"], path="artifact.candidate.id")
+        _require_string(candidate["mode"], path="artifact.candidate.mode")
+        _require_string(candidate["tessdata"], path="artifact.candidate.tessdata")
+        _require_string(candidate["langs"], path="artifact.candidate.langs")
+        if not isinstance(candidate["argv"], list):
+            raise ValueError("candidate argv must be a list")
+        if not isinstance(candidate["environment_variable_names"], list):
+            raise ValueError("candidate environment variable names must be a list")
+        for index, name in enumerate(candidate["environment_variable_names"]):
+            _require_string(
+                name,
+                path=f"artifact.candidate.environment_variable_names[{index}]",
+            )
         expected = config_by_id[candidate["id"]]
         if (
             candidate["mode"] != expected["mode"]

@@ -354,7 +354,7 @@ def test_calibration_rejects_unbounded_timeout() -> None:
 def test_calibration_rejects_unbounded_output_limit() -> None:
     payload = valid_artifact()
     payload["limits"]["max_output_bytes_per_stream"] = -1
-    with pytest.raises(ValueError, match="must match approved constants"):
+    with pytest.raises(ValueError, match="max_output_bytes_per_stream"):
         validate_calibration_artifact(payload)
 
 
@@ -709,6 +709,55 @@ def test_calibration_rejects_string_in_numeric_record_field() -> None:
     payload = valid_artifact()
     payload["records"][0]["elapsed_seconds"] = "1.0"
     with pytest.raises(ValueError, match="elapsed_seconds"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_text_in_success_field() -> None:
+    payload = valid_artifact()
+    payload["records"][0]["success"] = "true"
+    with pytest.raises(ValueError, match="record.success must be a boolean"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_bool_as_int_success() -> None:
+    payload = valid_artifact()
+    payload["records"][0]["success"] = 1
+    with pytest.raises(ValueError, match="record.success must be a boolean"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_negative_elapsed_seconds() -> None:
+    payload = valid_artifact()
+    payload["records"][0]["elapsed_seconds"] = -0.5
+    with pytest.raises(ValueError, match="record.elapsed_seconds"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_negative_aggregate_latency() -> None:
+    payload = valid_artifact()
+    payload["candidates"][0]["aggregate"]["latency_seconds"]["median"] = -1.0
+    with pytest.raises(ValueError, match="latency_seconds.median"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_wrong_host_scalar_type() -> None:
+    payload = valid_artifact()
+    payload["host"]["logical_cpus"] = "8"
+    with pytest.raises(ValueError, match="artifact.host.logical_cpus"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_wrong_toolchain_scalar_type() -> None:
+    payload = valid_artifact()
+    payload["toolchain"]["python"] = 3.12
+    with pytest.raises(ValueError, match="artifact.toolchain.python"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_bool_as_int_resource_limit_violation() -> None:
+    payload = valid_artifact()
+    payload["records"][0]["resource_limit_violation"] = 0
+    with pytest.raises(ValueError, match="resource_limit_violation must be a boolean"):
         validate_calibration_artifact(payload)
 
 
