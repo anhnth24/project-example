@@ -2,6 +2,8 @@
 .worktrees/
 node_modules/
 .artifacts/
+.venv/
+*.egg-info/
 **/__pycache__/
 *.py[cod]
 
@@ -13,6 +15,7 @@ web/dist/
 /deploy/.env.poc-smoke.tmp
 **/*.rs.bk
 # Dữ liệu tải/sinh ra (tái tạo bằng script) — không commit nhị phân nặng
+/*.pdf
 /bench/corpus/
 /bench/corpus_external/
 /bench/vn_corpus/fonts/
@@ -37,6 +40,7 @@ pdfium/
 /bench/edge/
 /bench/sample10/
 /bench/corpus10/
+/bench/ocr_cpu_service/.data/
 # O03 backup bundles must live outside the workspace (mktemp); never commit local copies
 /tmp/markhand-backup*/
 /tmp/o03-toolbin-*/

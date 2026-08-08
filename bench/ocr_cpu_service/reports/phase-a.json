@@ -1,0 +1,2090 @@
+{
+  "candidates": [
+    {
+      "aggregate": {
+        "cer": 0.1108275197096024,
+        "failures": 0,
+        "median_seconds_per_page": 1.1336008375001256,
+        "p95_seconds_per_page": 1.471673539149924,
+        "pages": 12,
+        "peak_rss_bytes": 121585664,
+        "wer": 0.19178440607012034
+      },
+      "id": "markhand-default",
+      "label": "Markhand default",
+      "metadata": {
+        "cold_initialization": {
+          "candidate_seconds": 1.479000275139697e-06,
+          "process_startup_included": true,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 19197952,
+            "sample_count": 5,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.04416615000081947
+          },
+          "timing_scope": "worker_process_invocation_to_ready",
+          "wall_seconds": 0.04475256899968372
+        },
+        "environment": {
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8",
+          "OMP_NUM_THREADS": "8",
+          "OPENBLAS_NUM_THREADS": "8",
+          "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+          "PATH": "/usr/local/bin:/usr/bin:/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONPATH": "bench/ocr_cpu_service"
+        },
+        "fileconv_build": {
+          "binary_sha256": "d85b911c08b8c26f37995f5609f92f50ac0ec49fdacc5014ef49a6e8f8500d50",
+          "build_command": "CC=gcc CXX=g++ cargo build --release -p fileconv-cli --no-default-features",
+          "build_features": [
+            "no-default-features"
+          ],
+          "profile": "release"
+        },
+        "invocation": "fileconv one <identical-page.png> --lang vie+eng",
+        "measurement_semantics": {
+          "cold_initialization": "worker process start through candidate-ready event",
+          "rss": "10 ms sampled sum of worker and descendant RSS during the measured interval",
+          "warm_page_latency": "parent wall time from request flush through result event; worker remains initialized"
+        },
+        "tessdata_role": "system-default",
+        "tessdata_sha256": {
+          "eng": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+          "vie": "79df64caf7bcfb2a27df5042ecb6121e196eada34da774956995747636d5bfa1"
+        },
+        "timing_note": "warm timing includes a fresh fileconv/Tesseract subprocess spawn, execution, and output collection for every page",
+        "worker_command": "python -m benchmark.worker --candidate markhand-default <role-specific local assets>"
+      },
+      "pages": [
+        {
+          "candidate_seconds": 1.0982201890001306,
+          "cer": 0.18787878787878787,
+          "character_edits": 279,
+          "elapsed_seconds": 1.0986482919997798,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 116768768,
+          "process_startup_included": false,
+          "reference_characters": 1485,
+          "reference_words": 329,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 116768768,
+            "sample_count": 104,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.0986482919997798
+          },
+          "source_id": "vnocr-real-cv-3722-metro-p1",
+          "source_sha256": "28dfe93886dae75fbcc17251b6f330f526da18c05394872243659325478a5cf6",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.2857142857142857,
+          "word_edits": 94
+        },
+        {
+          "candidate_seconds": 1.4133703480001714,
+          "cer": 0.10592025775271849,
+          "character_edits": 263,
+          "elapsed_seconds": 1.4138928970005509,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 121585664,
+          "process_startup_included": false,
+          "reference_characters": 2483,
+          "reference_words": 535,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 121585664,
+            "sample_count": 133,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.4138928970005509
+          },
+          "source_id": "vnocr-real-hanoi-kh-173-festival-p1",
+          "source_sha256": "cafe628510a11875f22e857115819b036df273de38a42f6569fbd111c6fbd3dd",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.15700934579439252,
+          "word_edits": 84
+        },
+        {
+          "candidate_seconds": 1.168060541000159,
+          "cer": 0.1269185360094451,
+          "character_edits": 215,
+          "elapsed_seconds": 1.1685533830004715,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 117919744,
+          "process_startup_included": false,
+          "reference_characters": 1694,
+          "reference_words": 364,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 117919744,
+            "sample_count": 110,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.1685533830004715
+          },
+          "source_id": "vnocr-real-hanoi-qd-2280-water-p1",
+          "source_sha256": "03b1203eb034925e1cca0001a688621025c4832f03355a6f66a8d0a0b3c20ddd",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.24175824175824176,
+          "word_edits": 88
+        },
+        {
+          "candidate_seconds": 0.8914800210004614,
+          "cer": 0.19424460431654678,
+          "character_edits": 216,
+          "elapsed_seconds": 0.891772815000877,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 114135040,
+          "process_startup_included": false,
+          "reference_characters": 1112,
+          "reference_words": 248,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 114135040,
+            "sample_count": 85,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.891772815000877
+          },
+          "source_id": "vnocr-real-hanoi-tb-453-flag-p1",
+          "source_sha256": "22872f8cedd422a629e5932e742905b096e582303482b3376d6a575a75465d08",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.25806451612903225,
+          "word_edits": 64
+        },
+        {
+          "candidate_seconds": 1.3435585899987927,
+          "cer": 0.09511015583019881,
+          "character_edits": 177,
+          "elapsed_seconds": 1.3439903250000498,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 119222272,
+          "process_startup_included": false,
+          "reference_characters": 1861,
+          "reference_words": 402,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 119222272,
+            "sample_count": 127,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.3439903250000498
+          },
+          "source_id": "vnocr-real-nq-115-ba-vi-p1",
+          "source_sha256": "bb1d2824cf789b6d3c1f76e2999251a57f0aeda9088d733de122483c8a570e98",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.15920398009950248,
+          "word_edits": 64
+        },
+        {
+          "candidate_seconds": 0.9643583279994346,
+          "cer": 0.07782101167315175,
+          "character_edits": 100,
+          "elapsed_seconds": 0.9647831860002043,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 115908608,
+          "process_startup_included": false,
+          "reference_characters": 1285,
+          "reference_words": 284,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 115908608,
+            "sample_count": 91,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.9647831860002043
+          },
+          "source_id": "vnocr-real-qd-707-ttg-p1",
+          "source_sha256": "bf6851f475dea358f2dc0136a9dced4d1dff9b7dfd5aac762d4b789e98f36295",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.16901408450704225,
+          "word_edits": 48
+        },
+        {
+          "candidate_seconds": 1.2262722960003885,
+          "cer": 0.1654228855721393,
+          "character_edits": 266,
+          "elapsed_seconds": 1.2266530840006453,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 117809152,
+          "process_startup_included": false,
+          "reference_characters": 1608,
+          "reference_words": 356,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 117809152,
+            "sample_count": 116,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.2266530840006453
+          },
+          "source_id": "vnocr-real-qd-729-ttg-p1",
+          "source_sha256": "081bef468ca7c09ed8415b5d34435c75e2580eb4c16191f9d8bfba004c7014a4",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.2303370786516854,
+          "word_edits": 82
+        },
+        {
+          "candidate_seconds": 1.541861046998747,
+          "cer": 0.12101143889223359,
+          "character_edits": 201,
+          "elapsed_seconds": 1.5422943239991582,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 117948416,
+          "process_startup_included": false,
+          "reference_characters": 1661,
+          "reference_words": 354,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 117948416,
+            "sample_count": 145,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.5422943239991582
+          },
+          "source_id": "vnocr-real-tt-21-bct-fuel-p1",
+          "source_sha256": "11dedc2e0c3e03cabc0a1f7f18c29f773aa4b6077e957aca0f47573b067d309d",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.2542372881355932,
+          "word_edits": 90
+        },
+        {
+          "candidate_seconds": 1.264174207999531,
+          "cer": 0.11441765007696254,
+          "character_edits": 223,
+          "elapsed_seconds": 1.2646490580009413,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 108429312,
+          "process_startup_included": false,
+          "reference_characters": 1949,
+          "reference_words": 416,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 108429312,
+            "sample_count": 119,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.2646490580009413
+          },
+          "source_id": "vnocr-real-tt-37-bca-vehicle-p1",
+          "source_sha256": "87b23f9f6b7bb0a382e380ddaf12f18389436f624a525d77e8628678c798d626",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.25961538461538464,
+          "word_edits": 108
+        },
+        {
+          "candidate_seconds": 0.5926210219986388,
+          "cer": 0.0015455950540958269,
+          "character_edits": 1,
+          "elapsed_seconds": 0.5931180869993113,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 109387776,
+          "process_startup_included": false,
+          "reference_characters": 647,
+          "reference_words": 140,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 109387776,
+            "sample_count": 56,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.5931180869993113
+          },
+          "source_id": "vnocr-synthetic-scan-bien-lai-p1",
+          "source_sha256": "370e519da2492ea9f938448a920e465a7f504befc28421f13e4c596535e4245e",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.007142857142857143,
+          "word_edits": 1
+        },
+        {
+          "candidate_seconds": 0.8144090349996986,
+          "cer": 0.008100810081008101,
+          "character_edits": 9,
+          "elapsed_seconds": 0.8151707779998105,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 112017408,
+          "process_startup_included": false,
+          "reference_characters": 1111,
+          "reference_words": 239,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 112017408,
+            "sample_count": 77,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.8151707779998105
+          },
+          "source_id": "vnocr-synthetic-scan-hoa-don-p1",
+          "source_sha256": "83758171e5f2e1b1e55e968e06a564cc08c30b243c9feec3f9cc3581ed93504d",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.03347280334728033,
+          "word_edits": 8
+        },
+        {
+          "candidate_seconds": 0.6123335829997814,
+          "cer": 0.005442176870748299,
+          "character_edits": 4,
+          "elapsed_seconds": 0.6127910879986302,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 108949504,
+          "process_startup_included": false,
+          "reference_characters": 735,
+          "reference_words": 155,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 108949504,
+            "sample_count": 58,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.6127910879986302
+          },
+          "source_id": "vnocr-synthetic-scan-phieu-chi-p1",
+          "source_sha256": "667167e998c9aaef5049e4b1ad66a17d39843de0b12ddb7b1c2086a0ff247c54",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.012903225806451613,
+          "word_edits": 2
+        },
+        {
+          "candidate_seconds": 1.2523773360007908,
+          "elapsed_seconds": 1.2528316220013949,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 118321152,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 118321152,
+            "sample_count": 118,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.2528316220013949
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 1.4291894920006598,
+          "elapsed_seconds": 1.4295111949995771,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 420,
+          "peak_rss_bytes": 115802112,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 115802112,
+            "sample_count": 135,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.4295111949995771
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 0.8480863829990994,
+          "elapsed_seconds": 0.848269801999777,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 839,
+          "peak_rss_bytes": 112738304,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 112738304,
+            "sample_count": 80,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.848269801999777
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 6.643999119,
+          "elapsed_seconds": 6.644553890999305,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 208621568,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 208621568,
+            "sample_count": 625,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 6.644553890999305
+          },
+          "source_id": "wikimedia-cuu-quoc-1945-09-05",
+          "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 9.885862926999835,
+          "elapsed_seconds": 9.886539500999788,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 2,
+          "peak_rss_bytes": 208539648,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 208539648,
+            "sample_count": 927,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 9.886539500999788
+          },
+          "source_id": "wikimedia-cuu-quoc-1945-09-05",
+          "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 2.092004194000765,
+          "elapsed_seconds": 2.09217962799994,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 110129152,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 110129152,
+            "sample_count": 197,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 2.09217962799994
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 2.4965218659999664,
+          "elapsed_seconds": 2.4967343700009224,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 4,
+          "peak_rss_bytes": 112091136,
+          "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 10,
+            "expected_anchors": 5,
+            "missing_anchors": 0,
+            "observed_anchors": 5,
+            "violations": 0
+          },
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 112091136,
+            "sample_count": 235,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 2.4967343700009224
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 2.5928144629997405,
+          "elapsed_seconds": 2.5932830389992887,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 8,
+          "peak_rss_bytes": 111779840,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 111779840,
+            "sample_count": 244,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 2.5932830389992887
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 0.5596150399996986,
+          "elapsed_seconds": 0.5598761269993702,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 87924736,
+          "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 15,
+            "expected_anchors": 6,
+            "missing_anchors": 0,
+            "observed_anchors": 6,
+            "violations": 0
+          },
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 87924736,
+            "sample_count": 53,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.5598761269993702
+          },
+          "source_id": "reviewed-multicolumn-v1",
+          "source_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
+          "stratum": "reviewed-multicolumn",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        }
+      ],
+      "strata": {
+        "real-scan": {
+          "cer": 0.12815431364777383,
+          "failures": 0,
+          "median_seconds_per_page": 1.2266530840006453,
+          "p95_seconds_per_page": 1.4909337531997153,
+          "pages": 9,
+          "peak_rss_bytes": 121585664,
+          "wer": 0.21958637469586376
+        },
+        "synthetic-scan": {
+          "cer": 0.005615724027276374,
+          "failures": 0,
+          "median_seconds_per_page": 0.6127910879986302,
+          "p95_seconds_per_page": 0.7949328089996925,
+          "pages": 3,
+          "peak_rss_bytes": 112017408,
+          "wer": 0.020599250936329586
+        }
+      }
+    },
+    {
+      "aggregate": {
+        "cer": 0.10260336906584992,
+        "failures": 0,
+        "median_seconds_per_page": 1.5371178329996837,
+        "p95_seconds_per_page": 1.8425851880499067,
+        "pages": 12,
+        "peak_rss_bytes": 144834560,
+        "wer": 0.17032967032967034
+      },
+      "id": "markhand-tessdata-best",
+      "label": "Markhand tessdata_best",
+      "metadata": {
+        "cold_initialization": {
+          "candidate_seconds": 1.868000254034996e-06,
+          "process_startup_included": true,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 19431424,
+            "sample_count": 5,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.04344798400052241
+          },
+          "timing_scope": "worker_process_invocation_to_ready",
+          "wall_seconds": 0.043871576999663375
+        },
+        "environment": {
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8",
+          "OMP_NUM_THREADS": "8",
+          "OPENBLAS_NUM_THREADS": "8",
+          "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+          "PATH": "/usr/local/bin:/usr/bin:/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONPATH": "bench/ocr_cpu_service"
+        },
+        "fileconv_build": {
+          "binary_sha256": "d85b911c08b8c26f37995f5609f92f50ac0ec49fdacc5014ef49a6e8f8500d50",
+          "build_command": "CC=gcc CXX=g++ cargo build --release -p fileconv-cli --no-default-features",
+          "build_features": [
+            "no-default-features"
+          ],
+          "profile": "release"
+        },
+        "invocation": "fileconv one <identical-page.png> --lang vie+eng",
+        "measurement_semantics": {
+          "cold_initialization": "worker process start through candidate-ready event",
+          "rss": "10 ms sampled sum of worker and descendant RSS during the measured interval",
+          "warm_page_latency": "parent wall time from request flush through result event; worker remains initialized"
+        },
+        "tessdata_role": "best",
+        "tessdata_sha256": {
+          "eng": "8280aed0782fe27257a68ea10fe7ef324ca0f8d85bd2fd145d1c2b560bcb66ba",
+          "vie": "b6b49293d95d0b6dbd8780174627e82c75be957b6f4ed9862155540d6b00bb45"
+        },
+        "timing_note": "warm timing includes a fresh fileconv/Tesseract subprocess spawn, execution, and output collection for every page",
+        "worker_command": "python -m benchmark.worker --candidate markhand-tessdata-best <role-specific local assets>"
+      },
+      "pages": [
+        {
+          "candidate_seconds": 1.5172537799990096,
+          "cer": 0.1717171717171717,
+          "character_edits": 255,
+          "elapsed_seconds": 1.517697462999422,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 136712192,
+          "process_startup_included": false,
+          "reference_characters": 1485,
+          "reference_words": 329,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 136712192,
+            "sample_count": 143,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.517697462999422
+          },
+          "source_id": "vnocr-real-cv-3722-metro-p1",
+          "source_sha256": "28dfe93886dae75fbcc17251b6f330f526da18c05394872243659325478a5cf6",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.24924012158054712,
+          "word_edits": 82
+        },
+        {
+          "candidate_seconds": 1.7896486299996468,
+          "cer": 0.10350382601691502,
+          "character_edits": 257,
+          "elapsed_seconds": 1.7900833959993179,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 144834560,
+          "process_startup_included": false,
+          "reference_characters": 2483,
+          "reference_words": 535,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 144834560,
+            "sample_count": 169,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.7900833959993179
+          },
+          "source_id": "vnocr-real-hanoi-kh-173-festival-p1",
+          "source_sha256": "cafe628510a11875f22e857115819b036df273de38a42f6569fbd111c6fbd3dd",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.14953271028037382,
+          "word_edits": 80
+        },
+        {
+          "candidate_seconds": 1.5807706150008016,
+          "cer": 0.1127508854781582,
+          "character_edits": 191,
+          "elapsed_seconds": 1.581203309000557,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 144084992,
+          "process_startup_included": false,
+          "reference_characters": 1694,
+          "reference_words": 364,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 144084992,
+            "sample_count": 149,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.581203309000557
+          },
+          "source_id": "vnocr-real-hanoi-qd-2280-water-p1",
+          "source_sha256": "03b1203eb034925e1cca0001a688621025c4832f03355a6f66a8d0a0b3c20ddd",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.1978021978021978,
+          "word_edits": 72
+        },
+        {
+          "candidate_seconds": 1.1381081609997636,
+          "cer": 0.18794964028776978,
+          "character_edits": 209,
+          "elapsed_seconds": 1.1385783240002638,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 138076160,
+          "process_startup_included": false,
+          "reference_characters": 1112,
+          "reference_words": 248,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 138076160,
+            "sample_count": 108,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.1385783240002638
+          },
+          "source_id": "vnocr-real-hanoi-tb-453-flag-p1",
+          "source_sha256": "22872f8cedd422a629e5932e742905b096e582303482b3376d6a575a75465d08",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.24193548387096775,
+          "word_edits": 60
+        },
+        {
+          "candidate_seconds": 1.8135436959983053,
+          "cer": 0.09081139172487909,
+          "character_edits": 169,
+          "elapsed_seconds": 1.813981788998717,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 142991360,
+          "process_startup_included": false,
+          "reference_characters": 1861,
+          "reference_words": 402,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 142991360,
+            "sample_count": 171,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.813981788998717
+          },
+          "source_id": "vnocr-real-nq-115-ba-vi-p1",
+          "source_sha256": "bb1d2824cf789b6d3c1f76e2999251a57f0aeda9088d733de122483c8a570e98",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.13681592039800994,
+          "word_edits": 55
+        },
+        {
+          "candidate_seconds": 1.387053062000632,
+          "cer": 0.07315175097276265,
+          "character_edits": 94,
+          "elapsed_seconds": 1.387496571000156,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 137830400,
+          "process_startup_included": false,
+          "reference_characters": 1285,
+          "reference_words": 284,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 137830400,
+            "sample_count": 131,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.387496571000156
+          },
+          "source_id": "vnocr-real-qd-707-ttg-p1",
+          "source_sha256": "bf6851f475dea358f2dc0136a9dced4d1dff9b7dfd5aac762d4b789e98f36295",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.1443661971830986,
+          "word_edits": 41
+        },
+        {
+          "candidate_seconds": 1.5560368719998223,
+          "cer": 0.15049751243781095,
+          "character_edits": 242,
+          "elapsed_seconds": 1.5565382029999455,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 139313152,
+          "process_startup_included": false,
+          "reference_characters": 1608,
+          "reference_words": 356,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 139313152,
+            "sample_count": 147,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.5565382029999455
+          },
+          "source_id": "vnocr-real-qd-729-ttg-p1",
+          "source_sha256": "081bef468ca7c09ed8415b5d34435c75e2580eb4c16191f9d8bfba004c7014a4",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.19662921348314608,
+          "word_edits": 70
+        },
+        {
+          "candidate_seconds": 1.8771059219998278,
+          "cer": 0.10295003010234799,
+          "character_edits": 171,
+          "elapsed_seconds": 1.8775448980013607,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 138280960,
+          "process_startup_included": false,
+          "reference_characters": 1661,
+          "reference_words": 354,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 138280960,
+            "sample_count": 177,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.8775448980013607
+          },
+          "source_id": "vnocr-real-tt-21-bct-fuel-p1",
+          "source_sha256": "11dedc2e0c3e03cabc0a1f7f18c29f773aa4b6077e957aca0f47573b067d309d",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.2288135593220339,
+          "word_edits": 81
+        },
+        {
+          "candidate_seconds": 1.7172974379991501,
+          "cer": 0.10723447922011288,
+          "character_edits": 209,
+          "elapsed_seconds": 1.7177031730007002,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 129630208,
+          "process_startup_included": false,
+          "reference_characters": 1949,
+          "reference_words": 416,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 129630208,
+            "sample_count": 162,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.7177031730007002
+          },
+          "source_id": "vnocr-real-tt-37-bca-vehicle-p1",
+          "source_sha256": "87b23f9f6b7bb0a382e380ddaf12f18389436f624a525d77e8628678c798d626",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.23557692307692307,
+          "word_edits": 98
+        },
+        {
+          "candidate_seconds": 0.6767128640003648,
+          "cer": 0.0,
+          "character_edits": 0,
+          "elapsed_seconds": 0.6771881789991312,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 125841408,
+          "process_startup_included": false,
+          "reference_characters": 647,
+          "reference_words": 140,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 125841408,
+            "sample_count": 64,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.6771881789991312
+          },
+          "source_id": "vnocr-synthetic-scan-bien-lai-p1",
+          "source_sha256": "370e519da2492ea9f938448a920e465a7f504befc28421f13e4c596535e4245e",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.0,
+          "word_edits": 0
+        },
+        {
+          "candidate_seconds": 0.9819462010000279,
+          "cer": 0.0054005400540054005,
+          "character_edits": 6,
+          "elapsed_seconds": 0.9823807910015603,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 128794624,
+          "process_startup_included": false,
+          "reference_characters": 1111,
+          "reference_words": 239,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 128794624,
+            "sample_count": 93,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.9823807910015603
+          },
+          "source_id": "vnocr-synthetic-scan-hoa-don-p1",
+          "source_sha256": "83758171e5f2e1b1e55e968e06a564cc08c30b243c9feec3f9cc3581ed93504d",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.02510460251046025,
+          "word_edits": 6
+        },
+        {
+          "candidate_seconds": 0.7760084420006024,
+          "cer": 0.00816326530612245,
+          "character_edits": 6,
+          "elapsed_seconds": 0.7764320679998491,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 127897600,
+          "process_startup_included": false,
+          "reference_characters": 735,
+          "reference_words": 155,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 127897600,
+            "sample_count": 73,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.7764320679998491
+          },
+          "source_id": "vnocr-synthetic-scan-phieu-chi-p1",
+          "source_sha256": "667167e998c9aaef5049e4b1ad66a17d39843de0b12ddb7b1c2086a0ff247c54",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.03870967741935484,
+          "word_edits": 6
+        },
+        {
+          "candidate_seconds": 1.4403771289998986,
+          "elapsed_seconds": 1.4409416010003042,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 143314944,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 143314944,
+            "sample_count": 136,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.4409416010003042
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 2.1192581260002044,
+          "elapsed_seconds": 2.1197181530005764,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 420,
+          "peak_rss_bytes": 136536064,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 136536064,
+            "sample_count": 200,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 2.1197181530005764
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 1.0631527109999297,
+          "elapsed_seconds": 1.0636130769999,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 839,
+          "peak_rss_bytes": 132227072,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 132227072,
+            "sample_count": 100,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.0636130769999
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 9.110698993001279,
+          "elapsed_seconds": 9.111196720999942,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 208728064,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 208728064,
+            "sample_count": 857,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 9.111196720999942
+          },
+          "source_id": "wikimedia-cuu-quoc-1945-09-05",
+          "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 13.18965020199903,
+          "elapsed_seconds": 13.190325801000654,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 2,
+          "peak_rss_bytes": 208642048,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 208642048,
+            "sample_count": 1239,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 13.190325801000654
+          },
+          "source_id": "wikimedia-cuu-quoc-1945-09-05",
+          "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 2.895796748000066,
+          "elapsed_seconds": 2.8962206529995456,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 132308992,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 132308992,
+            "sample_count": 272,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 2.8962206529995456
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 3.5401830099999643,
+          "elapsed_seconds": 3.5406658240008255,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 4,
+          "peak_rss_bytes": 129589248,
+          "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 10,
+            "expected_anchors": 5,
+            "missing_anchors": 0,
+            "observed_anchors": 5,
+            "violations": 0
+          },
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 129589248,
+            "sample_count": 333,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.5406658240008255
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 3.5186477930001274,
+          "elapsed_seconds": 3.5192231700002594,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 8,
+          "peak_rss_bytes": 129822720,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 129822720,
+            "sample_count": 331,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.5192231700002594
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 0.7009875810017547,
+          "elapsed_seconds": 0.7013997459998791,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 116744192,
+          "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 15,
+            "expected_anchors": 6,
+            "missing_anchors": 0,
+            "observed_anchors": 6,
+            "violations": 0
+          },
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 116744192,
+            "sample_count": 66,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 0.7013997459998791
+          },
+          "source_id": "reviewed-multicolumn-v1",
+          "source_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
+          "stratum": "reviewed-multicolumn",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        }
+      ],
+      "strata": {
+        "real-scan": {
+          "cer": 0.11870788743559255,
+          "failures": 0,
+          "median_seconds_per_page": 1.581203309000557,
+          "p95_seconds_per_page": 1.8521196544003034,
+          "pages": 9,
+          "peak_rss_bytes": 144834560,
+          "wer": 0.19434306569343066
+        },
+        "synthetic-scan": {
+          "cer": 0.0048134777376654635,
+          "failures": 0,
+          "median_seconds_per_page": 0.7764320679998491,
+          "p95_seconds_per_page": 0.9617859187013892,
+          "pages": 3,
+          "peak_rss_bytes": 128794624,
+          "wer": 0.02247191011235955
+        }
+      }
+    },
+    {
+      "aggregate": {
+        "cer": 0.39935341160456017,
+        "failures": 0,
+        "median_seconds_per_page": 4.369445503500174,
+        "p95_seconds_per_page": 5.06713496470029,
+        "pages": 12,
+        "peak_rss_bytes": 3498352640,
+        "wer": 0.7205651491365777
+      },
+      "id": "pp-ocrv6",
+      "label": "PP-OCRv6",
+      "metadata": {
+        "cold_initialization": {
+          "candidate_seconds": 1.8891004710003472,
+          "process_startup_included": true,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 595365888,
+            "sample_count": 182,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.9319022500003484
+          },
+          "timing_scope": "worker_process_invocation_to_ready",
+          "wall_seconds": 1.9324758499988093
+        },
+        "environment": {
+          "LANG": "C.UTF-8",
+          "LC_ALL": "C.UTF-8",
+          "OMP_NUM_THREADS": "8",
+          "OPENBLAS_NUM_THREADS": "8",
+          "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+          "PATH": "/usr/local/bin:/usr/bin:/bin",
+          "PYTHONNOUSERSITE": "1",
+          "PYTHONPATH": "bench/ocr_cpu_service"
+        },
+        "invocation": "cached CPU public API over identical page image",
+        "measurement_semantics": {
+          "cold_initialization": "worker process start through candidate-ready event",
+          "rss": "10 ms sampled sum of worker and descendant RSS during the measured interval",
+          "warm_page_latency": "parent wall time from request flush through result event; worker remains initialized"
+        },
+        "model_asset_sha256": {
+          "detection": {
+            "inference.json": "0f1a7ec35da36173529c7a60238b7f7919e3831929c3f700ad90ad4896adecd5",
+            "inference.pdiparams": "85218d2e3d98f5a21c58b4220627be923a97aee5db3cc71f39536ab31ac53960",
+            "inference.yml": "7298d5ead546584af2504d03355f881ac7a7bc0eb1e282d3e159277c1d0af871"
+          },
+          "recognition": {
+            "inference.json": "0b2e25e990bd072f1bf77d59d67d508bce6c4bd44af6624e0fb27d6da2cd00e8",
+            "inference.pdiparams": "1b01c79a914587933f615569e75de54f2e638ebb5d3f3b3c1b38c24ede8c7319",
+            "inference.yml": "991b700facf5b50a7de193468207d5f4255b538dde0d312ae3b7c7a9b6873129"
+          }
+        },
+        "worker_command": "python -m benchmark.worker --candidate pp-ocrv6 <role-specific local assets>"
+      },
+      "pages": [
+        {
+          "candidate_seconds": 4.709517003000656,
+          "cer": 0.5124579124579125,
+          "character_edits": 761,
+          "elapsed_seconds": 4.706504203000804,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 1965318144,
+          "process_startup_included": false,
+          "reference_characters": 1485,
+          "reference_words": 329,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 1965318144,
+            "sample_count": 442,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.706504203000804
+          },
+          "source_id": "vnocr-real-cv-3722-metro-p1",
+          "source_sha256": "28dfe93886dae75fbcc17251b6f330f526da18c05394872243659325478a5cf6",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.8115501519756839,
+          "word_edits": 267
+        },
+        {
+          "candidate_seconds": 5.3897703450002155,
+          "cer": 0.33225936367297626,
+          "character_edits": 825,
+          "elapsed_seconds": 5.390109983000002,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 2860126208,
+          "process_startup_included": false,
+          "reference_characters": 2483,
+          "reference_words": 535,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 2860126208,
+            "sample_count": 501,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 5.390109983000002
+          },
+          "source_id": "vnocr-real-hanoi-kh-173-festival-p1",
+          "source_sha256": "cafe628510a11875f22e857115819b036df273de38a42f6569fbd111c6fbd3dd",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.680373831775701,
+          "word_edits": 364
+        },
+        {
+          "candidate_seconds": 4.41394473499895,
+          "cer": 0.3795749704840614,
+          "character_edits": 643,
+          "elapsed_seconds": 4.414301064000028,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3361689600,
+          "process_startup_included": false,
+          "reference_characters": 1694,
+          "reference_words": 364,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3361689600,
+            "sample_count": 413,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.414301064000028
+          },
+          "source_id": "vnocr-real-hanoi-qd-2280-water-p1",
+          "source_sha256": "03b1203eb034925e1cca0001a688621025c4832f03355a6f66a8d0a0b3c20ddd",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.6703296703296703,
+          "word_edits": 244
+        },
+        {
+          "candidate_seconds": 3.7648529739999503,
+          "cer": 0.4226618705035971,
+          "character_edits": 470,
+          "elapsed_seconds": 3.765188252000371,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3328585728,
+          "process_startup_included": false,
+          "reference_characters": 1112,
+          "reference_words": 248,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3328585728,
+            "sample_count": 352,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.765188252000371
+          },
+          "source_id": "vnocr-real-hanoi-tb-453-flag-p1",
+          "source_sha256": "22872f8cedd422a629e5932e742905b096e582303482b3376d6a575a75465d08",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.7096774193548387,
+          "word_edits": 176
+        },
+        {
+          "candidate_seconds": 4.703578710999864,
+          "cer": 0.4228909188608275,
+          "character_edits": 787,
+          "elapsed_seconds": 4.702924319999511,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3410190336,
+          "process_startup_included": false,
+          "reference_characters": 1861,
+          "reference_words": 402,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3410190336,
+            "sample_count": 441,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.702924319999511
+          },
+          "source_id": "vnocr-real-nq-115-ba-vi-p1",
+          "source_sha256": "bb1d2824cf789b6d3c1f76e2999251a57f0aeda9088d733de122483c8a570e98",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.6990049751243781,
+          "word_edits": 281
+        },
+        {
+          "candidate_seconds": 3.8043694329990103,
+          "cer": 0.4832684824902724,
+          "character_edits": 621,
+          "elapsed_seconds": 3.8046951400010585,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3419254784,
+          "process_startup_included": false,
+          "reference_characters": 1285,
+          "reference_words": 284,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3419254784,
+            "sample_count": 354,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.8046951400010585
+          },
+          "source_id": "vnocr-real-qd-707-ttg-p1",
+          "source_sha256": "bf6851f475dea358f2dc0136a9dced4d1dff9b7dfd5aac762d4b789e98f36295",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.8028169014084507,
+          "word_edits": 228
+        },
+        {
+          "candidate_seconds": 4.802537843999744,
+          "cer": 0.4496268656716418,
+          "character_edits": 723,
+          "elapsed_seconds": 4.802882677000525,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3406438400,
+          "process_startup_included": false,
+          "reference_characters": 1608,
+          "reference_words": 356,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3406438400,
+            "sample_count": 448,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.802882677000525
+          },
+          "source_id": "vnocr-real-qd-729-ttg-p1",
+          "source_sha256": "081bef468ca7c09ed8415b5d34435c75e2580eb4c16191f9d8bfba004c7014a4",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.7752808988764045,
+          "word_edits": 276
+        },
+        {
+          "candidate_seconds": 4.636035134000849,
+          "cer": 0.4647802528597231,
+          "character_edits": 772,
+          "elapsed_seconds": 4.636381696000171,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3498352640,
+          "process_startup_included": false,
+          "reference_characters": 1661,
+          "reference_words": 354,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3498352640,
+            "sample_count": 428,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.636381696000171
+          },
+          "source_id": "vnocr-real-tt-21-bct-fuel-p1",
+          "source_sha256": "11dedc2e0c3e03cabc0a1f7f18c29f773aa4b6077e957aca0f47573b067d309d",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.8305084745762712,
+          "word_edits": 294
+        },
+        {
+          "candidate_seconds": 4.3242446840013145,
+          "cer": 0.4930733709594664,
+          "character_edits": 961,
+          "elapsed_seconds": 4.324589943000319,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3000913920,
+          "process_startup_included": false,
+          "reference_characters": 1949,
+          "reference_words": 416,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3000913920,
+            "sample_count": 401,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.324589943000319
+          },
+          "source_id": "vnocr-real-tt-37-bca-vehicle-p1",
+          "source_sha256": "87b23f9f6b7bb0a382e380ddaf12f18389436f624a525d77e8628678c798d626",
+          "stratum": "real-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.8725961538461539,
+          "word_edits": 363
+        },
+        {
+          "candidate_seconds": 3.142375407000145,
+          "cer": 0.15146831530139104,
+          "character_edits": 98,
+          "elapsed_seconds": 3.1427098479998676,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3333926912,
+          "process_startup_included": false,
+          "reference_characters": 647,
+          "reference_words": 140,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3333926912,
+            "sample_count": 292,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.1427098479998676
+          },
+          "source_id": "vnocr-synthetic-scan-bien-lai-p1",
+          "source_sha256": "370e519da2492ea9f938448a920e465a7f504befc28421f13e4c596535e4245e",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.5214285714285715,
+          "word_edits": 73
+        },
+        {
+          "candidate_seconds": 3.8632223099994007,
+          "cer": 0.0747074707470747,
+          "character_edits": 83,
+          "elapsed_seconds": 3.8597112970001035,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3286953984,
+          "process_startup_included": false,
+          "reference_characters": 1111,
+          "reference_words": 239,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3286953984,
+            "sample_count": 357,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.8597112970001035
+          },
+          "source_id": "vnocr-synthetic-scan-hoa-don-p1",
+          "source_sha256": "83758171e5f2e1b1e55e968e06a564cc08c30b243c9feec3f9cc3581ed93504d",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.34309623430962344,
+          "word_edits": 82
+        },
+        {
+          "candidate_seconds": 3.207818717999544,
+          "cer": 0.40408163265306124,
+          "character_edits": 297,
+          "elapsed_seconds": 3.207130769000287,
+          "error_kind": null,
+          "gate_included": true,
+          "page_number": 1,
+          "peak_rss_bytes": 3308466176,
+          "process_startup_included": false,
+          "reference_characters": 735,
+          "reference_words": 155,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3308466176,
+            "sample_count": 299,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.207130769000287
+          },
+          "source_id": "vnocr-synthetic-scan-phieu-chi-p1",
+          "source_sha256": "667167e998c9aaef5049e4b1ad66a17d39843de0b12ddb7b1c2086a0ff247c54",
+          "stratum": "synthetic-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall",
+          "wer": 0.6838709677419355,
+          "word_edits": 106
+        },
+        {
+          "candidate_seconds": 4.733400298999186,
+          "elapsed_seconds": 4.734075929000028,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 3419181056,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3419181056,
+            "sample_count": 437,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.734075929000028
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 5.196822369998699,
+          "elapsed_seconds": 5.198111853998853,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 420,
+          "peak_rss_bytes": 3385389056,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3385389056,
+            "sample_count": 481,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 5.198111853998853
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 3.5987757769999007,
+          "elapsed_seconds": 3.599419164998835,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 839,
+          "peak_rss_bytes": 3401310208,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3401310208,
+            "sample_count": 334,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 3.599419164998835
+          },
+          "source_id": "official-89-2026-tt-btc",
+          "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+          "stratum": "mixed",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 23.884359457000755,
+          "elapsed_seconds": 23.885203730000285,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 5424857088,
+          "process_startup_included": false,
+          "resource_limit_violation": true,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 5424857088,
+            "sample_count": 2233,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 23.885203730000285
+          },
+          "source_id": "wikimedia-cuu-quoc-1945-09-05",
+          "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 26.308077986999706,
+          "elapsed_seconds": 26.305221425000127,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 2,
+          "peak_rss_bytes": 5469872128,
+          "process_startup_included": false,
+          "resource_limit_violation": true,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 5469872128,
+            "sample_count": 2442,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 26.305221425000127
+          },
+          "source_id": "wikimedia-cuu-quoc-1945-09-05",
+          "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 4.0064336260002165,
+          "elapsed_seconds": 4.007827215000361,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 3130355712,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3130355712,
+            "sample_count": 368,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 4.007827215000361
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 5.726245947998905,
+          "elapsed_seconds": 5.726935083999706,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 4,
+          "peak_rss_bytes": 2982866944,
+          "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 3,
+            "expected_anchors": 5,
+            "missing_anchors": 2,
+            "observed_anchors": 3,
+            "violations": 0
+          },
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 2982866944,
+            "sample_count": 528,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 5.726935083999706
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 6.260915590000877,
+          "elapsed_seconds": 6.261608335000346,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 8,
+          "peak_rss_bytes": 3011846144,
+          "process_startup_included": false,
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 3011846144,
+            "sample_count": 586,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 6.261608335000346
+          },
+          "source_id": "wikimedia-dai-nam-1907-804",
+          "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+          "stratum": "historical-scan",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        },
+        {
+          "candidate_seconds": 1.0759805500001676,
+          "elapsed_seconds": 1.0773277359985514,
+          "error_kind": null,
+          "gate_included": false,
+          "page_number": 1,
+          "peak_rss_bytes": 2714750976,
+          "process_startup_included": false,
+          "reading_order": {
+            "comparable_pairs": 15,
+            "expected_anchors": 6,
+            "missing_anchors": 0,
+            "observed_anchors": 6,
+            "violations": 3
+          },
+          "resource_limit_violation": false,
+          "rss_measurement": {
+            "method": "sampled_process_tree_rss",
+            "peak_rss_bytes": 2714750976,
+            "sample_count": 100,
+            "sample_interval_seconds": 0.01,
+            "wall_seconds": 1.0773277359985514
+          },
+          "source_id": "reviewed-multicolumn-v1",
+          "source_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
+          "stratum": "reviewed-multicolumn",
+          "success": true,
+          "timing_scope": "warm_worker_request_wall"
+        }
+      ],
+      "strata": {
+        "real-scan": {
+          "cer": 0.4335447218919276,
+          "failures": 0,
+          "median_seconds_per_page": 4.636381696000171,
+          "p95_seconds_per_page": 5.155219060600211,
+          "pages": 9,
+          "peak_rss_bytes": 3498352640,
+          "wer": 0.7582116788321168
+        },
+        "synthetic-scan": {
+          "cer": 0.1917368632170076,
+          "failures": 0,
+          "median_seconds_per_page": 3.207130769000287,
+          "p95_seconds_per_page": 3.7944532442001218,
+          "pages": 3,
+          "peak_rss_bytes": 3333926912,
+          "wer": 0.4887640449438202
+        }
+      }
+    }
+  ],
+  "corpus": {
+    "historical_samples": [
+      {
+        "classification": "scan",
+        "classification_evidence": {
+          "image_pages": 2,
+          "pages": 2,
+          "text_pages": 0
+        },
+        "classification_mismatch": false,
+        "evidence_mode": "qualitative-only",
+        "manifest_classification": "scan",
+        "rendered_page_sha256": {
+          "1": "97a8db73c3e64ac6f31c0b310beac1a3d3847abc6ce07582f2bdbd982560e30f",
+          "2": "5c525ecc65fec7a24f6ffa416f03014f415122183a9dfde13672919fff9131ad"
+        },
+        "requested_render_dpi": 200,
+        "sampled_page_classification": {
+          "1": "scan",
+          "2": "scan"
+        },
+        "sampled_page_render_dpi": {
+          "1": 45,
+          "2": 45
+        },
+        "sampled_pages": [
+          1,
+          2
+        ],
+        "source_id": "wikimedia-cuu-quoc-1945-09-05",
+        "source_sha256": "9f505171606d169f1bd991c9a9d0efb24e26c6716debdc77aabc540b04471aae",
+        "transcription": "none-trustworthy-available"
+      },
+      {
+        "classification": "scan",
+        "classification_evidence": {
+          "image_pages": 8,
+          "pages": 8,
+          "text_pages": 0
+        },
+        "classification_mismatch": false,
+        "evidence_mode": "qualitative-only",
+        "manifest_classification": "scan",
+        "reading_order_review": {
+          "expected_anchors": 5,
+          "expected_sequence": [
+            "NHỜI ĐÀN BÀ",
+            "RAO HẸN",
+            "TẬP THƠ, PHÚ, CA, RAO",
+            "CÁO BẠCH",
+            "HIỆN BÁO HOÀN CẦU"
+          ],
+          "matching": "accent/punctuation folded; <=25% character edits",
+          "page_number": 4,
+          "review_status": "human-reviewed-short-anchors"
+        },
+        "rendered_page_sha256": {
+          "1": "52e2cafb2274d3e82444d94e9a749986347dbbb06ddf84e9642e72650f11d8b8",
+          "4": "c54b6777ba9b6e89416eb0ec093d8ee30729f2ea51cccb4980120db966c13f38",
+          "8": "c286d1f8716b319d747eb8a581eeb921600bb801bc633ee1073fea4e8e03a16f"
+        },
+        "requested_render_dpi": 200,
+        "sampled_page_classification": {
+          "1": "scan",
+          "4": "scan",
+          "8": "scan"
+        },
+        "sampled_page_render_dpi": {
+          "1": 200,
+          "4": 200,
+          "8": 200
+        },
+        "sampled_pages": [
+          1,
+          4,
+          8
+        ],
+        "source_id": "wikimedia-dai-nam-1907-804",
+        "source_sha256": "be44b06753266107bf8049d3d5c39c0805f1b712114a8e448b64a3d3f6154757",
+        "transcription": "none-trustworthy-available"
+      }
+    ],
+    "manifest_sha256": "81236508294eb70b3e149a68cc06f80ea329f61fcab3089750630f4e2a4c388a",
+    "official_sample": {
+      "classification": "scan",
+      "classification_evidence": {
+        "image_pages": 839,
+        "pages": 839,
+        "text_pages": 0
+      },
+      "classification_mismatch": true,
+      "manifest_classification": "mixed",
+      "rendered_page_sha256": {
+        "1": "c084830fd3af9e1e4c524d0c026a356ac94abedb5439fc13279aa1e33c545c44",
+        "420": "7924a73c3cd6e3fb832a7130914ef6c03cdf1955b9525ef99befa250eaeeefe4",
+        "839": "a280e77614819a01791f6d2bee8ccf5c0b62426f364799d9f045f194b03a9094"
+      },
+      "requested_render_dpi": 200,
+      "sampled_page_classification": {
+        "1": "scan",
+        "420": "scan",
+        "839": "scan"
+      },
+      "sampled_page_render_dpi": {
+        "1": 200,
+        "420": 200,
+        "839": 200
+      },
+      "sampled_pages": [
+        1,
+        420,
+        839
+      ],
+      "source_id": "official-89-2026-tt-btc",
+      "source_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc"
+    },
+    "quantitative_pages": 12,
+    "reading_order_cases": [
+      {
+        "classification": "synthetic-scan",
+        "expected_anchors": 6,
+        "expected_sequence": [
+          "L1",
+          "L2",
+          "L3",
+          "R1",
+          "R2",
+          "R3"
+        ],
+        "font_sha256": "ae7b7855e115a5966d8b1b3f80f254ccc117ec86f9965e202ee2940453837280",
+        "generator": "Pillow fixed canvas, coordinates, font, and PNG settings",
+        "ground_truth": "deterministic-source",
+        "image_sha256": "b9832fb43fd1eebd4c28b06b51cd28bc3d55df7bebe0f3bfac50540d578496f9",
+        "layout": "two-column-column-major",
+        "page_number": 1,
+        "review_status": "reviewed-fixture-contract",
+        "source_id": "reviewed-multicolumn-v1"
+      },
+      {
+        "classification": "scan",
+        "expected_anchors": 5,
+        "expected_sequence": [
+          "NHỜI ĐÀN BÀ",
+          "RAO HẸN",
+          "TẬP THƠ, PHÚ, CA, RAO",
+          "CÁO BẠCH",
+          "HIỆN BÁO HOÀN CẦU"
+        ],
+        "ground_truth": "human-reviewed-short-anchors",
+        "matching": "accent/punctuation folded; <=25% character edits",
+        "page_number": 4,
+        "review_status": "human-reviewed-short-anchors",
+        "source_id": "wikimedia-dai-nam-1907-804"
+      }
+    ],
+    "representativeness": {
+      "bounded_sample": true,
+      "confidence_interval_claimed": false,
+      "documents_per_source": 1,
+      "population_estimate": false
+    },
+    "strata": {
+      "real-scan": 9,
+      "synthetic-scan": 3
+    }
+  },
+  "gate": {
+    "baseline_cer": 0.11870788743559255,
+    "decision": "STOP",
+    "paddle_cer": 0.4335447218919276,
+    "passed": false,
+    "reasons": [
+      "relative real-scan CER improvement below 20%",
+      "real-scan: CER regression exceeds 0.05",
+      "synthetic-scan: CER regression exceeds 0.05",
+      "2 resource-limit violation(s)"
+    ],
+    "relative_improvement": -2.652198107957707,
+    "threshold": 0.2
+  },
+  "generated_at_utc": "2026-08-07T16:01:26Z",
+  "run": {
+    "commit": "bc7194a56dcca952633ab145edb18d211d2835a5",
+    "host": {
+      "architecture": "x86_64",
+      "logical_cpus": 8,
+      "max_rss_bytes": 4294967296,
+      "memory_bytes": 50538512384,
+      "platform": "Linux-6.12.94+-x86_64-with-glibc2.39"
+    },
+    "versions": {
+      "cargo": "cargo 1.88.0 (873a06493 2025-05-10)",
+      "paddleocr": "3.7.0",
+      "paddlepaddle": "3.2.2",
+      "paddlex": "3.7.2",
+      "pypdfium2": "5.12.1",
+      "python": "3.12.3",
+      "tesseract": "tesseract 5.3.4"
+    }
+  },
+  "schema_version": 1
+}
