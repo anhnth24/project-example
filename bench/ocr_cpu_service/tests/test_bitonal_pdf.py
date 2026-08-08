@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+import experiments.bitonal_pdf as bitonal_pdf  # noqa: E402
 from benchmark.candidates import CommandCandidateSpec
 from experiments.bitonal_pdf import (  # noqa: E402
     CALIBRATION_RUN_ROOT,
@@ -20,18 +21,15 @@ from experiments.bitonal_pdf import (  # noqa: E402
     EXPECTED_CANDIDATE_IDS,
     _DIAGNOSTIC_FIELDS,
     _PLAN_LIMITS,
-    _parser,
     aggregate_calibration_records,
     allocate_calibration_work_dir,
     build_calibration_candidates,
-    derive_calibration_gate,
     load_calibration_config,
     load_canonical_official_source,
     page_diagnostics,
     recognize_calibration_page,
     reference_disagreement_counts,
     release_calibration_work_dir,
-    render_calibration_report,
     render_calibration_pages,
     strip_for_disagreement,
     validate_calibration_artifact,
@@ -912,7 +910,7 @@ def test_gate_selects_the_only_improving_candidate_from_values() -> None:
         payload, improving_id, {page: 1 for page in range(1, 21)}
     )
 
-    gate = derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload)
 
     assert gate["winner_id"] == improving_id
     assert gate["tied_ids"] == []
@@ -932,7 +930,7 @@ def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page() -
         payload, eligible_id, {page: 1 for page in range(1, 21)}
     )
 
-    gate = derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload)
 
     assert gate["candidates"][regressing_id]["eligible"] is False
     assert (
@@ -950,7 +948,7 @@ def test_gate_reports_value_tie_without_candidate_id_tiebreak() -> None:
             payload, candidate_id, {page: 1 for page in range(1, 21)}
         )
 
-    gate = derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload)
 
     assert gate["winner_id"] is None
     assert gate["tied_ids"] == list(tied_ids)
@@ -964,10 +962,10 @@ def test_report_command_and_markdown_are_deterministic_and_text_free(
     _set_reference_character_edits(
         payload, improving_id, {page: 1 for page in range(1, 21)}
     )
-    first = render_calibration_report(payload)
-    second = render_calibration_report(copy.deepcopy(payload))
+    first = bitonal_pdf.render_calibration_report(payload)
+    second = bitonal_pdf.render_calibration_report(copy.deepcopy(payload))
 
-    args = _parser().parse_args(
+    args = bitonal_pdf._parser().parse_args(
         [
             "report",
             "--input",
