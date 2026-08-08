@@ -15,7 +15,6 @@ import statistics
 import subprocess
 import tempfile
 import time
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -611,23 +610,12 @@ def _suspicious_character_count(text: str) -> int:
     return len(_SUSPICIOUS_CHARACTER_RE.findall(text))
 
 
-def _accent_proxy_counts(
-    text: str, proxies: list[dict[str, Any]], *, note_text: str
-) -> dict[str, int]:
+def _accent_proxy_counts(text: str, proxies: list[dict[str, Any]]) -> dict[str, int]:
     lowered = text.casefold()
-    note_lowered = "".join(
-        character
-        for character in unicodedata.normalize("NFD", note_text.casefold())
-        if not unicodedata.combining(character)
-    ).replace("đ", "d")
     counts: dict[str, int] = {}
     for proxy in proxies:
         proxy_id = proxy["id"]
         tokens = proxy["tokens"]
-        if not any(token.casefold() in note_lowered for token in tokens):
-            raise ValueError(
-                f"accent proxy {proxy_id} is missing from the supplied note"
-            )
         counts[proxy_id] = sum(lowered.count(token.casefold()) for token in tokens)
     return counts
 
@@ -637,7 +625,6 @@ def page_diagnostics(
     *,
     page_number: int,
     config: dict[str, Any],
-    note_text: str,
 ) -> dict[str, Any]:
     digit_count, digit_checksum = _digit_sequence_metrics(text)
     diagnostics: dict[str, Any] = {
@@ -653,7 +640,6 @@ def page_diagnostics(
         diagnostics["accent_proxy_counts"] = _accent_proxy_counts(
             text,
             page_config.get("accent_proxies", []),
-            note_text=note_text,
         )
     if page_number == 450:
         diagnostics["legal_identifier_count"] = _legal_identifier_count(
@@ -1726,7 +1712,6 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
         args.reference.resolve(),
         approved_calibration_pages(config),
     )
-    note_text = args.note.read_text(encoding="utf-8")
     fileconv = args.fileconv.resolve()
     system_tessdata = args.system_tessdata.resolve()
     best_tessdata = args.best_tessdata.resolve()
@@ -1798,7 +1783,6 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
                             text,
                             page_number=page_number,
                             config=config,
-                            note_text=note_text,
                         )
                     del text
                 else:
@@ -1848,7 +1832,6 @@ def _parser() -> argparse.ArgumentParser:
     calibrate = subparsers.add_parser("calibrate")
     calibrate.add_argument("--pdf", type=Path, required=True)
     calibrate.add_argument("--reference", type=Path, required=True)
-    calibrate.add_argument("--note", type=Path, required=True)
     calibrate.add_argument("--fileconv", type=Path, required=True)
     calibrate.add_argument("--pdfium-lib", type=Path, required=True)
     calibrate.add_argument("--system-tessdata", type=Path, required=True)
