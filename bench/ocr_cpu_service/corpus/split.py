@@ -34,11 +34,11 @@ _FIELDS = (
     "provenance",
 )
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_HOLDOUT_FAMILIES = frozenset(
+_HOLDOUT_SOURCE_IDS = frozenset(
     {
-        "Cung oan ngam khuc 1905.pdf",
-        "Kinh Thanh Cuu Uoc Va Tan Uoc 1925.pdf",
-        "Tan Da tung van.pdf",
+        "cung-oan-ngam-khuc-1905-pdf",
+        "kinh-thanh-cuu-uoc-va-tan-uoc-1925-pdf",
+        "tan-da-tung-van-pdf",
     }
 )
 
@@ -68,9 +68,9 @@ class AccuracyAnnotation:
     provenance: str
 
 
-def deterministic_split(source_family: str) -> str:
+def deterministic_split(source_id: str) -> str:
     """Assign the three frozen validated families to holdout, all others to tuning."""
-    return "holdout" if source_family in _HOLDOUT_FAMILIES else "tuning"
+    return "holdout" if source_id in _HOLDOUT_SOURCE_IDS else "tuning"
 
 
 def _required_text(row: dict[str, Any], field: str, line: int) -> str:
@@ -130,7 +130,7 @@ def _annotation(row: Any, line: int) -> AccuracyAnnotation:
     )
     if annotation.review_status != "human-verified":
         raise ValueError(f"line {line}: review_status must be human-verified")
-    if annotation.split != deterministic_split(annotation.source_family):
+    if annotation.split != deterministic_split(annotation.source_id):
         raise ValueError(f"line {line}: split disagrees with frozen source-family split")
     if annotation.provenance == "wikisource":
         if annotation.proofread_status not in {"Proofread", "Validated"}:

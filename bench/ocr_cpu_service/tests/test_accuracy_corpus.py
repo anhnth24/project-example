@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 from corpus.split import (  # noqa: E402
     annotation_digest,
+    deterministic_split,
     load_accuracy_annotations,
     no_source_overlap,
     validate_accuracy_corpus,
@@ -58,6 +59,11 @@ def test_source_document_never_crosses_tuning_and_holdout() -> None:
     rows = load_accuracy_annotations(ANNOTATIONS)
 
     assert no_source_overlap(rows)
+
+
+def test_split_assignment_is_deterministic_by_source_id() -> None:
+    assert deterministic_split("cung-oan-ngam-khuc-1905-pdf") == "holdout"
+    assert deterministic_split("modern-government-document") == "tuning"
 
 
 def test_real_pages_have_human_reference_license_and_checksums() -> None:
