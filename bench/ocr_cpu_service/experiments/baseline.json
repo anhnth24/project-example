@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "split": "tuning",
+  "expected_pages": 44,
+  "repetitions": 2,
+  "limits": {
+    "cpu_threads": 1,
+    "timeout_seconds_per_page": 180,
+    "max_output_bytes_per_stream": 1048576,
+    "max_rss_bytes": 4294967296,
+    "diagnostic_pages_per_candidate": 8
+  },
+  "candidates": [
+    {
+      "id": "markhand-default",
+      "label": "Markhand default",
+      "argv": [
+        "{fileconv}",
+        "one",
+        "{input}",
+        "--lang",
+        "vie+eng"
+      ],
+      "environment": {
+        "FILECONV_TESSDATA": "{system_tessdata}"
+      }
+    },
+    {
+      "id": "markhand-tessdata-best",
+      "label": "Markhand tessdata_best",
+      "argv": [
+        "{fileconv}",
+        "one",
+        "{input}",
+        "--lang",
+        "vie+eng"
+      ],
+      "environment": {
+        "FILECONV_TESSDATA": "{best_tessdata}"
+      }
+    }
+  ],
+  "determinism": {
+    "ocr_counts_tolerance": 0,
+    "provenance_must_match": true,
+    "timing_is_non_deterministic": true
+  }
+}
