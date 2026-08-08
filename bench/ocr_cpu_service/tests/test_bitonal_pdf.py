@@ -100,9 +100,9 @@ def _record(
                 "suspicious_character_count": 0,
                 "accent_proxy_counts": (
                     {
-                        "latin-o-for-o-with-hook": 0,
-                        "latin-u-for-u-with-hook": 0,
-                        "latin-a-for-a-with-breve": 0,
+                        "latin-o-for-o-with-hook": 2,
+                        "latin-u-for-u-with-hook": 2,
+                        "latin-a-for-a-with-breve": 2,
                     }
                     if page_number == 60
                     else {}
@@ -231,6 +231,26 @@ def _set_reference_character_edits(
             if record["candidate_id"] == candidate_id
         ]
     )
+
+
+def _set_page_60_accent_proxies(
+    payload: dict[str, object],
+    candidate_id: str,
+    *,
+    latin_o: int,
+    latin_u: int,
+    latin_a: int,
+) -> None:
+    record = next(
+        record
+        for record in payload["records"]
+        if record["candidate_id"] == candidate_id and record["page_number"] == 60
+    )
+    record["diagnostics"]["accent_proxy_counts"] = {
+        "latin-o-for-o-with-hook": latin_o,
+        "latin-u-for-u-with-hook": latin_u,
+        "latin-a-for-a-with-breve": latin_a,
+    }
 
 
 def test_calibration_config_loads_four_exact_candidates() -> None:
@@ -901,11 +921,14 @@ def test_recognize_calibration_page_worker_startup_failure_returns_bounded_recor
     }
 
 
-def test_gate_selects_the_only_improving_candidate_from_values() -> None:
+def test_gate_accepts_all_accent_proxies_nonincreasing_with_one_strictly_lower() -> None:
     payload = valid_artifact()
     improving_id = EXPECTED_CANDIDATE_IDS[1]
     _set_reference_character_edits(
         payload, improving_id, {page: 1 for page in range(1, 21)}
+    )
+    _set_page_60_accent_proxies(
+        payload, improving_id, latin_o=1, latin_u=2, latin_a=2
     )
 
     gate = bitonal_pdf.derive_calibration_gate(payload)
@@ -913,6 +936,47 @@ def test_gate_selects_the_only_improving_candidate_from_values() -> None:
     assert gate["winner_id"] == improving_id
     assert gate["tied_ids"] == []
     assert gate["candidates"][improving_id]["eligible"] is True
+
+
+def test_gate_rejects_all_accent_proxies_equal_to_baseline() -> None:
+    payload = valid_artifact()
+    candidate_id = EXPECTED_CANDIDATE_IDS[1]
+    _set_reference_character_edits(
+        payload, candidate_id, {page: 1 for page in range(1, 21)}
+    )
+
+    gate = bitonal_pdf.derive_calibration_gate(payload)
+
+    assert gate["winner_id"] is None
+    assert gate["candidates"][candidate_id]["eligible"] is False
+    assert (
+        "page_60_accent_proxy_no_strict_improvement"
+        in gate["candidates"][candidate_id]["disqualifications"]
+    )
+
+
+def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease() -> None:
+    payload = valid_artifact()
+    candidate_id = EXPECTED_CANDIDATE_IDS[1]
+    _set_reference_character_edits(
+        payload, candidate_id, {page: 1 for page in range(1, 21)}
+    )
+    _set_page_60_accent_proxies(
+        payload, candidate_id, latin_o=1, latin_u=3, latin_a=2
+    )
+
+    gate = bitonal_pdf.derive_calibration_gate(payload)
+
+    assert gate["winner_id"] is None
+    assert gate["candidates"][candidate_id]["eligible"] is False
+    assert (
+        "page_60_accent_proxy_regression"
+        in gate["candidates"][candidate_id]["disqualifications"]
+    )
+    assert (
+        "page_60_accent_proxy_no_strict_improvement"
+        not in gate["candidates"][candidate_id]["disqualifications"]
+    )
 
 
 def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page() -> None:
@@ -926,6 +990,12 @@ def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page() -
     )
     _set_reference_character_edits(
         payload, eligible_id, {page: 1 for page in range(1, 21)}
+    )
+    _set_page_60_accent_proxies(
+        payload, regressing_id, latin_o=1, latin_u=2, latin_a=2
+    )
+    _set_page_60_accent_proxies(
+        payload, eligible_id, latin_o=1, latin_u=2, latin_a=2
     )
 
     gate = bitonal_pdf.derive_calibration_gate(payload)
@@ -945,6 +1015,9 @@ def test_gate_reports_value_tie_without_candidate_id_tiebreak() -> None:
         _set_reference_character_edits(
             payload, candidate_id, {page: 1 for page in range(1, 21)}
         )
+        _set_page_60_accent_proxies(
+            payload, candidate_id, latin_o=1, latin_u=2, latin_a=2
+        )
 
     gate = bitonal_pdf.derive_calibration_gate(payload)
 
@@ -959,6 +1032,9 @@ def test_report_command_and_markdown_are_deterministic_and_text_free(
     improving_id = EXPECTED_CANDIDATE_IDS[1]
     _set_reference_character_edits(
         payload, improving_id, {page: 1 for page in range(1, 21)}
+    )
+    _set_page_60_accent_proxies(
+        payload, improving_id, latin_o=1, latin_u=2, latin_a=2
     )
     first = bitonal_pdf.render_calibration_report(payload)
     second = bitonal_pdf.render_calibration_report(copy.deepcopy(payload))
