@@ -19,6 +19,7 @@ from experiments.preprocess import (  # noqa: E402
     MAX_DESKEW_DEGREES,
     MAX_DIMENSION,
     MAX_PIXELS,
+    _build_specs,
     _rotate_expand_white,
     aggregate_matrix_records,
     canonical_config_checksum,
@@ -339,6 +340,33 @@ def test_shim_preserves_direct_argv_and_records_preprocessed_transform_checksum(
     assert event["input_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
     assert event["transform_sha256"] == event["input_sha256"]
     assert list((tmp_path / "work").iterdir()) == []
+
+
+def test_matrix_candidate_environment_runs_shim_with_pinned_python(
+    tmp_path: Path,
+) -> None:
+    real = tmp_path / "fake-tesseract"
+    _write_fake_tesseract(real)
+    specs, _, _ = _build_specs(
+        load_experiment_configs(CONFIGS),
+        fileconv=tmp_path / "fileconv",
+        shim=PREPROCESS,
+        real_tesseract=real,
+        system_tessdata=tmp_path / "tessdata",
+        work_dir=tmp_path / "work",
+    )
+
+    result = subprocess.run(
+        [str(PREPROCESS), "--version"],
+        env=specs[0].environment,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert Path(sys.executable).parent == Path(
+        specs[0].environment["PATH"].split(os.pathsep)[0]
+    )
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])
