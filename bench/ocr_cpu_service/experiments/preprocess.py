@@ -1255,9 +1255,10 @@ def _build_specs(
     base = sanitized_candidate_environment(
         cpu_threads=configs["limits"]["cpu_threads"]
     )
-    base["PATH"] = os.pathsep.join(
-        (str(Path(sys.executable).parent), base["PATH"])
-    )
+    shim_base = {
+        **base,
+        "PATH": os.pathsep.join((str(Path(sys.executable).parent), base["PATH"])),
+    }
     specs: list[CommandCandidateSpec] = []
     public: list[dict[str, Any]] = []
     events_paths: list[Path | None] = []
@@ -1268,7 +1269,10 @@ def _build_specs(
             if is_rust_control
             else work_dir / "events" / f"{config['id']}.jsonl"
         )
-        environment = {**base, "FILECONV_TESSDATA": str(best_tessdata)}
+        environment = {
+            **(base if is_rust_control else shim_base),
+            "FILECONV_TESSDATA": str(best_tessdata),
+        }
         if not is_rust_control:
             environment.update(
                 {
