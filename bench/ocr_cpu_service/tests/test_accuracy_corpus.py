@@ -243,6 +243,7 @@ def test_loader_rejects_duplicate_page_and_missing_required_value(
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
+        ("difficulty_strata", [], "difficulty"),
         ("difficulty_strata", ["invented-stratum"], "difficulty"),
         ("license", "Public domain-ish", "license"),
         ("dataset_license", "CC-BY-SA-4.0", "license"),

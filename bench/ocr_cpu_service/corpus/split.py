@@ -159,7 +159,10 @@ def _annotation(row: Any, line: int) -> AccuracyAnnotation:
     )
     if annotation.review_status != "human-verified":
         raise ValueError(f"line {line}: review_status must be human-verified")
-    if not set(annotation.difficulty_strata) <= _DIFFICULTY_STRATA:
+    if (
+        not annotation.difficulty_strata
+        or not set(annotation.difficulty_strata) <= _DIFFICULTY_STRATA
+    ):
         raise ValueError(f"line {line}: difficulty_strata contains an unknown value")
     if annotation.split != deterministic_split(annotation.source_family):
         raise ValueError(f"line {line}: split disagrees with frozen source-family split")
