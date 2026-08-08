@@ -1104,7 +1104,7 @@ def _build_specs(
         cpu_threads=configs["limits"]["cpu_threads"]
     )
     base["PATH"] = os.pathsep.join(
-        (str(Path(sys.executable).resolve().parent), base["PATH"])
+        (str(Path(sys.executable).parent), base["PATH"])
     )
     specs: list[CommandCandidateSpec] = []
     public: list[dict[str, Any]] = []
