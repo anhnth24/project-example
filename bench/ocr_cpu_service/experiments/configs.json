@@ -97,6 +97,17 @@
       "configuration_sha256": "6d0511aed46367ec9b5dfbf2a35d7e20e24cf78eedb5ea3ba16cfe3c4cd2e09c"
     },
     {
+      "id": "psm-3",
+      "label": "Force Tesseract PSM 3",
+      "changed_factor": "psm",
+      "factor": {
+        "psm": {
+          "value": 3
+        }
+      },
+      "configuration_sha256": "ed4c72662fd089ef3efc8515bb10f95904d2d6ab8efe5967d3450e6106648093"
+    },
+    {
       "id": "psm-4",
       "label": "Force Tesseract PSM 4",
       "changed_factor": "psm",
