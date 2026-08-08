@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+import experiments.preprocess as preprocess_module  # noqa: E402
 from experiments.preprocess import (  # noqa: E402
     MAX_DESKEW_DEGREES,
     MAX_DIMENSION,
@@ -185,6 +186,7 @@ def _artifact() -> dict[str, object]:
             "python_binary_sha256": "e" * 64,
             "tesseract_binary_sha256": "d" * 64,
             "baseline_config_sha256": "6" * 64,
+            "baseline_artifact_sha256": "0" * 64,
             "host_sha256": "7" * 64,
             "toolchain_sha256": "8" * 64,
             "tessdata_sha256": {
@@ -259,6 +261,57 @@ def test_config_loader_fails_closed_on_missing_duplicate_multifactor_or_drift(
 
     with pytest.raises(ValueError, match=message):
         load_experiment_configs(path)
+
+
+@pytest.mark.parametrize("config_id", EXPECTED_IDS)
+def test_config_loader_rejects_rechecksummed_unsupported_semantics(
+    tmp_path: Path, config_id: str
+) -> None:
+    value = json.loads(CONFIGS.read_text())
+    item = next(config for config in value["configs"] if config["id"] == config_id)
+    if config_id == "control":
+        item["changed_factor"] = "execution_adapter"
+        item["factor"] = {"execution_adapter": {"mode": "unsupported-control-shim"}}
+    else:
+        settings = next(iter(item["factor"].values()))
+        settings["unsupported_semantics"] = True
+    item["configuration_sha256"] = canonical_config_checksum(item)
+    path = tmp_path / "configs.json"
+    path.write_text(json.dumps(value))
+
+    with pytest.raises(ValueError, match="semantic allowlist"):
+        load_experiment_configs(path)
+
+
+def test_migration_binds_exact_valid_baseline_bytes_without_changing_measurements(
+    tmp_path: Path,
+) -> None:
+    assert hasattr(preprocess_module, "matrix_measurement_sha256")
+    assert hasattr(preprocess_module, "migrate_baseline_provenance")
+    matrix_measurement_sha256 = preprocess_module.matrix_measurement_sha256
+    migrate_baseline_provenance = preprocess_module.migrate_baseline_provenance
+    artifact = _artifact()
+    artifact["provenance"].pop("baseline_artifact_sha256")
+    before = matrix_measurement_sha256(artifact)
+    baseline = SERVICE_ROOT / ".data" / "accuracy-baseline" / "repetition-1.json"
+
+    migrated = migrate_baseline_provenance(
+        artifact,
+        baseline_path=baseline,
+        configs=load_experiment_configs(CONFIGS),
+    )
+
+    assert migrated["provenance"]["baseline_artifact_sha256"] == hashlib.sha256(
+        baseline.read_bytes()
+    ).hexdigest()
+    assert matrix_measurement_sha256(migrated) == before
+
+    with pytest.raises(ValueError, match="baseline raw artifact"):
+        migrate_baseline_provenance(
+            artifact,
+            baseline_path=tmp_path / "missing.json",
+            configs=load_experiment_configs(CONFIGS),
+        )
 
 
 @pytest.mark.parametrize(
@@ -676,6 +729,14 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
     assert "DPI hint" in report
     assert "not a 300/400 PDF rerender comparison" in report
     assert "No holdout result" in report
+    decision = report.split("## Decision", 1)[1].split(
+        "## Ranked overall tuning measurements", 1
+    )[0]
+    assert "No candidate improved overall CER" in decision
+    assert "grayscale-normalization" in decision
+    assert "tied" in decision and "latency" in decision
+    assert "No policy was selected or frozen" in decision
+    assert "Holdout was not run" in decision
     assert "Transfer gap: **" in report
     assert "actual Rust control" in report
     assert "not directly production-equivalent" in report
@@ -694,5 +755,6 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
         assert "Failures" in section
     assert "Tesseract binary SHA-256" in report
     assert artifact["provenance"]["tesseract_binary_sha256"] in report
+    assert artifact["provenance"]["baseline_artifact_sha256"] in report
     assert "recognized_text" not in report
     assert "reference text" not in report.lower()
