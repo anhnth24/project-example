@@ -92,6 +92,7 @@ _BINDINGS_FIELDS = frozenset(
 _PROVENANCE_FIELDS = frozenset(
     {
         "source_sha256",
+        "reference_sha256",
         "config_sha256",
         "binary_sha256",
         "tessdata_sha256",
@@ -717,6 +718,7 @@ def _toolchain_description() -> dict[str, Any]:
 def build_calibration_provenance(
     *,
     source_sha256: str,
+    reference_sha256: str,
     config_path: Path,
     fileconv: Path,
     system_tessdata: Path,
@@ -727,6 +729,7 @@ def build_calibration_provenance(
 ) -> dict[str, Any]:
     return {
         "source_sha256": source_sha256,
+        "reference_sha256": reference_sha256,
         "config_sha256": _sha256(config_path),
         "binary_sha256": _sha256(fileconv),
         "tessdata_sha256": {
@@ -1120,6 +1123,10 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
         provenance["source_sha256"], path="artifact.provenance.source_sha256"
     )
     _require_sha256_string(
+        provenance["reference_sha256"],
+        path="artifact.provenance.reference_sha256",
+    )
+    _require_sha256_string(
         provenance["config_sha256"], path="artifact.provenance.config_sha256"
     )
     _require_sha256_string(
@@ -1254,6 +1261,15 @@ def validate_calibration_artifact(payload: dict[str, Any]) -> None:
         raise ValueError("all candidates for a page must share one render hash")
 
 
+def _validate_private_reference_binding(
+    payload: dict[str, Any], *, reference: Path
+) -> None:
+    if not reference.is_file():
+        raise ValueError("current private reference file is required")
+    if payload["provenance"]["reference_sha256"] != _sha256(reference):
+        raise ValueError("private reference checksum mismatch")
+
+
 def _candidate_configuration_sha256(candidate: dict[str, Any]) -> str:
     return _canonical_sha256(
         {
@@ -1302,9 +1318,12 @@ def _append_once(items: list[str], value: str) -> None:
         items.append(value)
 
 
-def derive_calibration_gate(payload: dict[str, Any]) -> dict[str, Any]:
+def derive_calibration_gate(
+    payload: dict[str, Any], *, reference: Path
+) -> dict[str, Any]:
     """Derive the calibration decision only from validated additive measurements."""
     validate_calibration_artifact(payload)
+    _validate_private_reference_binding(payload, reference=reference)
     baseline = _current_baseline(payload)
     baseline_id = baseline["id"]
     records = _records_by_candidate(payload)
@@ -1509,9 +1528,11 @@ def _format_hash(value: str | None) -> str:
     return value if value is not None else "null"
 
 
-def render_calibration_report(payload: dict[str, Any]) -> str:
+def render_calibration_report(
+    payload: dict[str, Any], *, reference: Path
+) -> str:
     """Render deterministic aggregate evidence without recognized/reference text."""
-    gate = derive_calibration_gate(payload)
+    gate = derive_calibration_gate(payload, reference=reference)
     records = _records_by_candidate(payload)
     candidate_by_id = {
         candidate["id"]: candidate for candidate in payload["candidates"]
@@ -1526,6 +1547,8 @@ def render_calibration_report(payload: dict[str, Any]) -> str:
         "## Provenance",
         "",
         f"- Source SHA-256: `{payload['provenance']['source_sha256']}`",
+        "- Private reference SHA-256: "
+        f"`{payload['provenance']['reference_sha256']}`",
         f"- Config SHA-256: `{payload['provenance']['config_sha256']}`",
         f"- Binary SHA-256: `{payload['provenance']['binary_sha256']}`",
         f"- PDFium SHA-256: `{payload['provenance']['pdfium_sha256']}`",
@@ -1716,8 +1739,9 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
         expected_sha256=config["source"]["expected_sha256"],
         max_bytes=config["limits"]["max_source_bytes"],
     )
+    reference_path = args.reference.resolve()
     reference_pages = load_private_reference_pages(
-        args.reference.resolve(),
+        reference_path,
         approved_calibration_pages(config),
     )
     fileconv = args.fileconv.resolve()
@@ -1728,6 +1752,7 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
     toolchain = _toolchain_description()
     provenance = build_calibration_provenance(
         source_sha256=official.sha256,
+        reference_sha256=_sha256(reference_path),
         config_path=DEFAULT_CONFIG,
         fileconv=fileconv,
         system_tessdata=system_tessdata,
@@ -1831,6 +1856,7 @@ def run_calibration(args: argparse.Namespace) -> dict[str, Any]:
         "records": records,
     }
     validate_calibration_artifact(artifact)
+    _validate_private_reference_binding(artifact, reference=reference_path)
     return artifact
 
 
@@ -1849,6 +1875,7 @@ def _parser() -> argparse.ArgumentParser:
     calibrate.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     report = subparsers.add_parser("report")
     report.add_argument("--input", type=Path, required=True)
+    report.add_argument("--reference", type=Path, required=True)
     report.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -1867,7 +1894,9 @@ def main() -> None:
             artifact = json.loads(args.input.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f"{args.input}: invalid calibration artifact: {error}") from error
-        report = render_calibration_report(artifact)
+        report = render_calibration_report(
+            artifact, reference=args.reference.resolve()
+        )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(report, encoding="utf-8")
 
