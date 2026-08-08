@@ -87,6 +87,7 @@ _CHECKSUM_FIELDS = (
     "configs_sha256",
     "binary_sha256",
     "shim_sha256",
+    "tesseract_binary_sha256",
     "baseline_config_sha256",
     "host_sha256",
     "toolchain_sha256",
@@ -561,7 +562,7 @@ def aggregate_matrix_records(records: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _event_summary(events_path: Path) -> tuple[str, int, float]:
+def _event_summary(events_path: Path) -> tuple[list[str], list[str], str, int, float]:
     if not events_path.exists():
         raise ValueError("shim emitted no transform event")
     events = [
@@ -571,11 +572,11 @@ def _event_summary(events_path: Path) -> tuple[str, int, float]:
     ]
     if not events:
         raise ValueError("shim emitted no transform event")
-    checksum = hashlib.sha256(
-        _canonical_json([event["transform_sha256"] for event in events])
-    ).hexdigest()
+    input_sha256s = [event["input_sha256"] for event in events]
+    transform_sha256s = [event["transform_sha256"] for event in events]
+    checksum = hashlib.sha256(_canonical_json(transform_sha256s)).hexdigest()
     angle = max(abs(float(event["deskew_degrees"])) for event in events)
-    return checksum, len(events), angle
+    return input_sha256s, transform_sha256s, checksum, len(events), angle
 
 
 def _run_matrix_candidate(
@@ -622,7 +623,13 @@ def _run_matrix_candidate(
             try:
                 measurement = worker.recognize(benchmark_page)
                 counts = error_counts(page["transcription"], measurement.text)
-                transform_sha256, attempts, angle = _event_summary(events_path)
+                (
+                    input_sha256s,
+                    transform_sha256s,
+                    transform_sha256,
+                    attempts,
+                    angle,
+                ) = _event_summary(events_path)
                 peak_rss = int(measurement.resource["peak_rss_bytes"])
                 record.update(
                     success=True,
@@ -635,6 +642,8 @@ def _run_matrix_candidate(
                     peak_rss_bytes=peak_rss,
                     rss_sample_count=int(measurement.resource["sample_count"]),
                     resource_limit_violation=peak_rss > max_rss_bytes,
+                    input_sha256s=input_sha256s,
+                    transform_sha256s=transform_sha256s,
                     transform_sha256=transform_sha256,
                     transform_attempts=attempts,
                     max_abs_deskew_degrees=angle,
@@ -788,9 +797,27 @@ def validate_matrix_artifact(
             if record.get("split") != "tuning":
                 raise ValueError("holdout matrix record is forbidden")
             if record["success"]:
+                input_sha256s = record.get("input_sha256s")
+                transform_sha256s = record.get("transform_sha256s")
+                if (
+                    not isinstance(input_sha256s, list)
+                    or not input_sha256s
+                    or not all(_valid_checksum(value) for value in input_sha256s)
+                ):
+                    raise ValueError("input checksum list is invalid")
+                if (
+                    not isinstance(transform_sha256s, list)
+                    or not transform_sha256s
+                    or not all(_valid_checksum(value) for value in transform_sha256s)
+                ):
+                    raise ValueError("transform checksum list is invalid")
                 if not _valid_checksum(record.get("transform_sha256")):
                     raise ValueError("transform checksum is invalid")
-                if int(record.get("transform_attempts", 0)) <= 0:
+                if (
+                    int(record.get("transform_attempts", 0)) <= 0
+                    or len(input_sha256s) != record["transform_attempts"]
+                    or len(transform_sha256s) != record["transform_attempts"]
+                ):
                     raise ValueError("transform attempts are invalid")
             elif not record.get("error_kind"):
                 raise ValueError("failure diagnostics are invalid")
@@ -855,6 +882,13 @@ def _format_aggregate_row(config_id: str, aggregate: dict[str, Any]) -> str:
 
 
 def render_matrix_report(artifact: dict[str, Any]) -> str:
+    control = artifact["candidates"][0]
+    control_counts = control["aggregate"]["raw_counts"]
+    baseline = artifact["baseline_calibration"]
+    transfer_character_gap = (
+        control_counts["character_edits"] - baseline["expected_character_edits"]
+    )
+    transfer_word_gap = control_counts["word_edits"] - baseline["expected_word_edits"]
     ranked = sorted(
         artifact["candidates"],
         key=lambda candidate: (candidate["aggregate"]["cer"], candidate["id"]),
@@ -872,6 +906,10 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
         "grayscale, unsharp mask, normalization, column detection, retry scoring, "
         "and temporary-file lifecycle. Matrix transferability is accepted only "
         "because control counts calibrated exactly to both Task 2 best baselines.",
+        "",
+        f"Transfer gap: **{transfer_character_gap} character edits and "
+        f"{transfer_word_gap} word edits** versus the production `markhand-auto` "
+        "and explicit `tessdata-best` baseline.",
         "",
         "The `dpi-hint-400` factor changes only Tesseract's DPI hint. Source images "
         "prevent a true render-resolution experiment, so this is **not a 300/400 "
@@ -891,9 +929,10 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
         "## Ranked overall tuning measurements",
         "",
         "| Rank | Config | Changed factor | Character edits / chars | CER | "
-        "Word edits / words | WER | Median s/page | p95 s/page | Peak RSS MiB | "
+        "Word edits / words | WER | CER change vs control | Median s/page | "
+        "p95 s/page | Peak RSS MiB | "
         "Failures |",
-        "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for rank, candidate in enumerate(ranked, 1):
         aggregate = candidate["aggregate"]
@@ -904,6 +943,7 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             f"{raw['character_edits']} / {raw['reference_characters']} | "
             f"{aggregate['cer']:.6f} | {raw['word_edits']} / "
             f"{raw['reference_words']} | {aggregate['wer']:.6f} | "
+            f"{aggregate['cer'] - control['aggregate']['cer']:+.6f} | "
             f"{aggregate['latency_seconds']['median']:.6f} | "
             f"{aggregate['latency_seconds']['p95']:.6f} | "
             f"{aggregate['peak_rss_bytes'] / 1048576:.2f} | "
@@ -934,18 +974,20 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             "`historical-old-print` stratum are reported separately.",
             "",
             "| Config | Document type | Pages | Character edits / chars | CER | "
-            "Word edits / words | WER |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+            "Word edits / words | WER | CER change vs control |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for candidate in artifact["candidates"]:
         for kind, aggregate in candidate["document_types"].items():
             raw = aggregate["raw_counts"]
+            control_cer = control["document_types"][kind]["cer"]
             lines.append(
                 f"| `{candidate['id']}` | `{kind}` | {aggregate['pages']} | "
                 f"{raw['character_edits']} / {raw['reference_characters']} | "
                 f"{aggregate['cer']:.6f} | {raw['word_edits']} / "
-                f"{raw['reference_words']} | {aggregate['wer']:.6f} |"
+                f"{raw['reference_words']} | {aggregate['wer']:.6f} | "
+                f"{aggregate['cer'] - control_cer:+.6f} |"
             )
     lines.extend(
         [
@@ -953,18 +995,20 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             "## Overlapping difficulty strata",
             "",
             "| Config | Difficulty | Pages | Character edits / chars | CER | "
-            "Word edits / words | WER |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+            "Word edits / words | WER | CER change vs control |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for candidate in artifact["candidates"]:
         for stratum, aggregate in candidate["strata"].items():
             raw = aggregate["raw_counts"]
+            control_cer = control["strata"][stratum]["cer"]
             lines.append(
                 f"| `{candidate['id']}` | `{stratum}` | {aggregate['pages']} | "
                 f"{raw['character_edits']} / {raw['reference_characters']} | "
                 f"{aggregate['cer']:.6f} | {raw['word_edits']} / "
-                f"{raw['reference_words']} | {aggregate['wer']:.6f} |"
+                f"{raw['reference_words']} | {aggregate['wer']:.6f} | "
+                f"{aggregate['cer'] - control_cer:+.6f} |"
             )
     lines.extend(
         [
@@ -972,8 +1016,8 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             "## Raw additive counts and transform checksums",
             "",
             "| Config | Page ID | Character edits | Chars | Word edits | Words | "
-            "Transform SHA-256 | Attempts |",
-            "| --- | --- | ---: | ---: | ---: | ---: | --- | ---: |",
+            "Input SHA-256(s) | Transform SHA-256(s) | Attempts |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: |",
         ]
     )
     for candidate in artifact["candidates"]:
@@ -984,7 +1028,8 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
                 f"{record.get('reference_characters', 0)} | "
                 f"{record.get('word_edits', 0)} | "
                 f"{record.get('reference_words', 0)} | "
-                f"`{record.get('transform_sha256', '')}` | "
+                f"`{','.join(record.get('input_sha256s', []))}` | "
+                f"`{','.join(record.get('transform_sha256s', []))}` | "
                 f"{record.get('transform_attempts', 0)} |"
             )
     names = sorted(
@@ -1004,8 +1049,19 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             + ". Values are intentionally not serialized.",
             "",
             f"- Config file SHA-256: `{artifact['provenance']['configs_sha256']}`.",
+            f"- Source manifest SHA-256: `{artifact['provenance']['source_sha256']}`.",
+            f"- Tuning split SHA-256: `{artifact['provenance']['split_sha256']}`.",
             f"- Shim SHA-256: `{artifact['provenance']['shim_sha256']}`.",
             f"- Fileconv SHA-256: `{artifact['provenance']['binary_sha256']}`.",
+            "- Tesseract binary SHA-256: "
+            f"`{artifact['provenance']['tesseract_binary_sha256']}`.",
+            "- Baseline config SHA-256: "
+            f"`{artifact['provenance']['baseline_config_sha256']}`.",
+            f"- Host descriptor SHA-256: `{artifact['provenance']['host_sha256']}`.",
+            "- Toolchain descriptor SHA-256: "
+            f"`{artifact['provenance']['toolchain_sha256']}`.",
+            "- Tessdata SHA-256: "
+            f"`{json.dumps(artifact['provenance']['tessdata_sha256'], sort_keys=True, separators=(',', ':'))}`.",
             "- Maximum input/output dimensions: 10,000 px; maximum pixels: "
             "50,000,000; maximum absolute deskew: 3.0 degrees; deskew expands "
             "onto white padding and never crops.",
@@ -1117,6 +1173,7 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "configs_sha256": _sha256(configs_path),
         "binary_sha256": _sha256(fileconv),
         "shim_sha256": _sha256(shim),
+        "tesseract_binary_sha256": _sha256(real_tesseract),
         "baseline_config_sha256": _sha256(
             SERVICE_ROOT / "experiments" / "baseline.json"
         ),
