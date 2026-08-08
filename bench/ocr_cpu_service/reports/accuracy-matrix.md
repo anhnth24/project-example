@@ -20,7 +20,9 @@ Tracked rows contain additive edit counts and transform checksums, never documen
 
 ## Decision
 
-**No candidate improved overall CER.** `grayscale-normalization` only tied the Rust control at 0.122174 CER while its median latency was much worse (3.750047 versus 1.805239 seconds/page).
+**No candidate improved overall CER.**
+
+**Accuracy ties (not improvements):** `direct-tesseract-transfer-control` tied at 0.122174 CER with median latency 1.939205 versus 1.805239 seconds/page for Rust control; `grayscale-normalization` tied at 0.122174 CER with median latency 3.750047 versus 1.805239 seconds/page for Rust control.
 
 **No policy was selected or frozen. Holdout was not run.** These are tuning-only measurements; Task 4 may evaluate observable retry signals without changing this Task 3 decision.
 
