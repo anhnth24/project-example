@@ -136,13 +136,18 @@ def _artifact() -> dict[str, object]:
                     if config["id"] == "control"
                     else "direct-tesseract-experiment"
                 ),
-                "environment_variable_names": [
-                    "BENCH_OCR_EXPERIMENT_CONFIG_ID",
-                    "BENCH_OCR_EXPERIMENT_EVENTS",
-                    "BENCH_OCR_REAL_TESSERACT",
-                    "FILECONV_TESSERACT",
-                    "LANG",
-                ],
+                "environment_variable_names": (
+                    ["FILECONV_TESSDATA", "LANG"]
+                    if config["id"] == "control"
+                    else [
+                        "BENCH_OCR_EXPERIMENT_CONFIG_ID",
+                        "BENCH_OCR_EXPERIMENT_EVENTS",
+                        "BENCH_OCR_REAL_TESSERACT",
+                        "FILECONV_TESSERACT",
+                        "FILECONV_TESSDATA",
+                        "LANG",
+                    ]
+                ),
                 "records": records,
                 "aggregate": aggregate_matrix_records(records),
                 "strata": {},
@@ -588,25 +593,28 @@ def test_matrix_artifact_requires_calibrated_control_exact_pages_and_checksums()
 
 def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> None:
     artifact = _artifact()
-    artifact["candidates"][1]["records"][0]["character_edits"] = 1
-    artifact["candidates"][1]["aggregate"] = aggregate_matrix_records(
-        artifact["candidates"][1]["records"]
+    artifact["candidates"][2]["records"][0]["character_edits"] = 1
+    artifact["candidates"][2]["aggregate"] = aggregate_matrix_records(
+        artifact["candidates"][2]["records"]
     )
-    artifact["candidates"][1]["strata"]["low-contrast"] = aggregate_matrix_records(
-        artifact["candidates"][1]["records"]
+    artifact["candidates"][2]["strata"]["low-contrast"] = aggregate_matrix_records(
+        artifact["candidates"][2]["records"]
     )
     modern = [
         row
-        for row in artifact["candidates"][1]["records"]
+        for row in artifact["candidates"][2]["records"]
         if row["document_type"] == "modern-government"
     ]
-    artifact["candidates"][1]["document_types"]["modern-government"] = (
+    artifact["candidates"][2]["document_types"]["modern-government"] = (
         aggregate_matrix_records(modern)
     )
 
     report = render_matrix_report(artifact)
+    ranked = report.split("## Ranked overall tuning measurements", 1)[1].split(
+        "## Exact one-factor configurations", 1
+    )[0]
 
-    assert report.index("`dpi-hint-400`") < report.index("`control`")
+    assert ranked.index("`dpi-hint-400`") < ranked.index("`control`")
     assert "Current best baseline: **12.2174% CER**" in report
     assert "modern-government" in report
     assert "historical-old-print" in report
