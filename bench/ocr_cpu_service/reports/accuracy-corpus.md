@@ -10,7 +10,7 @@ is blocked until the holdout adds 9–14 modern pages whose labels have received
 independent human review.
 
 The freeze digest is
-`7f1e56be8799bfee6f7c60c90babc45d86bc706c41089c0ced3c9b15392fe309`.
+`34d4f393065d166e053572853cce2a95b9b352e02eacb078125b25d2e36cd5e1`.
 The ignored local image set contains 50 files totaling 32,757,918 bytes.
 
 ## Composition
@@ -22,7 +22,7 @@ The ignored local image set contains 50 files totaling 32,757,918 bytes.
 | total | 9 | 41 | 50 | 30 |
 
 The 35 historical tuning pages are Proofread pages balanced over 18 source
-books: 16 books contribute two pages, one contributes three, and two contribute
+books: 15 books contribute two pages, one contributes three, and two contribute
 one. None is represented in holdout. The nine modern pages are the existing
 `nrl-ai/vn-ocr-documents-eval` public-domain government scans with the
 dataset-declared human-verified labels.
@@ -38,6 +38,25 @@ Wikisource test subset:
 
 Every other row from those three works is excluded from tuning. No source or
 family crosses splits.
+
+### Resolved holdout label conversion defect
+
+Vietage labels for `Cung oan ngam khuc 1905.pdf` pages 15 and 16 contained
+stray `r` characters after lines corresponding to the Wikisource layout
+templates `{{dòngt|100|r}}`, `{{dòngt|110|r}}`, `{{dòngt|120|r}}`, and
+`{{dòngt|130|r}}`. The `r` is the template's right-alignment parameter, not
+printed or transcribed page text. The package conversion leaked that parameter
+while removing the line-number template.
+
+The scans and exact revisions `81597` and `81598` show the correct lines without
+the stray character. Both revisions retain ProofreadPage quality level 4 with
+validator `Vinhtantran`; their quality histories identify `Tranminh360` as the
+distinct level-3 proofreader. The labels are therefore retained in holdout
+after only the pinned mechanical transformation
+`remove-vietage-dongt-alignment-artifact-v1`. No spelling, punctuation, or
+content was inferred or AI-corrected. The audit stores the original package
+labels, corrected label hashes, exact revision content, quality histories, and
+checksums.
 
 Tuning source counts are:
 
@@ -82,6 +101,14 @@ quality user from the earlier Proofread revision and the quality user from the
 Validated revision. Labels are the dataset's Wikisource-derived human text,
 never OCR or PDF-extracted text.
 
+`accuracy-provenance.json` provides 50 checked-in offline audit records. Each
+record binds the canonical annotation hash, image hash, manifest source ID and
+source hash. Wikisource records additionally pin exact API revision content,
+content hashes, status transitions, proofreader/validator identities, package
+label, and permitted transform. NRL records pin the exact metadata row and
+metadata package hash. Validation rejects unknown licenses, difficulty strata,
+source IDs, identities, transforms, or any record/checksum mismatch.
+
 MeddiesOCR, PNTV, all unproofread rows, and all non-`wikisource_qn` Vietage
 groups are excluded.
 
@@ -115,9 +142,34 @@ Run:
 PYTHONPATH=bench/ocr_cpu_service \
 bench/ocr_cpu_service/.venv/bin/python -m corpus.split \
   bench/ocr_cpu_service/corpus/accuracy-annotations.jsonl \
+  --sources bench/ocr_cpu_service/corpus/accuracy-sources.json \
+  --provenance bench/ocr_cpu_service/corpus/accuracy-provenance.json \
   --assets bench/ocr_cpu_service/.data/corpus
 ```
 
 Two consecutive runs returned the same digest, page count, asset count, and
 byte count. The schema loader fails closed on missing fields, non-human labels,
-bad checksums, duplicate source/page keys, and family leakage.
+bad checksums, duplicate source/page keys, family leakage, unknown strata,
+unrecognized license claims, non-distinct validators, and provenance drift.
+
+Restore every pinned source, including the 470 MB package, with the explicit
+bounded deadline override:
+
+```bash
+PYTHONPATH=bench/ocr_cpu_service \
+bench/ocr_cpu_service/.venv/bin/python -c \
+'from pathlib import Path; from corpus.download import download_sources; items = download_sources(Path("bench/ocr_cpu_service/corpus/accuracy-sources.json"), Path("bench/ocr_cpu_service/.data/corpus"), total_deadline_seconds=600); print(f"verified {len(items)} sources, {sum(item.bytes_downloaded for item in items)} bytes")'
+```
+
+The default remains 120 seconds. Overrides must be greater than zero and at
+most 600 seconds. The override changes only the whole-download deadline; the
+hostname allowlist, public-IP checks, TLS hostname verification, redirect
+revalidation, per-source byte cap, checksum, and atomic installation controls
+remain mandatory.
+
+## Remaining human-review blocker
+
+The two label-conversion defects are resolved from existing independently
+Validated Wikisource evidence and do not reduce the six-page holdout. The
+unresolved blocker is representativeness: holdout remains entirely historical.
+Production adoption still requires 9–14 independently reviewed modern pages.

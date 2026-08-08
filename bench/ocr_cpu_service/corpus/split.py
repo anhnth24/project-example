@@ -34,8 +34,37 @@ _FIELDS = (
     "provenance",
 )
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_PAGE_QUALITY = re.compile(r'<pagequality level="([0-4])" user="([^"]*)"')
+_DIFFICULTY_STRATA = frozenset(
+    {
+        "clean-official",
+        "dense-form",
+        "dense-text",
+        "historical-old-print",
+        "low-contrast",
+        "modern-government",
+        "multi-column",
+        "skew",
+        "small-text",
+        "stamp-watermark",
+    }
+)
+_WIKISOURCE_LICENSES = ("CC-BY-SA-4.0", "CC-BY-NC-SA-4.0")
+_NRL_LICENSES = (
+    "Public Domain (Luật SHTT VN, Điều 15)",
+    "CC0-1.0",
+)
+_CORRECTED_VIETAGE_PAGES = frozenset(
+    {
+        "wikisource:Cung oan ngam khuc 1905.pdf:0015",
+        "wikisource:Cung oan ngam khuc 1905.pdf:0016",
+    }
+)
 _HOLDOUT_SOURCE_IDS = frozenset(
     {
+        "Cung oan ngam khuc 1905.pdf",
+        "Kinh Thanh Cuu Uoc Va Tan Uoc 1925.pdf",
+        "Tan Da tung van.pdf",
         "cung-oan-ngam-khuc-1905-pdf",
         "kinh-thanh-cuu-uoc-va-tan-uoc-1925-pdf",
         "tan-da-tung-van-pdf",
@@ -130,9 +159,17 @@ def _annotation(row: Any, line: int) -> AccuracyAnnotation:
     )
     if annotation.review_status != "human-verified":
         raise ValueError(f"line {line}: review_status must be human-verified")
-    if annotation.split != deterministic_split(annotation.source_id):
+    if not set(annotation.difficulty_strata) <= _DIFFICULTY_STRATA:
+        raise ValueError(f"line {line}: difficulty_strata contains an unknown value")
+    if annotation.split != deterministic_split(annotation.source_family):
         raise ValueError(f"line {line}: split disagrees with frozen source-family split")
     if annotation.provenance == "wikisource":
+        if (annotation.license, annotation.dataset_license) != _WIKISOURCE_LICENSES:
+            raise ValueError(f"line {line}: Wikisource licenses are not allowed")
+        if annotation.source_id != "vietage-ocr-test":
+            raise ValueError(f"line {line}: Wikisource source_id is not pinned")
+        if annotation.transcription_origin != "wikisource-proofreadpage":
+            raise ValueError(f"line {line}: Wikisource transcription origin is invalid")
         if annotation.proofread_status not in {"Proofread", "Validated"}:
             raise ValueError(f"line {line}: Wikisource status is not admissible")
         if not annotation.page_url.startswith(
@@ -143,12 +180,26 @@ def _annotation(row: Any, line: int) -> AccuracyAnnotation:
             raise ValueError(f"line {line}: exact Wikisource revision is required")
         if not annotation.contributors:
             raise ValueError(f"line {line}: Wikisource contributor evidence is required")
-        if annotation.proofread_status == "Proofread" and annotation.reviewers:
-            raise ValueError(
-                f"line {line}: Proofread page cannot claim independent reviewers"
-            )
-        if annotation.proofread_status == "Validated" and not annotation.reviewers:
-            raise ValueError(f"line {line}: Validated page needs reviewer evidence")
+        if len(annotation.contributors) != 1:
+            raise ValueError(f"line {line}: Wikisource needs exactly one proofreader")
+        if annotation.proofread_status == "Proofread":
+            if annotation.reviewers:
+                raise ValueError(
+                    f"line {line}: Proofread page cannot claim independent reviewers"
+                )
+        elif len(annotation.reviewers) != 1:
+            raise ValueError(f"line {line}: Validated page needs exactly one validator")
+        elif annotation.reviewers[0] == annotation.contributors[0]:
+            raise ValueError(f"line {line}: validator must be distinct from proofreader")
+    elif annotation.provenance == "nrl-ai":
+        if (annotation.license, annotation.dataset_license) != _NRL_LICENSES:
+            raise ValueError(f"line {line}: nrl-ai licenses are not allowed")
+        if annotation.transcription_origin != "dataset-declared-human-verified":
+            raise ValueError(f"line {line}: nrl-ai transcription origin is invalid")
+        if len(annotation.contributors) != 1 or annotation.reviewers:
+            raise ValueError(f"line {line}: nrl-ai review evidence is invalid")
+    else:
+        raise ValueError(f"line {line}: provenance is not recognized")
     return annotation
 
 
@@ -168,10 +219,11 @@ def load_accuracy_annotations(path: Path) -> list[AccuracyAnnotation]:
         except json.JSONDecodeError as error:
             raise ValueError(f"line {line_number}: invalid JSON: {error}") from error
         row = _annotation(raw, line_number)
-        key = (row.source_id, row.page_number)
+        key = (row.source_family, row.page_number)
         if key in seen:
             raise ValueError(
-                f"line {line_number}: duplicate source/page {row.source_id}/{row.page_number}"
+                f"line {line_number}: duplicate source/page "
+                f"{row.source_family}/{row.page_number}"
             )
         seen.add(key)
         rows.append(row)
@@ -189,6 +241,163 @@ def no_source_overlap(rows: Iterable[AccuracyAnnotation]) -> bool:
 def validate_accuracy_corpus(rows: Iterable[AccuracyAnnotation]) -> None:
     if not no_source_overlap(rows):
         raise ValueError("source family crosses splits")
+
+
+def load_accuracy_provenance(path: Path) -> dict[str, Any]:
+    try:
+        audit = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"{path}: invalid provenance audit: {error}") from error
+    if not isinstance(audit, dict):
+        raise ValueError(f"{path}: provenance audit must be an object")
+    if set(audit) != {"schema_version", "sources_manifest_sha256", "records"}:
+        raise ValueError(f"{path}: provenance audit fields are invalid")
+    if audit["schema_version"] != 1 or not isinstance(audit["records"], list):
+        raise ValueError(f"{path}: unsupported provenance audit schema")
+    if not isinstance(audit["sources_manifest_sha256"], str) or not _SHA256.fullmatch(
+        audit["sources_manifest_sha256"]
+    ):
+        raise ValueError(f"{path}: source manifest checksum is invalid")
+    return audit
+
+
+def _text_sha256(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _canonical_sha256(value: Any) -> str:
+    serialized = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    )
+    return _text_sha256(serialized)
+
+
+def _validate_quality_revision(
+    revision: Any, expected_level: int, expected_user: str
+) -> None:
+    if not isinstance(revision, dict):
+        raise ValueError("Wikisource quality revision must be an object")
+    content = revision.get("content")
+    if not isinstance(content, str):
+        raise ValueError("Wikisource revision content is required")
+    if revision.get("content_sha256") != _text_sha256(content):
+        raise ValueError("Wikisource revision content checksum mismatch")
+    match = _PAGE_QUALITY.search(content)
+    if not match:
+        raise ValueError("Wikisource revision lacks pagequality evidence")
+    if int(match.group(1)) != expected_level or match.group(2) != expected_user:
+        raise ValueError("Wikisource quality identity/status mismatch")
+
+
+def validate_accuracy_provenance(
+    rows: Iterable[AccuracyAnnotation],
+    sources: Iterable[Any],
+    audit: dict[str, Any],
+) -> None:
+    """Bind every annotation to pinned source and immutable offline evidence."""
+    rows = list(rows)
+    sources = list(sources)
+    source_by_id = {source.id: source for source in sources}
+    reconstructed_manifest = json.dumps(
+        [asdict(source) for source in sources], ensure_ascii=False, indent=2
+    ) + "\n"
+    if audit["sources_manifest_sha256"] != _text_sha256(reconstructed_manifest):
+        raise ValueError("source manifest checksum mismatch")
+    records = audit["records"]
+    if len(records) != len(rows):
+        raise ValueError("provenance record count does not match annotations")
+    record_by_page = {record.get("page_id"): record for record in records}
+    if len(record_by_page) != len(records):
+        raise ValueError("duplicate provenance page record")
+
+    corrected_pages: set[str] = set()
+    for row in rows:
+        record = record_by_page.get(row.page_id)
+        if not isinstance(record, dict):
+            raise ValueError(f"missing provenance record: {row.page_id}")
+        source = source_by_id.get(row.source_id)
+        if source is None or source.sha256 != row.source_sha256:
+            raise ValueError(f"annotation source is not pinned: {row.page_id}")
+        if row.dataset_license != source.license:
+            raise ValueError(f"annotation dataset license differs from source: {row.page_id}")
+        if (
+            record.get("source_id") != row.source_id
+            or record.get("source_sha256") != row.source_sha256
+            or record.get("image_sha256") != row.image_sha256
+            or record.get("annotation_sha256") != _text_sha256(_canonical_json(row))
+        ):
+            raise ValueError(f"provenance annotation binding mismatch: {row.page_id}")
+        unsigned_record = dict(record)
+        record_sha256 = unsigned_record.pop("record_sha256", None)
+        if record_sha256 != _canonical_sha256(unsigned_record):
+            raise ValueError(f"provenance record checksum mismatch: {row.page_id}")
+        evidence = record.get("evidence")
+        if not isinstance(evidence, dict):
+            raise ValueError(f"missing source evidence: {row.page_id}")
+
+        if row.provenance == "wikisource":
+            if evidence.get("kind") != "wikisource-proofreadpage":
+                raise ValueError(f"wrong Wikisource evidence kind: {row.page_id}")
+            current = evidence.get("current_revision")
+            if not isinstance(current, dict) or current.get("revision_id") != row.revision_id:
+                raise ValueError(f"Wikisource revision binding mismatch: {row.page_id}")
+            expected_level = 4 if row.proofread_status == "Validated" else 3
+            expected_quality_user = (
+                row.reviewers[0]
+                if row.proofread_status == "Validated"
+                else row.contributors[0]
+            )
+            _validate_quality_revision(current, expected_level, expected_quality_user)
+            quality_revisions = evidence.get("quality_revisions")
+            expected_count = 2 if row.proofread_status == "Validated" else 1
+            if not isinstance(quality_revisions, list) or len(quality_revisions) != expected_count:
+                raise ValueError(f"Wikisource quality history is incomplete: {row.page_id}")
+            _validate_quality_revision(quality_revisions[0], 3, row.contributors[0])
+            if row.proofread_status == "Validated":
+                _validate_quality_revision(quality_revisions[1], 4, row.reviewers[0])
+            package_label = evidence.get("package_label")
+            if (
+                not isinstance(package_label, str)
+                or evidence.get("package_label_sha256") != _text_sha256(package_label)
+            ):
+                raise ValueError(f"Wikisource package label checksum mismatch: {row.page_id}")
+            transform = evidence.get("label_transform")
+            if transform == "identity":
+                expected_label = package_label
+            elif transform == "remove-vietage-dongt-alignment-artifact-v1":
+                corrected_pages.add(row.page_id)
+                expected_label = re.sub(r"(?<=[.!?])r(?=\n)", "", package_label)
+                if expected_label == package_label:
+                    raise ValueError(f"Wikisource correction changed nothing: {row.page_id}")
+            else:
+                raise ValueError(f"unrecognized label transform: {row.page_id}")
+            if row.transcription != expected_label:
+                raise ValueError(f"Wikisource label evidence mismatch: {row.page_id}")
+            if evidence.get("revision_api_url", "").find(f"revids={row.revision_id}") < 0:
+                raise ValueError(f"Wikisource immutable API URL mismatch: {row.page_id}")
+        else:
+            if evidence.get("kind") != "nrl-ai-metadata":
+                raise ValueError(f"wrong nrl-ai evidence kind: {row.page_id}")
+            metadata = evidence.get("metadata_record")
+            if not isinstance(metadata, dict) or evidence.get(
+                "metadata_record_sha256"
+            ) != _canonical_sha256(metadata):
+                raise ValueError(f"nrl-ai metadata checksum mismatch: {row.page_id}")
+            metadata_source = source_by_id.get(evidence.get("metadata_source_id"))
+            if (
+                metadata_source is None
+                or metadata_source.sha256 != evidence.get("metadata_source_sha256")
+            ):
+                raise ValueError(f"nrl-ai metadata source is not pinned: {row.page_id}")
+            if (
+                metadata.get("doc_id") != row.source_family
+                or metadata.get("text") != row.transcription
+                or metadata.get("source_url") != row.page_url
+                or metadata.get("license") != row.license
+            ):
+                raise ValueError(f"nrl-ai metadata binding mismatch: {row.page_id}")
+    if corrected_pages != _CORRECTED_VIETAGE_PAGES:
+        raise ValueError("Vietage label correction set is not exactly pinned")
 
 
 def _canonical_json(row: AccuracyAnnotation) -> str:
@@ -239,7 +448,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("annotations", type=Path)
     parser.add_argument("--assets", type=Path)
+    parser.add_argument("--sources", type=Path)
+    parser.add_argument("--provenance", type=Path)
     args = parser.parse_args()
+    if (args.sources is None) != (args.provenance is None):
+        parser.error("--sources and --provenance must be supplied together")
     rows = load_accuracy_annotations(args.annotations)
     evidence: dict[str, Any] = {
         "annotations": len(rows),
@@ -249,6 +462,12 @@ def main() -> None:
     }
     if args.assets:
         evidence.update(validate_local_assets(rows, args.assets))
+    if args.sources:
+        from corpus.download import load_sources
+
+        audit = load_accuracy_provenance(args.provenance)
+        validate_accuracy_provenance(rows, load_sources(args.sources), audit)
+        evidence["provenance_records"] = len(audit["records"])
     print(json.dumps(evidence, sort_keys=True))
 
 

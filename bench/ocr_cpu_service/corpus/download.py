@@ -32,6 +32,7 @@ _SOURCE_FIELDS = (
 _CHUNK_BYTES = 64 * 1024
 _DOWNLOAD_TIMEOUT_SECONDS = 30.0
 _DOWNLOAD_TOTAL_DEADLINE_SECONDS = 120.0
+_MAX_DOWNLOAD_TOTAL_DEADLINE_SECONDS = 600.0
 _monotonic = time.monotonic
 _APPROVED_HOSTS = frozenset(
     {
@@ -259,7 +260,22 @@ def load_sources(path: Path) -> list[CorpusSource]:
     return sources
 
 
-def download_sources(manifest: Path, output: Path) -> list[DownloadedSource]:
+def download_sources(
+    manifest: Path,
+    output: Path,
+    *,
+    total_deadline_seconds: float | None = None,
+) -> list[DownloadedSource]:
+    if total_deadline_seconds is None:
+        total_deadline_seconds = _DOWNLOAD_TOTAL_DEADLINE_SECONDS
+    if (
+        not isinstance(total_deadline_seconds, (int, float))
+        or isinstance(total_deadline_seconds, bool)
+        or total_deadline_seconds <= 0
+        or total_deadline_seconds > _MAX_DOWNLOAD_TOTAL_DEADLINE_SECONDS
+    ):
+        raise ValueError("total download deadline must be greater than 0 and at most 600")
+    total_deadline_seconds = float(total_deadline_seconds)
     sources = load_sources(manifest)
     output.mkdir(parents=True, exist_ok=True)
     downloaded: list[DownloadedSource] = []
@@ -272,7 +288,9 @@ def download_sources(manifest: Path, output: Path) -> list[DownloadedSource]:
                 mode="xb", prefix=f".{source.id}-", suffix=".tmp", dir=output, delete=False
             ) as temporary:
                 temporary_path = Path(temporary.name)
-                bytes_downloaded = _stream_source(source, temporary)
+                bytes_downloaded = _stream_source(
+                    source, temporary, total_deadline_seconds
+                )
                 temporary.flush()
                 os.fsync(temporary.fileno())
 
@@ -311,7 +329,11 @@ def _destination_name(source: CorpusSource) -> str:
     return f"{source.id}{suffixes}"
 
 
-def _stream_source(source: CorpusSource, destination: Any) -> int:
+def _stream_source(
+    source: CorpusSource,
+    destination: Any,
+    total_deadline_seconds: float,
+) -> int:
     started = _monotonic()
     request = Request(
         source.url,
@@ -320,15 +342,13 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
     digest = hashlib.sha256()
     bytes_downloaded = 0
 
-    initial_remaining = _DOWNLOAD_TOTAL_DEADLINE_SECONDS - (
-        _monotonic() - started
-    )
+    initial_remaining = total_deadline_seconds - (_monotonic() - started)
     if initial_remaining <= 0:
         raise TimeoutError(f"{source.id}: download deadline exceeded")
     _validate_download_url(
         source.url, timeout_seconds=initial_remaining
     )
-    remaining = _DOWNLOAD_TOTAL_DEADLINE_SECONDS - (_monotonic() - started)
+    remaining = total_deadline_seconds - (_monotonic() - started)
     if remaining <= 0:
         raise TimeoutError(f"{source.id}: download deadline exceeded")
     with urlopen(
@@ -352,7 +372,7 @@ def _stream_source(source: CorpusSource, destination: Any) -> int:
 
         read_chunk = getattr(response, "read1", response.read)
         while True:
-            if _monotonic() - started >= _DOWNLOAD_TOTAL_DEADLINE_SECONDS:
+            if _monotonic() - started >= total_deadline_seconds:
                 raise TimeoutError(f"{source.id}: download deadline exceeded")
             chunk = read_chunk(_CHUNK_BYTES)
             if not chunk:
