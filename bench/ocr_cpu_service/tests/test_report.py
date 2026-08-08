@@ -98,6 +98,89 @@ def test_report_recomputes_gate_and_rejects_inconsistent_stored_summary() -> Non
         recompute_and_validate_summary(computed)
 
 
+def _generic_report_payload(
+    *,
+    comparison: dict[str, object] | None,
+) -> dict[str, object]:
+    def candidate(candidate_id: str, edits: int) -> dict[str, object]:
+        return {
+            "id": candidate_id,
+            "label": candidate_id,
+            "metadata": {},
+            "pages": [
+                {
+                    "source_id": "page",
+                    "stratum": "real-scan",
+                    "page_number": 1,
+                    "success": True,
+                    "character_edits": edits,
+                    "reference_characters": 10,
+                    "word_edits": edits,
+                    "reference_words": 5,
+                    "elapsed_seconds": 1.0,
+                    "peak_rss_bytes": 100,
+                    "resource_limit_violation": False,
+                }
+            ],
+        }
+
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "generated_at_utc": "2026-08-08T00:00:00Z",
+        "run": {
+            "commit": "abc123",
+            "host": {"logical_cpus": 2, "memory_bytes": 1024},
+            "versions": {"python": "3.12"},
+        },
+        "corpus": {
+            "manifest_sha256": "a" * 64,
+            "quantitative_pages": 1,
+            "strata": {"real-scan": 1},
+            "official_sample": {
+                "source_id": "official",
+                "classification": "scan",
+                "classification_evidence": {
+                    "pages": 1,
+                    "text_pages": 0,
+                    "image_pages": 1,
+                },
+                "sampled_pages": [1],
+            },
+            "historical_samples": [],
+            "reading_order_cases": [],
+        },
+        "candidates": [
+            candidate("control-a", 2),
+            candidate("challenger-z", 1),
+        ],
+    }
+    if comparison is not None:
+        payload["comparison"] = comparison
+    return payload
+
+
+def test_report_uses_explicit_comparison_roles_not_candidate_names() -> None:
+    payload = _generic_report_payload(
+        comparison={"baseline": "control-a", "challenger": "challenger-z"}
+    )
+
+    markdown = render_markdown(payload)
+
+    assert "control-a" in markdown
+    assert "challenger-z" in markdown
+    assert "Challenger real-scan CER" in markdown
+    assert "PP-OCRv6 real-scan CER" not in markdown
+
+
+def test_report_without_challenger_states_no_adoption_gate() -> None:
+    payload = _generic_report_payload(comparison=None)
+
+    markdown = render_markdown(payload)
+
+    assert "no adoption gate was configured" in markdown.lower()
+    assert "Gate decision:" not in markdown
+
+
 def test_markdown_is_deterministic_metadata_only_rendering() -> None:
     data = {
         "schema_version": 1,
@@ -469,7 +552,6 @@ def test_candidate_environment_is_allowlisted_and_report_safe(
         "OMP_NUM_THREADS": "8",
         "OPENBLAS_NUM_THREADS": "8",
         "PATH": "/usr/local/bin:/usr/bin:/bin",
-        "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
         "PYTHONNOUSERSITE": "1",
         "PYTHONPATH": "bench/ocr_cpu_service",
     }

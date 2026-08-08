@@ -12,6 +12,7 @@ import select
 import subprocess
 import sys
 import time
+from collections.abc import Mapping, Set
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -22,10 +23,19 @@ import psutil
 import pypdfium2 as pdfium
 from PIL import Image, ImageDraw, ImageFont
 
+from benchmark.candidates import CommandCandidateSpec
+from benchmark.corpus import (
+    BenchmarkPage,
+    generate_reviewed_multicolumn_case as corpus_generate_multicolumn_case,
+    inspect_and_render_historical as corpus_render_historical,
+    inspect_and_render_official as corpus_render_official,
+    load_quantitative_pages as corpus_load_quantitative_pages,
+)
+from benchmark.render import RenderLimits
 from benchmark.metrics import error_counts, reading_order_violations
 from benchmark.report import aggregate_records, recompute_and_validate_summary
 from corpus.download import CorpusSource, load_sources
-from markhand_ocr.render import RenderLimits, render_page
+from markhand_ocr.render import render_page
 
 ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = ROOT / "bench" / "ocr_cpu_service"
@@ -33,7 +43,6 @@ DEFAULT_MANIFEST = SERVICE_ROOT / "corpus" / "sources.json"
 DEFAULT_CORPUS = SERVICE_ROOT / ".data" / "corpus"
 DEFAULT_WORK = SERVICE_ROOT / ".data" / "benchmark"
 OFFICIAL_SOURCE_ID = "official-89-2026-tt-btc"
-MODEL_ASSETS = ("inference.json", "inference.yml", "inference.pdiparams")
 HISTORICAL_READING_ORDER_ANCHORS = {
     ("wikimedia-dai-nam-1907-804", 4): (
         "NHỜI ĐÀN BÀ",
@@ -60,22 +69,9 @@ def sanitized_candidate_environment(*, cpu_threads: int) -> dict[str, str]:
         "OMP_NUM_THREADS": threads,
         "OPENBLAS_NUM_THREADS": threads,
         "PATH": "/usr/local/bin:/usr/bin:/bin",
-        "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
         "PYTHONNOUSERSITE": "1",
         "PYTHONPATH": "bench/ocr_cpu_service",
     }
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkPage:
-    source_id: str
-    source_sha256: str
-    stratum: str
-    page_number: int
-    path: Path
-    reference: str | None
-    gate_included: bool = True
-    reading_order_anchors: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +81,16 @@ class RecognitionMeasurement:
     resource: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class CandidateRunResult:
+    """Serializable measurements for one candidate/page execution."""
+
+    candidate_id: str
+    success: bool
+    record: dict[str, Any]
+    metadata: dict[str, Any]
+
+
 class Candidate(Protocol):
     id: str
     label: str
@@ -92,6 +98,27 @@ class Candidate(Protocol):
 
     def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
         """Recognize one page with explicit timing and RSS semantics."""
+
+
+def _json_compatible(value: Any) -> Any:
+    """Thaw deeply immutable provenance at the JSON serialization boundary."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise TypeError("JSON object keys must be strings")
+        return {key: _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    if isinstance(value, Set):
+        thawed = [_json_compatible(item) for item in value]
+        return sorted(
+            thawed,
+            key=lambda item: json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
+        )
+    raise TypeError(f"value is not JSON-compatible: {type(value).__name__}")
 
 
 def _sha256(path: Path) -> str:
@@ -566,7 +593,7 @@ class IsolatedCandidateWorker:
             raise RuntimeError("candidate worker did not become ready")
         self.metadata = {
             "worker_command": command_description,
-            "environment": environment,
+            "environment": dict(environment),
             "cold_initialization": {
                 "candidate_seconds": event["candidate_seconds"],
                 "wall_seconds": cold_wall_seconds,
@@ -574,7 +601,7 @@ class IsolatedCandidateWorker:
                 "process_startup_included": True,
                 "rss_measurement": resource,
             },
-            **(provenance or {}),
+            **_json_compatible(provenance or {}),
         }
 
     def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
@@ -616,6 +643,48 @@ class IsolatedCandidateWorker:
         except subprocess.TimeoutExpired:
             self._process.kill()
             self._process.wait()
+
+
+def _isolated_worker(
+    spec: CommandCandidateSpec, *, timeout_seconds: float
+) -> IsolatedCandidateWorker:
+    return IsolatedCandidateWorker(
+        candidate_id=spec.id,
+        label=spec.label,
+        command=[
+            sys.executable,
+            "-m",
+            "benchmark.worker",
+            "--argv-json",
+            json.dumps(spec.argv, ensure_ascii=False),
+        ],
+        environment=dict(spec.environment),
+        timeout_seconds=timeout_seconds,
+        command_description="python -m benchmark.worker --argv-json <candidate argv>",
+        provenance=_json_compatible(spec.provenance),
+    )
+
+
+def run_candidate(
+    spec: CommandCandidateSpec,
+    page: BenchmarkPage,
+    *,
+    timeout_seconds: float,
+    max_rss_bytes: int,
+) -> CandidateRunResult:
+    """Run one arbitrary candidate without retaining recognized text."""
+    candidate = _isolated_worker(spec, timeout_seconds=timeout_seconds)
+    try:
+        result = _run_candidate(candidate, [page], max_rss_bytes=max_rss_bytes)
+    finally:
+        candidate.close()
+    record = result["pages"][0]
+    return CandidateRunResult(
+        candidate_id=spec.id,
+        success=bool(record["success"]),
+        record=record,
+        metadata=result["metadata"],
+    )
 
 
 def _run_candidate(
@@ -708,10 +777,6 @@ def _run_candidate(
     }
 
 
-def _version(package: str) -> str:
-    return importlib.metadata.version(package)
-
-
 def _command_version(command: list[str]) -> str:
     result = subprocess.run(
         command, capture_output=True, text=True, check=True, timeout=30
@@ -723,19 +788,19 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     manifest = args.manifest.resolve()
     corpus_dir = args.corpus_dir.resolve()
     sources = load_sources(manifest)
-    quantitative_pages = load_quantitative_pages(manifest, corpus_dir)
+    quantitative_pages = corpus_load_quantitative_pages(manifest, corpus_dir)
     official_source = next(
         source for source in sources if source.id == OFFICIAL_SOURCE_ID
     )
-    official, official_pages = inspect_and_render_official(
+    official, official_pages = corpus_render_official(
         official_source, corpus_dir, args.work_dir.resolve()
     )
-    historical, historical_pages = inspect_and_render_historical(
+    historical, historical_pages = corpus_render_historical(
         [source for source in sources if source.kind == "wikimedia-scan"],
         corpus_dir,
         args.work_dir.resolve(),
     )
-    multicolumn, multicolumn_page = generate_reviewed_multicolumn_case(
+    multicolumn, multicolumn_page = corpus_generate_multicolumn_case(
         args.work_dir.resolve()
     )
     pages = (
@@ -747,27 +812,26 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
     fileconv = args.fileconv.resolve()
     system_tessdata = args.system_tessdata.resolve()
     best_tessdata = args.best_tessdata.resolve()
-    detection_dir = args.paddle_detection_dir.resolve()
-    recognition_dir = args.paddle_recognition_dir.resolve()
     environment = sanitized_candidate_environment(
         cpu_threads=args.cpu_threads
     )
-    worker_base = [sys.executable, "-m", "benchmark.worker"]
     fileconv_build = _fileconv_provenance(fileconv)
-    configurations = [
-        {
-            "id": "markhand-default",
-            "label": "Markhand default",
-            "command": worker_base
-            + [
-                "--candidate",
-                "markhand-default",
-                "--fileconv",
+    candidates = [
+        CommandCandidateSpec(
+            id="markhand-default",
+            label="Markhand default",
+            argv=(
                 str(fileconv),
-                "--tessdata",
-                str(system_tessdata),
-            ],
-            "provenance": {
+                "one",
+                "{input}",
+                "--lang",
+                "vie+eng",
+            ),
+            environment={
+                **environment,
+                "FILECONV_TESSDATA": str(system_tessdata),
+            },
+            provenance={
                 "fileconv_build": fileconv_build,
                 "invocation": "fileconv one <identical-page.png> --lang vie+eng",
                 "timing_note": (
@@ -782,20 +846,22 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     for language in ("vie", "eng")
                 },
             },
-        },
-        {
-            "id": "markhand-tessdata-best",
-            "label": "Markhand tessdata_best",
-            "command": worker_base
-            + [
-                "--candidate",
-                "markhand-tessdata-best",
-                "--fileconv",
+        ),
+        CommandCandidateSpec(
+            id="markhand-tessdata-best",
+            label="Markhand tessdata_best",
+            argv=(
                 str(fileconv),
-                "--tessdata",
-                str(best_tessdata),
-            ],
-            "provenance": {
+                "one",
+                "{input}",
+                "--lang",
+                "vie+eng",
+            ),
+            environment={
+                **environment,
+                "FILECONV_TESSDATA": str(best_tessdata),
+            },
+            provenance={
                 "fileconv_build": fileconv_build,
                 "invocation": "fileconv one <identical-page.png> --lang vie+eng",
                 "timing_note": (
@@ -810,62 +876,34 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                     for language in ("vie", "eng")
                 },
             },
-        },
-        {
-            "id": "pp-ocrv6",
-            "label": "PP-OCRv6",
-            "command": worker_base
-            + [
-                "--candidate",
-                "pp-ocrv6",
-                "--detection-dir",
-                str(detection_dir),
-                "--recognition-dir",
-                str(recognition_dir),
-            ],
-            "provenance": {
-                "invocation": "cached CPU public API over identical page image",
-                "model_asset_sha256": {
-                    role: {
-                        asset: _sha256(directory / asset)
-                        for asset in MODEL_ASSETS
-                    }
-                    for role, directory in (
-                        ("detection", detection_dir),
-                        ("recognition", recognition_dir),
-                    )
-                },
-            },
-        },
+        ),
     ]
     candidate_results: list[dict[str, Any]] = []
-    for configuration in configurations:
-        candidate = IsolatedCandidateWorker(
-            candidate_id=configuration["id"],
-            label=configuration["label"],
-            command=configuration["command"],
-            environment=environment,
-            timeout_seconds=args.timeout_seconds,
-            command_description=(
-                "python -m benchmark.worker --candidate "
-                f"{configuration['id']} <role-specific local assets>"
-            ),
-            provenance={
-                **configuration["provenance"],
-                "measurement_semantics": {
-                    "cold_initialization": (
-                        "worker process start through candidate-ready event"
-                    ),
-                    "warm_page_latency": (
-                        "parent wall time from request flush through result event; "
-                        "worker remains initialized"
-                    ),
-                    "rss": (
-                        "10 ms sampled sum of worker and descendant RSS during "
-                        "the measured interval"
-                    ),
+    for spec in candidates:
+        candidate = _isolated_worker(
+            CommandCandidateSpec(
+                id=spec.id,
+                label=spec.label,
+                argv=spec.argv,
+                environment=spec.environment,
+                provenance={
+                    **dict(spec.provenance),
+                    "measurement_semantics": {
+                        "cold_initialization": (
+                            "worker process start through candidate-ready event"
+                        ),
+                        "warm_page_latency": (
+                            "parent wall time from request flush through result "
+                            "event; worker remains initialized"
+                        ),
+                        "rss": (
+                            "10 ms sampled sum of worker and descendant RSS during "
+                            "the measured interval"
+                        ),
+                    },
                 },
-            },
+            ),
+            timeout_seconds=args.timeout_seconds,
         )
         try:
             candidate_results.append(
@@ -898,10 +936,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
             },
             "versions": {
                 "cargo": _command_version(["cargo", "--version"]),
-                "paddleocr": _version("paddleocr"),
-                "paddlepaddle": _version("paddlepaddle"),
-                "paddlex": _version("paddlex"),
-                "pypdfium2": _version("pypdfium2"),
+                "pypdfium2": importlib.metadata.version("pypdfium2"),
                 "python": platform.python_version(),
                 "tesseract": _command_version(["tesseract", "--version"]),
             },
@@ -943,7 +978,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
         },
         "candidates": candidate_results,
     }
-    return recompute_and_validate_summary(summary)
+    return recompute_and_validate_summary(_json_compatible(summary))
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -963,16 +998,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--best-tessdata", type=Path, default=ROOT / "tessdata_best"
     )
-    parser.add_argument(
-        "--paddle-detection-dir",
-        type=Path,
-        default=SERVICE_ROOT / ".data" / "models" / "detection",
-    )
-    parser.add_argument(
-        "--paddle-recognition-dir",
-        type=Path,
-        default=SERVICE_ROOT / ".data" / "models" / "recognition",
-    )
     parser.add_argument("--timeout-seconds", type=float, default=180.0)
     parser.add_argument(
         "--cpu-threads", type=int, default=psutil.cpu_count(logical=True) or 1
@@ -988,7 +1013,13 @@ def main() -> None:
     summary = run_benchmark(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            _json_compatible(summary),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
 

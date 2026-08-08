@@ -132,6 +132,16 @@ def _gate_records(candidate: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _is_legacy_phase_a(data: dict[str, Any]) -> bool:
+    return "comparison" not in data and {
+        candidate["id"] for candidate in data["candidates"]
+    } == {
+        "markhand-default",
+        "markhand-tessdata-best",
+        "pp-ocrv6",
+    }
+
+
 def recompute_and_validate_summary(data: dict[str, Any]) -> dict[str, Any]:
     """Recompute every derived value and reject contradictory stored claims."""
     result = copy.deepcopy(data)
@@ -156,48 +166,117 @@ def recompute_and_validate_summary(data: dict[str, Any]) -> dict[str, Any]:
         candidate["strata"] = strata
 
     by_id = {candidate["id"]: candidate for candidate in result["candidates"]}
-    required = {
-        "markhand-default",
-        "markhand-tessdata-best",
-        "pp-ocrv6",
-    }
-    if set(by_id) != required:
-        raise ValueError("summary must contain exactly the three Phase A candidates")
-    default = by_id["markhand-default"]
-    best = by_id["markhand-tessdata-best"]
-    paddle = by_id["pp-ocrv6"]
-    baseline_strata = {
-        stratum: min(
-            default["strata"][stratum]["cer"],
-            best["strata"][stratum]["cer"],
+    if len(by_id) != len(result["candidates"]):
+        raise ValueError("candidate ids must be unique")
+
+    if _is_legacy_phase_a(result):
+        default = by_id["markhand-default"]
+        best = by_id["markhand-tessdata-best"]
+        paddle = by_id["pp-ocrv6"]
+        baseline_strata = {
+            stratum: min(
+                default["strata"][stratum]["cer"],
+                best["strata"][stratum]["cer"],
+            )
+            for stratum in default["strata"]
+        }
+        failures = sum(
+            not record["success"]
+            for candidate in result["candidates"]
+            for record in candidate["pages"]
         )
-        for stratum in default["strata"]
-    }
-    failures = sum(
-        not record["success"]
-        for candidate in result["candidates"]
-        for record in candidate["pages"]
+        resource_violations = sum(
+            record.get("resource_limit_violation", False)
+            for candidate in result["candidates"]
+            for record in candidate["pages"]
+        )
+        gate = evaluate_gate(
+            default["strata"]["real-scan"]["cer"],
+            best["strata"]["real-scan"]["cer"],
+            paddle["strata"]["real-scan"]["cer"],
+            baseline_cer_by_stratum=baseline_strata,
+            paddle_cer_by_stratum={
+                stratum: metrics["cer"]
+                for stratum, metrics in paddle["strata"].items()
+            },
+            failures=failures,
+            resource_limit_violations=resource_violations,
+        ).as_json()
+        if "gate" in result and result["gate"] != gate:
+            raise ValueError("stored gate contradicts raw page counts")
+        result["gate"] = gate
+        return result
+
+    if "gate" in result:
+        raise ValueError("generic summaries must use comparison, not gate")
+    comparison = result.get("comparison")
+    if comparison is None:
+        return result
+    if not isinstance(comparison, dict):
+        raise TypeError("comparison must be an object")
+    baseline_id = comparison.get("baseline")
+    challenger_id = comparison.get("challenger")
+    if (
+        not isinstance(baseline_id, str)
+        or not isinstance(challenger_id, str)
+        or baseline_id == challenger_id
+        or baseline_id not in by_id
+        or challenger_id not in by_id
+    ):
+        raise ValueError("comparison must name distinct existing candidates")
+    stratum = comparison.get("stratum", "real-scan")
+    threshold = comparison.get("threshold", GATE_THRESHOLD)
+    if not isinstance(stratum, str) or not stratum:
+        raise ValueError("comparison stratum must not be empty")
+    if (
+        not isinstance(threshold, (int, float))
+        or isinstance(threshold, bool)
+        or threshold < 0
+    ):
+        raise ValueError("comparison threshold must be non-negative")
+    try:
+        baseline_cer = by_id[baseline_id]["strata"][stratum]["cer"]
+        challenger_cer = by_id[challenger_id]["strata"][stratum]["cer"]
+    except KeyError as error:
+        raise ValueError(f"comparison stratum is unavailable: {stratum}") from error
+    relative_improvement = (
+        (baseline_cer - challenger_cer) / baseline_cer
+        if baseline_cer > 0
+        else 0.0
     )
+    challenger_pages = by_id[challenger_id]["pages"]
+    failures = sum(not record["success"] for record in challenger_pages)
     resource_violations = sum(
         record.get("resource_limit_violation", False)
-        for candidate in result["candidates"]
-        for record in candidate["pages"]
+        for record in challenger_pages
     )
-    gate = evaluate_gate(
-        default["strata"]["real-scan"]["cer"],
-        best["strata"]["real-scan"]["cer"],
-        paddle["strata"]["real-scan"]["cer"],
-        baseline_cer_by_stratum=baseline_strata,
-        paddle_cer_by_stratum={
-            stratum: metrics["cer"]
-            for stratum, metrics in paddle["strata"].items()
-        },
-        failures=failures,
-        resource_limit_violations=resource_violations,
-    ).as_json()
-    if "gate" in result and result["gate"] != gate:
-        raise ValueError("stored gate contradicts raw page counts")
-    result["gate"] = gate
+    reasons = []
+    if relative_improvement < threshold:
+        reasons.append(
+            f"relative {stratum} CER improvement below {threshold * 100:g}%"
+        )
+    if failures:
+        reasons.append(f"{failures} challenger page failure(s)")
+    if resource_violations:
+        reasons.append(
+            f"{resource_violations} challenger resource-limit violation(s)"
+        )
+    computed = {
+        "baseline": baseline_id,
+        "challenger": challenger_id,
+        "stratum": stratum,
+        "baseline_cer": baseline_cer,
+        "challenger_cer": challenger_cer,
+        "relative_improvement": relative_improvement,
+        "threshold": threshold,
+        "passed": not reasons,
+        "decision": "PASS" if not reasons else "STOP",
+        "reasons": reasons,
+    }
+    for key, value in computed.items():
+        if key in comparison and comparison[key] != value:
+            raise ValueError("stored comparison contradicts raw page counts")
+    result["comparison"] = computed
     return result
 
 
@@ -212,14 +291,22 @@ def _mib(value: int) -> str:
 def render_markdown(data: dict[str, Any]) -> str:
     """Render a metadata-and-metrics-only report from raw summary JSON."""
     data = recompute_and_validate_summary(data)
-    gate = data["gate"]
+    legacy_phase_a = _is_legacy_phase_a(data)
+    gate = data.get("gate")
+    comparison = data.get("comparison")
     corpus = data["corpus"]
     run = data["run"]
     official = corpus["official_sample"]
     lines = [
         "# Phase A CPU OCR benchmark",
         "",
-        f"Gate decision: **{gate['decision']}**",
+        (
+            f"Gate decision: **{gate['decision']}**"
+            if legacy_phase_a
+            else f"Comparison decision: **{comparison['decision']}**"
+            if comparison
+            else "Adoption gate: **not configured**"
+        ),
         "",
         "This report contains metrics and metadata only; no complete document "
         "text or OCR output is included.",
@@ -507,24 +594,58 @@ def render_markdown(data: dict[str, Any]) -> str:
                 f"{metric['violations']} | {metric['missing_anchors']} |"
             )
 
-    lines.extend(
-        [
-            "",
-            "## Gate",
-            "",
-            f"- Better Tesseract real-scan CER: {_rate(gate['baseline_cer'])}",
-            f"- PP-OCRv6 real-scan CER: {_rate(gate['paddle_cer'])}",
-            "- Relative improvement: "
-            f"{gate['relative_improvement'] * 100:.2f}% "
-            f"(required: {gate['threshold'] * 100:.0f}%)",
-        ]
-    )
-    reasons = gate.get("reasons", [])
-    if reasons:
-        lines.append("- Decision reasons:")
-        lines.extend(f"  - {reason}" for reason in reasons)
+    if legacy_phase_a:
+        lines.extend(
+            [
+                "",
+                "## Gate",
+                "",
+                f"- Better Tesseract real-scan CER: {_rate(gate['baseline_cer'])}",
+                f"- PP-OCRv6 real-scan CER: {_rate(gate['paddle_cer'])}",
+                "- Relative improvement: "
+                f"{gate['relative_improvement'] * 100:.2f}% "
+                f"(required: {gate['threshold'] * 100:.0f}%)",
+            ]
+        )
+        reasons = gate.get("reasons", [])
+        if reasons:
+            lines.append("- Decision reasons:")
+            lines.extend(f"  - {reason}" for reason in reasons)
+        else:
+            lines.append("- All Phase A criteria passed.")
+    elif comparison:
+        stratum = comparison["stratum"]
+        lines.extend(
+            [
+                "",
+                "## Comparison",
+                "",
+                f"- Baseline: `{comparison['baseline']}`",
+                f"- Challenger: `{comparison['challenger']}`",
+                f"- Baseline {stratum} CER: "
+                f"{_rate(comparison['baseline_cer'])}",
+                f"- Challenger {stratum} CER: "
+                f"{_rate(comparison['challenger_cer'])}",
+                "- Relative improvement: "
+                f"{comparison['relative_improvement'] * 100:.2f}% "
+                f"(required: {comparison['threshold'] * 100:.0f}%)",
+            ]
+        )
+        reasons = comparison.get("reasons", [])
+        if reasons:
+            lines.append("- Decision reasons:")
+            lines.extend(f"  - {reason}" for reason in reasons)
+        else:
+            lines.append("- All configured comparison criteria passed.")
     else:
-        lines.append("- All Phase A criteria passed.")
+        lines.extend(
+            [
+                "",
+                "## Adoption gate",
+                "",
+                "No adoption gate was configured for this benchmark run.",
+            ]
+        )
 
     lines.extend(["", "## Tool versions", ""])
     lines.extend(
