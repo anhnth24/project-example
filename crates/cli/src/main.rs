@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 #[cfg(feature = "audio")]
 use fileconv_core::audio::AudioEngine;
 use fileconv_core::intelligence::{CorpusDocument, HandoffOptions};
-use fileconv_core::{Converter, FormatKind};
+use fileconv_core::{Converter, FormatKind, OcrPreprocessMode, OcrRunConfig};
 use walkdir::WalkDir;
 
 mod metrics;
@@ -123,7 +123,8 @@ fn main() -> Result<()> {
             {
                 opts.max_chars = Some(m);
             }
-            let conv = Converter::with_options(opts);
+            let conv =
+                Converter::with_options_and_ocr_config(opts, ocr_run_config_from_environment()?);
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
             Ok(())
@@ -785,6 +786,24 @@ fn render_audio_report(rows: &[AudioRow]) -> String {
 
 // ----------------------------- helpers -----------------------------
 
+/// Parse `FILECONV_OCR_PREPROCESS_MODE` for benchmark-only OCR preprocessing.
+pub(crate) fn parse_ocr_preprocess_mode(raw: Option<&str>) -> Result<OcrPreprocessMode, String> {
+    match raw {
+        None | Some("") => Ok(OcrPreprocessMode::Legacy),
+        Some("preserve-near-bitonal") => Ok(OcrPreprocessMode::PreserveNearBitonal),
+        Some(other) => Err(format!("unsupported OCR preprocess mode: {other}")),
+    }
+}
+
+fn ocr_run_config_from_environment() -> Result<OcrRunConfig, anyhow::Error> {
+    let raw = std::env::var("FILECONV_OCR_PREPROCESS_MODE").ok();
+    let preprocess_mode = parse_ocr_preprocess_mode(raw.as_deref()).map_err(anyhow::Error::msg)?;
+    Ok(OcrRunConfig {
+        preprocess_mode,
+        ..OcrRunConfig::default()
+    })
+}
+
 fn rel(base: &Path, p: &Path) -> String {
     p.strip_prefix(base)
         .unwrap_or(p)
@@ -824,8 +843,21 @@ fn count_pages(path: &Path, fmt: FormatKind) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::registered_commands;
-    use fileconv_core::{ConvertErrorKind, DetailedConvertError};
+    use super::{parse_ocr_preprocess_mode, registered_commands};
+    use fileconv_core::{ConvertErrorKind, DetailedConvertError, OcrPreprocessMode};
+
+    #[test]
+    fn parses_only_supported_preprocess_modes() {
+        assert_eq!(
+            parse_ocr_preprocess_mode(None).unwrap(),
+            OcrPreprocessMode::Legacy,
+        );
+        assert_eq!(
+            parse_ocr_preprocess_mode(Some("preserve-near-bitonal")).unwrap(),
+            OcrPreprocessMode::PreserveNearBitonal,
+        );
+        assert!(parse_ocr_preprocess_mode(Some("unknown")).is_err());
+    }
 
     #[test]
     fn one_detailed_command_is_registered() {
