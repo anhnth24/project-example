@@ -206,7 +206,9 @@ def _artifact() -> dict[str, object]:
             "expected_word_edits": 3383,
             "expected_reference_words": 11959,
             "rust_control_matches_task2_best": True,
-            "direct_transfer_matches_rust_control": True,
+            "direct_transfer_character_edit_gap": 0,
+            "direct_transfer_word_edit_gap": 0,
+            "direct_transfer_counts_match": True,
         },
         "candidates": candidates,
     }

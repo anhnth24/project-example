@@ -281,9 +281,7 @@ def _adaptive_pillow(image: Image.Image) -> Image.Image:
         image.size,
         bytes(
             255 if pixel > mean - 10 else 0
-            for pixel, mean in zip(
-                image.getdata(), local_mean.getdata(), strict=True
-            )
+            for pixel, mean in zip(image.tobytes(), local_mean.tobytes(), strict=True)
         ),
     )
 
@@ -297,7 +295,11 @@ def _background_suppression(image: Image.Image) -> Image.Image:
 
 def _projection_score(image: Image.Image) -> int:
     binary = image.point(lambda value: 1 if value < 180 else 0)
-    rows = [sum(binary.crop((0, y, binary.width, y + 1)).getdata()) for y in range(binary.height)]
+    pixels = binary.tobytes()
+    rows = [
+        sum(pixels[offset : offset + binary.width])
+        for offset in range(0, len(pixels), binary.width)
+    ]
     return sum((right - left) ** 2 for left, right in zip(rows, rows[1:]))
 
 
@@ -820,7 +822,15 @@ def validate_matrix_artifact(
         "expected_word_edits": 3383,
         "expected_reference_words": 11959,
         "rust_control_matches_task2_best": True,
-        "direct_transfer_matches_rust_control": True,
+        "direct_transfer_character_edit_gap": int(
+            calibration.get("direct_transfer_character_edit_gap", 0)
+        ),
+        "direct_transfer_word_edit_gap": int(
+            calibration.get("direct_transfer_word_edit_gap", 0)
+        ),
+        "direct_transfer_counts_match": bool(
+            calibration.get("direct_transfer_counts_match", False)
+        ),
     }:
         raise ValueError("control calibration did not match both best baselines")
     expected = configs["configs"]
@@ -829,6 +839,27 @@ def validate_matrix_artifact(
         config["id"] for config in expected
     ]:
         raise ValueError("matrix candidate IDs are invalid")
+    expected_counts = {
+        "character_edits": calibration["expected_character_edits"],
+        "reference_characters": calibration["expected_reference_characters"],
+        "word_edits": calibration["expected_word_edits"],
+        "reference_words": calibration["expected_reference_words"],
+    }
+    control_counts = candidates[0]["aggregate"]["raw_counts"]
+    transfer_counts = candidates[1]["aggregate"]["raw_counts"]
+    if control_counts != expected_counts:
+        raise ValueError("Rust control calibration does not match Task 2 best")
+    character_gap = (
+        transfer_counts["character_edits"] - control_counts["character_edits"]
+    )
+    word_gap = transfer_counts["word_edits"] - control_counts["word_edits"]
+    if (
+        calibration["direct_transfer_character_edit_gap"] != character_gap
+        or calibration["direct_transfer_word_edit_gap"] != word_gap
+        or calibration["direct_transfer_counts_match"]
+        != (transfer_counts == control_counts)
+    ):
+        raise ValueError("direct-Tesseract transfer calibration was not recomputed")
     expected_pages: set[str] | None = None
     for candidate, config in zip(candidates, expected, strict=True):
         expected_execution_class = (
@@ -1382,7 +1413,15 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
                 and baseline_counts.get("markhand-auto") == expected
                 and baseline_counts.get("tessdata-best") == expected
             ),
-            "direct_transfer_matches_rust_control": (
+            "direct_transfer_character_edit_gap": (
+                candidates[1]["aggregate"]["raw_counts"]["character_edits"]
+                - control_counts["character_edits"]
+            ),
+            "direct_transfer_word_edit_gap": (
+                candidates[1]["aggregate"]["raw_counts"]["word_edits"]
+                - control_counts["word_edits"]
+            ),
+            "direct_transfer_counts_match": (
                 candidates[1]["aggregate"]["raw_counts"] == control_counts
             ),
         },
