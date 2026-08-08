@@ -41,6 +41,7 @@ EXPECTED_IDS = (
     "threshold-adaptive-pillow",
     "median-denoise",
     "background-watermark-suppression",
+    "psm-3",
     "psm-4",
     "psm-6",
     "psm-11",
