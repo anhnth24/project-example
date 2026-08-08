@@ -1412,6 +1412,14 @@ def derive_calibration_gate(payload: dict[str, Any]) -> dict[str, Any]:
                     for proxy_id in _ACCENT_PROXY_IDS
                 ):
                     _append_once(disqualifications, "page_60_accent_proxy_regression")
+                if not any(
+                    candidate_proxies[proxy_id] < baseline_proxies[proxy_id]
+                    for proxy_id in _ACCENT_PROXY_IDS
+                ):
+                    _append_once(
+                        disqualifications,
+                        "page_60_accent_proxy_no_strict_improvement",
+                    )
 
             baseline_page_450 = baseline_records[450]
             candidate_page_450 = candidate_records[450]
