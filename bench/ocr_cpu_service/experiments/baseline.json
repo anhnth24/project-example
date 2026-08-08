@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "split": "tuning",
+  "expected_pages": 44,
+  "repetitions": 2,
+  "limits": {
+    "cpu_threads": 1,
+    "timeout_seconds_per_page": 180,
+    "max_output_bytes_per_stream": 1048576,
+    "max_rss_bytes": 4294967296,
+    "diagnostic_pages_per_candidate": 8
+  },
+  "candidates": [
+    {
+      "id": "worker-system-fast",
+      "label": "Worker deployment system-fast",
+      "argv": [
+        "{fileconv}",
+        "one",
+        "{input}",
+        "--lang",
+        "vie+eng"
+      ],
+      "tessdata_mode": "system-fast"
+    },
+    {
+      "id": "markhand-auto",
+      "label": "Markhand checkout auto-discovery",
+      "argv": [
+        "{fileconv}",
+        "one",
+        "{input}",
+        "--lang",
+        "vie+eng"
+      ],
+      "tessdata_mode": "auto"
+    },
+    {
+      "id": "tessdata-best",
+      "label": "Explicit repository tessdata_best",
+      "argv": [
+        "{fileconv}",
+        "one",
+        "{input}",
+        "--lang",
+        "vie+eng"
+      ],
+      "tessdata_mode": "best"
+    }
+  ],
+  "determinism": {
+    "ocr_counts_tolerance": 0,
+    "provenance_must_match": true,
+    "timing_is_non_deterministic": true
+  }
+}

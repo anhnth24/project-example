@@ -18,7 +18,7 @@ use anyhow::{bail, Context, Result};
 #[cfg(feature = "audio")]
 use fileconv_core::audio::AudioEngine;
 use fileconv_core::intelligence::{CorpusDocument, HandoffOptions};
-use fileconv_core::{Converter, FormatKind};
+use fileconv_core::{Converter, FormatKind, OcrPreprocessMode, OcrRunConfig};
 use walkdir::WalkDir;
 
 mod metrics;
@@ -33,6 +33,7 @@ fn registered_commands() -> &'static [&'static str] {
         "one-detailed",
         "handoff",
         "pptx-preview",
+        "bitonal-diagnostic",
         "info",
     ]
 }
@@ -123,7 +124,8 @@ fn main() -> Result<()> {
             {
                 opts.max_chars = Some(m);
             }
-            let conv = Converter::with_options(opts);
+            let conv =
+                Converter::with_options_and_ocr_config(opts, ocr_run_config_from_environment()?);
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
             Ok(())
@@ -218,6 +220,13 @@ fn main() -> Result<()> {
                     "slides": slides
                 }))?
             );
+            Ok(())
+        }
+        "bitonal-diagnostic" => {
+            let file = args.get(2).context("thiếu file ảnh")?;
+            let diagnostic =
+                fileconv_core::image_ocr::benchmark_bitonal_diagnostic_path(Path::new(file))?;
+            println!("{}", serde_json::to_string(&diagnostic)?);
             Ok(())
         }
         "info" => {
@@ -785,6 +794,43 @@ fn render_audio_report(rows: &[AudioRow]) -> String {
 
 // ----------------------------- helpers -----------------------------
 
+/// Sanitized error returned for any invalid `FILECONV_OCR_PREPROCESS_MODE` value.
+pub(crate) const INVALID_PREPROCESS_MODE_MSG: &str = "unsupported OCR preprocess mode";
+
+/// Parse `FILECONV_OCR_PREPROCESS_MODE` for benchmark-only OCR preprocessing.
+pub(crate) fn parse_ocr_preprocess_mode(raw: Option<&str>) -> Result<OcrPreprocessMode, String> {
+    match raw {
+        None | Some("") => Ok(OcrPreprocessMode::Legacy),
+        Some("preserve-near-bitonal") => Ok(OcrPreprocessMode::PreserveNearBitonal),
+        Some(_) => Err(INVALID_PREPROCESS_MODE_MSG.to_string()),
+    }
+}
+
+pub(crate) fn parse_ocr_preprocess_mode_from_os(
+    value: Option<&std::ffi::OsStr>,
+) -> Result<OcrPreprocessMode, String> {
+    match value {
+        None => Ok(OcrPreprocessMode::Legacy),
+        Some(raw) => {
+            let text = raw
+                .to_str()
+                .ok_or_else(|| INVALID_PREPROCESS_MODE_MSG.to_string())?;
+            parse_ocr_preprocess_mode(Some(text))
+        }
+    }
+}
+
+fn ocr_run_config_from_environment() -> Result<OcrRunConfig, anyhow::Error> {
+    let preprocess_mode = parse_ocr_preprocess_mode_from_os(
+        std::env::var_os("FILECONV_OCR_PREPROCESS_MODE").as_deref(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok(OcrRunConfig {
+        preprocess_mode,
+        ..OcrRunConfig::default()
+    })
+}
+
 fn rel(base: &Path, p: &Path) -> String {
     p.strip_prefix(base)
         .unwrap_or(p)
@@ -824,8 +870,68 @@ fn count_pages(path: &Path, fmt: FormatKind) -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    use super::registered_commands;
-    use fileconv_core::{ConvertErrorKind, DetailedConvertError};
+    use super::{
+        parse_ocr_preprocess_mode, parse_ocr_preprocess_mode_from_os, registered_commands,
+        INVALID_PREPROCESS_MODE_MSG,
+    };
+    use fileconv_core::{ConvertErrorKind, DetailedConvertError, OcrPreprocessMode};
+    use std::ffi::OsString;
+
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
+    #[test]
+    fn parses_only_supported_preprocess_modes() {
+        assert_eq!(
+            parse_ocr_preprocess_mode(None).unwrap(),
+            OcrPreprocessMode::Legacy,
+        );
+        assert_eq!(
+            parse_ocr_preprocess_mode(Some("preserve-near-bitonal")).unwrap(),
+            OcrPreprocessMode::PreserveNearBitonal,
+        );
+        assert!(parse_ocr_preprocess_mode(Some("unknown")).is_err());
+    }
+
+    #[test]
+    fn registers_benchmark_bitonal_diagnostic_command() {
+        assert!(registered_commands().contains(&"bitonal-diagnostic"));
+    }
+
+    #[test]
+    fn preprocess_mode_invalid_text_is_sanitized() {
+        let error = parse_ocr_preprocess_mode(Some("secret-mode")).unwrap_err();
+        assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);
+        assert!(!error.contains("secret-mode"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn preprocess_mode_invalid_bytes_are_sanitized() {
+        let invalid = OsString::from_vec(vec![0xff, 0xfe, 0xfd]);
+        let error = parse_ocr_preprocess_mode_from_os(Some(invalid.as_os_str())).unwrap_err();
+        assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);
+        assert!(!error.contains("ff"));
+    }
+
+    #[test]
+    fn preprocess_mode_empty_os_string_defaults_to_legacy() {
+        use std::ffi::OsStr;
+
+        assert_eq!(
+            parse_ocr_preprocess_mode_from_os(Some(OsStr::new(""))).unwrap(),
+            OcrPreprocessMode::Legacy,
+        );
+    }
+
+    #[test]
+    fn preprocess_mode_invalid_os_string_is_sanitized() {
+        use std::ffi::OsStr;
+
+        let error = parse_ocr_preprocess_mode_from_os(Some(OsStr::new("secret-mode"))).unwrap_err();
+        assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);
+        assert!(!error.contains("secret-mode"));
+    }
 
     #[test]
     fn one_detailed_command_is_registered() {

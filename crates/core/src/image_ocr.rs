@@ -41,11 +41,28 @@ impl OcrEngine {
     }
 }
 
+/// Per-call OCR preprocessing policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OcrPreprocessMode {
+    #[default]
+    Legacy,
+    /// Experimental, default-off bypass for large near-bitonal renders.
+    ///
+    /// The 92.0% extreme-pixel threshold was calibrated only on 22 pages from
+    /// one Thông tư PDF (lowest observed ratio about 92.21%), so it is not
+    /// general evidence. Although all 22 pages activated, character
+    /// disagreement worsened by about 40–44% versus matched legacy controls.
+    /// Do not enable in production without broader evidence; see
+    /// `bench/ocr_cpu_service/reports/bitonal-pdf-calibration.md`.
+    PreserveNearBitonal,
+}
+
 /// Per-call OCR configuration (no process-wide / TLS error collector).
 #[derive(Debug, Clone, Default)]
 pub struct OcrRunConfig {
     /// Override Tesseract binary; `None` uses `FILECONV_TESSERACT` / `tesseract`.
     pub tesseract_binary: Option<PathBuf>,
+    pub preprocess_mode: OcrPreprocessMode,
 }
 
 /// Pipeline stage where an OCR attempt failed (stable, not localized).
@@ -201,6 +218,16 @@ fn active_engine() -> OcrEngine {
 const UPSCALE_IF_AREA_BELOW: u64 = 500_000;
 /// Cạnh dài tối đa; lớn hơn ⇒ thu xuống để OCR không quá chậm.
 const MAX_LONG_SIDE: u32 = 2400;
+// Experimental near-bitonal constants for the default-off mode above. The
+// 920/1000 threshold comes only from the 22-page, single-document calibration
+// (minimum observed extreme ratio about 92.21%), where activation was 22/22
+// but character disagreement was about 40–44% worse. This is not a production
+// recommendation; see bench/ocr_cpu_service/reports/bitonal-pdf-calibration.md.
+const BITONAL_DARK_MAX: u8 = 32;
+const BITONAL_LIGHT_MIN: u8 = 223;
+const BITONAL_EXTREME_MIN_PER_MILLE: u64 = 920;
+const BITONAL_INK_MIN_PER_MILLE: u64 = 5;
+const BITONAL_INK_MAX_PER_MILLE: u64 = 400;
 /// Cạnh tối đa khi decode (strict, qua `image::Limits`). Cho phép trang lớn
 /// (A3@~600 DPI ≈ 5k×7k, A1@300 DPI ≈ 10k) nhưng chặn decompression bomb.
 /// Giữ `Limits::default().max_alloc` (512 MiB) của crate `image`.
@@ -253,8 +280,8 @@ fn write_ocr_temp_png(img: &DynamicImage) -> io::Result<NamedTempFile> {
     Ok(tmp)
 }
 
-fn write_ocr_temp_gray_png(img: &GrayImage) -> io::Result<NamedTempFile> {
-    write_ocr_temp_png(&DynamicImage::ImageLuma8(img.clone()))
+fn write_ocr_temp_gray_png(img: GrayImage) -> io::Result<NamedTempFile> {
+    write_ocr_temp_png(&DynamicImage::ImageLuma8(img))
 }
 
 /// OCR một file ảnh. `langs` ví dụ "vie+eng".
@@ -295,7 +322,7 @@ pub fn ocr_dynimage_detailed(
 ) -> Result<String, OcrAttemptError> {
     ensure_ocr_image_bounds(img.width(), img.height())
         .map_err(|error| OcrAttemptError::from_io(OcrStage::Bounds, error))?;
-    let pre = preprocess(img);
+    let pre = preprocess_with_mode(img, config.preprocess_mode);
     let tmp = write_ocr_temp_png(&pre)
         .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
     let tmp_path = tmp.path();
@@ -323,9 +350,94 @@ pub fn ocr_dynimage_detailed(
     text
 }
 
-/// Tiền xử lý: grayscale → chuẩn hoá kích thước → unsharp → normalize.
-fn preprocess(img: &DynamicImage) -> DynamicImage {
+/// Benchmark-only evidence emitted by the exact Rust classifier used by OCR.
+#[doc(hidden)]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OcrBitonalDiagnostic {
+    pub width: u32,
+    pub height: u32,
+    pub total_pixels: u64,
+    pub extreme_pixels: u64,
+    pub dark_pixels: u64,
+    pub dark_max: u8,
+    pub light_min: u8,
+    pub extreme_min_per_mille: u64,
+    pub ink_min_per_mille: u64,
+    pub ink_max_per_mille: u64,
+    pub max_long_side: u32,
+    pub qualifies: bool,
+    pub preserve_activated: bool,
+}
+
+fn bitonal_diagnostic(gray: &GrayImage) -> OcrBitonalDiagnostic {
+    let total = gray.width() as u64 * gray.height() as u64;
+    let mut extreme = 0u64;
+    let mut ink = 0u64;
+    for p in gray.pixels() {
+        let v = p[0];
+        if v <= BITONAL_DARK_MAX || v >= BITONAL_LIGHT_MIN {
+            extreme += 1;
+        }
+        if v <= BITONAL_DARK_MAX {
+            ink += 1;
+        }
+    }
+    let qualifies = total > 0
+        && per_mille_at_least(extreme, BITONAL_EXTREME_MIN_PER_MILLE, total)
+        && per_mille_at_least(ink, BITONAL_INK_MIN_PER_MILLE, total)
+        && per_mille_at_most(ink, BITONAL_INK_MAX_PER_MILLE, total);
+    OcrBitonalDiagnostic {
+        width: gray.width(),
+        height: gray.height(),
+        total_pixels: total,
+        extreme_pixels: extreme,
+        dark_pixels: ink,
+        dark_max: BITONAL_DARK_MAX,
+        light_min: BITONAL_LIGHT_MIN,
+        extreme_min_per_mille: BITONAL_EXTREME_MIN_PER_MILLE,
+        ink_min_per_mille: BITONAL_INK_MIN_PER_MILLE,
+        ink_max_per_mille: BITONAL_INK_MAX_PER_MILLE,
+        max_long_side: MAX_LONG_SIDE,
+        qualifies,
+        preserve_activated: qualifies && gray.width().max(gray.height()) > MAX_LONG_SIDE,
+    }
+}
+
+/// Read one bounded image and report benchmark-only classifier evidence.
+#[doc(hidden)]
+pub fn benchmark_bitonal_diagnostic_path(path: &Path) -> io::Result<OcrBitonalDiagnostic> {
+    let image = load_image_for_ocr(path).map_err(image_error_to_io)?;
+    ensure_ocr_image_bounds(image.width(), image.height())?;
+    Ok(bitonal_diagnostic(&image.to_luma8()))
+}
+
+/// Classify near-bitonal scans: extremes dominate and ink coverage is in range.
+pub(crate) fn is_effectively_bitonal(gray: &GrayImage) -> bool {
+    bitonal_diagnostic(gray).qualifies
+}
+
+fn per_mille_at_least(count: u64, threshold_per_mille: u64, total: u64) -> bool {
+    (count as u128) * 1000 >= (threshold_per_mille as u128) * (total as u128)
+}
+
+fn per_mille_at_most(count: u64, threshold_per_mille: u64, total: u64) -> bool {
+    (count as u128) * 1000 <= (threshold_per_mille as u128) * (total as u128)
+}
+
+/// Tiền xử lý theo chế độ: legacy hoặc giữ nguyên trang bitonal lớn.
+pub(crate) fn preprocess_with_mode(img: &DynamicImage, mode: OcrPreprocessMode) -> DynamicImage {
     let gray = img.to_luma8();
+    if matches!(mode, OcrPreprocessMode::PreserveNearBitonal) {
+        let long = gray.width().max(gray.height());
+        if long > MAX_LONG_SIDE && is_effectively_bitonal(&gray) {
+            return DynamicImage::ImageLuma8(gray);
+        }
+    }
+    preprocess_legacy(gray)
+}
+
+/// Tiền xử lý: grayscale → chuẩn hoá kích thước → unsharp → normalize.
+fn preprocess_legacy(gray: GrayImage) -> DynamicImage {
     let (w, h) = gray.dimensions();
     let area = w as u64 * h as u64;
     let long = w.max(h);
@@ -455,7 +567,7 @@ fn run_tesseract_with_columns_detailed(
     let mut columns = Vec::new();
     for (left, right) in ranges {
         let cropped = imageops::crop_imm(image, left, 0, right - left, image.height()).to_image();
-        let tmp = write_ocr_temp_gray_png(&cropped)
+        let tmp = write_ocr_temp_gray_png(cropped)
             .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
         let path = tmp.path();
         let automatic = run_tesseract_psm_detailed(path, langs, 4, config);
@@ -793,6 +905,7 @@ fn ocr_text_score(text: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
 
     #[test]
     fn retries_sparse_replacement_and_glued_uppercase_output() {
@@ -1008,6 +1121,160 @@ mod tests {
     }
 
     #[test]
+    fn effectively_bitonal_requires_ink_and_rejects_blank_or_gradient() {
+        let blank = GrayImage::from_pixel(2500, 32, image::Luma([255]));
+        assert!(!is_effectively_bitonal(&blank));
+
+        let mut document = GrayImage::from_pixel(2500, 32, image::Luma([255]));
+        for x in 100..2400 {
+            document.put_pixel(x, 16, image::Luma([0]));
+        }
+        assert!(is_effectively_bitonal(&document));
+
+        let gradient = GrayImage::from_fn(2500, 32, |x, _| image::Luma([((x % 256) as u8)]));
+        assert!(!is_effectively_bitonal(&gradient));
+    }
+
+    #[test]
+    fn near_bitonal_mode_preserves_large_dimensions() {
+        let mut page = GrayImage::from_pixel(2455, 3523, image::Luma([255]));
+        for y in (100..3400).step_by(40) {
+            for x in 100..2300 {
+                page.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        let output = preprocess_with_mode(
+            &DynamicImage::ImageLuma8(page),
+            OcrPreprocessMode::PreserveNearBitonal,
+        );
+        assert_eq!(output.dimensions(), (2455, 3523));
+    }
+
+    #[test]
+    fn legacy_and_non_bitonal_behavior_remain_unchanged() {
+        let photo_like = DynamicImage::ImageLuma8(GrayImage::from_fn(2455, 3523, |x, y| {
+            image::Luma([((x + y) % 256) as u8])
+        }));
+        assert_eq!(
+            preprocess_with_mode(&photo_like, OcrPreprocessMode::Legacy).dimensions(),
+            (1672, 2400),
+        );
+        assert_eq!(
+            preprocess_with_mode(&photo_like, OcrPreprocessMode::PreserveNearBitonal,).dimensions(),
+            (1672, 2400),
+        );
+    }
+
+    /// 1×`total` row: `ink` dark pixels, `extreme` total extreme (ink + light), rest mid-tone.
+    fn bitonal_fixture(total: u32, extreme: u32, ink: u32) -> GrayImage {
+        assert!(ink <= extreme && extreme <= total);
+        let mut img = GrayImage::from_pixel(total, 1, image::Luma([128]));
+        for x in 0..ink {
+            img.put_pixel(x, 0, image::Luma([0]));
+        }
+        for x in ink..extreme {
+            img.put_pixel(x, 0, image::Luma([255]));
+        }
+        img
+    }
+
+    #[test]
+    fn bitonal_classifier_extreme_ratio_boundary_is_inclusive() {
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 920, 5)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 919, 5)));
+    }
+
+    #[test]
+    fn bitonal_classifier_ink_min_boundary_is_inclusive() {
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 920, 5)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 920, 4)));
+    }
+
+    #[test]
+    fn bitonal_diagnostic_reports_frozen_constants_and_activation() {
+        let page = bitonal_fixture(2501, 2301, 20);
+        let diagnostic = bitonal_diagnostic(&page);
+        assert_eq!(diagnostic.dark_max, 32);
+        assert_eq!(diagnostic.light_min, 223);
+        assert_eq!(diagnostic.extreme_min_per_mille, 920);
+        assert_eq!(diagnostic.ink_min_per_mille, 5);
+        assert_eq!(diagnostic.ink_max_per_mille, 400);
+        assert_eq!(diagnostic.max_long_side, 2400);
+        assert_eq!(diagnostic.total_pixels, 2501);
+        assert_eq!(diagnostic.extreme_pixels, 2301);
+        assert_eq!(diagnostic.dark_pixels, 20);
+        assert!(diagnostic.qualifies);
+        assert!(diagnostic.preserve_activated);
+    }
+
+    #[test]
+    fn bitonal_classifier_ink_max_boundary_is_inclusive_without_truncation() {
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 1000, 400)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 1000, 401)));
+        // 40.01% ink truncates to 400 per_mille with integer division — must reject.
+        assert!(!is_effectively_bitonal(&bitonal_fixture(
+            10_000, 10_000, 4001
+        )));
+    }
+
+    #[test]
+    fn bitonal_classifier_rejects_empty_image() {
+        let empty = GrayImage::from_pixel(0, 0, image::Luma([255]));
+        assert!(!is_effectively_bitonal(&empty));
+    }
+
+    /// Qualifying near-bitonal page (long edge ≤ `MAX_LONG_SIDE`) using threshold
+    /// extremes `32`/`223` so legacy normalize/unsharp changes pixels vs input.
+    fn small_qualifying_near_bitonal_page() -> GrayImage {
+        let mut page = GrayImage::from_pixel(2000, 2300, image::Luma([255]));
+        for y in (100..2200).step_by(40) {
+            for x in 100..1900 {
+                page.put_pixel(x, y, image::Luma([32]));
+            }
+        }
+        for y in (50..2250).step_by(200) {
+            for x in 50..90 {
+                page.put_pixel(x, y, image::Luma([223]));
+            }
+        }
+        page
+    }
+
+    #[test]
+    fn qualifying_small_bitonal_page_uses_legacy_preprocess_not_preservation() {
+        let page = small_qualifying_near_bitonal_page();
+        assert!(is_effectively_bitonal(&page));
+        assert!(page.width().max(page.height()) <= MAX_LONG_SIDE);
+
+        let input = DynamicImage::ImageLuma8(page.clone());
+        let original = page.as_raw().to_vec();
+        let preserved = preprocess_with_mode(&input, OcrPreprocessMode::PreserveNearBitonal);
+        let legacy = preprocess_legacy(page);
+
+        // Fails if small pages return raw grayscale (preservation bypass).
+        assert_ne!(preserved.to_luma8().as_raw(), original.as_slice());
+        assert_eq!(preserved.to_luma8().as_raw(), legacy.to_luma8().as_raw());
+    }
+
+    #[test]
+    fn ocr_run_config_defaults_to_legacy_preprocess_mode() {
+        assert_eq!(
+            OcrRunConfig::default().preprocess_mode,
+            OcrPreprocessMode::Legacy,
+        );
+    }
+
+    #[test]
+    fn legacy_preprocess_mode_matches_legacy_helper_pixel_for_pixel() {
+        let photo_like = DynamicImage::ImageLuma8(GrayImage::from_fn(2455, 3523, |x, y| {
+            image::Luma([((x + y) % 256) as u8])
+        }));
+        let via_mode = preprocess_with_mode(&photo_like, OcrPreprocessMode::Legacy);
+        let via_helper = preprocess_legacy(photo_like.to_luma8());
+        assert_eq!(via_mode.to_luma8().as_raw(), via_helper.to_luma8().as_raw());
+    }
+
+    #[test]
     fn missing_tesseract_binary_is_typed_dependency_missing_with_stage() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sample.png");
@@ -1018,6 +1285,7 @@ mod tests {
             tesseract_binary: Some(PathBuf::from(
                 "/nonexistent/fileconv-core-t7-missing-tesseract",
             )),
+            ..OcrRunConfig::default()
         };
         let err = ocr_image_detailed(&path, "eng", &cfg).expect_err("missing binary");
         assert!(

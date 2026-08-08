@@ -1,0 +1,138 @@
+{
+  "schema_version": 2,
+  "split": "calibration",
+  "expected_pages": 22,
+  "approved_page_numbers": [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    60, 450
+  ],
+  "source": {
+    "id": "official-89-2026-tt-btc",
+    "expected_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+    "max_bytes": 17281751
+  },
+  "render": {
+    "dpi": 300,
+    "max_pixels": 50000000,
+    "max_dimension": 10000
+  },
+  "classifier": {
+    "dark_max": 32,
+    "light_min": 223,
+    "extreme_min_per_mille": 920,
+    "ink_min_per_mille": 5,
+    "ink_max_per_mille": 400,
+    "max_long_side": 2400
+  },
+  "limits": {
+    "cpu_threads": 1,
+    "timeout_seconds_per_page": 180,
+    "max_output_bytes_per_stream": 1048576,
+    "max_rss_bytes": 805306368,
+    "max_source_bytes": 17281751,
+    "process_tree_sample_interval_ms": 10
+  },
+  "candidates": [
+    {
+      "id": "legacy-best-vie-eng",
+      "mode": "legacy",
+      "tessdata": "best",
+      "langs": "vie+eng",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie+eng"],
+      "environment_variable_names": [
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
+    },
+    {
+      "id": "preserve-best-vie-eng",
+      "mode": "preserve-near-bitonal",
+      "tessdata": "best",
+      "langs": "vie+eng",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie+eng"],
+      "environment_variable_names": [
+        "FILECONV_OCR_PREPROCESS_MODE",
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
+    },
+    {
+      "id": "legacy-best-vie",
+      "mode": "legacy",
+      "tessdata": "best",
+      "langs": "vie",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie"],
+      "environment_variable_names": [
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
+    },
+    {
+      "id": "preserve-best-vie",
+      "mode": "preserve-near-bitonal",
+      "tessdata": "best",
+      "langs": "vie",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie"],
+      "environment_variable_names": [
+        "FILECONV_OCR_PREPROCESS_MODE",
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
+    }
+  ],
+  "page_diagnostics": {
+    "60": {
+      "accent_pairs": [
+        {"id": "luat", "accented": "luật", "unaccented": "luat"},
+        {"id": "duoc", "accented": "được", "unaccented": "duoc"},
+        {"id": "nguoi", "accented": "người", "unaccented": "nguoi"},
+        {"id": "nuoc", "accented": "nước", "unaccented": "nuoc"},
+        {"id": "truong", "accented": "trường", "unaccented": "truong"},
+        {"id": "dieu", "accented": "điều", "unaccented": "dieu"},
+        {"id": "quyet", "accented": "quyết", "unaccented": "quyet"},
+        {"id": "nghiep", "accented": "nghiệp", "unaccented": "nghiep"}
+      ]
+    },
+    "450": {
+      "legal_identifier_patterns": [
+        "\\d{1,4}/\\d{4}/TT-BTC",
+        "Điều\\s+\\d+",
+        "Khoản\\s+\\d+",
+        "Mục\\s+[IVXLC]+"
+      ]
+    }
+  },
+  "reference_disagreement": {
+    "metric_label": "reference_disagreement",
+    "forbidden_labels": ["cer", "accuracy", "ground_truth"]
+  }
+}
