@@ -465,48 +465,38 @@ def test_reference_disagreement_page_number_decoration_does_not_inflate_counts()
     assert with_both_cleaned["character_edits"] == 0
 
 
-def test_page_diagnostics_include_accent_proxy_counts_from_note() -> None:
+def test_page_diagnostics_include_frozen_accent_proxy_counts() -> None:
     config = load_calibration_config(CONFIGS)
-    note = (
-        "Page 60 may show thong/tuong/cuong, quy/luat/thu, and ban hanh/cap nhat "
-        "accent issues."
-    )
     diagnostics = page_diagnostics(
         "thong tu quy dinh",
         page_number=60,
         config=config,
-        note_text=note,
     )
     assert set(diagnostics) == set(_DIAGNOSTIC_FIELDS)
     assert diagnostics["accent_proxy_counts"]["latin-o-for-o-with-hook"] >= 1
 
 
-def test_page_diagnostics_require_note_context_for_accent_proxies() -> None:
-    config = load_calibration_config(CONFIGS)
-    with pytest.raises(ValueError, match="missing from the supplied note"):
-        page_diagnostics(
-            "thong tu",
-            page_number=60,
-            config=config,
-            note_text="unrelated note",
-        )
-
-
-def test_page_diagnostics_matches_accented_vietnamese_note_context() -> None:
-    config = load_calibration_config(CONFIGS)
-
-    diagnostics = page_diagnostics(
-        "thong tu quy dinh",
-        page_number=60,
-        config=config,
-        note_text="Thông tin về quy định và văn bản ban hành.",
+def test_calibrate_parser_matches_task3_command_without_private_note() -> None:
+    args = bitonal_pdf._parser().parse_args(
+        [
+            "calibrate",
+            "--pdf",
+            "official.pdf",
+            "--reference",
+            "reference.md",
+            "--fileconv",
+            "fileconv",
+            "--pdfium-lib",
+            "pdfium/lib",
+            "--system-tessdata",
+            "system-tessdata",
+            "--best-tessdata",
+            "best-tessdata",
+        ]
     )
 
-    assert diagnostics["accent_proxy_counts"] == {
-        "latin-o-for-o-with-hook": 1,
-        "latin-u-for-u-with-hook": 1,
-        "latin-a-for-a-with-breve": 0,
-    }
+    assert args.command == "calibrate"
+    assert not hasattr(args, "note")
 
 
 def test_calibration_work_dir_is_created_under_fixed_root() -> None:
@@ -557,7 +547,6 @@ def test_run_calibration_cleans_work_dir_after_inference_failures(tmp_path: Path
         sources=SERVICE_ROOT / "corpus" / "sources.json",
         pdf=tmp_path / "official.pdf",
         reference=tmp_path / "reference.md",
-        note=tmp_path / "note.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
         system_tessdata=tmp_path,
@@ -567,10 +556,6 @@ def test_run_calibration_cleans_work_dir_after_inference_failures(tmp_path: Path
     args.pdf.write_bytes(b"%PDF-1.4\n")
     args.reference.write_text(
         "\n".join(f"<!-- page {page} -->\nmột hai ba" for page in range(1, 21)),
-        encoding="utf-8",
-    )
-    args.note.write_text(
-        "thong tuong cuong quy luat thu ban hanh cap nhat",
         encoding="utf-8",
     )
     (tmp_path / "vie.traineddata").write_bytes(b"vie")
@@ -639,7 +624,6 @@ def test_run_calibration_cleans_work_dir_on_render_failure(tmp_path: Path) -> No
         sources=SERVICE_ROOT / "corpus" / "sources.json",
         pdf=tmp_path / "official.pdf",
         reference=tmp_path / "reference.md",
-        note=tmp_path / "note.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
         system_tessdata=tmp_path,
@@ -651,7 +635,6 @@ def test_run_calibration_cleans_work_dir_on_render_failure(tmp_path: Path) -> No
         "\n".join(f"<!-- page {page} -->\nmột hai ba" for page in range(1, 21)),
         encoding="utf-8",
     )
-    args.note.write_text("note", encoding="utf-8")
     (tmp_path / "vie.traineddata").write_bytes(b"vie")
     (tmp_path / "eng.traineddata").write_bytes(b"eng")
     (tmp_path / "libpdfium.so").write_bytes(b"pdfium")
@@ -840,7 +823,6 @@ def test_run_calibration_rejects_custom_agreeing_config(tmp_path: Path) -> None:
         sources=DEFAULT_SOURCES,
         pdf=tmp_path / "official.pdf",
         reference=tmp_path / "reference.md",
-        note=tmp_path / "note.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
         system_tessdata=tmp_path,
@@ -863,7 +845,6 @@ def test_run_calibration_rejects_custom_agreeing_sources(tmp_path: Path) -> None
         sources=custom_sources,
         pdf=tmp_path / "official.pdf",
         reference=tmp_path / "reference.md",
-        note=tmp_path / "note.md",
         fileconv=Path("/bin/true"),
         pdfium_lib=tmp_path,
         system_tessdata=tmp_path,
