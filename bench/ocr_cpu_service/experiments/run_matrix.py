@@ -540,6 +540,21 @@ def render_baseline_report(
             else value
         )
         lines.append(f"| `{name}` | `{rendered}` |")
+    if "host" in first:
+        lines.extend(
+            [
+                "",
+                "Host descriptor bound by `host_sha256`:",
+                "",
+                f"- Platform: `{first['host']['platform']}`",
+                f"- Architecture: `{first['host']['architecture']}`",
+                f"- Logical CPUs: {first['host']['logical_cpus']}",
+                f"- Memory bytes: {first['host']['memory_bytes']}",
+                f"- Tesseract: `{first['versions']['tesseract']}`",
+                f"- Python: `{first['versions']['python']}`",
+                f"- Build: `{first['candidates'][0]['provenance']['build_command']}`",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -625,14 +640,19 @@ def render_baseline_report(
             "stratum micro-average. CER is total character edits divided by total "
             "chars; WER is total word edits divided by total words.",
             "",
-            "| Candidate | Page ID | Character edits | Chars | Word edits | Words |",
-            "| --- | --- | ---: | ---: | ---: | ---: |",
+            "| Candidate | Page ID | Difficulty strata | Character edits | Chars | "
+            "Word edits | Words |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: |",
         ]
     )
     for candidate in first["candidates"]:
         for record in candidate["records"]:
+            strata = ", ".join(
+                f"`{stratum}`" for stratum in record["difficulty_strata"]
+            )
             lines.append(
                 f"| `{candidate['id']}` | {record['page_id']} | "
+                f"{strata} | "
                 f"{record.get('character_edits', 0)} | "
                 f"{record.get('reference_characters', 0)} | "
                 f"{record.get('word_edits', 0)} | "

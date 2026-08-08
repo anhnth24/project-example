@@ -382,7 +382,7 @@ def test_report_is_raw_recomputable_and_states_holdout_blocker() -> None:
 
     markdown = render_baseline_report(first, second)
 
-    assert "| p1 | 2 | 20 | 1 | 4 |" in markdown
+    assert "| p1 | `low-contrast` | 2 | 20 | 1 | 4 |" in markdown
     assert "2 / 20 = 0.100000" in markdown
     assert "Holdout assets were not read or executed" in markdown
     assert "production remains blocked" in markdown
