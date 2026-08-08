@@ -38,8 +38,10 @@ CONFIGS = SERVICE_ROOT / "experiments" / "configs.json"
 PREPROCESS = SERVICE_ROOT / "experiments" / "preprocess.py"
 EXPECTED_IDS = (
     "control",
+    "direct-tesseract-transfer-control",
     "dpi-hint-400",
     "deskew-auto-bounded",
+    "grayscale-normalization",
     "threshold-otsu",
     "threshold-adaptive-pillow",
     "median-denoise",
@@ -392,16 +394,23 @@ def test_matrix_candidate_environment_runs_shim_with_pinned_python(
         work_dir=tmp_path / "work",
     )
 
+    control, transfer = specs[:2]
+    assert "FILECONV_TESSDATA" in control.environment
+    assert "FILECONV_TESSERACT" not in control.environment
+    assert "BENCH_OCR_EXPERIMENT_CONFIG_ID" not in control.environment
+    assert "FILECONV_TESSERACT" in transfer.environment
+    assert "BENCH_OCR_EXPERIMENT_CONFIG_ID" in transfer.environment
+
     result = subprocess.run(
         [str(PREPROCESS), "--version"],
-        env=specs[0].environment,
+        env=transfer.environment,
         capture_output=True,
         text=True,
     )
 
     assert result.returncode == 0, result.stderr
     assert Path(sys.executable).parent == Path(
-        specs[0].environment["PATH"].split(os.pathsep)[0]
+        transfer.environment["PATH"].split(os.pathsep)[0]
     )
 
 
@@ -420,8 +429,47 @@ def test_matrix_candidate_binds_the_exact_supplied_config_path(
         work_dir=tmp_path / "work",
     )
 
-    assert specs[0].environment["BENCH_OCR_EXPERIMENT_CONFIGS"] == str(
+    assert specs[1].environment["BENCH_OCR_EXPERIMENT_CONFIGS"] == str(
         custom.resolve()
+    )
+
+
+def test_control_is_real_rust_pipeline_and_direct_variants_have_transfer_control(
+    tmp_path: Path,
+) -> None:
+    configs = load_experiment_configs(CONFIGS)
+    specs, public, events = _build_specs(
+        configs,
+        configs_path=CONFIGS,
+        fileconv=tmp_path / "fileconv",
+        shim=PREPROCESS,
+        real_tesseract=tmp_path / "tesseract",
+        system_tessdata=tmp_path / "system-tessdata",
+        best_tessdata=tmp_path / "best-tessdata",
+        work_dir=tmp_path / "work",
+    )
+
+    assert specs[0].id == "control"
+    assert specs[0].environment["FILECONV_TESSDATA"] == str(
+        tmp_path / "best-tessdata"
+    )
+    assert not set(specs[0].environment) & {
+        "FILECONV_TESSERACT",
+        "BENCH_OCR_EXPERIMENT_CONFIG_ID",
+        "BENCH_OCR_EXPERIMENT_CONFIGS",
+        "BENCH_OCR_EXPERIMENT_EVENTS",
+        "BENCH_OCR_EXPERIMENT_WORK_DIR",
+        "BENCH_OCR_REAL_TESSERACT",
+    }
+    assert public[0]["execution_class"] == "rust-control"
+    assert events[0] is None
+
+    assert specs[1].id == "direct-tesseract-transfer-control"
+    assert public[1]["execution_class"] == "direct-tesseract-experiment"
+    assert events[1] is not None
+    assert all(
+        item["execution_class"] == "direct-tesseract-experiment"
+        for item in public[1:]
     )
 
 
