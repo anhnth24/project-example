@@ -354,11 +354,17 @@ pub fn is_effectively_bitonal(gray: &GrayImage) -> bool {
             ink += 1;
         }
     }
-    let extreme_per_mille = extreme * 1000 / total;
-    let ink_per_mille = ink * 1000 / total;
-    extreme_per_mille >= BITONAL_EXTREME_MIN_PER_MILLE
-        && ink_per_mille >= BITONAL_INK_MIN_PER_MILLE
-        && ink_per_mille <= BITONAL_INK_MAX_PER_MILLE
+    per_mille_at_least(extreme, BITONAL_EXTREME_MIN_PER_MILLE, total)
+        && per_mille_at_least(ink, BITONAL_INK_MIN_PER_MILLE, total)
+        && per_mille_at_most(ink, BITONAL_INK_MAX_PER_MILLE, total)
+}
+
+fn per_mille_at_least(count: u64, threshold_per_mille: u64, total: u64) -> bool {
+    (count as u128) * 1000 >= (threshold_per_mille as u128) * (total as u128)
+}
+
+fn per_mille_at_most(count: u64, threshold_per_mille: u64, total: u64) -> bool {
+    (count as u128) * 1000 <= (threshold_per_mille as u128) * (total as u128)
 }
 
 /// Tiền xử lý theo chế độ: legacy hoặc giữ nguyên trang bitonal lớn.
@@ -1100,6 +1106,80 @@ mod tests {
             preprocess_with_mode(&photo_like, OcrPreprocessMode::PreserveNearBitonal,).dimensions(),
             (1672, 2400),
         );
+    }
+
+    /// 1×`total` row: `ink` dark pixels, `extreme` total extreme (ink + light), rest mid-tone.
+    fn bitonal_fixture(total: u32, extreme: u32, ink: u32) -> GrayImage {
+        assert!(ink <= extreme && extreme <= total);
+        let mut img = GrayImage::from_pixel(total, 1, image::Luma([128]));
+        for x in 0..ink {
+            img.put_pixel(x, 0, image::Luma([0]));
+        }
+        for x in ink..extreme {
+            img.put_pixel(x, 0, image::Luma([255]));
+        }
+        img
+    }
+
+    #[test]
+    fn bitonal_classifier_extreme_ratio_boundary_is_inclusive() {
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 985, 5)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 984, 5)));
+    }
+
+    #[test]
+    fn bitonal_classifier_ink_min_boundary_is_inclusive() {
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 985, 5)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 985, 4)));
+    }
+
+    #[test]
+    fn bitonal_classifier_ink_max_boundary_is_inclusive_without_truncation() {
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 1000, 400)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 1000, 401)));
+        // 40.01% ink truncates to 400 per_mille with integer division — must reject.
+        assert!(!is_effectively_bitonal(&bitonal_fixture(
+            10_000, 10_000, 4001
+        )));
+    }
+
+    #[test]
+    fn bitonal_classifier_rejects_empty_image() {
+        let empty = GrayImage::from_pixel(0, 0, image::Luma([255]));
+        assert!(!is_effectively_bitonal(&empty));
+    }
+
+    #[test]
+    fn qualifying_small_bitonal_page_uses_legacy_preprocess_not_preservation() {
+        let mut page = GrayImage::from_pixel(2000, 2300, image::Luma([255]));
+        for y in (100..2200).step_by(40) {
+            for x in 100..1900 {
+                page.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        assert!(is_effectively_bitonal(&page));
+        let input = DynamicImage::ImageLuma8(page.clone());
+        let preserved = preprocess_with_mode(&input, OcrPreprocessMode::PreserveNearBitonal);
+        let legacy = preprocess_legacy(&page);
+        assert_eq!(preserved.to_luma8().as_raw(), legacy.to_luma8().as_raw());
+    }
+
+    #[test]
+    fn ocr_run_config_defaults_to_legacy_preprocess_mode() {
+        assert_eq!(
+            OcrRunConfig::default().preprocess_mode,
+            OcrPreprocessMode::Legacy,
+        );
+    }
+
+    #[test]
+    fn legacy_preprocess_mode_matches_legacy_helper_pixel_for_pixel() {
+        let photo_like = DynamicImage::ImageLuma8(GrayImage::from_fn(2455, 3523, |x, y| {
+            image::Luma([((x + y) % 256) as u8])
+        }));
+        let via_mode = preprocess_with_mode(&photo_like, OcrPreprocessMode::Legacy);
+        let via_helper = preprocess_legacy(&photo_like.to_luma8());
+        assert_eq!(via_mode.to_luma8().as_raw(), via_helper.to_luma8().as_raw());
     }
 
     #[test]
