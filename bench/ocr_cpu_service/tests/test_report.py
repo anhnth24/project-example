@@ -147,12 +147,7 @@ def _generic_report_payload(
         "run": {
             "commit": "abc123",
             "host": {"logical_cpus": 2, "memory_bytes": 1024},
-            "versions": {
-                "paddleocr": "archived",
-                "paddlepaddle": "archived",
-                "paddlex": "archived",
-                "python": "3.12",
-            },
+            "versions": {"python": "3.12"},
         },
         "corpus": {
             "manifest_sha256": "a" * 64,
@@ -230,7 +225,12 @@ def test_markdown_is_deterministic_metadata_only_rendering() -> None:
         "run": {
             "commit": "abc123",
             "host": {"logical_cpus": 8, "memory_bytes": 1024},
-            "versions": {"python": "3.12"},
+            "versions": {
+                "paddleocr": "archived",
+                "paddlepaddle": "archived",
+                "paddlex": "archived",
+                "python": "3.12",
+            },
         },
         "corpus": {
             "manifest_sha256": "a" * 64,
