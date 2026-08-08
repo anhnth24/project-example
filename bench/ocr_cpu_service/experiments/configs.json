@@ -21,10 +21,21 @@
   "configs": [
     {
       "id": "control",
-      "label": "Rust pipeline control passthrough",
+      "label": "Actual Rust fileconv tessdata_best control",
       "changed_factor": null,
       "factor": {},
-      "configuration_sha256": "94d111b86b63a566323b8a616218a8a43658a85f75efec63ce7e50a9efb5e4d2"
+      "configuration_sha256": "44983d1cfd695fbfc64fd05428ed149a167c57ccec8e39ea71b40f787876c0c9"
+    },
+    {
+      "id": "direct-tesseract-transfer-control",
+      "label": "Direct-Tesseract passthrough transfer control",
+      "changed_factor": "execution_adapter",
+      "factor": {
+        "execution_adapter": {
+          "mode": "direct-tesseract-shim-passthrough"
+        }
+      },
+      "configuration_sha256": "e7371651a657604d77a61f22e58d4832a5705b524331ed3b78340bbb67d58b0b"
     },
     {
       "id": "dpi-hint-400",
@@ -52,6 +63,18 @@
         }
       },
       "configuration_sha256": "51f16f4cd2e72e946bfae88435da0b302ab76061eb23118683075ccf181385fb"
+    },
+    {
+      "id": "grayscale-normalization",
+      "label": "Deterministic grayscale autocontrast normalization",
+      "changed_factor": "grayscale_normalization",
+      "factor": {
+        "grayscale_normalization": {
+          "method": "autocontrast",
+          "cutoff_percent": 0
+        }
+      },
+      "configuration_sha256": "65aec2317fe0607c93adee509dbe5f29b3986c6d76ef51af8d21441dcaaf60a5"
     },
     {
       "id": "threshold-otsu",

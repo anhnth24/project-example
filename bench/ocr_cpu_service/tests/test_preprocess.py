@@ -115,6 +115,15 @@ def _artifact() -> dict[str, object]:
             )
             for index in range(44)
         ]
+        if config["id"] == "control":
+            for record in records:
+                for key in (
+                    "input_sha256s",
+                    "transform_sha256s",
+                    "transform_sha256",
+                    "transform_attempts",
+                ):
+                    record.pop(key)
         candidates.append(
             {
                 "id": config["id"],
@@ -122,6 +131,11 @@ def _artifact() -> dict[str, object]:
                 "changed_factor": config["changed_factor"],
                 "factor": config["factor"],
                 "configuration_sha256": config["configuration_sha256"],
+                "execution_class": (
+                    "rust-control"
+                    if config["id"] == "control"
+                    else "direct-tesseract-experiment"
+                ),
                 "environment_variable_names": [
                     "BENCH_OCR_EXPERIMENT_CONFIG_ID",
                     "BENCH_OCR_EXPERIMENT_EVENTS",
@@ -180,8 +194,8 @@ def _artifact() -> dict[str, object]:
             "expected_reference_characters": 54897,
             "expected_word_edits": 3383,
             "expected_reference_words": 11959,
-            "markhand_auto_match": True,
-            "explicit_best_match": True,
+            "rust_control_matches_task2_best": True,
+            "direct_transfer_matches_rust_control": True,
         },
         "candidates": candidates,
     }
@@ -391,6 +405,7 @@ def test_matrix_candidate_environment_runs_shim_with_pinned_python(
         shim=PREPROCESS,
         real_tesseract=real,
         system_tessdata=tmp_path / "tessdata",
+        best_tessdata=tmp_path / "tessdata-best",
         work_dir=tmp_path / "work",
     )
 
@@ -426,6 +441,7 @@ def test_matrix_candidate_binds_the_exact_supplied_config_path(
         shim=PREPROCESS,
         real_tesseract=tmp_path / "tesseract",
         system_tessdata=tmp_path / "tessdata",
+        best_tessdata=tmp_path / "tessdata-best",
         work_dir=tmp_path / "work",
     )
 
@@ -545,7 +561,7 @@ def test_matrix_artifact_requires_calibrated_control_exact_pages_and_checksums()
     validate_matrix_artifact(artifact, load_experiment_configs(CONFIGS))
 
     broken = deepcopy(artifact)
-    broken["baseline_calibration"]["explicit_best_match"] = False
+    broken["baseline_calibration"]["rust_control_matches_task2_best"] = False
     with pytest.raises(ValueError, match="calibration"):
         validate_matrix_artifact(broken, load_experiment_configs(CONFIGS))
 
@@ -599,8 +615,10 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
     assert "not a 300/400 PDF rerender comparison" in report
     assert "No holdout result" in report
     assert "Transfer gap: **" in report
-    assert "versus the production `markhand-auto`" in report
-    assert "CER change vs control" in report
+    assert "actual Rust control" in report
+    assert "not directly production-equivalent" in report
+    assert "CER change vs Rust control" in report
+    assert "CER change vs direct transfer" in report
     assert "Tesseract binary SHA-256" in report
     assert artifact["provenance"]["tesseract_binary_sha256"] in report
     assert "recognized_text" not in report

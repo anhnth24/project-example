@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib.metadata
 import json
 import math
 import os
@@ -48,7 +49,6 @@ from experiments.run_matrix import (
     _host_description,
     _sha256,
     _toolchain_description,
-    resolve_auto_tessdata,
     select_tuning_pages,
 )
 
@@ -71,8 +71,10 @@ MAX_DESKEW_DEGREES = 3.0
 PNG_COMPRESS_LEVEL = 9
 EXPECTED_CONFIG_IDS = (
     "control",
+    "direct-tesseract-transfer-control",
     "dpi-hint-400",
     "deskew-auto-bounded",
+    "grayscale-normalization",
     "threshold-otsu",
     "threshold-adaptive-pillow",
     "median-denoise",
@@ -355,6 +357,10 @@ def _apply_image_factor(
         }:
             raise ValueError("unsupported deskew settings")
         return _rotate_expand_white(gray, _estimate_deskew(gray))
+    if name == "grayscale_normalization":
+        if settings != {"method": "autocontrast", "cutoff_percent": 0}:
+            raise ValueError("unsupported grayscale normalization settings")
+        return ImageOps.autocontrast(gray, cutoff=0), deskew_degrees
     if name == "threshold":
         if settings == {"method": "otsu"}:
             return _otsu(gray), deskew_degrees
@@ -509,7 +515,13 @@ def shim_main(argv: list[str] | None = None) -> int:
     image_factor = (
         factor
         if config["changed_factor"]
-        in {"deskew", "threshold", "denoise", "background_suppression"}
+        in {
+            "deskew",
+            "grayscale_normalization",
+            "threshold",
+            "denoise",
+            "background_suppression",
+        }
         else {}
     )
     work_dir = Path(
@@ -627,7 +639,7 @@ def _run_matrix_candidate(
     public: dict[str, Any],
     pages: list[dict[str, Any]],
     *,
-    events_path: Path,
+    events_path: Path | None,
     timeout_seconds: float,
     max_output_bytes: int,
     max_rss_bytes: int,
@@ -641,7 +653,8 @@ def _run_matrix_candidate(
     records: list[dict[str, Any]] = []
     try:
         for page in pages:
-            events_path.unlink(missing_ok=True)
+            if events_path is not None:
+                events_path.unlink(missing_ok=True)
             benchmark_page = BenchmarkPage(
                 source_id=page["source_id"],
                 source_sha256=page["source_sha256"],
@@ -667,13 +680,6 @@ def _run_matrix_candidate(
             try:
                 measurement = worker.recognize(benchmark_page)
                 counts = error_counts(page["transcription"], measurement.text)
-                (
-                    input_sha256s,
-                    transform_sha256s,
-                    transform_sha256,
-                    attempts,
-                    angle,
-                ) = _event_summary(events_path)
                 peak_rss = int(measurement.resource["peak_rss_bytes"])
                 record.update(
                     success=True,
@@ -686,12 +692,22 @@ def _run_matrix_candidate(
                     peak_rss_bytes=peak_rss,
                     rss_sample_count=int(measurement.resource["sample_count"]),
                     resource_limit_violation=peak_rss > max_rss_bytes,
-                    input_sha256s=input_sha256s,
-                    transform_sha256s=transform_sha256s,
-                    transform_sha256=transform_sha256,
-                    transform_attempts=attempts,
-                    max_abs_deskew_degrees=angle,
                 )
+                if events_path is not None:
+                    (
+                        input_sha256s,
+                        transform_sha256s,
+                        transform_sha256,
+                        attempts,
+                        angle,
+                    ) = _event_summary(events_path)
+                    record.update(
+                        input_sha256s=input_sha256s,
+                        transform_sha256s=transform_sha256s,
+                        transform_sha256=transform_sha256,
+                        transform_attempts=attempts,
+                        max_abs_deskew_degrees=angle,
+                    )
             except TimeoutError:
                 record["error_kind"] = "timeout"
             except CandidateOutputLimitError:
@@ -707,7 +723,8 @@ def _run_matrix_candidate(
             )
     finally:
         worker.close()
-        events_path.unlink(missing_ok=True)
+        if events_path is not None:
+            events_path.unlink(missing_ok=True)
     strata = {
         stratum: aggregate_matrix_records(
             [
@@ -802,8 +819,8 @@ def validate_matrix_artifact(
         "expected_reference_characters": 54897,
         "expected_word_edits": 3383,
         "expected_reference_words": 11959,
-        "markhand_auto_match": True,
-        "explicit_best_match": True,
+        "rust_control_matches_task2_best": True,
+        "direct_transfer_matches_rust_control": True,
     }:
         raise ValueError("control calibration did not match both best baselines")
     expected = configs["configs"]
@@ -814,18 +831,33 @@ def validate_matrix_artifact(
         raise ValueError("matrix candidate IDs are invalid")
     expected_pages: set[str] | None = None
     for candidate, config in zip(candidates, expected, strict=True):
+        expected_execution_class = (
+            "rust-control"
+            if config["id"] == "control"
+            else "direct-tesseract-experiment"
+        )
         if (
             candidate["changed_factor"] != config["changed_factor"]
             or candidate["factor"] != config["factor"]
             or candidate["configuration_sha256"]
             != config["configuration_sha256"]
+            or candidate["execution_class"] != expected_execution_class
         ):
             raise ValueError("candidate configuration provenance drift")
         names = candidate["environment_variable_names"]
         if (
             not isinstance(names, list)
             or any(not isinstance(name, str) for name in names)
-            or "FILECONV_TESSERACT" not in names
+        ):
+            raise ValueError("shim environment-variable names are incomplete")
+        if config["id"] == "control":
+            if (
+                "FILECONV_TESSDATA" not in names
+                or any(name in names for name in _SHIM_ENVIRONMENT_NAMES)
+            ):
+                raise ValueError("Rust control must not use the experiment shim")
+        elif (
+            "FILECONV_TESSERACT" not in names
             or "BENCH_OCR_EXPERIMENT_CONFIG_ID" not in names
         ):
             raise ValueError("shim environment-variable names are incomplete")
@@ -842,7 +874,18 @@ def validate_matrix_artifact(
                 raise ValueError("holdout matrix record is forbidden")
             if not _valid_checksum(record.get("source_sha256")):
                 raise ValueError("source checksum is invalid")
-            if record["success"]:
+            if record["success"] and config["id"] == "control":
+                if any(
+                    key in record
+                    for key in (
+                        "input_sha256s",
+                        "transform_sha256s",
+                        "transform_sha256",
+                        "transform_attempts",
+                    )
+                ):
+                    raise ValueError("Rust control cannot claim shim transforms")
+            elif record["success"]:
                 input_sha256s = record.get("input_sha256s")
                 transform_sha256s = record.get("transform_sha256s")
                 if (
@@ -934,12 +977,16 @@ def _format_aggregate_row(config_id: str, aggregate: dict[str, Any]) -> str:
 
 def render_matrix_report(artifact: dict[str, Any]) -> str:
     control = artifact["candidates"][0]
+    transfer_control = artifact["candidates"][1]
     control_counts = control["aggregate"]["raw_counts"]
-    baseline = artifact["baseline_calibration"]
     transfer_character_gap = (
-        control_counts["character_edits"] - baseline["expected_character_edits"]
+        transfer_control["aggregate"]["raw_counts"]["character_edits"]
+        - control_counts["character_edits"]
     )
-    transfer_word_gap = control_counts["word_edits"] - baseline["expected_word_edits"]
+    transfer_word_gap = (
+        transfer_control["aggregate"]["raw_counts"]["word_edits"]
+        - control_counts["word_edits"]
+    )
     ranked = sorted(
         artifact["candidates"],
         key=lambda candidate: (candidate["aggregate"]["cer"], candidate["id"]),
@@ -952,15 +999,19 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
         "Current best baseline: **12.2174% CER** (`markhand-auto` and explicit "
         "`tessdata-best`, 6,707 / 54,897 character edits).",
         "",
-        "The control uses the benchmark-only Tesseract shim as a strict passthrough "
-        "after fileconv performs its normal Rust image decode, conditional resize, "
-        "grayscale, unsharp mask, normalization, column detection, retry scoring, "
-        "and temporary-file lifecycle. Matrix transferability is accepted only "
-        "because control counts calibrated exactly to both Task 2 best baselines.",
+        "`control` is the actual Rust `fileconv` pipeline with explicit "
+        "`tessdata_best`; it does not set `FILECONV_TESSERACT` and does not pass "
+        "through the Python shim.",
         "",
         f"Transfer gap: **{transfer_character_gap} character edits and "
-        f"{transfer_word_gap} word edits** versus the production `markhand-auto` "
-        "and explicit `tessdata-best` baseline.",
+        f"{transfer_word_gap} word edits** between "
+        "`direct-tesseract-transfer-control` and the actual Rust control.",
+        "",
+        "Every candidate other than `control` is a direct-Tesseract experiment "
+        "interposed after Rust preprocessing. These variants are compared to the "
+        "direct transfer control and are **not directly production-equivalent**, "
+        "even when the measured transfer gap is zero. Task 4 may consider their "
+        "tuning signal, but production behavior is not frozen here.",
         "",
         "The `dpi-hint-400` factor changes only Tesseract's DPI hint. Source images "
         "prevent a true render-resolution experiment, so this is **not a 300/400 "
@@ -980,10 +1031,11 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
         "## Ranked overall tuning measurements",
         "",
         "| Rank | Config | Changed factor | Character edits / chars | CER | "
-        "Word edits / words | WER | CER change vs control | Median s/page | "
+        "Word edits / words | WER | CER change vs Rust control | "
+        "CER change vs direct transfer | Median s/page | "
         "p95 s/page | Peak RSS MiB | "
         "Failures |",
-        "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for rank, candidate in enumerate(ranked, 1):
         aggregate = candidate["aggregate"]
@@ -995,6 +1047,7 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             f"{aggregate['cer']:.6f} | {raw['word_edits']} / "
             f"{raw['reference_words']} | {aggregate['wer']:.6f} | "
             f"{aggregate['cer'] - control['aggregate']['cer']:+.6f} | "
+            f"{aggregate['cer'] - transfer_control['aggregate']['cer']:+.6f} | "
             f"{aggregate['latency_seconds']['median']:.6f} | "
             f"{aggregate['latency_seconds']['p95']:.6f} | "
             f"{aggregate['peak_rss_bytes'] / 1048576:.2f} | "
@@ -1003,15 +1056,16 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## Exact one-factor configurations",
+        "## Exact one-factor configurations",
             "",
-            "| Config | Changed factor | Published value | Configuration SHA-256 |",
-            "| --- | --- | --- | --- |",
+        "| Config | Execution class | Changed factor | Published value | Configuration SHA-256 |",
+        "| --- | --- | --- | --- | --- |",
         ]
     )
     for candidate in artifact["candidates"]:
         lines.append(
             f"| `{candidate['id']}` | "
+            f"`{candidate['execution_class']}` | "
             f"`{candidate['changed_factor'] or 'none'}` | "
             f"`{json.dumps(candidate['factor'], sort_keys=True, separators=(',', ':'))}` | "
             f"`{candidate['configuration_sha256']}` |"
@@ -1154,8 +1208,9 @@ def _build_specs(
     shim: Path,
     real_tesseract: Path,
     system_tessdata: Path,
+    best_tessdata: Path,
     work_dir: Path,
-) -> tuple[list[CommandCandidateSpec], list[dict[str, Any]], list[Path]]:
+) -> tuple[list[CommandCandidateSpec], list[dict[str, Any]], list[Path | None]]:
     base = sanitized_candidate_environment(
         cpu_threads=configs["limits"]["cpu_threads"]
     )
@@ -1164,20 +1219,28 @@ def _build_specs(
     )
     specs: list[CommandCandidateSpec] = []
     public: list[dict[str, Any]] = []
-    events_paths: list[Path] = []
+    events_paths: list[Path | None] = []
     for config in configs["configs"]:
-        events = work_dir / "events" / f"{config['id']}.jsonl"
-        environment = {
-            **base,
-            "FILECONV_TESSERACT": str(shim),
-            "BENCH_OCR_REAL_TESSERACT": str(real_tesseract),
-            "BENCH_OCR_EXPERIMENT_CONFIG_ID": config["id"],
-            "BENCH_OCR_EXPERIMENT_CONFIGS": str(configs_path.resolve()),
-            "BENCH_OCR_EXPERIMENT_EVENTS": str(events),
-            "BENCH_OCR_EXPERIMENT_WORK_DIR": str(
-                work_dir / "transforms" / config["id"]
-            ),
-        }
+        is_rust_control = config["id"] == "control"
+        events = (
+            None
+            if is_rust_control
+            else work_dir / "events" / f"{config['id']}.jsonl"
+        )
+        environment = {**base, "FILECONV_TESSDATA": str(best_tessdata)}
+        if not is_rust_control:
+            environment.update(
+                {
+                    "FILECONV_TESSERACT": str(shim),
+                    "BENCH_OCR_REAL_TESSERACT": str(real_tesseract),
+                    "BENCH_OCR_EXPERIMENT_CONFIG_ID": config["id"],
+                    "BENCH_OCR_EXPERIMENT_CONFIGS": str(configs_path.resolve()),
+                    "BENCH_OCR_EXPERIMENT_EVENTS": str(events),
+                    "BENCH_OCR_EXPERIMENT_WORK_DIR": str(
+                        work_dir / "transforms" / config["id"]
+                    ),
+                }
+            )
         if config["changed_factor"] == "tessdata":
             environment["FILECONV_TESSDATA"] = str(system_tessdata)
         spec = CommandCandidateSpec(
@@ -1201,6 +1264,11 @@ def _build_specs(
                 "changed_factor": config["changed_factor"],
                 "factor": config["factor"],
                 "configuration_sha256": config["configuration_sha256"],
+                "execution_class": (
+                    "rust-control"
+                    if is_rust_control
+                    else "direct-tesseract-experiment"
+                ),
                 "environment_variable_names": sorted(environment),
             }
         )
@@ -1221,13 +1289,15 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
     shim = args.shim.resolve()
     real_tesseract = args.real_tesseract.resolve()
     system_tessdata = args.system_tessdata.resolve()
-    best_tessdata = resolve_auto_tessdata(
-        cwd=Path.cwd(),
-        executable=fileconv,
-        manifest_dir=ROOT / "crates" / "core",
-    )
+    best_tessdata = args.best_tessdata.resolve()
     host = _host_description(configs["limits"]["max_rss_bytes"])
-    toolchain = _toolchain_description()
+    toolchain = {
+        **_toolchain_description(),
+        "matrix_python_packages": {
+            package: importlib.metadata.version(package)
+            for package in ("Pillow", "psutil")
+        },
+    }
     provenance = {
         "source_sha256": _sha256(args.sources.resolve()),
         "split_sha256": hashlib.sha256(split_payload).hexdigest(),
@@ -1259,6 +1329,7 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
         shim=shim,
         real_tesseract=real_tesseract,
         system_tessdata=system_tessdata,
+        best_tessdata=best_tessdata,
         work_dir=args.work_dir.resolve(),
     )
     candidates = [
@@ -1306,13 +1377,13 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
             "expected_reference_characters": 54897,
             "expected_word_edits": 3383,
             "expected_reference_words": 11959,
-            "markhand_auto_match": (
+            "rust_control_matches_task2_best": (
                 control_counts == expected
                 and baseline_counts.get("markhand-auto") == expected
-            ),
-            "explicit_best_match": (
-                control_counts == expected
                 and baseline_counts.get("tessdata-best") == expected
+            ),
+            "direct_transfer_matches_rust_control": (
+                candidates[1]["aggregate"]["raw_counts"] == control_counts
             ),
         },
         "candidates": candidates,
@@ -1344,6 +1415,11 @@ def _matrix_parser() -> argparse.ArgumentParser:
         "--system-tessdata",
         type=Path,
         default=Path("/usr/share/tesseract-ocr/5/tessdata"),
+    )
+    parser.add_argument(
+        "--best-tessdata",
+        type=Path,
+        default=ROOT / "tessdata_best",
     )
     parser.add_argument("--work-dir", type=Path, default=DEFAULT_MATRIX_WORK)
     return parser
