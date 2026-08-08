@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "split": "tuning",
+  "expected_pages": 44,
+  "limits": {
+    "cpu_threads": 1,
+    "diagnostic_pages_per_candidate": 8,
+    "max_output_bytes_per_stream": 1048576,
+    "max_rss_bytes": 4294967296,
+    "timeout_seconds_per_page": 180,
+    "max_dimension": 10000,
+    "max_pixels": 50000000,
+    "max_deskew_degrees": 3.0
+  },
+  "configs": [
+    {
+      "id": "control",
+      "label": "Rust pipeline control passthrough",
+      "changed_factor": null,
+      "factor": {},
+      "configuration_sha256": "94d111b86b63a566323b8a616218a8a43658a85f75efec63ce7e50a9efb5e4d2"
+    },
+    {
+      "id": "dpi-hint-400",
+      "label": "Tesseract DPI hint 400",
+      "changed_factor": "dpi_hint",
+      "factor": {
+        "dpi_hint": {
+          "value": 400,
+          "semantics": "tesseract-hint-not-rerender"
+        }
+      },
+      "configuration_sha256": "417cbe7a18f0826c07d7b7dc3aa294a7c98fa3af749e89690b8295e9ddd68b1d"
+    },
+    {
+      "id": "deskew-auto-bounded",
+      "label": "Bounded projection auto-deskew",
+      "changed_factor": "deskew",
+      "factor": {
+        "deskew": {
+          "method": "projection-auto",
+          "max_degrees": 3.0,
+          "step_degrees": 0.25,
+          "expand": true,
+          "fill": "white"
+        }
+      },
+      "configuration_sha256": "51f16f4cd2e72e946bfae88435da0b302ab76061eb23118683075ccf181385fb"
+    },
+    {
+      "id": "threshold-otsu",
+      "label": "Otsu global threshold",
+      "changed_factor": "threshold",
+      "factor": {
+        "threshold": {
+          "method": "otsu"
+        }
+      },
+      "configuration_sha256": "7c3749e573a95836c898d7139f7d984142f6abd3fb869075fc0ad68f05754465"
+    },
+    {
+      "id": "threshold-adaptive-pillow",
+      "label": "Pure-Pillow adaptive threshold",
+      "changed_factor": "threshold",
+      "factor": {
+        "threshold": {
+          "method": "adaptive-pillow",
+          "window": 31,
+          "offset": 10
+        }
+      },
+      "configuration_sha256": "45b0ce13ace36b4a76e746e614a3a705dd2fa4c204964980ca912c4d1bd6674d"
+    },
+    {
+      "id": "median-denoise",
+      "label": "Conservative 3x3 median denoise",
+      "changed_factor": "denoise",
+      "factor": {
+        "denoise": {
+          "method": "median",
+          "size": 3
+        }
+      },
+      "configuration_sha256": "cdf898cdf3aff294dca0d25aa5994707e729b54824ba5ed8e1eb3fbb8c22bfbe"
+    },
+    {
+      "id": "background-watermark-suppression",
+      "label": "Conservative light background and watermark suppression",
+      "changed_factor": "background_suppression",
+      "factor": {
+        "background_suppression": {
+          "method": "light-tone-compress",
+          "preserve_below": 180,
+          "gain": 2
+        }
+      },
+      "configuration_sha256": "6d0511aed46367ec9b5dfbf2a35d7e20e24cf78eedb5ea3ba16cfe3c4cd2e09c"
+    },
+    {
+      "id": "psm-4",
+      "label": "Force Tesseract PSM 4",
+      "changed_factor": "psm",
+      "factor": {
+        "psm": {
+          "value": 4
+        }
+      },
+      "configuration_sha256": "c0f65840b6439f4e82dd20511a6dff04817a2d28082a50347b1a29e6b931858a"
+    },
+    {
+      "id": "psm-6",
+      "label": "Force Tesseract PSM 6",
+      "changed_factor": "psm",
+      "factor": {
+        "psm": {
+          "value": 6
+        }
+      },
+      "configuration_sha256": "fabceb6c7f64877656002c5b3c97a7600f484c2e93f2f0fe3d374dc6376559b2"
+    },
+    {
+      "id": "psm-11",
+      "label": "Force Tesseract PSM 11",
+      "changed_factor": "psm",
+      "factor": {
+        "psm": {
+          "value": 11
+        }
+      },
+      "configuration_sha256": "27329485ef8061063fbb77ce02603f4c6a244b9f38a8d8f55a9751a74c5d5869"
+    },
+    {
+      "id": "system-fast-tessdata",
+      "label": "System fast tessdata",
+      "changed_factor": "tessdata",
+      "factor": {
+        "tessdata": {
+          "role": "system-fast"
+        }
+      },
+      "configuration_sha256": "ab3947e5c65c62a0b97cd5abb28a871e03b4f3fe66010c94c00e22e7ca73aec6"
+    }
+  ]
+}
