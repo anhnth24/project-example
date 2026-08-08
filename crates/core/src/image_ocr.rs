@@ -1149,18 +1149,36 @@ mod tests {
         assert!(!is_effectively_bitonal(&empty));
     }
 
-    #[test]
-    fn qualifying_small_bitonal_page_uses_legacy_preprocess_not_preservation() {
+    /// Qualifying near-bitonal page (long edge ≤ `MAX_LONG_SIDE`) using threshold
+    /// extremes `32`/`223` so legacy normalize/unsharp changes pixels vs input.
+    fn small_qualifying_near_bitonal_page() -> GrayImage {
         let mut page = GrayImage::from_pixel(2000, 2300, image::Luma([255]));
         for y in (100..2200).step_by(40) {
             for x in 100..1900 {
-                page.put_pixel(x, y, image::Luma([0]));
+                page.put_pixel(x, y, image::Luma([32]));
             }
         }
+        for y in (50..2250).step_by(200) {
+            for x in 50..90 {
+                page.put_pixel(x, y, image::Luma([223]));
+            }
+        }
+        page
+    }
+
+    #[test]
+    fn qualifying_small_bitonal_page_uses_legacy_preprocess_not_preservation() {
+        let page = small_qualifying_near_bitonal_page();
         assert!(is_effectively_bitonal(&page));
+        assert!(page.width().max(page.height()) <= MAX_LONG_SIDE);
+
         let input = DynamicImage::ImageLuma8(page.clone());
+        let original = page.as_raw().to_vec();
         let preserved = preprocess_with_mode(&input, OcrPreprocessMode::PreserveNearBitonal);
         let legacy = preprocess_legacy(&page);
+
+        // Fails if small pages return raw grayscale (preservation bypass).
+        assert_ne!(preserved.to_luma8().as_raw(), original.as_slice());
         assert_eq!(preserved.to_luma8().as_raw(), legacy.to_luma8().as_raw());
     }
 

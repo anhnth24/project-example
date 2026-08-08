@@ -118,8 +118,10 @@ const BITONAL_INK_MAX_PER_MILLE: u64 = 400;
 
 Count every grayscale pixel after existing dimension/allocation checks. A page
 qualifies only when at least 98.5% of pixels are at an extreme and dark-pixel
-ink coverage is between 0.5% and 40%. Full traversal is bounded by existing
-12,000-side decode limits and `image::Limits` allocation checks.
+ink coverage is between 0.5% and 40%. Full traversal is bounded by existing OCR
+bounds without changing them: decoded files retain `image::Limits` `max_alloc`
+(512 MiB default) plus 12,000-per-side decode limits; in-memory and PDF-rendered
+images use the existing 12,000-per-side `ensure_ocr_image_bounds` check.
 
 `PreserveNearBitonal` returns the grayscale image unchanged only when the long
 edge exceeds `MAX_LONG_SIDE` and classification passes. Otherwise call the
