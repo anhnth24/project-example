@@ -886,6 +886,11 @@ mod tests {
     }
 
     #[test]
+    fn registers_benchmark_bitonal_diagnostic_command() {
+        assert!(registered_commands().contains(&"bitonal-diagnostic"));
+    }
+
+    #[test]
     fn preprocess_mode_invalid_text_is_sanitized() {
         let error = parse_ocr_preprocess_mode(Some("secret-mode")).unwrap_err();
         assert_eq!(error, INVALID_PREPROCESS_MODE_MSG);

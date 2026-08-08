@@ -1118,3 +1118,47 @@ def test_gate_rejects_current_private_reference_checksum_mismatch(
 
     with pytest.raises(ValueError, match="private reference checksum mismatch"):
         bitonal_pdf.derive_calibration_gate(payload, reference=reference)
+
+
+def test_accent_pairs_use_word_boundaries_and_distinguish_correct_diacritics() -> None:
+    pairs = [{"id": "luat", "accented": "luật", "unaccented": "luat"}]
+
+    correctly_accented = bitonal_pdf._accent_pair_counts("luật luật_sư", pairs)
+    unaccented = bitonal_pdf._accent_pair_counts("luat luat2", pairs)
+
+    assert correctly_accented == {
+        "luat": {"accented_count": 1, "unaccented_count": 0}
+    }
+    assert unaccented == {"luat": {"accented_count": 0, "unaccented_count": 1}}
+
+
+def test_digit_character_coverage_is_independent_of_fragmentation() -> None:
+    joined = bitonal_pdf._digit_character_metrics("Mã 123456")
+    split = bitonal_pdf._digit_character_metrics("Mã 12 34-56")
+
+    assert joined == split
+    assert joined[0] == 6
+
+
+def test_missing_candidate_schema_field_raises_value_error_not_key_error() -> None:
+    candidate = {
+        "mode": "legacy",
+        "tessdata": "best",
+        "langs": "vie",
+        "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie"],
+        "environment_variable_names": [],
+    }
+    with pytest.raises(ValueError, match="missing field.*id"):
+        bitonal_pdf._validate_candidate_config(candidate)
+
+
+def test_report_omits_private_reference_hash_and_states_conclusion(
+    tmp_path: Path,
+) -> None:
+    payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
+    report = bitonal_pdf.render_calibration_report(payload, reference=reference)
+
+    assert payload["provenance"]["reference_sha256"] not in report
+    assert "## Conclusion" in report
+    assert "839-page run executed: no" in report

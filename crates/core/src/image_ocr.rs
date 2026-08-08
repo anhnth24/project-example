@@ -1123,14 +1123,31 @@ mod tests {
 
     #[test]
     fn bitonal_classifier_extreme_ratio_boundary_is_inclusive() {
-        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 985, 5)));
-        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 984, 5)));
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 920, 5)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 919, 5)));
     }
 
     #[test]
     fn bitonal_classifier_ink_min_boundary_is_inclusive() {
-        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 985, 5)));
-        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 985, 4)));
+        assert!(is_effectively_bitonal(&bitonal_fixture(1000, 920, 5)));
+        assert!(!is_effectively_bitonal(&bitonal_fixture(1000, 920, 4)));
+    }
+
+    #[test]
+    fn bitonal_diagnostic_reports_frozen_constants_and_activation() {
+        let page = bitonal_fixture(2501, 2301, 20);
+        let diagnostic = bitonal_diagnostic(&page);
+        assert_eq!(diagnostic.dark_max, 32);
+        assert_eq!(diagnostic.light_min, 223);
+        assert_eq!(diagnostic.extreme_min_per_mille, 920);
+        assert_eq!(diagnostic.ink_min_per_mille, 5);
+        assert_eq!(diagnostic.ink_max_per_mille, 400);
+        assert_eq!(diagnostic.max_long_side, 2400);
+        assert_eq!(diagnostic.total_pixels, 2501);
+        assert_eq!(diagnostic.extreme_pixels, 2301);
+        assert_eq!(diagnostic.dark_pixels, 20);
+        assert!(diagnostic.qualifies);
+        assert!(diagnostic.preserve_activated);
     }
 
     #[test]

@@ -17,6 +17,14 @@
     "max_pixels": 50000000,
     "max_dimension": 10000
   },
+  "classifier": {
+    "dark_max": 32,
+    "light_min": 223,
+    "extreme_min_per_mille": 920,
+    "ink_min_per_mille": 5,
+    "ink_max_per_mille": 400,
+    "max_long_side": 2400
+  },
   "limits": {
     "cpu_threads": 1,
     "timeout_seconds_per_page": 180,
@@ -27,25 +35,7 @@
   },
   "candidates": [
     {
-      "id": "baseline-system-fast",
-      "mode": "legacy",
-      "tessdata": "system",
-      "langs": "vie+eng",
-      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie+eng"],
-      "environment_variable_names": [
-        "FILECONV_PDFIUM_LIB",
-        "FILECONV_TESSDATA",
-        "LANG",
-        "LC_ALL",
-        "OMP_NUM_THREADS",
-        "OPENBLAS_NUM_THREADS",
-        "PATH",
-        "PYTHONNOUSERSITE",
-        "PYTHONPATH"
-      ]
-    },
-    {
-      "id": "baseline-best",
+      "id": "legacy-best-vie-eng",
       "mode": "legacy",
       "tessdata": "best",
       "langs": "vie+eng",
@@ -63,7 +53,7 @@
       ]
     },
     {
-      "id": "bitonal-best-vie-eng",
+      "id": "preserve-best-vie-eng",
       "mode": "preserve-near-bitonal",
       "tessdata": "best",
       "langs": "vie+eng",
@@ -82,7 +72,25 @@
       ]
     },
     {
-      "id": "bitonal-best-vie",
+      "id": "legacy-best-vie",
+      "mode": "legacy",
+      "tessdata": "best",
+      "langs": "vie",
+      "argv_template": ["{fileconv}", "one", "{input}", "--lang", "vie"],
+      "environment_variable_names": [
+        "FILECONV_PDFIUM_LIB",
+        "FILECONV_TESSDATA",
+        "LANG",
+        "LC_ALL",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "PATH",
+        "PYTHONNOUSERSITE",
+        "PYTHONPATH"
+      ]
+    },
+    {
+      "id": "preserve-best-vie",
       "mode": "preserve-near-bitonal",
       "tessdata": "best",
       "langs": "vie",
@@ -103,19 +111,15 @@
   ],
   "page_diagnostics": {
     "60": {
-      "accent_proxies": [
-        {
-          "id": "latin-o-for-o-with-hook",
-          "tokens": ["thong", "tuong", "cuong"]
-        },
-        {
-          "id": "latin-u-for-u-with-hook",
-          "tokens": ["quy", "luat", "thu"]
-        },
-        {
-          "id": "latin-a-for-a-with-breve",
-          "tokens": ["ban hanh", "cap nhat"]
-        }
+      "accent_pairs": [
+        {"id": "luat", "accented": "luật", "unaccented": "luat"},
+        {"id": "duoc", "accented": "được", "unaccented": "duoc"},
+        {"id": "nguoi", "accented": "người", "unaccented": "nguoi"},
+        {"id": "nuoc", "accented": "nước", "unaccented": "nuoc"},
+        {"id": "truong", "accented": "trường", "unaccented": "truong"},
+        {"id": "dieu", "accented": "điều", "unaccented": "dieu"},
+        {"id": "quyet", "accented": "quyết", "unaccented": "quyet"},
+        {"id": "nghiep", "accented": "nghiệp", "unaccented": "nghiep"}
       ]
     },
     "450": {

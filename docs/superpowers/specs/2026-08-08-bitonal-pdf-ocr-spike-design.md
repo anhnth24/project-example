@@ -28,16 +28,20 @@ Thông tư without lexicon replacement, LLM correction, or table-cell OCR.
 
 ## Approaches
 
-The spike compares four isolated variants:
+The corrected calibration is an exact 2×2 matrix on one fixed
+`tessdata_best` installation:
 
-1. `baseline-system-fast`: current preprocessing, system `vie+eng`.
-2. `baseline-best`: current preprocessing, `tessdata_best` with `vie+eng`.
-3. `bitonal-best-vie-eng`: conditional bitonal bypass, best `vie+eng`.
-4. `bitonal-best-vie`: conditional bitonal bypass, best `vie`.
+1. `legacy-best-vie-eng`: current preprocessing, `vie+eng`.
+2. `preserve-best-vie-eng`: conditional near-bitonal bypass, `vie+eng`.
+3. `legacy-best-vie`: current preprocessing, `vie`.
+4. `preserve-best-vie`: conditional near-bitonal bypass, `vie`.
 
-This isolates model, preprocessing, and language effects. It does not combine
-the result with contextual substitutions, heading rewriting, table
-segmentation, or generative correction.
+This separates preprocessing effects within each language setting and language
+effects within each preprocessing setting. The former `baseline-system-fast`
+measurement remains historical context only; it is not an arm or baseline in
+the corrected calibration. The spike does not combine the result with
+contextual substitutions, heading rewriting, table segmentation, or
+generative correction.
 
 ## Conditional preprocessing
 
@@ -58,8 +62,23 @@ For a qualifying image whose long edge exceeds 2400 pixels:
 All other images retain the existing preprocessing exactly. Existing decode,
 dimension, allocation, tempfile, command, and output bounds remain unchanged.
 
-The threshold is frozen by tests before the live comparison. It cannot be
-tuned from the private reference output.
+The original 98.5% extreme-pixel threshold was invalid for this hypothesis:
+none of the 22 approved 300-DPI renders activated it. A bounded histogram
+measurement using the frozen dark/light cutoffs found extreme ratios from
+92.216052584% to 96.779655670%. The corrected threshold is 92.0%, which
+activates this near-bitonal set with a 0.216-percentage-point margin at the
+lowest page while retaining the existing blank, gradient/photo-like, ink
+minimum, and ink maximum rejection gates. It is frozen by tests before the
+corrected live comparison and cannot be tuned from OCR/reference output.
+
+A benchmark-only Rust diagnostic emits dimensions, total/extreme/dark pixel
+counts, exact classifier constants, qualification, and preserve activation.
+The runner executes that diagnostic against each exact saved render. Raw
+evidence binds every diagnostic to the render SHA-256, release binary SHA-256,
+classifier descriptor hash, and canonical configuration hash. Reported
+activation therefore comes from the exact Rust classifier used by OCR, not a
+Python reimplementation. Each preserve-mode arm must have nonzero activation
+to be eligible.
 
 ## Comparison flow
 
@@ -78,43 +97,58 @@ verified transcription, so their diagnostics cannot be called CER.
 
 - Pages 1–20: normalized character and word disagreement against the private
   reference after removing Markdown decoration and standalone page numbers.
-- Pages 60 and 450: deterministic counts for preserved digits, legal-document
-  identifiers, known accent-error proxies, non-whitespace characters, and
-  suspicious symbols.
-- Every page: latency, sampled process-tree RSS, exit state, output bound, and
-  page-marker coverage.
+- Page 60: word-boundary counts and unaccented ratios for frozen,
+  non-ambiguous accented/unaccented Vietnamese pairs. Tokens whose unaccented
+  form is itself valid or contextually ambiguous are excluded.
+- Page 450: total digit-character count and a checksum of the concatenated
+  digit stream, plus legal-document identifiers, non-whitespace characters,
+  and suspicious symbols. Splitting one digit stream into more OCR fragments
+  does not increase coverage.
+- Every rendered page: exact Rust classifier counts and activation evidence.
+- Every OCR execution: latency, sampled process-tree RSS, exit state, output
+  bound, and successful candidate-page record coverage.
 
 The reference disagreement is a comparative acceptance metric only. It must
 never be reported as CER or ground-truth accuracy.
 
 ## Winner gate
 
-A variant is eligible for the full run only if all are true:
+A preserve variant is eligible for later independent review only if all are
+true:
 
-- lower aggregate character disagreement than the current baseline on pages
-  1–20;
+- lower aggregate character disagreement than the legacy arm with the same
+  language setting on pages 1–20;
 - no page 1–20 regresses by more than two absolute disagreement points;
-- page 60 accent-error proxies improve or remain equal;
+- every page 60 unaccented-pair ratio improves or remains equal;
 - page 450 digit, identifier, and non-whitespace coverage do not regress;
 - all 22 pages succeed with one marker each;
-- median latency is at most 2× baseline;
-- sampled RSS remains below the 768 MiB worker memory limit.
+- exact Rust activation evidence is nonzero and bound to the measured renders;
+- median latency is at most 2× the matched legacy arm;
+- sampled process-tree peak RSS remains strictly below the 768 MiB worker
+  memory limit for both per-record and aggregate checks.
 
-If multiple variants pass, choose the lowest character disagreement, then the
-lowest word disagreement, then the lowest median latency. If none passes, stop
-without a full rerun or production change.
+If multiple preserve variants pass, choose the lowest character disagreement,
+then the lowest word disagreement, then the lowest median latency. Equal page
+60 ratios are acceptable as approved before measurement; the prior
+post-measurement strict-decrease requirement was an invalid gate change and is
+removed. If none passes, stop without a full rerun or production change.
 
 ## Full comparison
 
-Only the winning variant runs all 839 pages. The output and timing log remain
-ignored artifacts. The final tracked report records:
+The 839-page run is not executed as part of the corrected calibration. A
+winner only makes Task 4 eligible for independent review; Task 4 remains
+blocked until that review explicitly permits it. If later permitted, the
+output and timing log remain ignored artifacts. The final tracked report
+records:
 
-- exact binary, source, tessdata, configuration, and tool hashes;
+- exact binary, source, tessdata, configuration, classifier, and tool hashes;
 - complete page-marker coverage;
 - wall time and peak RSS;
 - before/after proxy metrics;
 - pages with the largest reference disagreement changes;
-- the explicit limitation that only pages 1–20 have a reference.
+- the explicit limitation that only pages 1–20 have a private,
+  non-human-verified acceptance reference and pages 60/450 have no verified
+  transcription.
 
 Both Markdown files are provided to the user outside Git for manual review.
 
@@ -125,8 +159,10 @@ Both Markdown files are provided to the user outside Git for manual review.
   bounded.
 - A failed page or missing marker fails the candidate; partial output cannot
   win.
-- No recognized text, private reference text, downloaded PDF, rendered page,
-  or full Markdown output is committed.
+- No recognized text, private reference text, private-reference hash/path,
+  downloaded PDF, rendered page, or full Markdown output is committed. The
+  private-reference SHA-256 remains only in ignored raw provenance and runtime
+  validation.
 - No contextual lexicon or language model changes canonical legal text.
 - No web-worker timeout, queue, sandbox, API, or deployment setting changes.
 
@@ -136,7 +172,9 @@ Both Markdown files are provided to the user outside Git for manual review.
   bitonal dimensions, deterministic output, and image bounds.
 - A fixture proves the comparison labels reference disagreement rather than
   CER.
-- Raw additive counts regenerate the report.
+- Raw additive counts and exact Rust activation evidence regenerate the report.
+- Access evidence is derived from pages actually opened/rendered and from
+  diagnostic/OCR execution counters; it is not inserted as asserted literals.
 - Rust formatting, locked metadata, dependency policy, architecture checks,
   full relevant tests, and tracked-artifact audits pass before push.
 - OCR/native-runtime behavior requires independent review before any later

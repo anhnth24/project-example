@@ -4,7 +4,7 @@
 
 **Goal:** Determine whether preserving 300-DPI near-bitonal PDF renders and using `tessdata_best` with a Vietnamese-only language candidate improves Thông tư 89 OCR without unsafe text correction.
 
-**Architecture:** Add an explicit, default-off preprocessing policy to `OcrRunConfig`; the current path remains the default. A benchmark-only CLI environment selector, stripped by the web-worker sandbox, enables a deterministic near-bitonal bypass for controlled candidates. A Python harness renders only selected PDF pages, executes four Rust `fileconv` candidates serially, derives a winner from raw counts, and runs the full 839-page PDF only after the winner gate passes.
+**Architecture:** Add an explicit, default-off preprocessing policy to `OcrRunConfig`; the current path remains the default. A benchmark-only CLI environment selector, stripped by the web-worker sandbox, enables a deterministic near-bitonal bypass for controlled candidates. A benchmark-only Rust diagnostic binds activation evidence to the exact saved render, release binary, and classifier constants. A Python harness renders only selected PDF pages, executes an exact 2×2 `tessdata_best` matrix serially, and derives a preserve-mode winner from raw counts. The full 839-page PDF remains blocked until the corrected calibration is independently reviewed.
 
 **Tech Stack:** Rust `image` and existing `fileconv-core`/CLI, PDFium through pypdfium2 for identical bounded calibration renders, Tesseract 5 `vie`/`eng`, existing Python benchmark metrics/psutil/Pillow/pytest.
 
@@ -16,7 +16,8 @@
 - The private 20-page reference is never committed and its disagreement metric is never called CER.
 - No recognized text, reference text, source PDF, rendered page, or full Markdown output is tracked.
 - Only pages 1–20, 60, and 450 may be opened before the winner is frozen.
-- The full 839-page run occurs only if one candidate passes every gate.
+- The full 839-page run does not occur in this correction. A passing candidate
+  only permits independent review to decide whether Task 4 may run.
 - Every Rust push runs formatting, locked metadata, and dependency policy checks.
 
 ---
@@ -111,17 +112,20 @@ Use frozen constants:
 ```rust
 const BITONAL_DARK_MAX: u8 = 32;
 const BITONAL_LIGHT_MIN: u8 = 223;
-const BITONAL_EXTREME_MIN_PER_MILLE: u64 = 985;
+const BITONAL_EXTREME_MIN_PER_MILLE: u64 = 920;
 const BITONAL_INK_MIN_PER_MILLE: u64 = 5;
 const BITONAL_INK_MAX_PER_MILLE: u64 = 400;
 ```
 
 Count every grayscale pixel after existing dimension/allocation checks. A page
-qualifies only when at least 98.5% of pixels are at an extreme and dark-pixel
-ink coverage is between 0.5% and 40%. Full traversal is bounded by existing OCR
-bounds without changing them: decoded files retain `image::Limits` `max_alloc`
-(512 MiB default) plus 12,000-per-side decode limits; in-memory and PDF-rendered
-images use the existing 12,000-per-side `ensure_ocr_image_bounds` check.
+qualifies only when at least 92.0% of pixels are at an extreme and dark-pixel
+ink coverage is between 0.5% and 40%. The 92.0% threshold is frozen from the
+22 approved render histogram range (92.216052584%–96.779655670%), not from OCR
+or reference output. Existing blank, gradient/photo-like, and ink gates remain.
+Full traversal is bounded by existing OCR bounds without changing them:
+decoded files retain `image::Limits` `max_alloc` (512 MiB default) plus
+12,000-per-side decode limits; in-memory and PDF-rendered images use the
+existing 12,000-per-side `ensure_ocr_image_bounds` check.
 
 `PreserveNearBitonal` returns the grayscale image unchanged only when the long
 edge exceeds `MAX_LONG_SIDE` and classification passes. Otherwise call the
@@ -226,9 +230,9 @@ Tests must reject:
 
 - any page other than `1..=20`, `60`, or `450`;
 - a candidate list not exactly
-  `baseline-system-fast`, `baseline-best`,
-  `bitonal-best-vie-eng`, `bitonal-best-vie`;
-- missing source/binary/tessdata/config/tool hashes;
+  `legacy-best-vie-eng`, `preserve-best-vie-eng`,
+  `legacy-best-vie`, `preserve-best-vie`;
+- missing source/binary/tessdata/config/classifier/tool hashes;
 - recognized text, reference text, stdout/stderr, or environment values;
 - duplicate/missing candidate-page records;
 - unbounded dimensions, timeout, output, RSS, or process-tree settings.
@@ -250,21 +254,24 @@ The runner:
 1. checksum-validates the official PDF;
 2. renders approved pages once at 300 DPI into ignored temporary storage;
 3. verifies each render stays within 50 million pixels/10,000 dimensions;
-4. invokes release `fileconv one <png> --lang <langs>` through the existing
+4. invokes release `fileconv bitonal-diagnostic <png>` once per render and
+   binds its exact constants/counts/activation to the render hash;
+5. invokes release `fileconv one <png> --lang <langs>` through the existing
    bounded candidate process contract;
-5. sets only environment variable names required by each candidate;
-6. samples process-tree RSS every 10 ms;
-7. retains text in memory only long enough to compute additive metrics;
-8. cleans rendered pages after completion.
+6. sets only environment variable names required by each candidate;
+7. samples process-tree RSS every 10 ms;
+8. retains text in memory only long enough to compute additive metrics;
+9. derives page-open/render/diagnostic/OCR counters from actual execution;
+10. cleans rendered pages after completion.
 
 Candidate semantics:
 
 ```json
 [
-  {"id":"baseline-system-fast","mode":"legacy","tessdata":"system","langs":"vie+eng"},
-  {"id":"baseline-best","mode":"legacy","tessdata":"best","langs":"vie+eng"},
-  {"id":"bitonal-best-vie-eng","mode":"preserve-near-bitonal","tessdata":"best","langs":"vie+eng"},
-  {"id":"bitonal-best-vie","mode":"preserve-near-bitonal","tessdata":"best","langs":"vie"}
+  {"id":"legacy-best-vie-eng","mode":"legacy","tessdata":"best","langs":"vie+eng"},
+  {"id":"preserve-best-vie-eng","mode":"preserve-near-bitonal","tessdata":"best","langs":"vie+eng"},
+  {"id":"legacy-best-vie","mode":"legacy","tessdata":"best","langs":"vie"},
+  {"id":"preserve-best-vie","mode":"preserve-near-bitonal","tessdata":"best","langs":"vie"}
 ]
 ```
 
@@ -276,11 +283,12 @@ using additive edit counts. Store only counts.
 
 For pages 60 and 450 store:
 
-- digit sequence count and checksum;
+- total digit-character count and concatenated digit-stream checksum;
 - legal identifier count;
 - non-whitespace character count;
 - suspicious-character count;
-- contextual accent-proxy counts from the supplied note.
+- page 60 word-boundary accented/unaccented pair counts for frozen,
+  non-ambiguous pairs, with ratios derived from those counts.
 
 Do not label any of these CER.
 
@@ -342,7 +350,6 @@ bench/ocr_cpu_service/.venv/bin/python \
   --reference /home/ubuntu/.cursor/projects/workspace/uploads/Tho_ng-tu_-89-2026-TT-BTC_opencode-qwen3.7-plus_0b58.md \
   --fileconv target/release/fileconv \
   --pdfium-lib pdfium/lib \
-  --system-tessdata /usr/share/tesseract-ocr/5/tessdata \
   --best-tessdata tessdata_best \
   --output bench/ocr_cpu_service/.data/bitonal-pdf/calibration.json
 ```
@@ -354,9 +361,11 @@ Expected cardinality: 4 × 22 = 88 successful records.
 The gate implementation must:
 
 - compare pages 1–20 aggregate and per-page disagreement;
-- compare page 60 accent proxies;
+- compare page 60 unaccented-pair ratios (improvement or equality accepted);
 - compare page 450 digit/identifier/content coverage;
 - enforce marker, latency, RSS, and failure constraints;
+- require preserve candidates to have nonzero exact Rust activation;
+- compare each preserve arm to the legacy arm with the same language;
 - derive winner/ties from values rather than candidate IDs.
 
 Add a synthetic fixture test proving an improving candidate wins and a
@@ -369,6 +378,7 @@ PYTHONPATH=bench/ocr_cpu_service \
 bench/ocr_cpu_service/.venv/bin/python \
   -m experiments.bitonal_pdf report \
   --input bench/ocr_cpu_service/.data/bitonal-pdf/calibration.json \
+  --reference /home/ubuntu/.cursor/projects/workspace/uploads/Tho_ng-tu_-89-2026-TT-BTC_opencode-qwen3.7-plus_0b58.md \
   --output bench/ocr_cpu_service/reports/bitonal-pdf-calibration.md
 ```
 
@@ -376,8 +386,9 @@ Regenerate to a temporary path and compare byte-for-byte.
 
 - [ ] **Step 5: Review gate**
 
-If `winner_id` is null, stop: do not run Task 4 and report the measured
-reason. If a winner exists, freeze its exact configuration hash and proceed.
+If `winner_id` is null, stop and report the measured reason. If a winner
+exists, freeze its exact configuration hash, report GO-to-independent-review,
+and still do not run Task 4 in this correction.
 
 - [ ] **Step 6: Commit calibration evidence**
 

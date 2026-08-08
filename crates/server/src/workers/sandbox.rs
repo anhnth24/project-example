@@ -989,6 +989,24 @@ mod imp {
     mod tests {
         use super::*;
 
+        #[test]
+        fn production_command_clears_environment_and_uses_exact_passthrough_allowlist() {
+            assert_eq!(
+                PASSTHROUGH_ENV_KEYS,
+                [
+                    "FILECONV_PDFIUM_LIB",
+                    "FILECONV_TESSDATA",
+                    "TESSDATA_PREFIX",
+                    "LANG",
+                ]
+            );
+            assert!(
+                include_str!("sandbox.rs").contains(".env_clear()"),
+                "production command must clear the inherited environment"
+            );
+            assert!(!PASSTHROUGH_ENV_KEYS.contains(&"FILECONV_OCR_PREPROCESS_MODE"));
+        }
+
         fn shell_config(script: &str, timeout: Duration) -> SandboxConfig {
             SandboxConfig {
                 argv_template: vec![
