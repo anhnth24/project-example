@@ -5,33 +5,21 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "markhand-ocr-benchmark"
 version = "0.1.0"
-description = "Bounded benchmark-only OCR conversion service"
+description = "Bounded, model-neutral OCR benchmark tooling"
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi>=0.141.1",
     "Pillow>=12.3.0",
     "psutil>=7.2.2",
     "pypdfium2>=5.12.1",
-    "python-multipart>=0.0.32",
 ]
 
 [project.optional-dependencies]
 test = [
-    "httpx2>=2.9.1",
     "pytest>=9.1.1",
-]
-model = [
-    "numpy>=2.3.5,<2.4",
-    "paddleocr>=3.7.0",
-    "paddlepaddle==3.2.2",
-    "uvicorn>=0.40.0",
 ]
 
 [tool.setuptools.packages.find]
-include = ["markhand_ocr*"]
+include = ["benchmark*", "corpus*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = [
-    "live: runs the real cached PaddleOCR models",
-]

@@ -33,11 +33,10 @@ from benchmark.corpus import (
     inspect_and_render_official as corpus_render_official,
     load_quantitative_pages as corpus_load_quantitative_pages,
 )
-from benchmark.render import RenderLimits
+from benchmark.render import RenderLimits, render_page
 from benchmark.metrics import error_counts, reading_order_violations
 from benchmark.report import aggregate_records, recompute_and_validate_summary
 from corpus.download import CorpusSource, load_sources
-from markhand_ocr.render import render_page
 
 ROOT = Path(__file__).resolve().parents[3]
 SERVICE_ROOT = ROOT / "bench" / "ocr_cpu_service"
