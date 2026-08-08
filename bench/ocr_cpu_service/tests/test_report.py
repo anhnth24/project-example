@@ -181,6 +181,26 @@ def test_report_without_challenger_states_no_adoption_gate() -> None:
     assert "Gate decision:" not in markdown
 
 
+def test_same_candidate_ids_without_archived_metadata_remain_generic() -> None:
+    payload = _generic_report_payload(comparison=None)
+    candidates = payload["candidates"]
+    assert isinstance(candidates, list)
+    candidates[0]["id"] = "markhand-default"
+    candidates[0]["label"] = "Markhand default"
+    candidates[1]["id"] = "markhand-tessdata-best"
+    candidates[1]["label"] = "Markhand tessdata_best"
+    paddle_named_only = json.loads(json.dumps(candidates[0]))
+    paddle_named_only["id"] = "pp-ocrv6"
+    paddle_named_only["label"] = "PP-OCRv6"
+    candidates.append(paddle_named_only)
+
+    markdown = render_markdown(payload)
+
+    assert "no adoption gate was configured" in markdown.lower()
+    assert "Gate decision:" not in markdown
+    assert "PP-OCRv6 real-scan CER" not in markdown
+
+
 def test_markdown_is_deterministic_metadata_only_rendering() -> None:
     data = {
         "schema_version": 1,

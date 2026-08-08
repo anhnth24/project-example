@@ -11,7 +11,7 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 _PLACEHOLDER = re.compile(r"\{([^{}]+)\}")
-_IMMUTABLE_PROVENANCE_SCALARS = (str, int, float, bool, bytes, type(None))
+_IMMUTABLE_PROVENANCE_SCALARS = (str, int, float, bool, type(None))
 
 
 def _freeze_provenance(value: Any, active: set[int] | None = None) -> Any:
@@ -43,8 +43,8 @@ def _freeze_provenance(value: Any, active: set[int] | None = None) -> Any:
         active.remove(identity)
 
     raise TypeError(
-        "candidate provenance values must be immutable scalars, "
-        "mappings, sequences, or sets"
+        "candidate provenance values must be JSON-compatible immutable "
+        "scalars, mappings, sequences, or sets"
     )
 
 

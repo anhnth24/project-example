@@ -133,13 +133,29 @@ def _gate_records(candidate: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _is_legacy_phase_a(data: dict[str, Any]) -> bool:
-    return "comparison" not in data and {
-        candidate["id"] for candidate in data["candidates"]
-    } == {
-        "markhand-default",
-        "markhand-tessdata-best",
-        "pp-ocrv6",
-    }
+    gate = data.get("gate")
+    versions = data.get("run", {}).get("versions", {})
+    return (
+        data.get("schema_version") == 1
+        and "comparison" not in data
+        and isinstance(gate, dict)
+        and {
+            "passed",
+            "baseline_cer",
+            "paddle_cer",
+            "relative_improvement",
+            "threshold",
+            "reasons",
+            "decision",
+        }.issubset(gate)
+        and {"paddleocr", "paddlepaddle", "paddlex"}.issubset(versions)
+        and {candidate["id"] for candidate in data["candidates"]}
+        == {
+            "markhand-default",
+            "markhand-tessdata-best",
+            "pp-ocrv6",
+        }
+    )
 
 
 def recompute_and_validate_summary(data: dict[str, Any]) -> dict[str, Any]:

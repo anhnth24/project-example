@@ -7,8 +7,10 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import os
 import platform
 import select
+import signal
 import subprocess
 import sys
 import time
@@ -509,6 +511,24 @@ def _process_tree_rss(process: psutil.Process) -> int:
     return total
 
 
+def _terminate_process_group(
+    process: subprocess.Popen[str], *, grace_seconds: float = 0.5
+) -> None:
+    """Terminate the dedicated worker session and reap its group leader."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+
+
 def _read_event_with_process_tree_rss(
     process: subprocess.Popen[str],
     *,
@@ -527,8 +547,7 @@ def _read_event_with_process_tree_rss(
         sample_count += 1
         elapsed = time.perf_counter() - started
         if elapsed > timeout_seconds:
-            process.kill()
-            process.wait()
+            _terminate_process_group(process)
             raise TimeoutError("candidate worker event timeout")
         readable, _, _ = select.select(
             [process.stdout], [], [], sample_interval_seconds
@@ -583,6 +602,7 @@ class IsolatedCandidateWorker:
             text=True,
             bufsize=1,
             env=environment,
+            start_new_session=True,
         )
         event, resource = _read_event_with_process_tree_rss(
             self._process, timeout_seconds=timeout_seconds
@@ -641,8 +661,7 @@ class IsolatedCandidateWorker:
         try:
             self._process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            self._process.kill()
-            self._process.wait()
+            _terminate_process_group(self._process)
 
 
 def _isolated_worker(

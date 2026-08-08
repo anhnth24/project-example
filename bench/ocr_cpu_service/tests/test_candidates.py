@@ -148,3 +148,14 @@ def test_provenance_is_detached_from_caller_nested_structures() -> None:
     assert frozen_build["assets"] == ({"name": "detector"},)
     assert frozen_build["features"] == frozenset({"cpu", "offline"})
     assert "profile" not in frozen_build
+
+
+def test_rejects_bytes_as_non_json_provenance() -> None:
+    with pytest.raises(TypeError, match="JSON-compatible"):
+        CommandCandidateSpec(
+            "x",
+            "X",
+            ("tool", "{input}"),
+            {},
+            {"build": {"digest": b"not-json"}},
+        )
