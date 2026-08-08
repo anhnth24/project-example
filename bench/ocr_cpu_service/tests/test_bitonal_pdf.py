@@ -984,6 +984,10 @@ def test_gate_rejects_all_accent_proxies_equal_to_baseline(tmp_path: Path) -> No
         "page_60_accent_proxy_no_strict_improvement"
         in gate["candidates"][candidate_id]["disqualifications"]
     )
+    assert (
+        "page_60_accent_proxy_no_strict_improvement"
+        not in gate["candidates"][EXPECTED_CANDIDATE_IDS[0]]["disqualifications"]
+    )
 
 
 def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease(
