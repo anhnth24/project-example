@@ -132,6 +132,7 @@ def valid_artifact() -> dict[str, object]:
     }
     provenance = {
         "source_sha256": canonical_source.sha256,
+        "reference_sha256": _checksum(),
         "config_sha256": CANONICAL_CONFIG_SHA256,
         "binary_sha256": _checksum(),
         "tessdata_sha256": {
@@ -253,6 +254,15 @@ def _set_page_60_accent_proxies(
     }
 
 
+def _bind_private_reference(
+    payload: dict[str, object], tmp_path: Path, *, content: bytes = b"private fixture"
+) -> Path:
+    reference = tmp_path / "reviewed-reference.md"
+    reference.write_bytes(content)
+    payload["provenance"]["reference_sha256"] = hashlib.sha256(content).hexdigest()
+    return reference
+
+
 def test_calibration_config_loads_four_exact_candidates() -> None:
     config = load_calibration_config(CONFIGS)
     assert tuple(candidate["id"] for candidate in config["candidates"]) == (
@@ -278,6 +288,20 @@ def test_calibration_rejects_missing_provenance_checksums() -> None:
     payload = valid_artifact()
     del payload["provenance"]["binary_sha256"]
     with pytest.raises(ValueError, match="missing field"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_missing_private_reference_checksum() -> None:
+    payload = valid_artifact()
+    del payload["provenance"]["reference_sha256"]
+    with pytest.raises(ValueError, match="missing field.*reference_sha256"):
+        validate_calibration_artifact(payload)
+
+
+def test_calibration_rejects_malformed_private_reference_checksum() -> None:
+    payload = valid_artifact()
+    payload["provenance"]["reference_sha256"] = "not-a-checksum"
+    with pytest.raises(ValueError, match="reference_sha256 contains an invalid checksum"):
         validate_calibration_artifact(payload)
 
 
@@ -622,6 +646,9 @@ def test_run_calibration_cleans_work_dir_after_inference_failures(tmp_path: Path
     ):
         artifact = run_calibration(args)
     assert all(record["error_kind"] == "timeout" for record in artifact["records"])
+    assert artifact["provenance"]["reference_sha256"] == hashlib.sha256(
+        args.reference.read_bytes()
+    ).hexdigest()
     assert len(work_dirs) == 1
     assert not work_dirs[0].exists()
 
@@ -921,8 +948,11 @@ def test_recognize_calibration_page_worker_startup_failure_returns_bounded_recor
     }
 
 
-def test_gate_accepts_all_accent_proxies_nonincreasing_with_one_strictly_lower() -> None:
+def test_gate_accepts_all_accent_proxies_nonincreasing_with_one_strictly_lower(
+    tmp_path: Path,
+) -> None:
     payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
     improving_id = EXPECTED_CANDIDATE_IDS[1]
     _set_reference_character_edits(
         payload, improving_id, {page: 1 for page in range(1, 21)}
@@ -931,21 +961,22 @@ def test_gate_accepts_all_accent_proxies_nonincreasing_with_one_strictly_lower()
         payload, improving_id, latin_o=1, latin_u=2, latin_a=2
     )
 
-    gate = bitonal_pdf.derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
     assert gate["winner_id"] == improving_id
     assert gate["tied_ids"] == []
     assert gate["candidates"][improving_id]["eligible"] is True
 
 
-def test_gate_rejects_all_accent_proxies_equal_to_baseline() -> None:
+def test_gate_rejects_all_accent_proxies_equal_to_baseline(tmp_path: Path) -> None:
     payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
     candidate_id = EXPECTED_CANDIDATE_IDS[1]
     _set_reference_character_edits(
         payload, candidate_id, {page: 1 for page in range(1, 21)}
     )
 
-    gate = bitonal_pdf.derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
     assert gate["winner_id"] is None
     assert gate["candidates"][candidate_id]["eligible"] is False
@@ -955,8 +986,11 @@ def test_gate_rejects_all_accent_proxies_equal_to_baseline() -> None:
     )
 
 
-def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease() -> None:
+def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease(
+    tmp_path: Path,
+) -> None:
     payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
     candidate_id = EXPECTED_CANDIDATE_IDS[1]
     _set_reference_character_edits(
         payload, candidate_id, {page: 1 for page in range(1, 21)}
@@ -965,7 +999,7 @@ def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease() -> No
         payload, candidate_id, latin_o=1, latin_u=3, latin_a=2
     )
 
-    gate = bitonal_pdf.derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
     assert gate["winner_id"] is None
     assert gate["candidates"][candidate_id]["eligible"] is False
@@ -979,8 +1013,11 @@ def test_gate_rejects_one_accent_proxy_increase_despite_another_decrease() -> No
     )
 
 
-def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page() -> None:
+def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page(
+    tmp_path: Path,
+) -> None:
     payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
     regressing_id = EXPECTED_CANDIDATE_IDS[1]
     eligible_id = EXPECTED_CANDIDATE_IDS[2]
     _set_reference_character_edits(
@@ -998,7 +1035,7 @@ def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page() -
         payload, eligible_id, latin_o=1, latin_u=2, latin_a=2
     )
 
-    gate = bitonal_pdf.derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
     assert gate["candidates"][regressing_id]["eligible"] is False
     assert (
@@ -1008,8 +1045,9 @@ def test_gate_disqualifies_an_aggregate_improvement_with_one_regressing_page() -
     assert gate["winner_id"] == eligible_id
 
 
-def test_gate_reports_value_tie_without_candidate_id_tiebreak() -> None:
+def test_gate_reports_value_tie_without_candidate_id_tiebreak(tmp_path: Path) -> None:
     payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
     tied_ids = EXPECTED_CANDIDATE_IDS[1:3]
     for candidate_id in tied_ids:
         _set_reference_character_edits(
@@ -1019,7 +1057,7 @@ def test_gate_reports_value_tie_without_candidate_id_tiebreak() -> None:
             payload, candidate_id, latin_o=1, latin_u=2, latin_a=2
         )
 
-    gate = bitonal_pdf.derive_calibration_gate(payload)
+    gate = bitonal_pdf.derive_calibration_gate(payload, reference=reference)
 
     assert gate["winner_id"] is None
     assert gate["tied_ids"] == list(tied_ids)
@@ -1029,6 +1067,7 @@ def test_report_command_and_markdown_are_deterministic_and_text_free(
     tmp_path: Path,
 ) -> None:
     payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
     improving_id = EXPECTED_CANDIDATE_IDS[1]
     _set_reference_character_edits(
         payload, improving_id, {page: 1 for page in range(1, 21)}
@@ -1036,14 +1075,18 @@ def test_report_command_and_markdown_are_deterministic_and_text_free(
     _set_page_60_accent_proxies(
         payload, improving_id, latin_o=1, latin_u=2, latin_a=2
     )
-    first = bitonal_pdf.render_calibration_report(payload)
-    second = bitonal_pdf.render_calibration_report(copy.deepcopy(payload))
+    first = bitonal_pdf.render_calibration_report(payload, reference=reference)
+    second = bitonal_pdf.render_calibration_report(
+        copy.deepcopy(payload), reference=reference
+    )
 
     args = bitonal_pdf._parser().parse_args(
         [
             "report",
             "--input",
             str(tmp_path / "calibration.json"),
+            "--reference",
+            str(reference),
             "--output",
             str(tmp_path / "report.md"),
         ]
@@ -1052,5 +1095,22 @@ def test_report_command_and_markdown_are_deterministic_and_text_free(
     assert args.command == "report"
     assert first == second
     assert f"`winner_id`: `{improving_id}`" in first
+    assert (
+        f"- Private reference SHA-256: "
+        f"`{payload['provenance']['reference_sha256']}`" in first
+    )
+    assert str(reference) not in first
+    assert "private fixture" not in first
     assert "secret recognized content" not in first
     assert "secret reference content" not in first
+
+
+def test_gate_rejects_current_private_reference_checksum_mismatch(
+    tmp_path: Path,
+) -> None:
+    payload = valid_artifact()
+    reference = _bind_private_reference(payload, tmp_path)
+    reference.write_bytes(b"different private fixture")
+
+    with pytest.raises(ValueError, match="private reference checksum mismatch"):
+        bitonal_pdf.derive_calibration_gate(payload, reference=reference)
