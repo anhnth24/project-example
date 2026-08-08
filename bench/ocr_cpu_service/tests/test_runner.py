@@ -174,3 +174,55 @@ def test_timeout_kills_worker_and_recognizer_process_tree(tmp_path: Path) -> Non
         for pid in pids.values():
             if psutil.pid_exists(pid):
                 os.kill(pid, signal.SIGKILL)
+
+
+def test_timeout_sigkills_descendant_that_ignores_sigterm(tmp_path: Path) -> None:
+    process_ids = tmp_path / "process-ids.json"
+    recognizer = tmp_path / "stubborn-recognizer.py"
+    recognizer.write_text(
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import subprocess\n"
+        "import sys\n"
+        "import time\n"
+        "child = subprocess.Popen([\n"
+        "    sys.executable, '-c',\n"
+        "    'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)',\n"
+        "])\n"
+        "Path(sys.argv[1]).write_text(json.dumps({\n"
+        "    'recognizer': os.getpid(), 'child': child.pid\n"
+        "}), encoding='utf-8')\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    spec = CommandCandidateSpec(
+        id="stubborn-timeout-tree",
+        label="Stubborn timeout tree",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    pids: dict[str, int] = {}
+
+    try:
+        result = run_candidate(
+            spec,
+            _benchmark_page(process_ids),
+            timeout_seconds=0.25,
+            max_rss_bytes=1024 * 1024 * 1024,
+        )
+        pids = json.loads(process_ids.read_text(encoding="utf-8"))
+
+        assert not result.success
+        assert result.record["error_kind"] == "timeout"
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and any(
+            psutil.pid_exists(pid) for pid in pids.values()
+        ):
+            time.sleep(0.02)
+        assert all(not psutil.pid_exists(pid) for pid in pids.values())
+    finally:
+        for pid in pids.values():
+            if psutil.pid_exists(pid):
+                os.kill(pid, signal.SIGKILL)

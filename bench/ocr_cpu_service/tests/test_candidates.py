@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 
@@ -158,4 +159,26 @@ def test_rejects_bytes_as_non_json_provenance() -> None:
             ("tool", "{input}"),
             {},
             {"build": {"digest": b"not-json"}},
+        )
+
+
+@pytest.mark.parametrize(
+    ("provenance", "message"),
+    [
+        ({"build": {1: "value"}}, "keys must be strings"),
+        ({"score": math.nan}, "finite"),
+        ({"score": math.inf}, "finite"),
+        ({"score": -math.inf}, "finite"),
+    ],
+)
+def test_rejects_non_json_mapping_keys_and_floats(
+    provenance: dict[object, object], message: str
+) -> None:
+    with pytest.raises((TypeError, ValueError), match=message):
+        CommandCandidateSpec(
+            "x",
+            "X",
+            ("tool", "{input}"),
+            {},
+            provenance,  # type: ignore[arg-type]
         )

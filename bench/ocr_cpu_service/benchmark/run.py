@@ -514,19 +514,36 @@ def _process_tree_rss(process: psutil.Process) -> int:
 def _terminate_process_group(
     process: subprocess.Popen[str], *, grace_seconds: float = 0.5
 ) -> None:
-    """Terminate the dedicated worker session and reap its group leader."""
+    """Terminate a worker session, including descendants surviving SIGTERM."""
+    process_group = process.pid
+
+    def group_exists() -> bool:
+        try:
+            os.killpg(process_group, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process_group, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    try:
-        process.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
+
+    deadline = time.monotonic() + grace_seconds
+    while group_exists() and time.monotonic() < deadline:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=min(0.05, max(0.0, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(0.01)
+
+    if group_exists():
+        try:
+            os.killpg(process_group, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        process.wait()
+
+    process.wait()
 
 
 def _read_event_with_process_tree_rss(

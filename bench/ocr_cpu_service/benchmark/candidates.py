@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Mapping as MappingABC
 from collections.abc import Set as SetABC
@@ -16,6 +17,8 @@ _IMMUTABLE_PROVENANCE_SCALARS = (str, int, float, bool, type(None))
 
 def _freeze_provenance(value: Any, active: set[int] | None = None) -> Any:
     """Detach and recursively freeze JSON-like provenance containers."""
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("candidate provenance floats must be finite")
     if isinstance(value, _IMMUTABLE_PROVENANCE_SCALARS):
         return value
 
@@ -27,6 +30,8 @@ def _freeze_provenance(value: Any, active: set[int] | None = None) -> Any:
     active.add(identity)
     try:
         if isinstance(value, MappingABC):
+            if any(not isinstance(key, str) for key in value):
+                raise TypeError("candidate provenance mapping keys must be strings")
             return MappingProxyType(
                 {
                     key: _freeze_provenance(item, active)
