@@ -492,6 +492,23 @@ def test_page_diagnostics_require_note_context_for_accent_proxies() -> None:
         )
 
 
+def test_page_diagnostics_matches_accented_vietnamese_note_context() -> None:
+    config = load_calibration_config(CONFIGS)
+
+    diagnostics = page_diagnostics(
+        "thong tu quy dinh",
+        page_number=60,
+        config=config,
+        note_text="Thông tin về quy định và văn bản ban hành.",
+    )
+
+    assert diagnostics["accent_proxy_counts"] == {
+        "latin-o-for-o-with-hook": 1,
+        "latin-u-for-u-with-hook": 1,
+        "latin-a-for-a-with-breve": 0,
+    }
+
+
 def test_calibration_work_dir_is_created_under_fixed_root() -> None:
     path = allocate_calibration_work_dir()
     try:
