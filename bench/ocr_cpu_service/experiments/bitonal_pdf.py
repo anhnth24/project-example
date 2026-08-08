@@ -15,6 +15,7 @@ import statistics
 import subprocess
 import tempfile
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -614,7 +615,11 @@ def _accent_proxy_counts(
     text: str, proxies: list[dict[str, Any]], *, note_text: str
 ) -> dict[str, int]:
     lowered = text.casefold()
-    note_lowered = note_text.casefold()
+    note_lowered = "".join(
+        character
+        for character in unicodedata.normalize("NFD", note_text.casefold())
+        if not unicodedata.combining(character)
+    ).replace("đ", "d")
     counts: dict[str, int] = {}
     for proxy in proxies:
         proxy_id = proxy["id"]
