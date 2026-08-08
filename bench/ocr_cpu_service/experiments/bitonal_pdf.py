@@ -1431,7 +1431,7 @@ def derive_calibration_gate(
                     for proxy_id in _ACCENT_PROXY_IDS
                 ):
                     _append_once(disqualifications, "page_60_accent_proxy_regression")
-                if not any(
+                if candidate_id != baseline_id and not any(
                     candidate_proxies[proxy_id] < baseline_proxies[proxy_id]
                     for proxy_id in _ACCENT_PROXY_IDS
                 ):
