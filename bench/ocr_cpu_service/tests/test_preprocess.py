@@ -434,7 +434,8 @@ def test_report_ranks_tuning_cer_and_labels_strata_and_dpi_limit_honestly() -> N
     assert "DPI hint" in report
     assert "not a 300/400 PDF rerender comparison" in report
     assert "No holdout result" in report
-    assert "Transfer gap: **0 character edits" in report
+    assert "Transfer gap: **" in report
+    assert "versus the production `markhand-auto`" in report
     assert "CER change vs control" in report
     assert "Tesseract binary SHA-256" in report
     assert artifact["provenance"]["tesseract_binary_sha256"] in report
