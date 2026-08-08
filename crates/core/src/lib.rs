@@ -38,7 +38,7 @@ pub use diagnostics::{
     ConversionOutcome, ConversionReport, ConversionWarning, ConversionWarningCode,
     ConvertErrorKind, DetailedConvertError, DetailedErrorDto,
 };
-pub use image_ocr::OcrRunConfig;
+pub use image_ocr::{OcrPreprocessMode, OcrRunConfig};
 pub use probe::{probe, FileInfo};
 
 #[cfg(feature = "audio")]

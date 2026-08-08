@@ -41,11 +41,20 @@ impl OcrEngine {
     }
 }
 
+/// Per-call OCR preprocessing policy.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OcrPreprocessMode {
+    #[default]
+    Legacy,
+    PreserveNearBitonal,
+}
+
 /// Per-call OCR configuration (no process-wide / TLS error collector).
 #[derive(Debug, Clone, Default)]
 pub struct OcrRunConfig {
     /// Override Tesseract binary; `None` uses `FILECONV_TESSERACT` / `tesseract`.
     pub tesseract_binary: Option<PathBuf>,
+    pub preprocess_mode: OcrPreprocessMode,
 }
 
 /// Pipeline stage where an OCR attempt failed (stable, not localized).
@@ -201,6 +210,11 @@ fn active_engine() -> OcrEngine {
 const UPSCALE_IF_AREA_BELOW: u64 = 500_000;
 /// Cạnh dài tối đa; lớn hơn ⇒ thu xuống để OCR không quá chậm.
 const MAX_LONG_SIDE: u32 = 2400;
+const BITONAL_DARK_MAX: u8 = 32;
+const BITONAL_LIGHT_MIN: u8 = 223;
+const BITONAL_EXTREME_MIN_PER_MILLE: u64 = 985;
+const BITONAL_INK_MIN_PER_MILLE: u64 = 5;
+const BITONAL_INK_MAX_PER_MILLE: u64 = 400;
 /// Cạnh tối đa khi decode (strict, qua `image::Limits`). Cho phép trang lớn
 /// (A3@~600 DPI ≈ 5k×7k, A1@300 DPI ≈ 10k) nhưng chặn decompression bomb.
 /// Giữ `Limits::default().max_alloc` (512 MiB) của crate `image`.
@@ -295,7 +309,7 @@ pub fn ocr_dynimage_detailed(
 ) -> Result<String, OcrAttemptError> {
     ensure_ocr_image_bounds(img.width(), img.height())
         .map_err(|error| OcrAttemptError::from_io(OcrStage::Bounds, error))?;
-    let pre = preprocess(img);
+    let pre = preprocess_with_mode(img, config.preprocess_mode);
     let tmp = write_ocr_temp_png(&pre)
         .map_err(|error| OcrAttemptError::from_io(OcrStage::Preprocess, error))?;
     let tmp_path = tmp.path();
@@ -323,28 +337,63 @@ pub fn ocr_dynimage_detailed(
     text
 }
 
-/// Tiền xử lý: grayscale → chuẩn hoá kích thước → unsharp → normalize.
-fn preprocess(img: &DynamicImage) -> DynamicImage {
+/// Classify near-bitonal scans: extremes dominate and ink coverage is in range.
+pub fn is_effectively_bitonal(gray: &GrayImage) -> bool {
+    let total = gray.width() as u64 * gray.height() as u64;
+    if total == 0 {
+        return false;
+    }
+    let mut extreme = 0u64;
+    let mut ink = 0u64;
+    for p in gray.pixels() {
+        let v = p[0];
+        if v <= BITONAL_DARK_MAX || v >= BITONAL_LIGHT_MIN {
+            extreme += 1;
+        }
+        if v <= BITONAL_DARK_MAX {
+            ink += 1;
+        }
+    }
+    let extreme_per_mille = extreme * 1000 / total;
+    let ink_per_mille = ink * 1000 / total;
+    extreme_per_mille >= BITONAL_EXTREME_MIN_PER_MILLE
+        && ink_per_mille >= BITONAL_INK_MIN_PER_MILLE
+        && ink_per_mille <= BITONAL_INK_MAX_PER_MILLE
+}
+
+/// Tiền xử lý theo chế độ: legacy hoặc giữ nguyên trang bitonal lớn.
+pub fn preprocess_with_mode(img: &DynamicImage, mode: OcrPreprocessMode) -> DynamicImage {
     let gray = img.to_luma8();
+    if matches!(mode, OcrPreprocessMode::PreserveNearBitonal) {
+        let long = gray.width().max(gray.height());
+        if long > MAX_LONG_SIDE && is_effectively_bitonal(&gray) {
+            return DynamicImage::ImageLuma8(gray);
+        }
+    }
+    preprocess_legacy(&gray)
+}
+
+/// Tiền xử lý: grayscale → chuẩn hoá kích thước → unsharp → normalize.
+fn preprocess_legacy(gray: &GrayImage) -> DynamicImage {
     let (w, h) = gray.dimensions();
     let area = w as u64 * h as u64;
     let long = w.max(h);
 
     let scaled = if area < UPSCALE_IF_AREA_BELOW {
         // Ảnh nhỏ/mờ → phóng ×2 (rẻ vì ảnh nhỏ), giúp OCR chính xác hơn.
-        imageops::resize(&gray, w * 2, h * 2, imageops::FilterType::Lanczos3)
+        imageops::resize(gray, w * 2, h * 2, imageops::FilterType::Lanczos3)
     } else if long > MAX_LONG_SIDE {
         // Ảnh quá lớn → thu xuống để giữ tốc độ.
         let f = MAX_LONG_SIDE as f32 / long as f32;
         imageops::resize(
-            &gray,
+            gray,
             (w as f32 * f).round() as u32,
             (h as f32 * f).round() as u32,
             imageops::FilterType::Lanczos3,
         )
     } else {
         // Trang giấy tờ đủ nét → giữ nguyên (không đội thời gian OCR).
-        gray
+        gray.clone()
     };
 
     // Làm nét nhẹ rồi kéo giãn tương phản về [0,255].
@@ -793,6 +842,7 @@ fn ocr_text_score(text: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
 
     #[test]
     fn retries_sparse_replacement_and_glued_uppercase_output() {
@@ -1008,6 +1058,51 @@ mod tests {
     }
 
     #[test]
+    fn effectively_bitonal_requires_ink_and_rejects_blank_or_gradient() {
+        let blank = GrayImage::from_pixel(2500, 32, image::Luma([255]));
+        assert!(!is_effectively_bitonal(&blank));
+
+        let mut document = GrayImage::from_pixel(2500, 32, image::Luma([255]));
+        for x in 100..2400 {
+            document.put_pixel(x, 16, image::Luma([0]));
+        }
+        assert!(is_effectively_bitonal(&document));
+
+        let gradient = GrayImage::from_fn(2500, 32, |x, _| image::Luma([((x % 256) as u8)]));
+        assert!(!is_effectively_bitonal(&gradient));
+    }
+
+    #[test]
+    fn near_bitonal_mode_preserves_large_dimensions() {
+        let mut page = GrayImage::from_pixel(2455, 3523, image::Luma([255]));
+        for y in (100..3400).step_by(40) {
+            for x in 100..2300 {
+                page.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+        let output = preprocess_with_mode(
+            &DynamicImage::ImageLuma8(page),
+            OcrPreprocessMode::PreserveNearBitonal,
+        );
+        assert_eq!(output.dimensions(), (2455, 3523));
+    }
+
+    #[test]
+    fn legacy_and_non_bitonal_behavior_remain_unchanged() {
+        let photo_like = DynamicImage::ImageLuma8(GrayImage::from_fn(2455, 3523, |x, y| {
+            image::Luma([((x + y) % 256) as u8])
+        }));
+        assert_eq!(
+            preprocess_with_mode(&photo_like, OcrPreprocessMode::Legacy).dimensions(),
+            (1672, 2400),
+        );
+        assert_eq!(
+            preprocess_with_mode(&photo_like, OcrPreprocessMode::PreserveNearBitonal,).dimensions(),
+            (1672, 2400),
+        );
+    }
+
+    #[test]
     fn missing_tesseract_binary_is_typed_dependency_missing_with_stage() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("sample.png");
@@ -1018,6 +1113,7 @@ mod tests {
             tesseract_binary: Some(PathBuf::from(
                 "/nonexistent/fileconv-core-t7-missing-tesseract",
             )),
+            ..OcrRunConfig::default()
         };
         let err = ocr_image_detailed(&path, "eng", &cfg).expect_err("missing binary");
         assert!(
