@@ -28,11 +28,19 @@ EXPECTED_DIRECT_RUNTIME_DEPENDENCIES = {
     "pypdfium2",
 }
 EXPECTED_TEST_DEPENDENCIES = {"pytest"}
+REMOVED_TRACKED_PATHS = {
+    "bench/ocr_cpu_service/scripts/run_service.sh",
+    "bench/ocr_cpu_service/tests/test_api.py",
+    "bench/ocr_cpu_service/tests/test_markdown.py",
+    "bench/ocr_cpu_service/tests/test_ordering.py",
+    "bench/ocr_cpu_service/tests/test_paddle_backend.py",
+    "bench/ocr_cpu_service/tests/test_service.py",
+}
 
 
-def _tracked_benchmark_python() -> list[Path]:
+def _tracked_benchmark_paths(pathspec: str) -> list[Path]:
     result = subprocess.run(
-        ["git", "ls-files", "bench/ocr_cpu_service/*.py"],
+        ["git", "ls-files", pathspec],
         cwd=REPOSITORY_ROOT,
         check=True,
         capture_output=True,
@@ -45,6 +53,21 @@ def _tracked_benchmark_python() -> list[Path]:
     ]
 
 
+def test_rejected_service_model_and_launcher_paths_are_untracked() -> None:
+    tracked = {
+        str(path.relative_to(REPOSITORY_ROOT))
+        for path in _tracked_benchmark_paths("bench/ocr_cpu_service/**")
+    }
+    rejected = sorted(
+        path
+        for path in tracked
+        if path.startswith("bench/ocr_cpu_service/markhand_ocr/")
+        or path in REMOVED_TRACKED_PATHS
+    )
+
+    assert not rejected, "rejected tracked paths remain:\n" + "\n".join(rejected)
+
+
 def _normalized_dependency_name(requirement: str) -> str:
     name = requirement.split("[", 1)[0]
     for separator in ("<", ">", "=", "!", "~", ";", " "):
@@ -54,7 +77,7 @@ def _normalized_dependency_name(requirement: str) -> str:
 
 def test_tracked_benchmark_has_no_rejected_runtime_imports() -> None:
     rejected: list[str] = []
-    for path in _tracked_benchmark_python():
+    for path in _tracked_benchmark_paths("bench/ocr_cpu_service/*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         imported_roots = {
             alias.name.split(".", 1)[0]
