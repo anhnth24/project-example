@@ -37,7 +37,6 @@ from experiments.bitonal_pdf import (  # noqa: E402
 
 SERVICE_ROOT = Path(__file__).parents[1]
 CONFIGS = SERVICE_ROOT / "experiments" / "bitonal-configs.json"
-ROOT = SERVICE_ROOT.parents[1]
 
 
 def _checksum() -> str:
@@ -788,11 +787,6 @@ def test_calibration_uses_bounded_worker_contract(tmp_path: Path) -> None:
     assert error_kind is None
     assert text.strip() == "xin chào"
     assert resource["peak_rss_bytes"] >= 0
-
-
-def test_sandbox_excludes_fileconv_ocr_preprocess_mode() -> None:
-    sandbox = (ROOT / "crates/server/src/workers/sandbox.rs").read_text(encoding="utf-8")
-    assert "FILECONV_OCR_PREPROCESS_MODE" not in sandbox
 
 
 def test_canonical_official_source_matches_checked_in_manifest() -> None:

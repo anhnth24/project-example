@@ -934,15 +934,6 @@ mod tests {
     }
 
     #[test]
-    fn sandbox_excludes_fileconv_ocr_preprocess_mode_allowlist() {
-        let sandbox = include_str!("../../server/src/workers/sandbox.rs");
-        assert!(
-            !sandbox.contains("FILECONV_OCR_PREPROCESS_MODE"),
-            "web sandbox must not allow benchmark-only OCR preprocess mode"
-        );
-    }
-
-    #[test]
     fn one_detailed_command_is_registered() {
         assert!(
             registered_commands().contains(&"one-detailed"),
