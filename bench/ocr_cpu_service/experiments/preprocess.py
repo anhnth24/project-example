@@ -1110,8 +1110,9 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             "`historical-old-print` stratum are reported separately.",
             "",
             "| Config | Document type | Pages | Character edits / chars | CER | "
-            "Word edits / words | WER | CER change vs control |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "Word edits / words | WER | CER change vs Rust control | "
+            "Median s/page | p95 s/page | Peak RSS MiB | Failures |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for candidate in artifact["candidates"]:
@@ -1123,7 +1124,11 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
                 f"{raw['character_edits']} / {raw['reference_characters']} | "
                 f"{aggregate['cer']:.6f} | {raw['word_edits']} / "
                 f"{raw['reference_words']} | {aggregate['wer']:.6f} | "
-                f"{aggregate['cer'] - control_cer:+.6f} |"
+                f"{aggregate['cer'] - control_cer:+.6f} | "
+                f"{aggregate['latency_seconds']['median']:.6f} | "
+                f"{aggregate['latency_seconds']['p95']:.6f} | "
+                f"{aggregate['peak_rss_bytes'] / 1048576:.2f} | "
+                f"{aggregate['failures']} |"
             )
     lines.extend(
         [
@@ -1131,8 +1136,9 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             "## Overlapping difficulty strata",
             "",
             "| Config | Difficulty | Pages | Character edits / chars | CER | "
-            "Word edits / words | WER | CER change vs control |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "Word edits / words | WER | CER change vs Rust control | "
+            "Median s/page | p95 s/page | Peak RSS MiB | Failures |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for candidate in artifact["candidates"]:
@@ -1144,7 +1150,11 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
                 f"{raw['character_edits']} / {raw['reference_characters']} | "
                 f"{aggregate['cer']:.6f} | {raw['word_edits']} / "
                 f"{raw['reference_words']} | {aggregate['wer']:.6f} | "
-                f"{aggregate['cer'] - control_cer:+.6f} |"
+                f"{aggregate['cer'] - control_cer:+.6f} | "
+                f"{aggregate['latency_seconds']['median']:.6f} | "
+                f"{aggregate['latency_seconds']['p95']:.6f} | "
+                f"{aggregate['peak_rss_bytes'] / 1048576:.2f} | "
+                f"{aggregate['failures']} |"
             )
     lines.extend(
         [
