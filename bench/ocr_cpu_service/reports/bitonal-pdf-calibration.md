@@ -5,6 +5,7 @@ This report contains additive counts and hashes only. It does not contain recogn
 ## Provenance
 
 - Source SHA-256: `952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc`
+- Private reference SHA-256: `b1f07425d9d82e129bfce7cf52570af14bfbd82da93daf8cb7721e01625cedd8`
 - Config SHA-256: `e37f2f60eb94211656e8c41d0a9ef438ee0dd0f9f6902388b9009d2332568758`
 - Binary SHA-256: `1584939f59a20d0be2c9879505f8b65f73679a9dd058c9175c54e7febf68fb86`
 - PDFium SHA-256: `0c6b5e32e878b04784ced0995dc42c6f106ad02348b2fd3aa89d7886e075b66e`
@@ -35,9 +36,9 @@ A successful page marker below means one unique successful candidate-page record
 | Candidate | Eligible | Character disagreement | Word disagreement | Median seconds | Peak RSS bytes | Successful page markers | Failures | Resource violations | Configuration SHA-256 | Disqualifications |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
 | `baseline-system-fast` | no | 1.088502% | 3.797589% | 1.647462 | 156545024 | 22 | 0 | 0 | `82e434c491956a5c3f1747b882717921422547bad06c4013e830e6d90d3d7bc2` | aggregate_character_disagreement_not_lower_than_baseline |
-| `baseline-best` | no | 0.852978% | 2.943131% | 2.153830 | 160514048 | 22 | 0 | 0 | `f21232ffba038eb1fe78a34b7b8e8d03381bc042ea03d8529aa9f8e516a59d81` | page_450_digit_sequence_count_regression |
-| `bitonal-best-vie-eng` | no | 0.852978% | 2.943131% | 2.132419 | 160636928 | 22 | 0 | 0 | `a0ebf1ddbaed1edcee64705f5571809526b33984388df34cc9d490d8b2b9ce92` | page_450_digit_sequence_count_regression |
-| `bitonal-best-vie` | no | 0.693840% | 2.373493% | 1.751307 | 156332032 | 22 | 0 | 0 | `22641412a9e42855cca7716495bd94f384236ffb9cffaf8608aa1e277cbe0e7a` | page_450_digit_sequence_count_regression |
+| `baseline-best` | no | 0.852978% | 2.943131% | 2.153830 | 160514048 | 22 | 0 | 0 | `f21232ffba038eb1fe78a34b7b8e8d03381bc042ea03d8529aa9f8e516a59d81` | page_60_accent_proxy_no_strict_improvement, page_450_digit_sequence_count_regression |
+| `bitonal-best-vie-eng` | no | 0.852978% | 2.943131% | 2.132419 | 160636928 | 22 | 0 | 0 | `a0ebf1ddbaed1edcee64705f5571809526b33984388df34cc9d490d8b2b9ce92` | page_60_accent_proxy_no_strict_improvement, page_450_digit_sequence_count_regression |
+| `bitonal-best-vie` | no | 0.693840% | 2.373493% | 1.751307 | 156332032 | 22 | 0 | 0 | `22641412a9e42855cca7716495bd94f384236ffb9cffaf8608aa1e277cbe0e7a` | page_60_accent_proxy_no_strict_improvement, page_450_digit_sequence_count_regression |
 
 ## Pages 1–20 additive disagreement counts
 
