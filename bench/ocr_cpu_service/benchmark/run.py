@@ -271,7 +271,7 @@ class IsolatedCandidateWorker:
             "output_limits": {
                 "stdout_bytes": max_output_bytes,
                 "stderr_bytes": max_output_bytes,
-                "enforcement": "temporary_files_with_inherited_RLIMIT_FSIZE",
+                "enforcement": "bounded_pipes_with_process_tree_termination",
             },
             "cold_initialization": {
                 "candidate_seconds": event["candidate_seconds"],
@@ -587,8 +587,8 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                             "max_rss_bytes is a measured gate, not an OS limit"
                         ),
                         "output": (
-                            "stdout and stderr use hard per-stream RLIMIT_FSIZE "
-                            "bounds backed by temporary files"
+                            "stdout and stderr use hard per-stream bounded-pipe "
+                            "collection with process-tree termination"
                         ),
                     },
                 },

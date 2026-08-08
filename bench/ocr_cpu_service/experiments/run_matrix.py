@@ -376,8 +376,8 @@ def _run_one_candidate(
                 "gate, not an OS-enforced limit"
             ),
             "output": (
-                "stdout and stderr each use a hard temporary-file RLIMIT_FSIZE "
-                "byte bound"
+                "stdout and stderr each use hard bounded-pipe collection with "
+                "process-tree termination"
             ),
             "timeout": "per-page wall deadline; timed-out process groups are terminated",
         },
@@ -657,7 +657,7 @@ def render_baseline_report(
             "- Each page had a 180-second wall deadline. Timeout cleanup terminates "
             "the complete process group.",
             "- Candidate stdout and stderr each had a hard 1,048,576-byte "
-            "temporary-file RLIMIT_FSIZE bound.",
+            "bounded-pipe collection limit; overflow terminates the process tree.",
             "- RSS is a 10 ms sampled process-tree sum. The 4 GiB threshold is a "
             "measured gate, not an OS-enforced memory limit.",
             "- Page latency spans warm worker request through result and includes "

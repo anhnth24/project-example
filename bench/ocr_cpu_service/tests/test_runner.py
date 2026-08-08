@@ -159,6 +159,38 @@ def test_unlimited_candidate_output_is_hard_bounded_and_sanitized(
     assert "OCR_CANARY_SECRET" in result.metadata["environment_variable_names"]
 
 
+def test_output_limit_does_not_restrict_candidate_internal_files(
+    tmp_path: Path,
+) -> None:
+    recognizer = tmp_path / "internal-file.py"
+    internal = tmp_path / "internal.bin"
+    recognizer.write_text(
+        "from pathlib import Path\n"
+        f"Path({str(internal)!r}).write_bytes(b'x' * 8192)\n"
+        "print('xin chào')\n",
+        encoding="utf-8",
+    )
+    spec = CommandCandidateSpec(
+        id="internal-file",
+        label="Internal file",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+
+    result = run_candidate(
+        spec,
+        _benchmark_page(tmp_path / "page.png", reference="xin chào"),
+        timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
+        max_output_bytes=4096,
+    )
+
+    assert result.success
+    assert result.record["cer"] == 0.0
+    assert internal.stat().st_size == 8192
+
+
 def test_candidate_provenance_is_thawed_only_for_json_output(
     tmp_path: Path,
 ) -> None:
