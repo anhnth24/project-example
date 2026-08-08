@@ -1160,10 +1160,54 @@ def _format_aggregate_row(config_id: str, aggregate: dict[str, Any]) -> str:
 def render_matrix_report(artifact: dict[str, Any]) -> str:
     control = artifact["candidates"][0]
     transfer_control = artifact["candidates"][1]
-    grayscale = next(
-        candidate
-        for candidate in artifact["candidates"]
-        if candidate["id"] == "grayscale-normalization"
+    control_cer = control["aggregate"]["cer"]
+    improvements = sorted(
+        (
+            candidate
+            for candidate in artifact["candidates"][1:]
+            if candidate["aggregate"]["cer"] < control_cer
+        ),
+        key=lambda candidate: (candidate["aggregate"]["cer"], candidate["id"]),
+    )
+    ties = sorted(
+        (
+            candidate
+            for candidate in artifact["candidates"][1:]
+            if candidate["aggregate"]["cer"] == control_cer
+        ),
+        key=lambda candidate: candidate["id"],
+    )
+    if improvements:
+        improvement_decision = (
+            "**Measured tuning accuracy winner"
+            + ("s" if len(improvements) != 1 else "")
+            + ", strictly below Rust control:** "
+            + "; ".join(
+                f"`{candidate['id']}` at {candidate['aggregate']['cer']:.6f} CER "
+                f"with {candidate['aggregate']['raw_counts']['character_edits']} / "
+                f"{candidate['aggregate']['raw_counts']['reference_characters']} "
+                "character edits"
+                for candidate in improvements
+            )
+            + "."
+        )
+    else:
+        improvement_decision = "**No candidate improved overall CER.**"
+    tie_decision = (
+        "**Accuracy ties (not improvements):** "
+        + (
+            "; ".join(
+                f"`{candidate['id']}` tied at {candidate['aggregate']['cer']:.6f} "
+                "CER with median latency "
+                f"{candidate['aggregate']['latency_seconds']['median']:.6f} versus "
+                f"{control['aggregate']['latency_seconds']['median']:.6f} "
+                "seconds/page for Rust control"
+                for candidate in ties
+            )
+            if ties
+            else "none"
+        )
+        + "."
     )
     control_counts = control["aggregate"]["raw_counts"]
     transfer_character_gap = (
@@ -1217,11 +1261,9 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
         "",
         "## Decision",
         "",
-        "**No candidate improved overall CER.** `grayscale-normalization` only "
-        f"tied the Rust control at {control['aggregate']['cer']:.6f} CER while "
-        "its median latency was much worse "
-        f"({grayscale['aggregate']['latency_seconds']['median']:.6f} versus "
-        f"{control['aggregate']['latency_seconds']['median']:.6f} seconds/page).",
+        improvement_decision,
+        "",
+        tie_decision,
         "",
         "**No policy was selected or frozen. Holdout was not run.** These are "
         "tuning-only measurements; Task 4 may evaluate observable retry signals "
