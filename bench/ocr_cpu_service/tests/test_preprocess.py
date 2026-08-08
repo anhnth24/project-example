@@ -142,6 +142,7 @@ def _artifact() -> dict[str, object]:
             "configs_sha256": "3" * 64,
             "binary_sha256": "4" * 64,
             "shim_sha256": "5" * 64,
+            "python_binary_sha256": "e" * 64,
             "tesseract_binary_sha256": "d" * 64,
             "baseline_config_sha256": "6" * 64,
             "host_sha256": "7" * 64,

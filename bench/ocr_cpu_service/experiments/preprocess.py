@@ -87,6 +87,7 @@ _CHECKSUM_FIELDS = (
     "configs_sha256",
     "binary_sha256",
     "shim_sha256",
+    "python_binary_sha256",
     "tesseract_binary_sha256",
     "baseline_config_sha256",
     "host_sha256",
@@ -1052,6 +1053,7 @@ def render_matrix_report(artifact: dict[str, Any]) -> str:
             f"- Source manifest SHA-256: `{artifact['provenance']['source_sha256']}`.",
             f"- Tuning split SHA-256: `{artifact['provenance']['split_sha256']}`.",
             f"- Shim SHA-256: `{artifact['provenance']['shim_sha256']}`.",
+            f"- Python binary SHA-256: `{artifact['provenance']['python_binary_sha256']}`.",
             f"- Fileconv SHA-256: `{artifact['provenance']['binary_sha256']}`.",
             "- Tesseract binary SHA-256: "
             f"`{artifact['provenance']['tesseract_binary_sha256']}`.",
@@ -1100,6 +1102,9 @@ def _build_specs(
 ) -> tuple[list[CommandCandidateSpec], list[dict[str, Any]], list[Path]]:
     base = sanitized_candidate_environment(
         cpu_threads=configs["limits"]["cpu_threads"]
+    )
+    base["PATH"] = os.pathsep.join(
+        (str(Path(sys.executable).resolve().parent), base["PATH"])
     )
     specs: list[CommandCandidateSpec] = []
     public: list[dict[str, Any]] = []
@@ -1173,6 +1178,7 @@ def run_tuning_matrix(args: argparse.Namespace) -> dict[str, Any]:
         "configs_sha256": _sha256(configs_path),
         "binary_sha256": _sha256(fileconv),
         "shim_sha256": _sha256(shim),
+        "python_binary_sha256": _sha256(Path(sys.executable).resolve()),
         "tesseract_binary_sha256": _sha256(real_tesseract),
         "baseline_config_sha256": _sha256(
             SERVICE_ROOT / "experiments" / "baseline.json"
