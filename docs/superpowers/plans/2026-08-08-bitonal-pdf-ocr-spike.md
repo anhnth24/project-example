@@ -120,8 +120,9 @@ const BITONAL_INK_MAX_PER_MILLE: u64 = 400;
 Count every grayscale pixel after existing dimension/allocation checks. A page
 qualifies only when at least 92.0% of pixels are at an extreme and dark-pixel
 ink coverage is between 0.5% and 40%. The 92.0% threshold is frozen from the
-22 approved render histogram range (92.216052584%–96.779655670%), not from OCR
-or reference output. Existing blank, gradient/photo-like, and ink gates remain.
+22 approved render histogram range (about 92.2%–96.8%), not from OCR or
+reference output. The exact post-freeze Rust diagnostic range is
+92.214812969%–96.779655670%. Existing blank, gradient/photo-like, and ink gates remain.
 Full traversal is bounded by existing OCR bounds without changing them:
 decoded files retain `image::Limits` `max_alloc` (512 MiB default) plus
 12,000-per-side decode limits; in-memory and PDF-rendered images use the

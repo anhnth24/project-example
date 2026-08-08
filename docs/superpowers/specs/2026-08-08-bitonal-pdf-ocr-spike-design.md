@@ -64,10 +64,11 @@ dimension, allocation, tempfile, command, and output bounds remain unchanged.
 
 The original 98.5% extreme-pixel threshold was invalid for this hypothesis:
 none of the 22 approved 300-DPI renders activated it. A bounded histogram
-measurement using the frozen dark/light cutoffs found extreme ratios from
-92.216052584% to 96.779655670%. The corrected threshold is 92.0%, which
-activates this near-bitonal set with a 0.216-percentage-point margin at the
-lowest page while retaining the existing blank, gradient/photo-like, ink
+measurement using the frozen dark/light cutoffs found extreme ratios near
+92.2%–96.8%. The corrected threshold is 92.0%. Exact post-freeze Rust
+diagnostics measured 92.214812969%–96.779655670%, activating all 22 pages with
+a 0.214812969-percentage-point margin at the lowest page while retaining the
+existing blank, gradient/photo-like, ink
 minimum, and ink maximum rejection gates. It is frozen by tests before the
 corrected live comparison and cannot be tuned from OCR/reference output.
 
