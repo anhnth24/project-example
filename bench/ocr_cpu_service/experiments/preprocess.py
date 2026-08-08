@@ -243,6 +243,8 @@ def load_experiment_configs(path: Path = DEFAULT_CONFIGS) -> dict[str, Any]:
         factor = item["factor"]
         if not isinstance(factor, dict):
             raise ValueError("factor must be an object")
+        if len(factor) > 1:
+            raise ValueError("each config must change exactly one factor")
         if (
             item["changed_factor"],
             factor,
