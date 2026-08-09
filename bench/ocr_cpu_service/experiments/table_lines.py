@@ -525,119 +525,111 @@ def _covers_interval(
     )
 
 
-def _complete_regions(
+@dataclass(frozen=True, slots=True)
+class _IntersectionComponent:
+    horizontal: tuple[int, ...]
+    vertical: tuple[int, ...]
+    edge_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _GraphResult:
+    components: tuple[_IntersectionComponent, ...]
+    intersection_checks: int
+    intersection_edges: int
+    node_visits: int
+    edge_visits: int
+
+
+def _intersection_components(
     horizontal: Sequence[_Line],
     vertical: Sequence[_Line],
     tolerance: int,
-) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
-    candidates: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
-    for top_index in range(len(horizontal) - 2):
-        top = horizontal[top_index]
-        for bottom_index in range(top_index + 2, len(horizontal)):
-            bottom = horizontal[bottom_index]
-            y1, y2 = top.coordinate, bottom.coordinate
-            for left_index in range(len(vertical) - 2):
-                left = vertical[left_index]
-                for right_index in range(left_index + 2, len(vertical)):
-                    right = vertical[right_index]
-                    x1, x2 = left.coordinate, right.coordinate
-                    if not (
-                        _covers_interval(top, x1, x2, tolerance)
-                        and _covers_interval(bottom, x1, x2, tolerance)
-                        and _covers_interval(left, y1, y2, tolerance)
-                        and _covers_interval(right, y1, y2, tolerance)
-                    ):
-                        continue
-                    h_indices = tuple(
-                        index
-                        for index in range(top_index, bottom_index + 1)
-                        if _covers_interval(
-                            horizontal[index], x1, x2, tolerance
-                        )
-                    )
-                    v_indices = tuple(
-                        index
-                        for index in range(left_index, right_index + 1)
-                        if _covers_interval(vertical[index], y1, y2, tolerance)
-                    )
-                    if (
-                        len(h_indices) < 3
-                        or len(v_indices) < 3
-                        or h_indices[0] != top_index
-                        or h_indices[-1] != bottom_index
-                        or v_indices[0] != left_index
-                        or v_indices[-1] != right_index
-                    ):
-                        continue
-                    if all(
-                        _covers_point(
-                            horizontal[row],
-                            vertical[column].coordinate,
-                            tolerance,
-                        )
-                        and _covers_point(
-                            vertical[column],
-                            horizontal[row].coordinate,
-                            tolerance,
-                        )
-                        for row in h_indices
-                        for column in v_indices
-                    ):
-                        selected_h = set(h_indices)
-                        selected_v = set(v_indices)
-                        partial_horizontal = any(
-                            sum(
-                                _covers_point(
-                                    horizontal[row],
-                                    vertical[column].coordinate,
-                                    tolerance,
-                                )
-                                and _covers_point(
-                                    vertical[column],
-                                    horizontal[row].coordinate,
-                                    tolerance,
-                                )
-                                for column in v_indices
-                            )
-                            >= 2
-                            for row in range(top_index, bottom_index + 1)
-                            if row not in selected_h
-                        )
-                        partial_vertical = any(
-                            sum(
-                                _covers_point(
-                                    horizontal[row],
-                                    vertical[column].coordinate,
-                                    tolerance,
-                                )
-                                and _covers_point(
-                                    vertical[column],
-                                    horizontal[row].coordinate,
-                                    tolerance,
-                                )
-                                for row in h_indices
-                            )
-                            >= 2
-                            for column in range(left_index, right_index + 1)
-                            if column not in selected_v
-                        )
-                        if not partial_horizontal and not partial_vertical:
-                            candidates.add((h_indices, v_indices))
+) -> _GraphResult:
+    horizontal_adjacency: list[list[int]] = [
+        [] for _ in range(len(horizontal))
+    ]
+    vertical_adjacency: list[list[int]] = [[] for _ in range(len(vertical))]
+    intersection_checks = 0
+    intersection_edges = 0
+    for row, horizontal_line in enumerate(horizontal):
+        for column, vertical_line in enumerate(vertical):
+            intersection_checks += 1
+            if _covers_point(
+                horizontal_line, vertical_line.coordinate, tolerance
+            ) and _covers_point(
+                vertical_line, horizontal_line.coordinate, tolerance
+            ):
+                horizontal_adjacency[row].append(column)
+                vertical_adjacency[column].append(row)
+                intersection_edges += 1
 
-    maximal: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
-    for candidate in sorted(candidates):
-        h_indices, v_indices = candidate
-        h_set = set(h_indices)
-        v_set = set(v_indices)
-        if any(
-            candidate != other
-            and h_set.issubset(other[0])
-            and v_set.issubset(other[1])
-            for other in candidates
-        ):
+    seen_horizontal = [False] * len(horizontal)
+    seen_vertical = [False] * len(vertical)
+    components: list[_IntersectionComponent] = []
+    node_visits = 0
+    edge_visits = 0
+    for seed in range(len(horizontal)):
+        if seen_horizontal[seed] or not horizontal_adjacency[seed]:
             continue
-        maximal.append(candidate)
-    return tuple(maximal)
+        seen_horizontal[seed] = True
+        stack: list[tuple[bool, int]] = [(True, seed)]
+        component_horizontal: list[int] = []
+        component_vertical: list[int] = []
+        component_edge_visits = 0
+        while stack:
+            is_horizontal, index = stack.pop()
+            node_visits += 1
+            if is_horizontal:
+                component_horizontal.append(index)
+                neighbors = horizontal_adjacency[index]
+                component_edge_visits += len(neighbors)
+                for column in neighbors:
+                    if not seen_vertical[column]:
+                        seen_vertical[column] = True
+                        stack.append((False, column))
+            else:
+                component_vertical.append(index)
+                neighbors = vertical_adjacency[index]
+                component_edge_visits += len(neighbors)
+                for row in neighbors:
+                    if not seen_horizontal[row]:
+                        seen_horizontal[row] = True
+                        stack.append((True, row))
+        edge_visits += component_edge_visits
+        components.append(
+            _IntersectionComponent(
+                horizontal=tuple(sorted(component_horizontal)),
+                vertical=tuple(sorted(component_vertical)),
+                edge_count=component_edge_visits // 2,
+            )
+        )
+    return _GraphResult(
+        components=tuple(components),
+        intersection_checks=intersection_checks,
+        intersection_edges=intersection_edges,
+        node_visits=node_visits,
+        edge_visits=edge_visits,
+    )
+
+
+def _component_has_continuous_lines(
+    component: _IntersectionComponent,
+    horizontal: Sequence[_Line],
+    vertical: Sequence[_Line],
+    tolerance: int,
+) -> bool:
+    x1 = vertical[component.vertical[0]].coordinate
+    x2 = vertical[component.vertical[-1]].coordinate
+    y1 = horizontal[component.horizontal[0]].coordinate
+    y2 = horizontal[component.horizontal[-1]].coordinate
+    return all(
+        _covers_interval(horizontal[index], x1, x2, tolerance)
+        for index in component.horizontal
+    ) and all(
+        _covers_interval(vertical[index], y1, y2, tolerance)
+        for index in component.vertical
+    )
 
 
 def _inverse_box(
@@ -767,74 +759,130 @@ def detect_ruled_table(
         "horizontal_lines": len(horizontal),
         "vertical_lines": len(vertical),
     }
-    if len(horizontal) - 1 > config.max_rows:
-        return _result(
-            "invalid_grid",
-            angle=angle,
-            size=(width, height),
-            diagnostics={**diagnostics, "limit": "max_rows"},
-        )
-    if len(vertical) - 1 > config.max_columns:
-        return _result(
-            "invalid_grid",
-            angle=angle,
-            size=(width, height),
-            diagnostics={**diagnostics, "limit": "max_columns"},
-        )
-    possible_cells = max(0, len(horizontal) - 1) * max(
-        0, len(vertical) - 1
+    max_global_horizontal = 2 * (config.max_rows + 1)
+    max_global_vertical = 2 * (config.max_columns + 1)
+    intersection_budget = max_global_horizontal * max_global_vertical
+    diagnostics.update(
+        {
+            "max_global_horizontal_lines": max_global_horizontal,
+            "max_global_vertical_lines": max_global_vertical,
+            "intersection_budget": intersection_budget,
+            "intersection_checks": 0,
+            "intersection_edges": 0,
+            "adjacency_nodes_allocated": 0,
+            "component_node_visits": 0,
+            "component_edge_visits": 0,
+        }
     )
-    if possible_cells > config.max_cells:
+    if len(horizontal) > max_global_horizontal:
         return _result(
             "invalid_grid",
             angle=angle,
             size=(width, height),
-            diagnostics={**diagnostics, "limit": "max_cells"},
+            diagnostics={
+                **diagnostics,
+                "limit": "global_horizontal_lines",
+            },
+        )
+    if len(vertical) > max_global_vertical:
+        return _result(
+            "invalid_grid",
+            angle=angle,
+            size=(width, height),
+            diagnostics={
+                **diagnostics,
+                "limit": "global_vertical_lines",
+            },
+        )
+    if len(horizontal) * len(vertical) > intersection_budget:
+        return _result(
+            "invalid_grid",
+            angle=angle,
+            size=(width, height),
+            diagnostics={**diagnostics, "limit": "intersection_budget"},
         )
 
-    regions = _complete_regions(
+    graph = _intersection_components(
         horizontal, vertical, config.intersection_tolerance_pixels
     )
-    diagnostics["complete_regions"] = len(regions)
-    if len(regions) > 1:
+    diagnostics.update(
+        {
+            "intersection_checks": graph.intersection_checks,
+            "intersection_edges": graph.intersection_edges,
+            "adjacency_nodes_allocated": len(horizontal) + len(vertical),
+            "component_node_visits": graph.node_visits,
+            "component_edge_visits": graph.edge_visits,
+        }
+    )
+    table_components = tuple(
+        component
+        for component in graph.components
+        if len(component.horizontal) >= 3 and len(component.vertical) >= 3
+    )
+    complete_regions: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+    incomplete_components = 0
+    component_limit = ""
+    for component in table_components:
+        rows = len(component.horizontal) - 1
+        columns = len(component.vertical) - 1
+        cells = rows * columns
+        if rows > config.max_rows:
+            component_limit = component_limit or "max_rows"
+            incomplete_components += 1
+        elif columns > config.max_columns:
+            component_limit = component_limit or "max_columns"
+            incomplete_components += 1
+        elif cells > config.max_cells:
+            component_limit = component_limit or "max_cells"
+            incomplete_components += 1
+        elif (
+            component.edge_count
+            != len(component.horizontal) * len(component.vertical)
+            or not _component_has_continuous_lines(
+                component,
+                horizontal,
+                vertical,
+                config.intersection_tolerance_pixels,
+            )
+        ):
+            incomplete_components += 1
+        else:
+            complete_regions.append(
+                (component.horizontal, component.vertical)
+            )
+
+    diagnostics["candidate_components"] = len(table_components)
+    diagnostics["complete_regions"] = len(complete_regions)
+    diagnostics["incomplete_components"] = incomplete_components
+    if len(complete_regions) > 1:
         return _result(
             "unsupported",
             angle=angle,
             size=(width, height),
             diagnostics=diagnostics,
         )
-    if not regions:
-        incomplete_candidate = (
-            len(horizontal) >= 2
-            and len(vertical) >= 2
-            and (len(horizontal) >= 3 or len(vertical) >= 3)
-        )
+    if incomplete_components:
         return _result(
-            "invalid_grid" if incomplete_candidate else "not_detected",
+            "invalid_grid",
+            angle=angle,
+            size=(width, height),
+            diagnostics=(
+                {**diagnostics, "limit": component_limit}
+                if component_limit
+                else diagnostics
+            ),
+        )
+    if not complete_regions:
+        return _result(
+            "not_detected",
             angle=angle,
             size=(width, height),
             diagnostics=diagnostics,
         )
 
-    h_indices, v_indices = regions[0]
+    h_indices, v_indices = complete_regions[0]
     rows = len(h_indices) - 1
     columns = len(v_indices) - 1
-    cell_count = rows * columns
-    if rows > config.max_rows:
-        limit = "max_rows"
-    elif columns > config.max_columns:
-        limit = "max_columns"
-    elif cell_count > config.max_cells:
-        limit = "max_cells"
-    else:
-        limit = ""
-    if limit:
-        return _result(
-            "invalid_grid",
-            angle=angle,
-            size=(width, height),
-            diagnostics={**diagnostics, "limit": limit},
-        )
 
     x_coordinates = tuple(vertical[index].coordinate for index in v_indices)
     y_coordinates = tuple(horizontal[index].coordinate for index in h_indices)

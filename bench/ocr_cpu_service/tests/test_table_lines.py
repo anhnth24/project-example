@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+import experiments.table_lines as table_lines  # noqa: E402
 from experiments.table_lines import (  # noqa: E402
     Box,
     DetectionResult,
@@ -114,6 +115,24 @@ def merged_subgrid_fixture() -> Image.Image:
     return image
 
 
+def _regular_coordinates(count: int, *, start: int = 10, step: int = 12) -> tuple[int, ...]:
+    return tuple(start + index * step for index in range(count))
+
+
+def _guard_rectangle_enumeration(monkeypatch, *, maximum_calls: int = 20_000) -> None:
+    original = table_lines._covers_interval
+    calls = 0
+
+    def bounded(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls > maximum_calls:
+            raise AssertionError("post-clustering geometry exceeded operation bound")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(table_lines, "_covers_interval", bounded)
+
+
 def _iou(left: Box, right: Box) -> float:
     intersection = max(
         0, min(left.right, right.right) - max(left.left, right.left)
@@ -174,13 +193,23 @@ def test_isolated_noise_does_not_change_grid():
     assert (result.grid.rows, result.grid.columns) == (2, 2)
 
 
-def test_qualifying_partial_segment_inside_cell_does_not_split_grid_region():
+def test_connected_partial_segment_inside_cell_invalidates_grid_component():
     with grid_image() as image:
         ImageDraw.Draw(image).line((20, 50, 100, 50), fill=0, width=2)
         result = detect_ruled_table(image, balanced_config())
-    assert result.status == "detected"
-    assert result.grid is not None
-    assert (result.grid.rows, result.grid.columns) == (2, 2)
+    assert result.status == "invalid_grid"
+    assert result.grid is None
+
+
+def test_partial_internal_line_cannot_shrink_component_to_three_by_three():
+    with grid_image(
+        xs=(20, 80, 140, 220),
+        ys=(20, 60, 100, 140),
+    ) as image:
+        ImageDraw.Draw(image).line((20, 40, 70, 40), fill=0, width=2)
+        result = detect_ruled_table(image, balanced_config())
+    assert result.status == "invalid_grid"
+    assert result.grid is None
 
 
 @pytest.mark.parametrize("input_angle", (-1.5, 1.5))
@@ -235,20 +264,88 @@ def test_incomplete_or_merged_like_grid_is_typed_invalid(fixture):
 
 
 @pytest.mark.parametrize(
-    ("xs", "ys", "expected_limit"),
+    ("xs", "ys", "size", "expected_limit"),
     [
-        ((20, 120, 220), tuple(range(10, 375, 7)), "max_rows"),
-        (tuple(range(10, 235, 7)), (20, 80, 140), "max_columns"),
+        (
+            (20, 120, 220),
+            _regular_coordinates(52),
+            (240, 640),
+            "max_rows",
+        ),
+        (
+            _regular_coordinates(32),
+            (20, 80, 140),
+            (400, 160),
+            "max_columns",
+        ),
     ],
 )
-def test_dimension_overflow_is_rejected_before_cell_allocation(
-    xs, ys, expected_limit
+def test_exact_dimension_overflow_is_rejected_per_component(
+    xs, ys, size, expected_limit
 ):
-    with grid_image(width=250, height=390, xs=xs, ys=ys) as image:
+    with grid_image(width=size[0], height=size[1], xs=xs, ys=ys) as image:
         result = detect_ruled_table(image, balanced_config())
     assert result.status == "invalid_grid"
     assert result.diagnostics["limit"] == expected_limit
     assert result.diagnostics["cells_allocated"] == 0
+
+
+def test_exact_fifty_by_thirty_grid_is_accepted_with_bounded_graph(monkeypatch):
+    _guard_rectangle_enumeration(monkeypatch)
+    xs = _regular_coordinates(31)
+    ys = _regular_coordinates(51)
+    with grid_image(width=380, height=630, xs=xs, ys=ys) as image:
+        result = detect_ruled_table(image, balanced_config())
+    assert result.status == "detected"
+    assert result.grid is not None
+    assert (result.grid.rows, result.grid.columns) == (50, 30)
+    assert len(result.grid.cells) == 1_500
+    assert result.diagnostics["intersection_checks"] == 51 * 31
+    assert result.diagnostics["component_node_visits"] == 51 + 31
+    assert result.diagnostics["component_edge_visits"] == 2 * 51 * 31
+
+
+def test_two_separate_valid_twenty_five_row_grids_are_unsupported():
+    image = Image.new("L", (390, 720), 255)
+    draw = ImageDraw.Draw(image)
+    for xs, ys in (
+        ((10, 80, 150), _regular_coordinates(26)),
+        ((220, 290, 360), _regular_coordinates(26, start=400)),
+    ):
+        for x in xs:
+            draw.line((x, ys[0], x, ys[-1]), fill=0, width=2)
+        for y in ys:
+            draw.line((xs[0], y, xs[-1], y), fill=0, width=2)
+    try:
+        result = detect_ruled_table(image, balanced_config())
+    finally:
+        image.close()
+    assert result.status == "unsupported"
+    assert result.diagnostics["complete_regions"] == 2
+
+
+def test_dense_structured_global_budget_has_operation_count_proof():
+    xs = _regular_coordinates(62)
+    ys = _regular_coordinates(102)
+    with grid_image(width=752, height=1_230, xs=xs, ys=ys) as image:
+        result = detect_ruled_table(image, balanced_config())
+    assert result.status == "invalid_grid"
+    assert result.diagnostics["intersection_budget"] == 102 * 62
+    assert result.diagnostics["intersection_checks"] == 102 * 62
+    assert result.diagnostics["intersection_edges"] == 102 * 62
+    assert result.diagnostics["component_node_visits"] == 102 + 62
+    assert result.diagnostics["component_edge_visits"] == 2 * 102 * 62
+
+
+def test_excessive_global_lines_are_rejected_before_adjacency_allocation():
+    xs = (20, 120, 220)
+    ys = _regular_coordinates(103)
+    with grid_image(width=240, height=1_250, xs=xs, ys=ys) as image:
+        result = detect_ruled_table(image, balanced_config())
+    assert result.status == "invalid_grid"
+    assert result.diagnostics["limit"] == "global_horizontal_lines"
+    assert result.diagnostics["intersection_checks"] == 0
+    assert result.diagnostics["adjacency_nodes_allocated"] == 0
 
 
 def test_grid_rejects_1501_cells_before_coordinate_validation():
