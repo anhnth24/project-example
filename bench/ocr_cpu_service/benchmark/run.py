@@ -205,6 +205,47 @@ def _terminate_process_group(
     process.wait()
 
 
+def _process_group_and_root_gone(process: subprocess.Popen[str]) -> bool:
+    root_gone = process.poll() is not None
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        group_gone = True
+    except (OSError, ValueError):
+        group_gone = False
+    else:
+        group_gone = False
+    return root_gone and group_gone
+
+
+def _kill_process_group_and_verify(
+    process: subprocess.Popen[str],
+    *,
+    wait_seconds: float = 0.5,
+) -> bool:
+    """Independently SIGKILL, reap, and verify a worker session is gone."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except (OSError, ValueError):
+        return False
+
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while True:
+        try:
+            process.wait(timeout=max(0.0, min(0.05, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return False
+        if _process_group_and_root_gone(process):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def _read_event_with_process_tree_rss(
     process: subprocess.Popen[str],
     *,
@@ -388,8 +429,9 @@ class IsolatedCandidateWorker:
         except BaseException:
             try:
                 _terminate_process_group(self._process)
-            finally:
-                self._closed = True
+            except (OSError, ValueError, subprocess.SubprocessError):
+                _kill_process_group_and_verify(self._process)
+            self._closed = _process_group_and_root_gone(self._process)
             raise
 
     def recognize(
@@ -505,8 +547,23 @@ class IsolatedCandidateWorker:
                 close_fault = True
             finally:
                 self._closed = self._process.poll() is not None
-        if close_fault:
+        if close_fault or not _process_group_and_root_gone(self._process):
+            fallback_succeeded = _kill_process_group_and_verify(self._process)
+            self._closed = fallback_succeeded
+        else:
+            fallback_succeeded = True
+        if not fallback_succeeded:
             raise CandidateWorkerCleanupError from None
+
+    def force_kill(self) -> None:
+        """Kill and verify this worker without relying on graceful close."""
+        if _process_group_and_root_gone(self._process):
+            self._closed = True
+            return
+        if not _kill_process_group_and_verify(self._process):
+            self._closed = False
+            raise CandidateWorkerCleanupError from None
+        self._closed = True
 
 
 def _isolated_worker(

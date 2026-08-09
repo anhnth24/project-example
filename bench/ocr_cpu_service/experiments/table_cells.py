@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import re
 import shutil
+import stat
 import tempfile
 import time
 import unicodedata
@@ -423,6 +425,44 @@ def _failure(error_kind: FailureKind) -> TableRecognitionError:
     return TableRecognitionError(error_kind)
 
 
+def _remove_owned_page_tree(path: Path) -> None:
+    """Remove an owned tree without relying on shutil.rmtree."""
+    try:
+        path_stat = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(path_stat.st_mode) or not stat.S_ISDIR(path_stat.st_mode):
+        if not stat.S_ISLNK(path_stat.st_mode):
+            os.chmod(
+                path,
+                path_stat.st_mode | stat.S_IRUSR | stat.S_IWUSR,
+                follow_symlinks=False,
+            )
+        path.unlink()
+        return
+
+    os.chmod(
+        path,
+        path_stat.st_mode | stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR,
+        follow_symlinks=False,
+    )
+    with os.scandir(path) as entries:
+        children = [Path(entry.path) for entry in entries]
+    for child in children:
+        _remove_owned_page_tree(child)
+    path.rmdir()
+
+
+def _owned_path_exists(path: Path) -> bool | None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
+    return True
+
+
 def _cleanup_grid_resources(
     *,
     worker: Any,
@@ -438,24 +478,26 @@ def _cleanup_grid_resources(
         try:
             worker.close(timeout_seconds=close_timeout)
         except Exception:
-            cleanup_failed = True
             try:
-                worker.close(timeout_seconds=0.0)
+                worker.force_kill()
             except Exception:
-                pass
+                cleanup_failed = True
     if page_directory is not None:
-        for _attempt in range(2):
-            try:
-                shutil.rmtree(page_directory)
-                break
-            except FileNotFoundError:
-                break
-            except Exception:
-                cleanup_failed = True
         try:
-            if page_directory.exists():
-                cleanup_failed = True
-        except OSError:
+            shutil.rmtree(page_directory)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            for _attempt in range(2):
+                try:
+                    _remove_owned_page_tree(page_directory)
+                except FileNotFoundError:
+                    break
+                except Exception:
+                    continue
+                if _owned_path_exists(page_directory) is False:
+                    break
+        if _owned_path_exists(page_directory) is not False:
             cleanup_failed = True
     return TableCleanupError() if cleanup_failed else None
 
