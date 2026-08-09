@@ -27,6 +27,18 @@ An earlier ignored draft-annotation engineering smoke was not official evidence,
 did not authorize a measured `STOP` or winner, and has been discarded. This
 tracked report contains no smoke aggregates.
 
+## Evidence controls for the eventual official run
+
+- A frozen winner must bind the exact validated bytes of ignored
+  `raw/tuning.json`, its recomputed winner ID, and the canonical candidate hash.
+- Holdout creates `raw/holdout.started.json` atomically before opening its first
+  page; an existing marker blocks every retry, including after a crash.
+- Failure evidence records the primary timeout, output, resource, or candidate
+  error independently from a concurrent cleanup failure, and aggregates count
+  both dimensions.
+- The exported report renderer validates every canonical artifact before
+  producing any Markdown.
+
 ## Bounds reserved for the official run
 
 - Cell match IoU: `>= 0.80`
