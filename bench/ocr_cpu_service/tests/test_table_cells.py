@@ -109,7 +109,7 @@ def grid_recognition(
                 row=index // columns,
                 column=index % columns,
                 text=text,
-                candidate_seconds=0.0,
+                elapsed_seconds=0.0,
                 resource={},
             )
             for index, text in enumerate(texts)
@@ -144,6 +144,7 @@ class FakeWorker:
         *,
         error: BaseException | None = None,
         peak_rss_bytes: int = 1_024,
+        cold_peak_rss_bytes: int = 1_024,
     ) -> None:
         self.texts = list(texts or [])
         self.error = error
@@ -151,6 +152,13 @@ class FakeWorker:
         self.paths: list[Path] = []
         self.timeouts: list[float | None] = []
         self.close_count = 0
+        self.metadata = {
+            "cold_initialization": {
+                "rss_measurement": {
+                    "peak_rss_bytes": cold_peak_rss_bytes,
+                }
+            }
+        }
 
     def recognize(
         self, page: object, *, timeout_seconds: float | None = None
@@ -278,7 +286,7 @@ def test_blank_cells_skip_worker_and_have_zero_subprocess_time(
         image.close()
     assert worker.paths == []
     assert [cell.text for cell in recognition.cells] == ["", "", "", ""]
-    assert [cell.candidate_seconds for cell in recognition.cells] == [
+    assert [cell.elapsed_seconds for cell in recognition.cells] == [
         0.0,
         0.0,
         0.0,
@@ -386,7 +394,7 @@ def test_grid_recognition_caps_cells_at_1500() -> None:
             row=index // 30,
             column=index % 30,
             text="",
-            candidate_seconds=0.0,
+            elapsed_seconds=0.0,
             resource={},
         )
         for index in range(1_501)
@@ -396,10 +404,11 @@ def test_grid_recognition_caps_cells_at_1500() -> None:
 
 
 def test_cell_resources_are_ignored_by_repr_and_equality() -> None:
-    left = CellRecognition(0, 0, "x", 1.0, {"peak_rss_bytes": 1})
-    right = CellRecognition(0, 0, "x", 1.0, {"peak_rss_bytes": 999})
+    left = CellRecognition(0, 0, "PRIVATE TEXT", 1.0, {"peak_rss_bytes": 1})
+    right = CellRecognition(0, 0, "PRIVATE TEXT", 1.0, {"peak_rss_bytes": 999})
     assert left == right
     assert "peak_rss_bytes" not in repr(left)
+    assert "PRIVATE TEXT" not in repr(left)
 
 
 def test_one_worker_recognizes_nonblank_cells_row_major_with_numeric_paths(
@@ -414,6 +423,12 @@ def test_one_worker_recognizes_nonblank_cells_row_major_with_numeric_paths(
         (1, 1),
     ]
     assert [cell.text for cell in recognition.cells] == ["A", "B", "C", "D"]
+    assert [cell.elapsed_seconds for cell in recognition.cells] == [
+        0.25,
+        0.25,
+        0.25,
+        0.25,
+    ]
     assert [path.name for path in worker.paths] == [
         "cell-0000-0000.png",
         "cell-0000-0001.png",
@@ -489,6 +504,63 @@ def test_rss_must_be_strictly_below_bound(tmp_path: Path) -> None:
     assert worker.close_count == 1
 
 
+def test_cold_worker_rss_must_be_strictly_below_bound(tmp_path: Path) -> None:
+    worker = FakeWorker(
+        ["A"],
+        cold_peak_rss_bytes=805_306_368,
+    )
+    grid = rectangular_grid(rows=1, columns=1)
+    with pytest.raises(TableRecognitionError) as caught:
+        recognize_with_worker(tmp_path, worker, grid=grid)
+    assert caught.value.error_kind == "resource_limit"
+    assert worker.paths == []
+    assert worker.close_count == 1
+
+
+@pytest.mark.parametrize(
+    ("startup_failure", "expected_kind"),
+    [
+        (TimeoutError("PRIVATE_STARTUP_TIMEOUT"), "timeout"),
+        (RuntimeError("PRIVATE_STARTUP_FAILURE"), "candidate_error"),
+    ],
+)
+def test_worker_startup_failures_are_typed_sanitized_and_cleaned(
+    tmp_path: Path,
+    startup_failure: BaseException,
+    expected_kind: str,
+) -> None:
+    page_directory = tmp_path / "startup-page"
+    page_directory.mkdir()
+    grid = rectangular_grid(rows=1, columns=1)
+    image = nonblank_grid_image(grid)
+    try:
+        with (
+            patch(
+                "experiments.table_cells.tempfile.mkdtemp",
+                return_value=str(page_directory),
+            ),
+            patch(
+                "experiments.table_cells._isolated_worker",
+                side_effect=startup_failure,
+            ),
+            pytest.raises(TableRecognitionError) as caught,
+        ):
+            recognize_grid(
+                grid,
+                working_image=image,
+                candidate_id="balanced-psm6",
+                cell_inset_pixels=4,
+                psm=6,
+                tessdata=candidate_tessdata(tmp_path),
+                limits=limits(),
+            )
+    finally:
+        image.close()
+    assert caught.value.error_kind == expected_kind
+    assert "PRIVATE" not in str(caught.value)
+    assert not page_directory.exists()
+
+
 def test_page_deadline_is_checked_after_each_response(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -557,6 +629,26 @@ def test_crops_and_owned_page_directory_are_removed_on_failure(
         image.close()
     assert worker.close_count == 1
     assert not page_directory.exists()
+
+
+def test_invalid_cell_crop_maps_to_sanitized_invalid_grid(
+    tmp_path: Path,
+) -> None:
+    grid = rectangular_grid(rows=1, columns=1)
+    image = Image.new("L", (99, 50), 255)
+    worker = FakeWorker([])
+    try:
+        with pytest.raises(TableRecognitionError) as caught:
+            recognize_with_worker(
+                tmp_path,
+                worker,
+                grid=grid,
+                image=image,
+            )
+    finally:
+        image.close()
+    assert caught.value.error_kind == "invalid_grid"
+    assert worker.close_count == 1
 
 
 def test_normalization_changes_only_nfc_and_whitespace(
