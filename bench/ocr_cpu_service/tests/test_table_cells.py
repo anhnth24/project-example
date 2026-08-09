@@ -16,7 +16,6 @@ from benchmark.run import (  # noqa: E402
     RecognitionMeasurement,
     sanitized_candidate_environment,
 )
-from experiments.ruled_table import process_limits  # noqa: E402
 from experiments.table_cells import (  # noqa: E402
     CellRecognition,
     GridRecognition,
@@ -31,6 +30,7 @@ from experiments.table_cells import (  # noqa: E402
     recognize_grid,
     serialize_markdown,
 )
+from experiments.ruled_table import process_limits  # noqa: E402
 from experiments.table_lines import Box, Grid, GridCell  # noqa: E402
 
 
