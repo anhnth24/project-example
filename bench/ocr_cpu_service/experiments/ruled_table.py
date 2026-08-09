@@ -44,11 +44,21 @@ from experiments.table_lines import (
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = SERVICE_ROOT / "experiments" / "ruled-table-config.json"
 DEFAULT_MANIFEST = SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json"
+DEFAULT_ANNOTATIONS = SERVICE_ROOT / ".data" / "ruled-table" / "annotations"
+DEFAULT_PDF = (
+    SERVICE_ROOT
+    / ".data"
+    / "corpus"
+    / "official-89-2026-tt-btc.signed.pdf"
+)
 DEFAULT_TESSDATA = SERVICE_ROOT.parents[1] / "tessdata_best"
 DEFAULT_RAW_ARTIFACT = SERVICE_ROOT / ".data" / "ruled-table" / "raw-tuning.json"
 DEFAULT_REPORT = SERVICE_ROOT / "reports" / "ruled-table-spike.md"
 CANONICAL_CONFIG_SHA256 = (
-    "521efe33c8e128581708c6269e92486799201f59c648f6117048735530b0a495"
+    "53882ed34ec756fd2fc9e7bb3ad66ac021c86b26c70a04299f8dd1b1eec0a3f8"
+)
+CANONICAL_MANIFEST_SHA256 = (
+    "89511ce0a181be774582075730b502c97170f3166b35acae9a0ca3eb475df6a4"
 )
 CANONICAL_SOURCE_ID = "official-89-2026-tt-btc"
 CANONICAL_SOURCE_SHA256 = (
@@ -62,6 +72,7 @@ _CONFIG_FIELDS = frozenset(
         "schema_version",
         "source",
         "render",
+        "tessdata",
         "geometry_limits",
         "process_limits",
         "detector_candidates",
@@ -70,6 +81,7 @@ _CONFIG_FIELDS = frozenset(
 )
 _SOURCE_CONFIG_FIELDS = frozenset({"id", "expected_sha256", "max_bytes"})
 _RENDER_FIELDS = frozenset({"dpi", "max_pixels", "max_dimension"})
+_TESSDATA_FIELDS = frozenset({"vie_sha256"})
 _GEOMETRY_FIELDS = frozenset(
     {
         "max_rows",
@@ -440,6 +452,11 @@ def _validate_config(payload: object) -> dict[str, Any]:
     if _positive_int(render["max_dimension"], "config.render.max_dimension") > 10_000:
         raise ValueError("config.render.max_dimension exceeds the canonical limit")
 
+    tessdata = _closed_mapping(
+        config["tessdata"], fields=_TESSDATA_FIELDS, name="config.tessdata"
+    )
+    _sha256(tessdata["vie_sha256"], "config.tessdata.vie_sha256")
+
     geometry = _closed_mapping(
         config["geometry_limits"],
         fields=_GEOMETRY_FIELDS,
@@ -570,6 +587,7 @@ def _validate_config(payload: object) -> dict[str, Any]:
     for section in (
         "source",
         "render",
+        "tessdata",
         "geometry_limits",
         "process_limits",
         "detector_candidates",
@@ -1288,6 +1306,24 @@ class CellMatchCounts:
 
 
 @dataclass(frozen=True, slots=True)
+class PositionedBox:
+    row: int
+    column: int
+    box: Box
+
+    def __post_init__(self) -> None:
+        if (
+            not _is_int(self.row)
+            or not _is_int(self.column)
+            or self.row < 0
+            or self.column < 0
+        ):
+            raise ValueError("positioned box coordinates must be nonnegative integers")
+        if not isinstance(self.box, Box):
+            raise TypeError("positioned box must contain a Box")
+
+
+@dataclass(frozen=True, slots=True)
 class CellContentCounts:
     character_edits: int
     reference_characters: int
@@ -1393,6 +1429,16 @@ _BINDING_FIELDS = frozenset(
         "toolchain_sha256",
     }
 )
+_FROZEN_WINNER_FIELDS = frozenset(
+    {
+        "schema_version",
+        "winner_id",
+        "configuration_sha256",
+        "config_sha256",
+        "manifest_sha256",
+        "tuning_artifact_sha256",
+    }
+)
 _AGGREGATE_FIELDS = frozenset(
     {
         "candidate_id",
@@ -1485,8 +1531,8 @@ def _box_iou(left: Box, right: Box) -> float:
 
 
 def match_cells(
-    references: Sequence[Box],
-    predictions: Sequence[Box],
+    references: Sequence[Box | PositionedBox],
+    predictions: Sequence[Box | PositionedBox],
     *,
     threshold: float,
 ) -> CellMatchCounts:
@@ -1498,18 +1544,47 @@ def match_cells(
         or not 0 <= float(threshold) <= 1
     ):
         raise ValueError("threshold must be a finite fraction")
-    if any(not isinstance(box, Box) for box in references + predictions):
-        raise TypeError("cell boxes must be Box values")
+    def positioned(
+        values: Sequence[Box | PositionedBox],
+    ) -> tuple[PositionedBox, ...]:
+        output: list[PositionedBox] = []
+        for index, value in enumerate(values):
+            if isinstance(value, PositionedBox):
+                output.append(value)
+            elif isinstance(value, Box):
+                output.append(PositionedBox(index, 0, value))
+            else:
+                raise TypeError("cell boxes must be Box or PositionedBox values")
+        return tuple(output)
+
+    positioned_references = positioned(references)
+    positioned_predictions = positioned(predictions)
     candidates = [
-        (iou, reference_index, prediction_index)
-        for reference_index, reference in enumerate(references)
-        for prediction_index, prediction in enumerate(predictions)
-        if (iou := _box_iou(reference, prediction)) >= threshold
+        (
+            iou,
+            reference.row,
+            reference.column,
+            prediction.row,
+            prediction.column,
+            reference_index,
+            prediction_index,
+        )
+        for reference_index, reference in enumerate(positioned_references)
+        for prediction_index, prediction in enumerate(positioned_predictions)
+        if (iou := _box_iou(reference.box, prediction.box)) >= threshold
     ]
-    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    candidates.sort(key=lambda item: (-item[0], *item[1:5]))
     used_references: set[int] = set()
     used_predictions: set[int] = set()
-    for _iou, reference_index, prediction_index in candidates:
+    for (
+        _iou,
+        _reference_row,
+        _reference_column,
+        _prediction_row,
+        _prediction_column,
+        reference_index,
+        prediction_index,
+    ) in candidates:
         if (
             reference_index in used_references
             or prediction_index in used_predictions
@@ -1641,6 +1716,12 @@ def _toolchain_description() -> dict[str, str]:
 def _canonical_artifact_bindings() -> ArtifactBindings:
     config_raw = DEFAULT_CONFIG.read_bytes()
     manifest_raw = DEFAULT_MANIFEST.read_bytes()
+    if hashlib.sha256(config_raw).hexdigest() != CANONICAL_CONFIG_SHA256:
+        raise ValueError("canonical config SHA-256 mismatch")
+    if hashlib.sha256(manifest_raw).hexdigest() != CANONICAL_MANIFEST_SHA256:
+        raise ValueError("canonical manifest SHA-256 mismatch")
+    config = load_config(DEFAULT_CONFIG)
+    _verify_tessdata(DEFAULT_TESSDATA, config)
     manifest_payload = json.loads(manifest_raw)
     pages = manifest_payload.get("pages")
     if not isinstance(pages, list):
@@ -1689,9 +1770,13 @@ def _rate(edits: int, reference_units: int) -> float:
     return float(edits > 0)
 
 
-def _artifact_box(value: Mapping[str, Any]) -> Box:
+def _artifact_box(value: Mapping[str, Any]) -> PositionedBox:
     bbox = value["bbox"]
-    return Box(bbox[0], bbox[1], bbox[2], bbox[3])
+    return PositionedBox(
+        value["row"],
+        value["column"],
+        Box(bbox[0], bbox[1], bbox[2], bbox[3]),
+    )
 
 
 def _aggregate_candidate(
@@ -2008,6 +2093,10 @@ def _validate_record(
         raise ValueError(f"{name} has duplicate predicted coordinates")
     if len(set(reference_coordinates)) != len(reference_coordinates):
         raise ValueError(f"{name} has duplicate reference coordinates")
+    if predicted_coordinates != sorted(predicted_coordinates):
+        raise ValueError(f"{name}.predicted_boxes must be row-major")
+    if reference_coordinates != sorted(reference_coordinates):
+        raise ValueError(f"{name}.reference_boxes must be row-major")
     if status == "detected":
         if rows * columns != len(predicted_boxes):
             raise ValueError(f"{name} detected grid cardinality is inconsistent")
@@ -2038,11 +2127,24 @@ def _validate_record(
             _nonnegative_int(cell[field_name], f"{cell_name}.{field_name}")
         _bool(cell["reference_blank"], f"{cell_name}.reference_blank")
         _bool(cell["predicted_blank"], f"{cell_name}.predicted_blank")
-        _bool(cell["prediction_present"], f"{cell_name}.prediction_present")
+        prediction_present = _bool(
+            cell["prediction_present"], f"{cell_name}.prediction_present"
+        )
+        if not prediction_present and (
+            cell["character_edits"] != cell["reference_characters"]
+            or cell["word_edits"] != cell["reference_words"]
+        ):
+            raise ValueError(
+                f"{cell_name} missing prediction must record full-reference deletions"
+            )
     if len(set(cell_coordinates)) != len(cell_coordinates):
         raise ValueError(f"{name} has duplicate cell coordinates")
     if set(reference_coordinates) - set(cell_coordinates):
         raise ValueError(f"{name} is missing annotated cell evidence")
+    if status != "detected" and any(
+        cell["prediction_present"] for cell in cells
+    ):
+        raise ValueError(f"{name} failed table record cannot retain predictions")
     _finite_nonnegative_number(record["elapsed_seconds"], f"{name}.elapsed_seconds")
     _nonnegative_int(record["peak_rss_bytes"], f"{name}.peak_rss_bytes")
     resource = _closed_mapping(
@@ -2227,6 +2329,70 @@ def validate_artifact(payload: Mapping[str, Any], *, split: str) -> None:
             raise ValueError("artifact decision is stale")
 
 
+def freeze_tuning_winner(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Create a closed winner binding only after full tuning validation."""
+    validate_artifact(payload, split="tuning")
+    winner_id = payload["winner_id"]
+    if not isinstance(winner_id, str):
+        raise ValueError("validated tuning artifact has no eligible winner")
+    candidates = [
+        candidate
+        for candidate in payload["candidates"]
+        if candidate["id"] == winner_id
+    ]
+    if len(candidates) != 1:
+        raise ValueError("validated tuning winner is not unique")
+    return {
+        "schema_version": 1,
+        "winner_id": winner_id,
+        "configuration_sha256": candidates[0]["configuration_sha256"],
+        "config_sha256": payload["config_sha256"],
+        "manifest_sha256": payload["manifest_sha256"],
+        "tuning_artifact_sha256": _canonical_json_sha256(payload),
+    }
+
+
+def validate_frozen_winner(payload: Mapping[str, Any]) -> None:
+    """Bind a frozen winner to canonical config, manifest, and candidate bytes."""
+    winner = _closed_mapping(
+        payload, fields=_FROZEN_WINNER_FIELDS, name="frozen_winner"
+    )
+    if winner["schema_version"] != 1 or not _is_int(winner["schema_version"]):
+        raise ValueError("frozen_winner.schema_version must equal 1")
+    winner_id = _string(winner["winner_id"], "frozen_winner.winner_id")
+    bindings = _canonical_artifact_bindings()
+    if (
+        _sha256(winner["config_sha256"], "frozen_winner.config_sha256")
+        != bindings.config_sha256
+    ):
+        raise ValueError("frozen winner config binding is not canonical")
+    if (
+        _sha256(winner["manifest_sha256"], "frozen_winner.manifest_sha256")
+        != bindings.manifest_sha256
+    ):
+        raise ValueError("frozen winner manifest binding is not canonical")
+    _sha256(
+        winner["tuning_artifact_sha256"],
+        "frozen_winner.tuning_artifact_sha256",
+    )
+    expected_candidates = _artifact_candidate_descriptors(load_config(DEFAULT_CONFIG))
+    matches = [
+        candidate
+        for candidate in expected_candidates
+        if candidate["id"] == winner_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("frozen winner ID is not canonical")
+    if (
+        _sha256(
+            winner["configuration_sha256"],
+            "frozen_winner.configuration_sha256",
+        )
+        != matches[0]["configuration_sha256"]
+    ):
+        raise ValueError("frozen winner configuration binding is not canonical")
+
+
 def _record_bindings(
     bindings: ArtifactBindings, *, page_number: int
 ) -> dict[str, str]:
@@ -2248,20 +2414,23 @@ def _record_bindings(
 def _empty_cell_evidence(annotation: PageAnnotation) -> list[dict[str, Any]]:
     if annotation.table is None:
         return []
-    return [
-        {
-            "row": cell.row,
-            "column": cell.column,
-            "character_edits": 0,
-            "reference_characters": 0,
-            "word_edits": 0,
-            "reference_words": 0,
-            "reference_blank": cell.blank,
-            "predicted_blank": False,
-            "prediction_present": False,
-        }
-        for cell in annotation.table.cells
-    ]
+    evidence: list[dict[str, Any]] = []
+    for cell in annotation.table.cells:
+        counts = error_counts(cell.text, "")
+        evidence.append(
+            {
+                "row": cell.row,
+                "column": cell.column,
+                "character_edits": counts.character_edits,
+                "reference_characters": counts.reference_characters,
+                "word_edits": counts.word_edits,
+                "reference_words": counts.reference_words,
+                "reference_blank": cell.blank,
+                "predicted_blank": False,
+                "prediction_present": False,
+            }
+        )
+    return evidence
 
 
 def _content_evidence(
@@ -2387,7 +2556,11 @@ def _run_page(
                     default=0,
                 )
     except TableRecognitionError as error:
-        status = error.error_kind
+        status = (
+            "cleanup_error"
+            if error.cleanup_failure is not None
+            else error.error_kind
+        )
         if status == "resource_limit":
             peak_rss_bytes = config["process_limits"]["max_rss_bytes"]
     except Exception:
@@ -2397,6 +2570,10 @@ def _run_page(
             working.close()
         if image is not None:
             image.close()
+    if status != "detected":
+        rows = 0
+        columns = 0
+        predicted_boxes = []
     table = annotation.table
     reference_boxes = (
         _box_evidence(
@@ -2464,29 +2641,120 @@ def _bindings_for_run(
     )
 
 
+def _verify_annotation_readiness(
+    manifest: CorpusManifest,
+    annotations_path: Path,
+    *,
+    require_human_review: bool = True,
+) -> int:
+    pages = manifest.tuning + manifest.holdout + manifest.negative
+    verified = sum(page.review_status == "human_verified" for page in pages)
+    if require_human_review and verified != len(pages):
+        raise ValueError(
+            f"{verified}/{len(pages)} annotations are human_verified; "
+            f"require {len(pages)}/{len(pages)} human_verified"
+        )
+    expected_directory = (manifest._root / "annotations").resolve()
+    if annotations_path.resolve() != expected_directory:
+        raise ValueError("annotations directory is not canonical for the manifest")
+    for page in pages:
+        annotation_path = annotations_path / Path(page.annotation_path).name
+        raw = annotation_path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != page.annotation_sha256:
+            raise ValueError("annotation SHA-256 mismatch during preflight")
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, UnicodeDecodeError) as error:
+            raise ValueError("annotation is not valid UTF-8 JSON") from error
+        annotation = _parse_annotation(
+            payload,
+            expected_render_sha256=page.render_sha256,
+            require_verified_holdout=False,
+        )
+        if (
+            annotation.source_sha256 != manifest.source_sha256
+            or annotation.page_number != page.page_number
+            or annotation.split != page.split
+            or annotation.negative != page.negative
+            or annotation.review_status != page.review_status
+            or annotation.reviewer != page.reviewer
+            or annotation.revision != page.revision
+            or template_fingerprint(annotation) != page.template_fingerprint
+        ):
+            raise ValueError("annotation metadata does not match frozen manifest")
+    return verified
+
+
+def _verify_source_pdf(path: Path, config: Mapping[str, Any]) -> None:
+    try:
+        size = path.stat().st_size
+    except OSError as error:
+        raise ValueError("canonical source PDF is unavailable") from error
+    if size != CANONICAL_SOURCE_SIZE:
+        raise ValueError("canonical source PDF size mismatch")
+    if _sha256_file(path) != config["source"]["expected_sha256"]:
+        raise ValueError("canonical source PDF SHA-256 mismatch")
+
+
+def _verify_tessdata(path: Path, config: Mapping[str, Any]) -> None:
+    model = path / "vie.traineddata"
+    if not path.is_dir() or not model.is_file():
+        raise ValueError("canonical tessdata must contain vie.traineddata")
+    if _sha256_file(model) != config["tessdata"]["vie_sha256"]:
+        raise ValueError("canonical vie.traineddata SHA-256 mismatch")
+
+
+def _preflight_official_inputs(
+    *,
+    config_path: Path,
+    manifest_path: Path,
+    annotations_path: Path,
+    pdf_path: Path,
+    tessdata: Path,
+    split: Literal["tuning", "holdout"],
+) -> tuple[dict[str, Any], CorpusManifest]:
+    config = load_config(config_path)
+    manifest = load_manifest(manifest_path, mode=split)
+    _verify_annotation_readiness(
+        manifest,
+        annotations_path,
+        require_human_review=True,
+    )
+    if manifest.manifest_sha256 != CANONICAL_MANIFEST_SHA256:
+        raise ValueError("frozen manifest SHA-256 is not canonical")
+    _verify_source_pdf(pdf_path, config)
+    _verify_tessdata(tessdata, config)
+    if manifest.access_counts != {"tuning": 0, "holdout": 0, "negative": 0}:
+        raise ValueError("official preflight unexpectedly opened a page")
+    return config, manifest
+
+
 def run_split(
     split: Literal["tuning", "holdout"],
     *,
     manifest_path: Path = DEFAULT_MANIFEST,
     config_path: Path = DEFAULT_CONFIG,
+    annotations_path: Path = DEFAULT_ANNOTATIONS,
+    pdf_path: Path = DEFAULT_PDF,
     tessdata: Path = DEFAULT_TESSDATA,
     frozen_winner: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run exactly one isolated split and return closed aggregate-only evidence."""
     if split not in {"tuning", "holdout"}:
         raise ValueError("split must be tuning or holdout")
-    config = load_config(config_path)
-    manifest = load_manifest(manifest_path, mode=split)
+    config, manifest = _preflight_official_inputs(
+        config_path=config_path,
+        manifest_path=manifest_path,
+        annotations_path=annotations_path,
+        pdf_path=pdf_path,
+        tessdata=tessdata,
+        split=split,
+    )
     if split == "holdout":
-        sealed = manifest.holdout + manifest.negative
-        if any(page.review_status != "human_verified" for page in sealed):
-            raise ValueError("holdout annotations must all be human_verified")
         if frozen_winner is None:
             raise ValueError("holdout requires a frozen tuning winner artifact")
-        validate_artifact(frozen_winner, split="tuning")
+        validate_frozen_winner(frozen_winner)
         winner_id = frozen_winner["winner_id"]
-        if not isinstance(winner_id, str):
-            raise ValueError("holdout requires a non-null frozen winner")
         selected_candidates = [
             candidate
             for candidate in config["detector_candidates"]
@@ -2555,7 +2823,10 @@ def _format_metric(value: Any) -> str:
     return str(value)
 
 
-def render_report(payload: Mapping[str, Any]) -> str:
+def render_report(
+    payload: Mapping[str, Any],
+    holdout_payload: Mapping[str, Any] | None = None,
+) -> str:
     """Render deterministic aggregate-only Markdown without raw records."""
     split = payload.get("split")
     if split not in {"tuning", "holdout"}:
@@ -2575,9 +2846,9 @@ def render_report(payload: Mapping[str, Any]) -> str:
         f"- Source SHA-256: `{source.get('sha256')}`",
         f"- Manifest SHA-256: `{payload.get('manifest_sha256')}`",
         f"- Configuration SHA-256: `{payload.get('config_sha256')}`",
-        f"- Split: `{split}`",
+        f"- Split: `{'tuning+holdout' if holdout_payload is not None else split}`",
         (
-            "- Access: "
+            "- Tuning artifact access: "
             f"tuning={access.get('tuning_pages_opened')}, "
             f"holdout={access.get('holdout_pages_opened')}, "
             f"negative={access.get('negative_pages_opened')}"
@@ -2600,6 +2871,19 @@ def render_report(payload: Mapping[str, Any]) -> str:
         ),
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
+    if holdout_payload is not None:
+        holdout_access = holdout_payload.get("access")
+        if not isinstance(holdout_access, Mapping):
+            raise ValueError("holdout artifact public provenance is invalid")
+        lines.insert(
+            9,
+            (
+                "- Holdout artifact access: "
+                f"tuning={holdout_access.get('tuning_pages_opened')}, "
+                f"holdout={holdout_access.get('holdout_pages_opened')}, "
+                f"negative={holdout_access.get('negative_pages_opened')}"
+            ),
+        )
     for aggregate in sorted(aggregates, key=lambda item: item["candidate_id"]):
         lines.append(
             "| "
@@ -2645,8 +2929,14 @@ def render_report(payload: Mapping[str, Any]) -> str:
             "|---|---:|---:|---|",
         ]
     )
-    if split == "holdout" and len(aggregates) == 1:
-        aggregate = aggregates[0]
+    gate_payload = holdout_payload if holdout_payload is not None else payload
+    gate_aggregates = gate_payload.get("aggregates")
+    if (
+        gate_payload.get("split") == "holdout"
+        and isinstance(gate_aggregates, list)
+        and len(gate_aggregates) == 1
+    ):
+        aggregate = gate_aggregates[0]
         gate_rows = [
             (
                 "Exact table grids",
@@ -2686,7 +2976,7 @@ def render_report(payload: Mapping[str, Any]) -> str:
                 f"| {label} | {_format_metric(measured)} | {threshold} | "
                 f"{'PASS' if passed else 'FAIL'} |"
             )
-        decision = derive_holdout_decision(payload)
+        decision = derive_holdout_decision(gate_payload)
     else:
         for label, threshold in (
             ("Exact table grids", "3 / 3"),
@@ -2735,25 +3025,32 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     inventory = subparsers.add_parser("inventory")
-    inventory.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    inventory.add_argument("--output", type=Path, default=DEFAULT_REPORT)
+    inventory.add_argument("--manifest", type=Path, required=True)
+    inventory.add_argument("--annotations", type=Path, required=True)
+    inventory.add_argument("--output", type=Path, required=True)
+    inventory.add_argument("--require-human-review", action="store_true")
     tune = subparsers.add_parser("tune")
-    tune.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    tune.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    tune.add_argument("--tessdata", type=Path, default=DEFAULT_TESSDATA)
-    tune.add_argument("--output", type=Path, default=DEFAULT_RAW_ARTIFACT)
+    tune.add_argument("--config", type=Path, required=True)
+    tune.add_argument("--manifest", type=Path, required=True)
+    tune.add_argument("--annotations", type=Path, required=True)
+    tune.add_argument("--pdf", type=Path, required=True)
+    tune.add_argument("--tessdata", type=Path, required=True)
+    tune.add_argument("--output", type=Path, required=True)
     holdout = subparsers.add_parser("holdout")
-    holdout.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
-    holdout.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
-    holdout.add_argument("--tessdata", type=Path, default=DEFAULT_TESSDATA)
-    holdout.add_argument("--winner", type=Path, required=True)
+    holdout.add_argument("--config", type=Path, required=True)
+    holdout.add_argument("--frozen-winner", type=Path, required=True)
+    holdout.add_argument("--manifest", type=Path, required=True)
+    holdout.add_argument("--annotations", type=Path, required=True)
+    holdout.add_argument("--pdf", type=Path, required=True)
+    holdout.add_argument("--tessdata", type=Path, required=True)
     holdout.add_argument("--output", type=Path, required=True)
     validate = subparsers.add_parser("validate")
-    validate.add_argument("artifact", type=Path)
+    validate.add_argument("--input", type=Path, required=True)
     validate.add_argument("--split", choices=("tuning", "holdout"), required=True)
     report = subparsers.add_parser("report")
-    report.add_argument("artifact", type=Path)
-    report.add_argument("--output", type=Path, default=DEFAULT_REPORT)
+    report.add_argument("--tuning", type=Path, required=True)
+    report.add_argument("--holdout", type=Path)
+    report.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -2761,40 +3058,63 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "inventory":
         manifest = load_manifest(args.manifest, mode="tuning")
+        _verify_annotation_readiness(
+            manifest,
+            args.annotations,
+            require_human_review=args.require_human_review,
+        )
+        if manifest.manifest_sha256 != CANONICAL_MANIFEST_SHA256:
+            raise ValueError("frozen manifest SHA-256 is not canonical")
         write_corpus_report(manifest, args.output)
     elif args.command == "tune":
         payload = run_split(
             "tuning",
             manifest_path=args.manifest,
             config_path=args.config,
+            annotations_path=args.annotations,
+            pdf_path=args.pdf,
             tessdata=args.tessdata,
         )
         _write_json_artifact(args.output, payload)
     elif args.command == "holdout":
-        # Review metadata is checked by run_split before this path is opened.
         manifest = load_manifest(args.manifest, mode="holdout")
-        if any(
-            page.review_status != "human_verified"
-            for page in manifest.holdout + manifest.negative
-        ):
-            raise ValueError("holdout annotations must all be human_verified")
-        winner = _load_json_artifact(args.winner)
+        _verify_annotation_readiness(
+            manifest,
+            args.annotations,
+            require_human_review=True,
+        )
+        if manifest.manifest_sha256 != CANONICAL_MANIFEST_SHA256:
+            raise ValueError("frozen manifest SHA-256 is not canonical")
+        winner = _load_json_artifact(args.frozen_winner)
         payload = run_split(
             "holdout",
             manifest_path=args.manifest,
             config_path=args.config,
+            annotations_path=args.annotations,
+            pdf_path=args.pdf,
             tessdata=args.tessdata,
             frozen_winner=winner,
         )
         _write_json_artifact(args.output, payload)
     elif args.command == "validate":
+        payload = _load_json_artifact(args.input)
         validate_artifact(
-            _load_json_artifact(args.artifact),
+            payload,
             split=args.split,
         )
+        if args.split == "tuning" and payload["winner_id"] is not None:
+            frozen = freeze_tuning_winner(payload)
+            _write_json_artifact(args.input.parent / "winner.json", frozen)
     elif args.command == "report":
-        payload = _load_json_artifact(args.artifact)
-        _atomic_write_bytes(args.output, render_report(payload).encode("utf-8"))
+        tuning = _load_json_artifact(args.tuning)
+        validate_artifact(tuning, split="tuning")
+        holdout_payload = (
+            _load_json_artifact(args.holdout) if args.holdout is not None else None
+        )
+        if holdout_payload is not None:
+            validate_artifact(holdout_payload, split="holdout")
+        report = render_report(tuning, holdout_payload)
+        _atomic_write_bytes(args.output, report.encode("utf-8"))
     return 0
 
 

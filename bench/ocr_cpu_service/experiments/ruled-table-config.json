@@ -10,6 +10,9 @@
     "max_pixels": 50000000,
     "max_dimension": 10000
   },
+  "tessdata": {
+    "vie_sha256": "b6b49293d95d0b6dbd8780174627e82c75be957b6f4ed9862155540d6b00bb45"
+  },
   "geometry_limits": {
     "max_rows": 50,
     "max_columns": 30,

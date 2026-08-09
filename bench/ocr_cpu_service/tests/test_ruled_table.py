@@ -239,7 +239,7 @@ def write_manifest_fixture(
 
 def test_canonical_config_is_exact_and_immutable():
     assert hashlib.sha256(CONFIG.read_bytes()).hexdigest() == (
-        "521efe33c8e128581708c6269e92486799201f59c648f6117048735530b0a495"
+        "53882ed34ec756fd2fc9e7bb3ad66ac021c86b26c70a04299f8dd1b1eec0a3f8"
     )
     assert CANONICAL_CONFIG_SHA256 == hashlib.sha256(CONFIG.read_bytes()).hexdigest()
     config = load_config(CONFIG)
@@ -1328,9 +1328,18 @@ def test_holdout_cli_fails_before_opening_draft_canonical_holdout():
                 "holdout",
                 "--manifest",
                 str(manifest),
+                "--annotations",
+                str(manifest.parent / "annotations"),
+                "--pdf",
+                str(
+                    SERVICE_ROOT
+                    / ".data"
+                    / "corpus"
+                    / "official-89-2026-tt-btc.signed.pdf"
+                ),
                 "--tessdata",
                 str(SERVICE_ROOT.parents[1] / "tessdata_best"),
-                "--winner",
+                "--frozen-winner",
                 "unused.json",
                 "--output",
                 "unused-output.json",
