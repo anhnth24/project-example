@@ -654,6 +654,7 @@ for line in sys.stdin:
         command=[sys.executable, str(worker_script)],
         environment=environment,
         timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
     )
     page = BenchmarkPage(
         source_id="page",
