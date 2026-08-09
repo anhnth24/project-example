@@ -187,6 +187,46 @@ class Grid:
         actual = tuple(cell.coordinate for cell in self.cells)
         if actual != expected or len(set(actual)) != len(actual):
             raise ValueError("cells must be unique and in row-major order")
+        column_bounds = tuple(
+            (
+                self.cells[column].working_box.left,
+                self.cells[column].working_box.right,
+            )
+            for column in range(self.columns)
+        )
+        row_bounds = tuple(
+            (
+                self.cells[row * self.columns].working_box.top,
+                self.cells[row * self.columns].working_box.bottom,
+            )
+            for row in range(self.rows)
+        )
+        rectangular = (
+            column_bounds[0][0] == self.working_table_box.left
+            and column_bounds[-1][1] == self.working_table_box.right
+            and row_bounds[0][0] == self.working_table_box.top
+            and row_bounds[-1][1] == self.working_table_box.bottom
+            and all(
+                column_bounds[index][1] == column_bounds[index + 1][0]
+                for index in range(self.columns - 1)
+            )
+            and all(
+                row_bounds[index][1] == row_bounds[index + 1][0]
+                for index in range(self.rows - 1)
+            )
+            and all(
+                cell.working_box
+                == Box(
+                    column_bounds[cell.column][0],
+                    row_bounds[cell.row][0],
+                    column_bounds[cell.column][1],
+                    row_bounds[cell.row][1],
+                )
+                for cell in self.cells
+            )
+        )
+        if not rectangular:
+            raise ValueError("working cells must share rectangular topology")
         for cell in self.cells:
             if not _box_within(cell.working_box, self.working_table_box):
                 raise ValueError("working cell lies outside table box")

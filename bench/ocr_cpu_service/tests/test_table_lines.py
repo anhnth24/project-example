@@ -299,6 +299,14 @@ def test_geometry_contracts_are_frozen_and_validate_complete_row_major_grid():
         cell.row = 2
     with pytest.raises(ValueError, match="row-major"):
         Grid(1, 2, box, box, (GridCell(0, 1, box, box), cell))
+    with pytest.raises(ValueError, match="rectangular topology"):
+        Grid(
+            1,
+            2,
+            box,
+            box,
+            (cell, GridCell(0, 1, box, box)),
+        )
     assert grid.cells == (cell,)
 
 
