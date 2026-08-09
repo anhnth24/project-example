@@ -156,6 +156,8 @@ class FakeWorker:
         self.timeouts: list[float | None] = []
         self.close_timeouts: list[float | None] = []
         self.close_count = 0
+        self.force_kill_count = 0
+        self.killed = False
         self.metadata = {
             "cold_initialization": {
                 "rss_measurement": {
@@ -186,6 +188,10 @@ class FakeWorker:
     def close(self, *, timeout_seconds: float | None = None) -> None:
         self.close_count += 1
         self.close_timeouts.append(timeout_seconds)
+
+    def force_kill(self) -> None:
+        self.force_kill_count += 1
+        self.killed = True
 
 
 def recognize_with_worker(
@@ -794,15 +800,14 @@ def test_crops_and_owned_page_directory_are_removed_on_failure(
     assert not page_directory.exists()
 
 
-def test_primary_failure_is_preserved_and_close_fault_is_reported_safely(
+def test_persistent_close_fault_uses_independent_kill_and_preserves_primary(
     tmp_path: Path,
 ) -> None:
     class CloseFaultWorker(FakeWorker):
         def close(self, *, timeout_seconds: float | None = None) -> None:
             self.close_count += 1
             self.close_timeouts.append(timeout_seconds)
-            if self.close_count == 1:
-                raise RuntimeError(f"PRIVATE_CLOSE_CANARY:{tmp_path}")
+            raise RuntimeError(f"PRIVATE_CLOSE_CANARY:{tmp_path}")
 
     page_directory = tmp_path / "close-fault-page"
     page_directory.mkdir()
@@ -840,30 +845,35 @@ def test_primary_failure_is_preserved_and_close_fault_is_reported_safely(
         )
     )
     assert caught.value.error_kind == "candidate_error"
-    assert isinstance(caught.value.cleanup_failure, TableCleanupError)
+    assert caught.value.cleanup_failure is None
     assert "PRIVATE" not in formatted
     assert str(tmp_path) not in formatted
-    assert worker.close_count == 2
+    assert worker.close_count == 1
+    assert worker.force_kill_count == 1
+    assert worker.killed
     assert not page_directory.exists()
 
 
-def test_recursive_temp_cleanup_fault_is_retried_reported_and_leak_free(
+def test_persistent_rmtree_fault_uses_permission_repair_fallback(
     tmp_path: Path,
 ) -> None:
     page_directory = tmp_path / "rmtree-fault-page"
     page_directory.mkdir()
+    nested = page_directory / "nested"
+    nested.mkdir()
+    protected = nested / "protected.bin"
+    protected.write_bytes(b"private")
+    protected.chmod(0)
+    nested.chmod(0)
     worker = FakeWorker([])
     grid = rectangular_grid(rows=1, columns=1)
     image = Image.new("L", (100, 50), 255)
-    real_rmtree = shutil.rmtree
     calls = 0
 
     def faulty_rmtree(path: Path) -> None:
         nonlocal calls
         calls += 1
-        if calls == 1:
-            raise OSError(f"PRIVATE_RMTREE_CANARY:{path}")
-        real_rmtree(path)
+        raise OSError(f"PRIVATE_RMTREE_CANARY:{path}")
 
     try:
         with (
@@ -879,9 +889,8 @@ def test_recursive_temp_cleanup_fault_is_retried_reported_and_leak_free(
                 "experiments.table_cells.shutil.rmtree",
                 side_effect=faulty_rmtree,
             ),
-            pytest.raises(TableCleanupError) as caught,
         ):
-            recognize_grid(
+            recognition = recognize_grid(
                 grid,
                 working_image=image,
                 candidate_id="rmtree-fault",
@@ -892,6 +901,53 @@ def test_recursive_temp_cleanup_fault_is_retried_reported_and_leak_free(
             )
     finally:
         image.close()
+    assert len(recognition.cells) == 1
+    assert calls == 1
+    assert not page_directory.exists()
+
+
+def test_truly_unremovable_owned_path_yields_sanitized_cleanup_failure(
+    tmp_path: Path,
+) -> None:
+    page_directory = tmp_path / "unremovable-page"
+    page_directory.mkdir()
+    worker = FakeWorker([])
+    grid = rectangular_grid(rows=1, columns=1)
+    image = Image.new("L", (100, 50), 255)
+    try:
+        with (
+            patch(
+                "experiments.table_cells.tempfile.mkdtemp",
+                return_value=str(page_directory),
+            ),
+            patch(
+                "experiments.table_cells._isolated_worker",
+                return_value=worker,
+            ),
+            patch(
+                "experiments.table_cells.shutil.rmtree",
+                side_effect=OSError(f"PRIVATE_RMTREE:{page_directory}"),
+            ),
+            patch(
+                "experiments.table_cells._remove_owned_page_tree",
+                side_effect=OSError(f"PRIVATE_FALLBACK:{page_directory}"),
+                create=True,
+            ) as fallback,
+            pytest.raises(TableCleanupError) as caught,
+        ):
+            recognize_grid(
+                grid,
+                working_image=image,
+                candidate_id="unremovable",
+                cell_inset_pixels=4,
+                psm=6,
+                tessdata=candidate_tessdata(tmp_path),
+                limits=limits(),
+            )
+    finally:
+        image.close()
+        if page_directory.exists():
+            shutil.rmtree(page_directory)
     formatted = "".join(
         traceback.format_exception(
             type(caught.value),
@@ -902,8 +958,43 @@ def test_recursive_temp_cleanup_fault_is_retried_reported_and_leak_free(
     assert caught.value.error_kind == "cleanup_error"
     assert "PRIVATE" not in formatted
     assert str(tmp_path) not in formatted
-    assert calls == 2
-    assert not page_directory.exists()
+    fallback.assert_called()
+
+
+def test_primary_failure_precedes_verified_cleanup_failure(
+    tmp_path: Path,
+) -> None:
+    class UnkillableWorker(FakeWorker):
+        def close(self, *, timeout_seconds: float | None = None) -> None:
+            raise RuntimeError(f"PRIVATE_CLOSE:{tmp_path}")
+
+        def force_kill(self) -> None:
+            raise RuntimeError(f"PRIVATE_KILL:{tmp_path}")
+
+    worker = UnkillableWorker(error=RuntimeError("PRIVATE_PRIMARY"))
+    grid = rectangular_grid(rows=1, columns=1)
+    image = nonblank_grid_image(grid)
+    try:
+        with pytest.raises(TableRecognitionError) as caught:
+            recognize_with_worker(
+                tmp_path,
+                worker,
+                grid=grid,
+                image=image,
+            )
+    finally:
+        image.close()
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__,
+        )
+    )
+    assert caught.value.error_kind == "candidate_error"
+    assert isinstance(caught.value.cleanup_failure, TableCleanupError)
+    assert "PRIVATE" not in formatted
+    assert str(tmp_path) not in formatted
 
 
 def test_cleanup_time_counts_toward_page_deadline(

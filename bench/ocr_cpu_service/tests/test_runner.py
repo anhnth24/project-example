@@ -19,6 +19,7 @@ from benchmark.corpus import BenchmarkPage  # noqa: E402
 from benchmark.run import (  # noqa: E402
     CandidateResourceLimitError,
     CandidateResourceSamplingError,
+    CandidateWorkerCleanupError,
     CandidateWorkerProtocolError,
     IsolatedCandidateWorker,
     _isolated_worker,
@@ -707,3 +708,87 @@ def test_process_tree_rss_access_denied_remains_fail_closed(
 
     with pytest.raises(psutil.AccessDenied):
         _process_tree_rss(root)
+
+
+def test_close_uses_independent_sigkill_fallback_after_persistent_failure(
+    tmp_path: Path,
+) -> None:
+    recognizer = tmp_path / "recognizer.py"
+    recognizer.write_text("print('ready')\n", encoding="utf-8")
+    spec = CommandCandidateSpec(
+        id="close-fallback",
+        label="Close fallback",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    worker = _isolated_worker(
+        spec,
+        timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
+        max_output_bytes=4096,
+    )
+    root_pid = worker._process.pid
+    try:
+        with patch(
+            "benchmark.run._terminate_process_group",
+            side_effect=OSError("persistent high-level close failure"),
+        ):
+            worker.close(timeout_seconds=1.0)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and psutil.pid_exists(root_pid):
+            time.sleep(0.02)
+        assert not psutil.pid_exists(root_pid)
+        with pytest.raises(ProcessLookupError):
+            os.killpg(root_pid, 0)
+    finally:
+        if psutil.pid_exists(root_pid):
+            try:
+                os.killpg(root_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            worker._process.wait()
+
+
+def test_close_verification_failure_is_typed_and_sanitized(
+    tmp_path: Path,
+) -> None:
+    recognizer = tmp_path / "recognizer.py"
+    recognizer.write_text("print('ready')\n", encoding="utf-8")
+    spec = CommandCandidateSpec(
+        id="close-verification",
+        label="Close verification",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    worker = _isolated_worker(
+        spec,
+        timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
+        max_output_bytes=4096,
+    )
+    try:
+        with (
+            patch(
+                "benchmark.run._terminate_process_group",
+                side_effect=OSError(f"PRIVATE_HIGH_LEVEL:{tmp_path}"),
+            ),
+            patch(
+                "benchmark.run._kill_process_group_and_verify",
+                return_value=False,
+                create=True,
+            ),
+            pytest.raises(CandidateWorkerCleanupError) as caught,
+        ):
+            worker.close(timeout_seconds=1.0)
+        assert caught.value.error_kind == "worker_cleanup"
+        assert "PRIVATE" not in str(caught.value)
+        assert str(tmp_path) not in str(caught.value)
+    finally:
+        if psutil.pid_exists(worker._process.pid):
+            try:
+                os.killpg(worker._process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            worker._process.wait()
