@@ -2,15 +2,19 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
 import json
+import shutil
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+from benchmark.metrics import error_counts  # noqa: E402
 from experiments.ruled_table import (  # noqa: E402
     CANONICAL_CONFIG_SHA256,
     CANONICAL_SOURCE_SHA256,
@@ -18,10 +22,18 @@ from experiments.ruled_table import (  # noqa: E402
     CellContentCounts,
     CellMatchCounts,
     CellReference,
+    ManifestPage,
+    OpenedPage,
     PageAnnotation,
+    PositionedBox,
     TableReference,
+    _empty_cell_evidence,
+    _parser,
+    _recompute_aggregates,
+    _run_page,
     derive_holdout_decision,
     derive_tuning_winner,
+    freeze_tuning_winner,
     load_annotation,
     load_config,
     load_manifest,
@@ -33,9 +45,19 @@ from experiments.ruled_table import (  # noqa: E402
     run_split,
     template_fingerprint,
     validate_artifact,
+    validate_frozen_winner,
     write_corpus_report,
 )
-from experiments.table_lines import Box  # noqa: E402
+from experiments.table_cells import (  # noqa: E402
+    TableCleanupError,
+    TableRecognitionError,
+)
+from experiments.table_lines import (  # noqa: E402
+    Box,
+    DetectionResult,
+    Grid,
+    GridCell,
+)
 
 
 SERVICE_ROOT = Path(__file__).parents[1]
@@ -1316,3 +1338,487 @@ def test_holdout_cli_fails_before_opening_draft_canonical_holdout():
         )
     opened.assert_not_called()
     assert manifest.read_bytes() == before
+
+
+def test_canonical_config_tracks_exact_vietnamese_tessdata_hash():
+    config = load_config(CONFIG)
+    assert config["tessdata"] == {
+        "vie_sha256": "b6b49293d95d0b6dbd8780174627e82c75be957b6f4ed9862155540d6b00bb45"
+    }
+
+
+def test_failed_table_evidence_records_full_reference_deletions_without_text(
+    tmp_path,
+):
+    path = tmp_path / "annotation.json"
+    annotation_payload = valid_annotation()
+    _write_json(path, annotation_payload)
+    annotation = load_annotation(path, expected_render_sha256="b" * 64)
+    evidence = _empty_cell_evidence(annotation)
+    expected = [
+        error_counts(cell["text"], "")
+        for cell in annotation_payload["table"]["cells"]
+    ]
+    assert sum(item["character_edits"] for item in evidence) == sum(
+        item.character_edits for item in expected
+    )
+    assert sum(item["reference_characters"] for item in evidence) == sum(
+        item.reference_characters for item in expected
+    )
+    assert sum(item["word_edits"] for item in evidence) == sum(
+        item.word_edits for item in expected
+    )
+    assert sum(item["reference_words"] for item in evidence) == sum(
+        item.reference_words for item in expected
+    )
+    assert all(item["prediction_present"] is False for item in evidence)
+    serialized = json.dumps(evidence, ensure_ascii=False)
+    for cell in annotation_payload["table"]["cells"]:
+        if cell["text"]:
+            assert cell["text"] not in serialized
+
+
+@pytest.mark.parametrize(
+    ("candidate_id", "failed_pages", "expected_cer"),
+    [
+        ("strict-psm6", 5, 50 / 60),
+        ("balanced-psm6", 4, 40 / 60),
+    ],
+)
+def test_failure_pages_micro_average_full_reference_deletions(
+    candidate_id, failed_pages, expected_cer
+):
+    payload = artifact_fixture("tuning")
+    candidate_records = [
+        record
+        for record in payload["records"]
+        if record["candidate_id"] == candidate_id
+    ]
+    for record in candidate_records[:failed_pages]:
+        record["status"] = "invalid_grid"
+        record["rows"] = 0
+        record["columns"] = 0
+        record["predicted_boxes"] = []
+        record["cells"][0].update(
+            {
+                "character_edits": 10,
+                "reference_characters": 10,
+                "word_edits": 2,
+                "reference_words": 2,
+                "predicted_blank": False,
+                "prediction_present": False,
+            }
+        )
+    recomputed = _recompute_aggregates(payload)
+    aggregate = next(
+        item for item in recomputed if item["candidate_id"] == candidate_id
+    )
+    assert aggregate["character_edits"] == failed_pages * 10
+    assert aggregate["reference_characters"] == 60
+    assert aggregate["word_edits"] == failed_pages * 2
+    assert aggregate["reference_words"] == 12
+    assert aggregate["cell_cer"] == pytest.approx(expected_cer)
+    payload["aggregates"] = recomputed
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        validate_artifact(payload, split="tuning")
+
+
+def test_iou_ties_use_preserved_coordinates_not_input_order():
+    references = [
+        PositionedBox(0, 0, Box(0, 0, 10, 10)),
+        PositionedBox(1, 0, Box(10, 0, 20, 10)),
+    ]
+    prediction_low = PositionedBox(0, 0, Box(20, 0, 30, 10))
+    prediction_high = PositionedBox(0, 1, Box(30, 0, 40, 10))
+    predictions = [prediction_high, prediction_low]
+
+    def artificial_iou(reference, prediction):
+        edges = {
+            (0, 20): 0.8,
+            (0, 30): 0.8,
+            (10, 20): 0.8,
+        }
+        return edges.get((reference.left, prediction.left), 0.0)
+
+    with patch("experiments.ruled_table._box_iou", artificial_iou):
+        counts = match_cells(references, predictions, threshold=0.8)
+    assert counts == CellMatchCounts(tp=1, fp=1, fn=1)
+
+
+@pytest.mark.parametrize("field", ["predicted_boxes", "reference_boxes"])
+def test_artifact_box_arrays_must_be_unique_and_row_major(field):
+    payload = artifact_fixture()
+    record = payload["records"][0]
+    record["rows"] = 1
+    record["columns"] = 2
+    record["reference_rows"] = 1
+    record["reference_columns"] = 2
+    second_box = {"row": 0, "column": 1, "bbox": [100, 0, 200, 100]}
+    record["predicted_boxes"].append(copy.deepcopy(second_box))
+    record["reference_boxes"].append(copy.deepcopy(second_box))
+    second_cell = copy.deepcopy(record["cells"][0])
+    second_cell["column"] = 1
+    record["cells"].append(second_cell)
+    record[field].reverse()
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="row-major"),
+    ):
+        validate_artifact(payload, split="holdout")
+
+
+def _detected_grid_for_annotation(annotation: PageAnnotation) -> DetectionResult:
+    table = annotation.table
+    assert table is not None
+    cells = tuple(
+        GridCell(
+            cell.row,
+            cell.column,
+            Box(*cell.bbox),
+            Box(*cell.bbox),
+        )
+        for cell in table.cells
+    )
+    grid = Grid(
+        table.rows,
+        table.columns,
+        Box(*table.bbox),
+        Box(*table.bbox),
+        cells,
+    )
+    return DetectionResult("detected", 0.0, (220, 130), grid, {})
+
+
+def test_recognition_cleanup_failure_clears_geometry_and_keeps_deletions(tmp_path):
+    annotation_path = tmp_path / "annotation.json"
+    _write_json(annotation_path, valid_annotation())
+    annotation = load_annotation(
+        annotation_path, expected_render_sha256="b" * 64
+    )
+    manifest_page = ManifestPage(
+        page_number=450,
+        split="tuning",
+        negative=False,
+        template_family="fixture",
+        template_fingerprint=template_fingerprint(annotation),
+        render_path="private-render.png",
+        render_sha256="c" * 64,
+        annotation_path="private-annotation.json",
+        annotation_sha256="f" * 64,
+        review_status="human_verified",
+        reviewer="reviewer@example.invalid",
+        revision=1,
+    )
+    image = Image.new("L", (220, 130), 255)
+    encoded = io.BytesIO()
+    image.save(encoded, format="PNG")
+    image.close()
+    opened = OpenedPage(manifest_page, annotation, encoded.getvalue())
+    failure = TableRecognitionError("timeout")
+    failure.report_cleanup_failure(TableCleanupError())
+    config = load_config(CONFIG)
+    candidate = config["detector_candidates"][0]
+    with (
+        patch(
+            "experiments.ruled_table.detect_ruled_table",
+            return_value=_detected_grid_for_annotation(annotation),
+        ),
+        patch("experiments.ruled_table.recognize_grid", side_effect=failure),
+    ):
+        record = _run_page(
+            opened,
+            candidate=candidate,
+            config=config,
+            tessdata=tmp_path,
+            bindings=_canonical_bindings_fixture(),
+        )
+    assert record["status"] == "cleanup_error"
+    assert record["resource"]["cleanup_failed"] is True
+    assert record["rows"] == record["columns"] == 0
+    assert record["predicted_boxes"] == []
+    assert sum(item["character_edits"] for item in record["cells"]) == sum(
+        item["reference_characters"] for item in record["cells"]
+    )
+    assert sum(item["word_edits"] for item in record["cells"]) == sum(
+        item["reference_words"] for item in record["cells"]
+    )
+
+
+def test_validator_accepts_consistent_failure_and_rejects_retained_geometry():
+    payload = artifact_fixture()
+    record = payload["records"][0]
+    record["status"] = "timeout"
+    record["rows"] = 0
+    record["columns"] = 0
+    record["predicted_boxes"] = []
+    record["resource"]["timed_out"] = True
+    record["cells"][0].update(
+        {
+            "character_edits": 10,
+            "reference_characters": 10,
+            "word_edits": 2,
+            "reference_words": 2,
+            "prediction_present": False,
+        }
+    )
+    payload["aggregates"] = _recompute_aggregates(payload)
+    payload["decision"] = "STOP"
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        validate_artifact(payload, split="holdout")
+
+    record["rows"] = 1
+    record["columns"] = 1
+    record["predicted_boxes"] = [
+        {"row": 0, "column": 0, "bbox": [0, 0, 100, 100]}
+    ]
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="non-detected.*grid"),
+    ):
+        validate_artifact(payload, split="holdout")
+
+
+def test_task_five_cli_exposes_exact_planned_arguments():
+    parser = _parser()
+    tune = parser.parse_args(
+        [
+            "tune",
+            "--config",
+            "config.json",
+            "--manifest",
+            "manifest.json",
+            "--annotations",
+            "annotations",
+            "--pdf",
+            "source.pdf",
+            "--tessdata",
+            "tessdata",
+            "--output",
+            "tuning.json",
+        ]
+    )
+    assert tune.annotations == Path("annotations")
+    assert tune.pdf == Path("source.pdf")
+    holdout = parser.parse_args(
+        [
+            "holdout",
+            "--config",
+            "config.json",
+            "--frozen-winner",
+            "winner.json",
+            "--manifest",
+            "manifest.json",
+            "--annotations",
+            "annotations",
+            "--pdf",
+            "source.pdf",
+            "--tessdata",
+            "tessdata",
+            "--output",
+            "holdout.json",
+        ]
+    )
+    assert holdout.frozen_winner == Path("winner.json")
+    validation = parser.parse_args(
+        ["validate", "--input", "tuning.json", "--split", "tuning"]
+    )
+    assert validation.input == Path("tuning.json")
+    report = parser.parse_args(
+        [
+            "report",
+            "--tuning",
+            "tuning.json",
+            "--holdout",
+            "holdout.json",
+            "--output",
+            "report.md",
+        ]
+    )
+    assert report.tuning == Path("tuning.json")
+    assert report.holdout == Path("holdout.json")
+
+
+def test_inventory_require_review_rejects_before_page_open(tmp_path):
+    manifest = SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json"
+    output = tmp_path / "inventory.md"
+    with (
+        patch("experiments.ruled_table.CorpusManifest.open_page") as opened,
+        pytest.raises(ValueError, match="12/12.*human_verified|0/12"),
+    ):
+        main(
+            [
+                "inventory",
+                "--manifest",
+                str(manifest),
+                "--annotations",
+                str(manifest.parent / "annotations"),
+                "--output",
+                str(output),
+                "--require-human-review",
+            ]
+        )
+    opened.assert_not_called()
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("kind", ["config", "manifest", "pdf", "tessdata"])
+def test_altered_official_input_fails_before_page_open(tmp_path, kind):
+    config = tmp_path / "config.json"
+    config.write_bytes(CONFIG.read_bytes())
+    manifest = tmp_path / "manifest.json"
+    canonical_manifest = SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json"
+    manifest.write_bytes(canonical_manifest.read_bytes())
+    pdf = tmp_path / "source.pdf"
+    canonical_pdf = (
+        SERVICE_ROOT / ".data" / "corpus" / "official-89-2026-tt-btc.signed.pdf"
+    )
+    shutil.copyfile(canonical_pdf, pdf)
+    tessdata = tmp_path / "tessdata"
+    tessdata.mkdir()
+    shutil.copyfile(
+        SERVICE_ROOT.parents[1] / "tessdata_best" / "vie.traineddata",
+        tessdata / "vie.traineddata",
+    )
+    target = {
+        "config": config,
+        "manifest": manifest,
+        "pdf": pdf,
+        "tessdata": tessdata / "vie.traineddata",
+    }[kind]
+    with target.open("ab") as stream:
+        stream.write(b"altered")
+    with (
+        patch(
+            "experiments.ruled_table._verify_annotation_readiness",
+            return_value=12,
+        ),
+        patch("experiments.ruled_table.CorpusManifest.open_page") as opened,
+        pytest.raises(ValueError),
+    ):
+        run_split(
+            "tuning",
+            config_path=config,
+            manifest_path=manifest,
+            annotations_path=manifest.parent / "annotations",
+            pdf_path=pdf,
+            tessdata=tessdata,
+        )
+    opened.assert_not_called()
+
+
+def test_byte_identical_custom_inputs_pass_preflight_before_open(tmp_path):
+    config = tmp_path / "config.json"
+    config.write_bytes(CONFIG.read_bytes())
+    manifest = tmp_path / "manifest.json"
+    canonical_manifest = SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json"
+    manifest.write_bytes(canonical_manifest.read_bytes())
+    pdf = tmp_path / "source.pdf"
+    shutil.copyfile(
+        SERVICE_ROOT / ".data" / "corpus" / "official-89-2026-tt-btc.signed.pdf",
+        pdf,
+    )
+    tessdata = tmp_path / "tessdata"
+    tessdata.mkdir()
+    shutil.copyfile(
+        SERVICE_ROOT.parents[1] / "tessdata_best" / "vie.traineddata",
+        tessdata / "vie.traineddata",
+    )
+    with (
+        patch(
+            "experiments.ruled_table._verify_annotation_readiness",
+            return_value=12,
+        ),
+        patch(
+            "experiments.ruled_table.CorpusManifest.open_page",
+            side_effect=RuntimeError("preflight passed"),
+        ) as opened,
+        pytest.raises(RuntimeError, match="preflight passed"),
+    ):
+        run_split(
+            "tuning",
+            config_path=config,
+            manifest_path=manifest,
+            annotations_path=manifest.parent / "annotations",
+            pdf_path=pdf,
+            tessdata=tessdata,
+        )
+    assert opened.call_count == 1
+
+
+def test_frozen_winner_is_closed_and_binds_exact_candidate():
+    tuning = artifact_fixture("tuning")
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        frozen = freeze_tuning_winner(tuning)
+        assert set(frozen) == {
+            "schema_version",
+            "winner_id",
+            "configuration_sha256",
+            "config_sha256",
+            "manifest_sha256",
+            "tuning_artifact_sha256",
+        }
+        validate_frozen_winner(frozen)
+    frozen["configuration_sha256"] = "f" * 64
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="configuration"),
+    ):
+        validate_frozen_winner(frozen)
+
+
+@pytest.mark.parametrize("kind", ["stale", "noncanonical", "private"])
+def test_report_cli_validates_every_artifact_before_rendering(
+    tmp_path, kind
+):
+    tuning = artifact_fixture("tuning")
+    holdout = artifact_fixture("holdout")
+    if kind == "stale":
+        holdout["aggregates"][0]["cell_tp"] += 1
+    elif kind == "noncanonical":
+        tuning["config_sha256"] = "f" * 64
+    else:
+        holdout["records"][0]["printable_private_field"] = "PRIVATE_CANARY"
+    tuning_path = tmp_path / "tuning.json"
+    holdout_path = tmp_path / "holdout.json"
+    output = tmp_path / "report.md"
+    _write_json(tuning_path, tuning)
+    _write_json(holdout_path, holdout)
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        patch("experiments.ruled_table.render_report") as renderer,
+        pytest.raises(ValueError),
+    ):
+        main(
+            [
+                "report",
+                "--tuning",
+                str(tuning_path),
+                "--holdout",
+                str(holdout_path),
+                "--output",
+                str(output),
+            ]
+        )
+    renderer.assert_not_called()
+    assert not output.exists()
