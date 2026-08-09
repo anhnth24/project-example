@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -15,6 +16,10 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from benchmark.candidates import CommandCandidateSpec  # noqa: E402
 from benchmark.corpus import BenchmarkPage  # noqa: E402
 from benchmark.run import (  # noqa: E402
+    CandidateResourceLimitError,
+    CandidateResourceSamplingError,
+    CandidateWorkerProtocolError,
+    IsolatedCandidateWorker,
     _isolated_worker,
     run_candidate,
     sanitized_candidate_environment,
@@ -369,6 +374,7 @@ def test_normal_close_kills_daemonized_candidate_descendant_and_is_idempotent(
         spec,
         timeout_seconds=5.0,
         max_output_bytes=4096,
+        max_rss_bytes=1024 * 1024 * 1024,
     )
     child_pid = 0
 
@@ -413,6 +419,7 @@ def test_isolated_worker_allows_stricter_per_request_timeout(
         spec,
         timeout_seconds=5.0,
         max_output_bytes=4096,
+        max_rss_bytes=1024 * 1024 * 1024,
     )
     try:
         with pytest.raises(TimeoutError):
@@ -422,3 +429,214 @@ def test_isolated_worker_allows_stricter_per_request_timeout(
             )
     finally:
         worker.close()
+
+
+def _capturing_popen(processes: list[subprocess.Popen[str]]):
+    real_popen = subprocess.Popen
+
+    def capture(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        processes.append(process)
+        return process
+
+    return capture
+
+
+def _assert_processes_gone(processes: list[subprocess.Popen[str]]) -> None:
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline and any(
+        psutil.pid_exists(process.pid) for process in processes
+    ):
+        time.sleep(0.02)
+    assert processes
+    assert all(not psutil.pid_exists(process.pid) for process in processes)
+
+
+def test_worker_startup_rss_cap_is_hard_and_constructor_cleans_process() -> None:
+    spec = CommandCandidateSpec(
+        id="startup-rss",
+        label="Startup RSS",
+        argv=(sys.executable, "-c", "print('unused')", "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    processes: list[subprocess.Popen[str]] = []
+    with (
+        patch(
+            "benchmark.run.subprocess.Popen",
+            side_effect=_capturing_popen(processes),
+        ),
+        pytest.raises(CandidateResourceLimitError) as caught,
+    ):
+        _isolated_worker(
+            spec,
+            timeout_seconds=5.0,
+            max_output_bytes=4096,
+            max_rss_bytes=1,
+        )
+    assert caught.value.error_kind == "resource_limit"
+    _assert_processes_gone(processes)
+
+
+def test_request_rss_cap_kills_worker_and_candidate_tree(tmp_path: Path) -> None:
+    process_ids = tmp_path / "rss-process-ids.json"
+    recognizer = tmp_path / "memory-recognizer.py"
+    recognizer.write_text(
+        "import json\n"
+        "import os\n"
+        "from pathlib import Path\n"
+        "import time\n"
+        "allocation = bytearray(100 * 1024 * 1024)\n"
+        "Path(os.environ['PROCESS_IDS']).write_text(\n"
+        "    json.dumps({'recognizer': os.getpid()}), encoding='utf-8'\n"
+        ")\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    environment = sanitized_candidate_environment(cpu_threads=1)
+    environment["PROCESS_IDS"] = str(process_ids)
+    spec = CommandCandidateSpec(
+        id="request-rss",
+        label="Request RSS",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=environment,
+        provenance={},
+    )
+    worker = _isolated_worker(
+        spec,
+        timeout_seconds=5.0,
+        max_output_bytes=4096,
+        max_rss_bytes=80 * 1024 * 1024,
+    )
+    recognizer_pid = 0
+    try:
+        with pytest.raises(CandidateResourceLimitError) as caught:
+            worker.recognize(_benchmark_page(tmp_path / "page.png"))
+        assert caught.value.error_kind == "resource_limit"
+        recognizer_pid = json.loads(
+            process_ids.read_text(encoding="utf-8")
+        )["recognizer"]
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and psutil.pid_exists(recognizer_pid):
+            time.sleep(0.02)
+        assert not psutil.pid_exists(recognizer_pid)
+    finally:
+        worker.close()
+        if recognizer_pid and psutil.pid_exists(recognizer_pid):
+            os.kill(recognizer_pid, signal.SIGKILL)
+
+
+def test_process_tree_sampling_error_fails_closed_and_cleans_worker() -> None:
+    spec = CommandCandidateSpec(
+        id="sampling-error",
+        label="Sampling error",
+        argv=(sys.executable, "-c", "print('unused')", "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    processes: list[subprocess.Popen[str]] = []
+    with (
+        patch(
+            "benchmark.run.subprocess.Popen",
+            side_effect=_capturing_popen(processes),
+        ),
+        patch(
+            "benchmark.run._process_tree_rss",
+            side_effect=psutil.AccessDenied(pid=123),
+        ),
+        pytest.raises(CandidateResourceSamplingError) as caught,
+    ):
+        _isolated_worker(
+            spec,
+            timeout_seconds=5.0,
+            max_output_bytes=4096,
+            max_rss_bytes=1024 * 1024 * 1024,
+        )
+    assert caught.value.error_kind == "resource_sampling"
+    _assert_processes_gone(processes)
+
+
+def test_constructor_cleans_process_after_malformed_ready_metadata() -> None:
+    processes: list[subprocess.Popen[str]] = []
+    with (
+        patch(
+            "benchmark.run.subprocess.Popen",
+            side_effect=_capturing_popen(processes),
+        ),
+        pytest.raises(CandidateWorkerProtocolError) as caught,
+    ):
+        IsolatedCandidateWorker(
+            candidate_id="malformed-ready",
+            label="Malformed ready",
+            command=(
+                sys.executable,
+                "-c",
+                "import json, time; "
+                "print(json.dumps({'event':'ready'}), flush=True); "
+                "time.sleep(60)",
+            ),
+            environment=sanitized_candidate_environment(cpu_threads=1),
+            timeout_seconds=5.0,
+            max_output_bytes=4096,
+            max_rss_bytes=1024 * 1024 * 1024,
+        )
+    assert caught.value.error_kind == "worker_protocol"
+    _assert_processes_gone(processes)
+
+
+def test_constructor_cleans_process_after_malformed_resource_metadata() -> None:
+    processes: list[subprocess.Popen[str]] = []
+    with (
+        patch(
+            "benchmark.run.subprocess.Popen",
+            side_effect=_capturing_popen(processes),
+        ),
+        patch(
+            "benchmark.run._read_event_with_process_tree_rss",
+            return_value=(
+                {"event": "ready", "candidate_seconds": 0.01},
+                {"peak_rss_bytes": "not-an-integer"},
+            ),
+        ),
+        pytest.raises(CandidateWorkerProtocolError) as caught,
+    ):
+        IsolatedCandidateWorker(
+            candidate_id="malformed-resource",
+            label="Malformed resource",
+            command=(sys.executable, "-c", "import time; time.sleep(60)"),
+            environment=sanitized_candidate_environment(cpu_threads=1),
+            timeout_seconds=5.0,
+            max_output_bytes=4096,
+            max_rss_bytes=1024 * 1024 * 1024,
+        )
+    assert caught.value.error_kind == "worker_protocol"
+    _assert_processes_gone(processes)
+
+
+def test_run_candidate_maps_hard_rss_limit_for_existing_user(
+    tmp_path: Path,
+) -> None:
+    recognizer = tmp_path / "memory-recognizer.py"
+    recognizer.write_text(
+        "import time\n"
+        "allocation = bytearray(100 * 1024 * 1024)\n"
+        "time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    spec = CommandCandidateSpec(
+        id="existing-user-rss",
+        label="Existing user RSS",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    result = run_candidate(
+        spec,
+        _benchmark_page(tmp_path / "page.png"),
+        timeout_seconds=5.0,
+        max_rss_bytes=80 * 1024 * 1024,
+        max_output_bytes=4096,
+    )
+    assert not result.success
+    assert result.record["error_kind"] == "resource_limit"
+    assert result.record["resource_limit_violation"] is True
