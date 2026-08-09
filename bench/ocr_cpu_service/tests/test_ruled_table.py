@@ -1660,6 +1660,16 @@ def test_task_five_cli_exposes_exact_planned_arguments():
     )
     assert report.tuning == Path("tuning.json")
     assert report.holdout == Path("holdout.json")
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            [
+                "report",
+                "--tuning",
+                "tuning.json",
+                "--output",
+                "report.md",
+            ]
+        )
 
 
 def test_inventory_require_review_rejects_before_page_open(tmp_path):
