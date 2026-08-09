@@ -368,6 +368,48 @@ def test_download_sources_uses_bounded_timeout(
     assert 0 < observed["timeout"] <= 60
 
 
+def test_download_sources_accepts_explicit_bounded_total_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = valid_source()
+    manifest = tmp_path / "sources.json"
+    output = tmp_path / "corpus"
+    write_manifest(manifest, [source])
+    observed: list[float] = []
+
+    def stream(
+        item: CorpusSource, destination: object, total_deadline_seconds: float
+    ) -> int:
+        del item
+        observed.append(total_deadline_seconds)
+        destination.write(b"bounded")  # type: ignore[attr-defined]
+        return 7
+
+    monkeypatch.setattr(corpus_download, "_stream_source", stream)
+
+    downloaded = download_sources(
+        manifest, output, total_deadline_seconds=600
+    )
+
+    assert observed == [600]
+    assert downloaded[0].bytes_downloaded == 7
+
+
+@pytest.mark.parametrize("deadline", [0, -1, 600.01, True])
+def test_download_sources_rejects_invalid_total_deadline(
+    tmp_path: Path, deadline: object
+) -> None:
+    manifest = tmp_path / "sources.json"
+    write_manifest(manifest, [valid_source()])
+
+    with pytest.raises(ValueError, match="deadline"):
+        download_sources(
+            manifest,
+            tmp_path / "corpus",
+            total_deadline_seconds=deadline,  # type: ignore[arg-type]
+        )
+
+
 def test_download_sources_enforces_total_monotonic_deadline_against_slow_drip(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

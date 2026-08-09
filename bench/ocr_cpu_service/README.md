@@ -54,6 +54,18 @@ The downloader enforces the checked-in hostname allowlist, public DNS
 resolution, TLS hostname verification, redirect revalidation, byte limits,
 whole-download deadlines, and SHA-256 checks.
 
+The frozen accuracy package is larger and uses an explicit bounded deadline:
+
+```bash
+PYTHONPATH=bench/ocr_cpu_service \
+bench/ocr_cpu_service/.venv/bin/python -c \
+'from pathlib import Path; from corpus.download import download_sources; items = download_sources(Path("bench/ocr_cpu_service/corpus/accuracy-sources.json"), Path("bench/ocr_cpu_service/.data/corpus"), total_deadline_seconds=600); print(f"verified {len(items)} sources, {sum(item.bytes_downloaded for item in items)} bytes")'
+```
+
+The default remains 120 seconds and the maximum accepted override is 600.
+Every existing hostname, public-IP, TLS, redirect, byte, checksum, deadline,
+and atomic-install control still applies.
+
 ## Build and run the retained baseline
 
 Build the project-owned baseline:
