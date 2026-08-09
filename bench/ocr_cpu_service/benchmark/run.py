@@ -161,11 +161,13 @@ def _fileconv_provenance(fileconv: Path) -> dict[str, Any]:
 
 
 def _process_tree_rss(process: psutil.Process) -> int:
-    processes = [process]
-    processes.extend(process.children(recursive=True))
-    total = 0
-    for item in processes:
-        total += item.memory_info().rss
+    total = process.memory_info().rss
+    descendants = process.children(recursive=True)
+    for item in descendants:
+        try:
+            total += item.memory_info().rss
+        except (psutil.NoSuchProcess, psutil.ZombieProcess, ProcessLookupError):
+            continue
     return total
 
 
