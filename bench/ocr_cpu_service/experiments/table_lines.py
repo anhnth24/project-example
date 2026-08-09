@@ -492,20 +492,47 @@ def _cluster_lines(
 
     lines: list[_Line] = []
     for cluster in clusters:
-        coordinate = int(round(statistics.median(cluster)))
-        intervals = sorted(
-            (run.start, run.end)
-            for member in cluster
-            for run in by_coordinate[member]
+        cluster_runs = sorted(
+            (
+                run
+                for member in cluster
+                for run in by_coordinate[member]
+            ),
+            key=lambda run: (run.start, run.end, run.coordinate),
         )
-        segments: list[tuple[int, int]] = []
-        for start, end in intervals:
-            if segments and start <= segments[-1][1] + 1:
-                segments[-1] = (segments[-1][0], max(segments[-1][1], end))
+        segment_groups: list[list[_Run]] = []
+        segment_ends: list[int] = []
+        for run in cluster_runs:
+            if segment_groups and run.start <= segment_ends[-1] + 1:
+                segment_groups[-1].append(run)
+                segment_ends[-1] = max(segment_ends[-1], run.end)
             else:
-                segments.append((start, end))
-        lines.append(_Line(coordinate, tuple(segments)))
-    return tuple(lines)
+                segment_groups.append([run])
+                segment_ends.append(run.end)
+        for group, end in zip(segment_groups, segment_ends, strict=True):
+            coordinate = int(
+                round(
+                    statistics.median(
+                        sorted({run.coordinate for run in group})
+                    )
+                )
+            )
+            lines.append(
+                _Line(
+                    coordinate,
+                    ((min(run.start for run in group), end),),
+                )
+            )
+    return tuple(
+        sorted(
+            lines,
+            key=lambda line: (
+                line.coordinate,
+                line.segments[0][0],
+                line.segments[0][1],
+            ),
+        )
+    )
 
 
 def _covers_point(line: _Line, point: int, tolerance: int) -> bool:
@@ -539,6 +566,13 @@ class _GraphResult:
     intersection_edges: int
     node_visits: int
     edge_visits: int
+
+
+@dataclass(frozen=True, slots=True)
+class _CandidateRegion:
+    horizontal: tuple[_Line, ...]
+    vertical: tuple[_Line, ...]
+    component: _IntersectionComponent
 
 
 def _intersection_components(
@@ -613,23 +647,88 @@ def _intersection_components(
     )
 
 
-def _component_has_closed_lines(
-    component: _IntersectionComponent,
+def _canonical_component_lines(
+    indices: Sequence[int], lines: Sequence[_Line]
+) -> tuple[_Line, ...]:
+    by_coordinate: dict[int, list[tuple[int, int]]] = {}
+    for index in indices:
+        line = lines[index]
+        by_coordinate.setdefault(line.coordinate, []).extend(line.segments)
+    canonical: list[_Line] = []
+    for coordinate in sorted(by_coordinate):
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(by_coordinate[coordinate]):
+            if merged and start <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        canonical.append(_Line(coordinate, tuple(merged)))
+    return tuple(canonical)
+
+
+def _component_is_complete(
     horizontal: Sequence[_Line],
     vertical: Sequence[_Line],
     tolerance: int,
 ) -> bool:
-    x1 = vertical[component.vertical[0]].coordinate
-    x2 = vertical[component.vertical[-1]].coordinate
-    y1 = horizontal[component.horizontal[0]].coordinate
-    y2 = horizontal[component.horizontal[-1]].coordinate
+    if not all(
+        _covers_point(horizontal_line, vertical_line.coordinate, tolerance)
+        and _covers_point(vertical_line, horizontal_line.coordinate, tolerance)
+        for horizontal_line in horizontal
+        for vertical_line in vertical
+    ):
+        return False
+    x1 = vertical[0].coordinate
+    x2 = vertical[-1].coordinate
+    y1 = horizontal[0].coordinate
+    y2 = horizontal[-1].coordinate
     return all(
-        _matches_interval(horizontal[index], x1, x2, tolerance)
-        for index in component.horizontal
+        _matches_interval(line, x1, x2, tolerance) for line in horizontal
     ) and all(
-        _matches_interval(vertical[index], y1, y2, tolerance)
-        for index in component.vertical
+        _matches_interval(line, y1, y2, tolerance) for line in vertical
     )
+
+
+def _overlap_length(
+    start: int, end: int, region_start: int, region_end: int
+) -> int:
+    return max(0, min(end, region_end) - max(start, region_start) + 1)
+
+
+def _internal_rule_signals(
+    region: _CandidateRegion,
+    horizontal_nodes: Sequence[_Line],
+    vertical_nodes: Sequence[_Line],
+    tolerance: int,
+) -> tuple[int, int]:
+    left = region.vertical[0].coordinate
+    right = region.vertical[-1].coordinate
+    top = region.horizontal[0].coordinate
+    bottom = region.horizontal[-1].coordinate
+    minimum_overlap = 2 * tolerance + 1
+    member_horizontal = set(region.component.horizontal)
+    member_vertical = set(region.component.vertical)
+    signals = 0
+    scanned = 0
+    for index, line in enumerate(horizontal_nodes):
+        if index in member_horizontal:
+            continue
+        scanned += 1
+        if top < line.coordinate < bottom and any(
+            _overlap_length(start, end, left, right) >= minimum_overlap
+            for start, end in line.segments
+        ):
+            signals += 1
+    for index, line in enumerate(vertical_nodes):
+        if index in member_vertical:
+            continue
+        scanned += 1
+        if left < line.coordinate < right and any(
+            _overlap_length(start, end, top, bottom) >= minimum_overlap
+            for start, end in line.segments
+        ):
+            signals += 1
+    return signals, scanned
 
 
 def _inverse_box(
@@ -814,19 +913,33 @@ def detect_ruled_table(
             "component_edge_visits": graph.edge_visits,
         }
     )
-    table_components = tuple(
-        component
-        for component in graph.components
-        if len(component.horizontal) >= 3 and len(component.vertical) >= 3
-    )
-    complete_regions: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+    complete_regions: list[_CandidateRegion] = []
     incomplete_components = 0
+    candidate_components = 0
+    component_intersection_checks = 0
     component_limit = ""
-    for component in table_components:
-        rows = len(component.horizontal) - 1
-        columns = len(component.vertical) - 1
+    for component in graph.components:
+        component_horizontal = _canonical_component_lines(
+            component.horizontal, horizontal
+        )
+        component_vertical = _canonical_component_lines(
+            component.vertical, vertical
+        )
+        horizontal_count = len(component_horizontal)
+        vertical_count = len(component_vertical)
+        table_like = (
+            horizontal_count >= 3 and vertical_count >= 2
+        ) or (horizontal_count >= 2 and vertical_count >= 3)
+        if not table_like:
+            continue
+        candidate_components += 1
+        component_intersection_checks += horizontal_count * vertical_count
+        rows = horizontal_count - 1
+        columns = vertical_count - 1
         cells = rows * columns
-        if rows > config.max_rows:
+        if horizontal_count < 3 or vertical_count < 3:
+            incomplete_components += 1
+        elif rows > config.max_rows:
             component_limit = component_limit or "max_rows"
             incomplete_components += 1
         elif columns > config.max_columns:
@@ -835,25 +948,32 @@ def detect_ruled_table(
         elif cells > config.max_cells:
             component_limit = component_limit or "max_cells"
             incomplete_components += 1
-        elif (
-            component.edge_count
-            != len(component.horizontal) * len(component.vertical)
-            or not _component_has_closed_lines(
-                component,
-                horizontal,
-                vertical,
-                config.intersection_tolerance_pixels,
-            )
+        elif not _component_is_complete(
+            component_horizontal,
+            component_vertical,
+            config.intersection_tolerance_pixels,
         ):
             incomplete_components += 1
         else:
             complete_regions.append(
-                (component.horizontal, component.vertical)
+                _CandidateRegion(
+                    horizontal=component_horizontal,
+                    vertical=component_vertical,
+                    component=component,
+                )
             )
 
-    diagnostics["candidate_components"] = len(table_components)
+    diagnostics["candidate_components"] = candidate_components
+    diagnostics[
+        "component_intersection_checks"
+    ] = component_intersection_checks
     diagnostics["complete_regions"] = len(complete_regions)
     diagnostics["incomplete_components"] = incomplete_components
+    diagnostics["internal_overlap_threshold"] = (
+        2 * config.intersection_tolerance_pixels + 1
+    )
+    diagnostics["internal_rule_nodes_scanned"] = 0
+    diagnostics["internal_rule_signals"] = 0
     if len(complete_regions) > 1:
         return _result(
             "unsupported",
@@ -872,6 +992,22 @@ def detect_ruled_table(
                 else diagnostics
             ),
         )
+    if complete_regions:
+        internal_signals, internal_scanned = _internal_rule_signals(
+            complete_regions[0],
+            horizontal,
+            vertical,
+            config.intersection_tolerance_pixels,
+        )
+        diagnostics["internal_rule_nodes_scanned"] = internal_scanned
+        diagnostics["internal_rule_signals"] = internal_signals
+        if internal_signals:
+            return _result(
+                "invalid_grid",
+                angle=angle,
+                size=(width, height),
+                diagnostics=diagnostics,
+            )
     if not complete_regions:
         return _result(
             "not_detected",
@@ -880,12 +1016,12 @@ def detect_ruled_table(
             diagnostics=diagnostics,
         )
 
-    h_indices, v_indices = complete_regions[0]
-    rows = len(h_indices) - 1
-    columns = len(v_indices) - 1
+    region = complete_regions[0]
+    rows = len(region.horizontal) - 1
+    columns = len(region.vertical) - 1
 
-    x_coordinates = tuple(vertical[index].coordinate for index in v_indices)
-    y_coordinates = tuple(horizontal[index].coordinate for index in h_indices)
+    x_coordinates = tuple(line.coordinate for line in region.vertical)
+    y_coordinates = tuple(line.coordinate for line in region.horizontal)
     if any(
         left >= right
         for left, right in zip(x_coordinates, x_coordinates[1:])

@@ -84,6 +84,18 @@ def two_grid_fixture() -> Image.Image:
     return image
 
 
+def _draw_grid(
+    draw: ImageDraw.ImageDraw,
+    *,
+    xs: tuple[int, ...],
+    ys: tuple[int, ...],
+) -> None:
+    for x in xs:
+        draw.line((x, ys[0], x, ys[-1]), fill=0, width=2)
+    for y in ys:
+        draw.line((xs[0], y, xs[-1], y), fill=0, width=2)
+
+
 def gapped_grid_fixture(gap: int) -> Image.Image:
     image = grid_image()
     draw = ImageDraw.Draw(image)
@@ -155,6 +167,41 @@ def test_two_valid_grids_are_unsupported():
     assert result.grid is None
 
 
+def test_stacked_grids_with_aligned_vertical_coordinates_are_unsupported():
+    image = Image.new("L", (240, 340), 255)
+    draw = ImageDraw.Draw(image)
+    _draw_grid(draw, xs=(20, 120, 220), ys=(10, 60, 110))
+    _draw_grid(draw, xs=(20, 120, 220), ys=(220, 270, 320))
+    try:
+        result = detect_ruled_table(image, balanced_config())
+    finally:
+        image.close()
+    assert result.status == "unsupported"
+    assert result.diagnostics["complete_regions"] == 2
+
+
+def test_side_by_side_aligned_maximum_grids_fit_global_graph_budget():
+    image = Image.new("L", (880, 630), 255)
+    draw = ImageDraw.Draw(image)
+    ys = _regular_coordinates(51)
+    _draw_grid(draw, xs=_regular_coordinates(31), ys=ys)
+    _draw_grid(
+        draw,
+        xs=_regular_coordinates(31, start=500),
+        ys=ys,
+    )
+    try:
+        result = detect_ruled_table(image, balanced_config())
+    finally:
+        image.close()
+    assert result.status == "unsupported"
+    assert result.diagnostics["complete_regions"] == 2
+    assert result.diagnostics["horizontal_lines"] == 102
+    assert result.diagnostics["vertical_lines"] == 62
+    assert result.diagnostics["intersection_checks"] == 102 * 62
+    assert result.diagnostics["adjacency_nodes_allocated"] == 102 + 62
+
+
 def test_segment_gap_at_configured_maximum_is_bridged():
     with gapped_grid_fixture(8) as image:
         result = detect_ruled_table(image, balanced_config())
@@ -195,6 +242,26 @@ def test_partial_internal_line_cannot_shrink_component_to_three_by_three():
         result = detect_ruled_table(image, balanced_config())
     assert result.status == "invalid_grid"
     assert result.grid is None
+
+
+def test_zero_edge_damaged_internal_rule_invalidates_coarser_grid():
+    image = grid_image(
+        width=300,
+        height=220,
+        xs=(20, 100, 180, 280),
+        ys=(20, 80, 140, 200),
+    )
+    draw = ImageDraw.Draw(image)
+    draw.line((20, 50, 280, 50), fill=0, width=2)
+    for x in (20, 100, 180, 280):
+        draw.rectangle((x - 6, 50, x + 6, 51), fill=255)
+    try:
+        result = detect_ruled_table(image, balanced_config())
+    finally:
+        image.close()
+    assert result.status == "invalid_grid"
+    assert result.grid is None
+    assert result.diagnostics["internal_rule_signals"] >= 1
 
 
 def test_open_rule_overhang_cannot_be_accepted_as_smaller_three_by_three():
@@ -258,6 +325,20 @@ def test_blank_cells_do_not_affect_geometry():
 )
 def test_incomplete_or_merged_like_grid_is_typed_invalid(fixture):
     with fixture() as image:
+        result = detect_ruled_table(image, balanced_config())
+    assert result.status == "invalid_grid"
+    assert result.grid is None
+
+
+@pytest.mark.parametrize(
+    ("xs", "ys"),
+    [
+        ((20, 220), (20, 80, 140)),
+        ((20, 120, 220), (20, 140)),
+    ],
+)
+def test_connected_three_by_two_or_two_by_three_lines_are_invalid(xs, ys):
+    with grid_image(xs=xs, ys=ys) as image:
         result = detect_ruled_table(image, balanced_config())
     assert result.status == "invalid_grid"
     assert result.grid is None
