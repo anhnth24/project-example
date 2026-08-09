@@ -390,3 +390,35 @@ def test_normal_close_kills_daemonized_candidate_descendant_and_is_idempotent(
         worker.close()
         if child_pid and psutil.pid_exists(child_pid):
             os.kill(child_pid, signal.SIGKILL)
+
+
+def test_isolated_worker_allows_stricter_per_request_timeout(
+    tmp_path: Path,
+) -> None:
+    recognizer = tmp_path / "slow-recognizer.py"
+    recognizer.write_text(
+        "import time\n"
+        "time.sleep(2)\n"
+        "print('too late')\n",
+        encoding="utf-8",
+    )
+    spec = CommandCandidateSpec(
+        id="per-request-timeout",
+        label="Per-request timeout",
+        argv=(sys.executable, str(recognizer), "{input}"),
+        environment=sanitized_candidate_environment(cpu_threads=1),
+        provenance={},
+    )
+    worker = _isolated_worker(
+        spec,
+        timeout_seconds=5.0,
+        max_output_bytes=4096,
+    )
+    try:
+        with pytest.raises(TimeoutError):
+            worker.recognize(
+                _benchmark_page(tmp_path / "page.png"),
+                timeout_seconds=0.1,
+            )
+    finally:
+        worker.close()
