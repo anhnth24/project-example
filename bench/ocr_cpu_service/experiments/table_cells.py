@@ -21,6 +21,8 @@ from benchmark.candidates import CommandCandidateSpec
 from benchmark.corpus import BenchmarkPage
 from benchmark.run import (
     CandidateOutputLimitError,
+    CandidateResourceLimitError,
+    CandidateResourceSamplingError,
     _isolated_worker,
     sanitized_candidate_environment,
 )
@@ -394,10 +396,16 @@ def recognize_grid(
                     limits.cell_timeout_seconds,
                     limits.page_timeout_seconds,
                 ),
+                max_rss_bytes=limits.max_rss_bytes,
                 max_output_bytes=limits.max_output_bytes_per_cell,
             )
         except TimeoutError as error:
             raise _failure("timeout") from error
+        except (
+            CandidateResourceLimitError,
+            CandidateResourceSamplingError,
+        ) as error:
+            raise _failure("resource_limit") from error
         except Exception as error:
             raise _failure("candidate_error") from error
         try:
@@ -474,6 +482,11 @@ def recognize_grid(
                 raise _failure("timeout") from error
             except CandidateOutputLimitError as error:
                 raise _failure("output_limit") from error
+            except (
+                CandidateResourceLimitError,
+                CandidateResourceSamplingError,
+            ) as error:
+                raise _failure("resource_limit") from error
             except TableRecognitionError:
                 raise
             except Exception as error:

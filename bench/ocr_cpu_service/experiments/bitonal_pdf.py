@@ -28,6 +28,8 @@ from benchmark.metrics import error_counts
 from benchmark.render import PageRenderRejected, RenderLimits, render_page
 from benchmark.run import (
     CandidateOutputLimitError,
+    CandidateResourceLimitError,
+    CandidateResourceSamplingError,
     _isolated_worker,
     sanitized_candidate_environment,
 )
@@ -1056,8 +1058,13 @@ def recognize_calibration_page(
         worker = _isolated_worker(
             candidate.spec,
             timeout_seconds=timeout_seconds,
+            max_rss_bytes=max_rss_bytes,
             max_output_bytes=max_output_bytes,
         )
+    except (CandidateResourceLimitError, CandidateResourceSamplingError):
+        resource = dict(failure_resource)
+        resource["resource_limit_violation"] = True
+        return None, resource, "resource_limit"
     except Exception:
         return None, dict(failure_resource), "candidate_error"
     try:
@@ -1082,6 +1089,10 @@ def recognize_calibration_page(
         return None, dict(failure_resource), "timeout"
     except CandidateOutputLimitError:
         return None, dict(failure_resource), "output_limit"
+    except (CandidateResourceLimitError, CandidateResourceSamplingError):
+        resource = dict(failure_resource)
+        resource["resource_limit_violation"] = True
+        return None, resource, "resource_limit"
     except Exception:
         return None, dict(failure_resource), "candidate_error"
     finally:

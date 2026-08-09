@@ -21,6 +21,8 @@ from benchmark.corpus import BenchmarkPage
 from benchmark.metrics import error_counts
 from benchmark.run import (
     CandidateOutputLimitError,
+    CandidateResourceLimitError,
+    CandidateResourceSamplingError,
     _isolated_worker,
     sanitized_candidate_environment,
 )
@@ -331,6 +333,7 @@ def _run_one_candidate(
     worker = _isolated_worker(
         spec,
         timeout_seconds=timeout_seconds,
+        max_rss_bytes=max_rss_bytes,
         max_output_bytes=max_output_bytes,
     )
     records: list[dict[str, Any]] = []
@@ -376,6 +379,9 @@ def _run_one_candidate(
                 record["error_kind"] = "timeout"
             except CandidateOutputLimitError:
                 record["error_kind"] = "output_limit"
+            except (CandidateResourceLimitError, CandidateResourceSamplingError):
+                record["error_kind"] = "resource_limit"
+                record["resource_limit_violation"] = True
             except Exception:
                 record["error_kind"] = "candidate_error"
             records.append(record)
