@@ -543,7 +543,46 @@ def _complete_regions(
                         for row in h_indices
                         for column in v_indices
                     ):
-                        candidates.add((h_indices, v_indices))
+                        selected_h = set(h_indices)
+                        selected_v = set(v_indices)
+                        partial_horizontal = any(
+                            sum(
+                                _covers_point(
+                                    horizontal[row],
+                                    vertical[column].coordinate,
+                                    tolerance,
+                                )
+                                and _covers_point(
+                                    vertical[column],
+                                    horizontal[row].coordinate,
+                                    tolerance,
+                                )
+                                for column in v_indices
+                            )
+                            >= 2
+                            for row in range(top_index, bottom_index + 1)
+                            if row not in selected_h
+                        )
+                        partial_vertical = any(
+                            sum(
+                                _covers_point(
+                                    horizontal[row],
+                                    vertical[column].coordinate,
+                                    tolerance,
+                                )
+                                and _covers_point(
+                                    vertical[column],
+                                    horizontal[row].coordinate,
+                                    tolerance,
+                                )
+                                for row in h_indices
+                            )
+                            >= 2
+                            for column in range(left_index, right_index + 1)
+                            if column not in selected_v
+                        )
+                        if not partial_horizontal and not partial_vertical:
+                            candidates.add((h_indices, v_indices))
 
     maximal: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
     for candidate in sorted(candidates):

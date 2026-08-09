@@ -105,6 +105,15 @@ def merged_cell_fixture() -> Image.Image:
     return image
 
 
+def merged_subgrid_fixture() -> Image.Image:
+    image = grid_image(
+        xs=(20, 70, 120, 170, 220),
+        ys=(20, 50, 80, 110, 140),
+    )
+    ImageDraw.Draw(image).rectangle((115, 75, 126, 86), fill=255)
+    return image
+
+
 def _iou(left: Box, right: Box) -> float:
     intersection = max(
         0, min(left.right, right.right) - max(left.left, right.left)
@@ -212,7 +221,11 @@ def test_blank_cells_do_not_affect_geometry():
 
 @pytest.mark.parametrize(
     "fixture",
-    (incomplete_intersection_fixture, merged_cell_fixture),
+    (
+        incomplete_intersection_fixture,
+        merged_cell_fixture,
+        merged_subgrid_fixture,
+    ),
 )
 def test_incomplete_or_merged_like_grid_is_typed_invalid(fixture):
     with fixture() as image:
