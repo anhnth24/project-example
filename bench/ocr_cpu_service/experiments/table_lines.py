@@ -485,85 +485,80 @@ def _covers_interval(
     )
 
 
-def _cell_components(
-    cells: set[tuple[int, int]],
-) -> tuple[set[tuple[int, int]], ...]:
-    remaining = set(cells)
-    components: list[set[tuple[int, int]]] = []
-    while remaining:
-        seed = remaining.pop()
-        component = {seed}
-        frontier = [seed]
-        while frontier:
-            row, column = frontier.pop()
-            for neighbor in (
-                (row - 1, column),
-                (row + 1, column),
-                (row, column - 1),
-                (row, column + 1),
-            ):
-                if neighbor in remaining:
-                    remaining.remove(neighbor)
-                    component.add(neighbor)
-                    frontier.append(neighbor)
-        components.append(component)
-    return tuple(components)
-
-
 def _complete_regions(
     horizontal: Sequence[_Line],
     vertical: Sequence[_Line],
     tolerance: int,
 ) -> tuple[tuple[tuple[int, ...], tuple[int, ...]], ...]:
-    valid_cells: set[tuple[int, int]] = set()
-    for row in range(len(horizontal) - 1):
-        top = horizontal[row]
-        bottom = horizontal[row + 1]
-        for column in range(len(vertical) - 1):
-            left = vertical[column]
-            right = vertical[column + 1]
-            x1, x2 = left.coordinate, right.coordinate
+    candidates: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    for top_index in range(len(horizontal) - 2):
+        top = horizontal[top_index]
+        for bottom_index in range(top_index + 2, len(horizontal)):
+            bottom = horizontal[bottom_index]
             y1, y2 = top.coordinate, bottom.coordinate
-            if (
-                _covers_interval(top, x1, x2, tolerance)
-                and _covers_interval(bottom, x1, x2, tolerance)
-                and _covers_interval(left, y1, y2, tolerance)
-                and _covers_interval(right, y1, y2, tolerance)
-            ):
-                valid_cells.add((row, column))
+            for left_index in range(len(vertical) - 2):
+                left = vertical[left_index]
+                for right_index in range(left_index + 2, len(vertical)):
+                    right = vertical[right_index]
+                    x1, x2 = left.coordinate, right.coordinate
+                    if not (
+                        _covers_interval(top, x1, x2, tolerance)
+                        and _covers_interval(bottom, x1, x2, tolerance)
+                        and _covers_interval(left, y1, y2, tolerance)
+                        and _covers_interval(right, y1, y2, tolerance)
+                    ):
+                        continue
+                    h_indices = tuple(
+                        index
+                        for index in range(top_index, bottom_index + 1)
+                        if _covers_interval(
+                            horizontal[index], x1, x2, tolerance
+                        )
+                    )
+                    v_indices = tuple(
+                        index
+                        for index in range(left_index, right_index + 1)
+                        if _covers_interval(vertical[index], y1, y2, tolerance)
+                    )
+                    if (
+                        len(h_indices) < 3
+                        or len(v_indices) < 3
+                        or h_indices[0] != top_index
+                        or h_indices[-1] != bottom_index
+                        or v_indices[0] != left_index
+                        or v_indices[-1] != right_index
+                    ):
+                        continue
+                    if all(
+                        _covers_point(
+                            horizontal[row],
+                            vertical[column].coordinate,
+                            tolerance,
+                        )
+                        and _covers_point(
+                            vertical[column],
+                            horizontal[row].coordinate,
+                            tolerance,
+                        )
+                        for row in h_indices
+                        for column in v_indices
+                    ):
+                        candidates.add((h_indices, v_indices))
 
-    regions: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
-    for component in _cell_components(valid_cells):
-        h_indices = tuple(
-            sorted({index for row, _ in component for index in (row, row + 1)})
-        )
-        v_indices = tuple(
-            sorted(
-                {
-                    index
-                    for _, column in component
-                    for index in (column, column + 1)
-                }
-            )
-        )
-        if len(h_indices) < 3 or len(v_indices) < 3:
-            continue
-        expected_cells = {
-            (row, column)
-            for row in h_indices[:-1]
-            for column in v_indices[:-1]
-        }
-        if component != expected_cells:
-            continue
-        if not all(
-            _covers_point(horizontal[row], vertical[column].coordinate, tolerance)
-            and _covers_point(vertical[column], horizontal[row].coordinate, tolerance)
-            for row in h_indices
-            for column in v_indices
+    maximal: list[tuple[tuple[int, ...], tuple[int, ...]]] = []
+    for candidate in sorted(candidates):
+        h_indices, v_indices = candidate
+        h_set = set(h_indices)
+        v_set = set(v_indices)
+        if any(
+            candidate != other
+            and h_set.issubset(other[0])
+            and v_set.issubset(other[1])
+            for other in candidates
         ):
             continue
-        regions.append((h_indices, v_indices))
-    return tuple(regions)
+        maximal.append(candidate)
+    return tuple(maximal)
 
 
 def _inverse_box(

@@ -165,6 +165,15 @@ def test_isolated_noise_does_not_change_grid():
     assert (result.grid.rows, result.grid.columns) == (2, 2)
 
 
+def test_qualifying_partial_segment_inside_cell_does_not_split_grid_region():
+    with grid_image() as image:
+        ImageDraw.Draw(image).line((20, 50, 100, 50), fill=0, width=2)
+        result = detect_ruled_table(image, balanced_config())
+    assert result.status == "detected"
+    assert result.grid is not None
+    assert (result.grid.rows, result.grid.columns) == (2, 2)
+
+
 @pytest.mark.parametrize("input_angle", (-1.5, 1.5))
 def test_deskew_recovers_rotated_grid_and_inverse_maps_cells(input_angle):
     with grid_image() as source:
