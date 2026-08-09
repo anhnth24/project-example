@@ -3,23 +3,50 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import importlib.metadata
+import io
 import json
+import math
 import os
+import platform
 import re
+import shutil
+import statistics
+import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Mapping, Sequence
 
+import psutil
+from PIL import Image
+
+from benchmark.metrics import error_counts, normalize_for_metric
 from benchmark.render import RenderLimits, open_pdf, render_page
-from experiments.table_cells import ProcessLimits
-from experiments.table_lines import DetectorConfig
+from experiments.table_cells import (
+    GridRecognition,
+    ProcessLimits,
+    TableRecognitionError,
+    recognize_grid,
+)
+from experiments.table_lines import (
+    Box,
+    DetectorConfig,
+    detect_ruled_table,
+    prepare_working_image,
+)
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = SERVICE_ROOT / "experiments" / "ruled-table-config.json"
+DEFAULT_MANIFEST = SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json"
+DEFAULT_TESSDATA = SERVICE_ROOT.parents[1] / "tessdata_best"
+DEFAULT_RAW_ARTIFACT = SERVICE_ROOT / ".data" / "ruled-table" / "raw-tuning.json"
+DEFAULT_REPORT = SERVICE_ROOT / "reports" / "ruled-table-spike.md"
 CANONICAL_CONFIG_SHA256 = (
     "521efe33c8e128581708c6269e92486799201f59c648f6117048735530b0a495"
 )
@@ -1232,3 +1259,1544 @@ def write_corpus_report(manifest: CorpusManifest, output: Path) -> None:
         "- Ground-truth text tracked: no\n"
     )
     _atomic_write_bytes(output, report.encode("utf-8"))
+
+
+@dataclass(frozen=True, slots=True)
+class CellMatchCounts:
+    tp: int
+    fp: int
+    fn: int
+
+    @property
+    def precision(self) -> float:
+        denominator = self.tp + self.fp
+        return self.tp / denominator if denominator else 1.0
+
+    @property
+    def recall(self) -> float:
+        denominator = self.tp + self.fn
+        return self.tp / denominator if denominator else 1.0
+
+    @property
+    def f1(self) -> float:
+        denominator = self.precision + self.recall
+        return (
+            2 * self.precision * self.recall / denominator
+            if denominator
+            else 0.0
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CellContentCounts:
+    character_edits: int
+    reference_characters: int
+    word_edits: int
+    reference_words: int
+    blank_correct: int
+    blank_total: int
+    cells: Mapping[
+        tuple[int, int],
+        tuple[int, int, int, int, bool, bool],
+    ]
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactBindings:
+    config_sha256: str
+    manifest_sha256: str
+    source_sha256: str
+    render_sha256_by_page: Mapping[int, str]
+    tesseract_sha256: str
+    tessdata_sha256: str
+    host_sha256: str
+    toolchain_sha256: str
+
+
+_ARTIFACT_FIELDS = frozenset(
+    {
+        "schema_version",
+        "split",
+        "source",
+        "config_sha256",
+        "manifest_sha256",
+        "host",
+        "toolchain",
+        "access",
+        "candidates",
+        "records",
+        "aggregates",
+        "winner_id",
+        "decision",
+    }
+)
+_ARTIFACT_SOURCE_FIELDS = frozenset({"id", "sha256", "size_bytes"})
+_HOST_FIELDS = frozenset(
+    {"platform", "architecture", "logical_cpus", "memory_bytes"}
+)
+_TOOLCHAIN_FIELDS = frozenset({"python", "pillow", "tesseract"})
+_ACCESS_FIELDS = frozenset(
+    {
+        "tuning_pages_opened",
+        "holdout_pages_opened",
+        "negative_pages_opened",
+    }
+)
+_ARTIFACT_CANDIDATE_FIELDS = frozenset({"id", "configuration_sha256"})
+_RECORD_FIELDS = frozenset(
+    {
+        "id",
+        "candidate_id",
+        "page_number",
+        "split",
+        "negative",
+        "status",
+        "rows",
+        "columns",
+        "reference_rows",
+        "reference_columns",
+        "predicted_boxes",
+        "reference_boxes",
+        "cells",
+        "elapsed_seconds",
+        "peak_rss_bytes",
+        "resource",
+        "bindings",
+    }
+)
+_ARTIFACT_BOX_FIELDS = frozenset({"row", "column", "bbox"})
+_ARTIFACT_CELL_FIELDS = frozenset(
+    {
+        "row",
+        "column",
+        "character_edits",
+        "reference_characters",
+        "word_edits",
+        "reference_words",
+        "reference_blank",
+        "predicted_blank",
+        "prediction_present",
+    }
+)
+_RESOURCE_FIELDS = frozenset(
+    {"timed_out", "resource_violation", "cleanup_failed"}
+)
+_BINDING_FIELDS = frozenset(
+    {
+        "config_sha256",
+        "manifest_sha256",
+        "source_sha256",
+        "render_sha256",
+        "tesseract_sha256",
+        "tessdata_sha256",
+        "host_sha256",
+        "toolchain_sha256",
+    }
+)
+_AGGREGATE_FIELDS = frozenset(
+    {
+        "candidate_id",
+        "record_count",
+        "table_pages",
+        "negative_pages",
+        "failures",
+        "timeouts",
+        "resource_violations",
+        "cleanup_failures",
+        "false_positives",
+        "wrong_grids",
+        "exact_grid_pages",
+        "cell_tp",
+        "cell_fp",
+        "cell_fn",
+        "character_edits",
+        "reference_characters",
+        "word_edits",
+        "reference_words",
+        "blank_correct",
+        "blank_total",
+        "cell_precision",
+        "cell_recall",
+        "cell_f1",
+        "cell_cer",
+        "cell_wer",
+        "empty_cell_accuracy",
+        "median_page_latency_seconds",
+        "maximum_page_latency_seconds",
+        "peak_rss_bytes",
+    }
+)
+_INTEGER_AGGREGATE_FIELDS = _AGGREGATE_FIELDS - {
+    "candidate_id",
+    "cell_precision",
+    "cell_recall",
+    "cell_f1",
+    "cell_cer",
+    "cell_wer",
+    "empty_cell_accuracy",
+    "median_page_latency_seconds",
+    "maximum_page_latency_seconds",
+}
+_RECORD_STATUSES = frozenset(
+    {
+        "detected",
+        "not_detected",
+        "unsupported",
+        "invalid_grid",
+        "timeout",
+        "output_limit",
+        "candidate_error",
+        "resource_limit",
+        "cleanup_error",
+    }
+)
+_FORBIDDEN_RAW_KEYS = frozenset(
+    {
+        "text",
+        "recognized_text",
+        "reference",
+        "markdown",
+        "path",
+        "render_path",
+        "annotation_path",
+        "environment",
+        "env",
+        "error",
+        "error_detail",
+        "image",
+        "image_bytes",
+    }
+)
+_TUNING_PAGES = frozenset({255, 460, 537, 450, 541, 772})
+_HOLDOUT_PAGES = frozenset({394, 503, 809})
+_NEGATIVE_PAGES = frozenset({20, 60, 100})
+
+
+def _box_iou(left: Box, right: Box) -> float:
+    intersection_width = max(
+        0, min(left.right, right.right) - max(left.left, right.left)
+    )
+    intersection_height = max(
+        0, min(left.bottom, right.bottom) - max(left.top, right.top)
+    )
+    intersection = intersection_width * intersection_height
+    union = left.area + right.area - intersection
+    return intersection / union if union else 0.0
+
+
+def match_cells(
+    references: Sequence[Box],
+    predictions: Sequence[Box],
+    *,
+    threshold: float,
+) -> CellMatchCounts:
+    """Greedily match boxes one-to-one with deterministic IoU ordering."""
+    if (
+        isinstance(threshold, bool)
+        or not isinstance(threshold, (int, float))
+        or not math.isfinite(float(threshold))
+        or not 0 <= float(threshold) <= 1
+    ):
+        raise ValueError("threshold must be a finite fraction")
+    if any(not isinstance(box, Box) for box in references + predictions):
+        raise TypeError("cell boxes must be Box values")
+    candidates = [
+        (iou, reference_index, prediction_index)
+        for reference_index, reference in enumerate(references)
+        for prediction_index, prediction in enumerate(predictions)
+        if (iou := _box_iou(reference, prediction)) >= threshold
+    ]
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    used_references: set[int] = set()
+    used_predictions: set[int] = set()
+    for _iou, reference_index, prediction_index in candidates:
+        if (
+            reference_index in used_references
+            or prediction_index in used_predictions
+        ):
+            continue
+        used_references.add(reference_index)
+        used_predictions.add(prediction_index)
+    tp = len(used_references)
+    return CellMatchCounts(
+        tp=tp,
+        fp=len(predictions) - tp,
+        fn=len(references) - tp,
+    )
+
+
+def measure_cell_content(
+    references: Mapping[tuple[int, int], tuple[str, bool]],
+    predictions: Mapping[tuple[int, int], str],
+    *,
+    reference_shape: tuple[int, int] | None = None,
+    predicted_shape: tuple[int, int] | None = None,
+) -> CellContentCounts:
+    """Return additive content and blank counts without retaining cell text."""
+    if (
+        reference_shape is not None
+        and predicted_shape is not None
+        and reference_shape != predicted_shape
+    ):
+        raise ValueError(
+            "content metrics require exact rows and columns to be confirmed"
+        )
+    cells: dict[
+        tuple[int, int],
+        tuple[int, int, int, int, bool, bool],
+    ] = {}
+    character_edits = reference_characters = 0
+    word_edits = reference_words = 0
+    blank_correct = 0
+    for coordinate in sorted(set(references) | set(predictions)):
+        reference_value = references.get(coordinate)
+        prediction_present = coordinate in predictions
+        if reference_value is None:
+            reference_text = ""
+            reference_blank = False
+        else:
+            reference_text, reference_blank = reference_value
+            if not isinstance(reference_text, str) or not isinstance(
+                reference_blank, bool
+            ):
+                raise TypeError("reference cells must contain text and blank flags")
+        hypothesis = predictions.get(coordinate, "")
+        if not isinstance(hypothesis, str):
+            raise TypeError("predicted cells must contain strings")
+        counts = error_counts(reference_text, hypothesis)
+        predicted_blank = not bool(normalize_for_metric(hypothesis))
+        cells[coordinate] = (
+            counts.character_edits,
+            counts.reference_characters,
+            counts.word_edits,
+            counts.reference_words,
+            reference_blank,
+            predicted_blank if prediction_present else False,
+        )
+        character_edits += counts.character_edits
+        reference_characters += counts.reference_characters
+        word_edits += counts.word_edits
+        reference_words += counts.reference_words
+        if (
+            reference_value is not None
+            and prediction_present
+            and reference_blank == predicted_blank
+        ):
+            blank_correct += 1
+    return CellContentCounts(
+        character_edits=character_edits,
+        reference_characters=reference_characters,
+        word_edits=word_edits,
+        reference_words=reference_words,
+        blank_correct=blank_correct,
+        blank_total=len(references),
+        cells=cells,
+    )
+
+
+def _canonical_json_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _command_version(command: Sequence[str]) -> str:
+    result = subprocess.run(
+        list(command),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    )
+    output = result.stdout or result.stderr
+    return output.splitlines()[0].strip()
+
+
+def _host_description() -> dict[str, Any]:
+    return {
+        "platform": platform.platform(),
+        "architecture": platform.machine(),
+        "logical_cpus": psutil.cpu_count(logical=True) or 0,
+        "memory_bytes": psutil.virtual_memory().total,
+    }
+
+
+def _toolchain_description() -> dict[str, str]:
+    return {
+        "python": platform.python_version(),
+        "pillow": importlib.metadata.version("Pillow"),
+        "tesseract": _command_version(["tesseract", "--version"]),
+    }
+
+
+def _canonical_artifact_bindings() -> ArtifactBindings:
+    config_raw = DEFAULT_CONFIG.read_bytes()
+    manifest_raw = DEFAULT_MANIFEST.read_bytes()
+    manifest_payload = json.loads(manifest_raw)
+    pages = manifest_payload.get("pages")
+    if not isinstance(pages, list):
+        raise ValueError("canonical manifest pages are invalid")
+    render_hashes: dict[int, str] = {}
+    for page in pages:
+        if not isinstance(page, dict):
+            raise ValueError("canonical manifest page is invalid")
+        page_number = _positive_int(
+            page.get("page_number"), "canonical manifest page_number"
+        )
+        render_hashes[page_number] = _sha256(
+            page.get("render_sha256"), "canonical manifest render_sha256"
+        )
+    tesseract = shutil.which("tesseract")
+    if tesseract is None:
+        raise ValueError("canonical Tesseract executable is unavailable")
+    host = _host_description()
+    toolchain = _toolchain_description()
+    return ArtifactBindings(
+        config_sha256=hashlib.sha256(config_raw).hexdigest(),
+        manifest_sha256=hashlib.sha256(manifest_raw).hexdigest(),
+        source_sha256=CANONICAL_SOURCE_SHA256,
+        render_sha256_by_page=render_hashes,
+        tesseract_sha256=_sha256_file(Path(tesseract)),
+        tessdata_sha256=_sha256_file(DEFAULT_TESSDATA / "vie.traineddata"),
+        host_sha256=_canonical_json_sha256(host),
+        toolchain_sha256=_canonical_json_sha256(toolchain),
+    )
+
+
+def _artifact_candidate_descriptors(config: Mapping[str, Any]) -> list[dict[str, str]]:
+    candidates = config["detector_candidates"]
+    return [
+        {
+            "id": candidate["id"],
+            "configuration_sha256": _canonical_json_sha256(candidate),
+        }
+        for candidate in candidates
+    ]
+
+
+def _rate(edits: int, reference_units: int) -> float:
+    if reference_units:
+        return edits / reference_units
+    return float(edits > 0)
+
+
+def _artifact_box(value: Mapping[str, Any]) -> Box:
+    bbox = value["bbox"]
+    return Box(bbox[0], bbox[1], bbox[2], bbox[3])
+
+
+def _aggregate_candidate(
+    candidate_id: str,
+    records: Sequence[Mapping[str, Any]],
+    *,
+    threshold: float = 0.80,
+) -> dict[str, Any]:
+    table_records = [record for record in records if not record["negative"]]
+    negative_records = [record for record in records if record["negative"]]
+    match_totals = CellMatchCounts(0, 0, 0)
+    for record in table_records:
+        counts = match_cells(
+            [_artifact_box(box) for box in record["reference_boxes"]],
+            [_artifact_box(box) for box in record["predicted_boxes"]],
+            threshold=threshold,
+        )
+        match_totals = CellMatchCounts(
+            match_totals.tp + counts.tp,
+            match_totals.fp + counts.fp,
+            match_totals.fn + counts.fn,
+        )
+    cells = [cell for record in records for cell in record["cells"]]
+    character_edits = sum(cell["character_edits"] for cell in cells)
+    reference_characters = sum(cell["reference_characters"] for cell in cells)
+    word_edits = sum(cell["word_edits"] for cell in cells)
+    reference_words = sum(cell["reference_words"] for cell in cells)
+    blank_correct = sum(
+        cell["prediction_present"]
+        and cell["reference_blank"] == cell["predicted_blank"]
+        for cell in cells
+        if (cell["row"], cell["column"])
+        in {
+            (box["row"], box["column"])
+            for record in records
+            for box in record["reference_boxes"]
+        }
+    )
+    blank_total = sum(len(record["reference_boxes"]) for record in table_records)
+    exact_grid_pages = sum(
+        record["status"] == "detected"
+        and record["rows"] == record["reference_rows"]
+        and record["columns"] == record["reference_columns"]
+        for record in table_records
+    )
+    elapsed = sorted(float(record["elapsed_seconds"]) for record in records)
+    successful_statuses = {"detected", "not_detected"}
+    return {
+        "candidate_id": candidate_id,
+        "record_count": len(records),
+        "table_pages": len(table_records),
+        "negative_pages": len(negative_records),
+        "failures": sum(
+            record["status"] not in successful_statuses for record in records
+        ),
+        "timeouts": sum(record["resource"]["timed_out"] for record in records),
+        "resource_violations": sum(
+            record["resource"]["resource_violation"] for record in records
+        ),
+        "cleanup_failures": sum(
+            record["resource"]["cleanup_failed"] for record in records
+        ),
+        "false_positives": sum(
+            record["status"] == "detected" for record in negative_records
+        ),
+        "wrong_grids": len(table_records) - exact_grid_pages,
+        "exact_grid_pages": exact_grid_pages,
+        "cell_tp": match_totals.tp,
+        "cell_fp": match_totals.fp,
+        "cell_fn": match_totals.fn,
+        "character_edits": character_edits,
+        "reference_characters": reference_characters,
+        "word_edits": word_edits,
+        "reference_words": reference_words,
+        "blank_correct": blank_correct,
+        "blank_total": blank_total,
+        "cell_precision": match_totals.precision,
+        "cell_recall": match_totals.recall,
+        "cell_f1": match_totals.f1,
+        "cell_cer": _rate(character_edits, reference_characters),
+        "cell_wer": _rate(word_edits, reference_words),
+        "empty_cell_accuracy": (
+            blank_correct / blank_total if blank_total else 1.0
+        ),
+        "median_page_latency_seconds": statistics.median(elapsed),
+        "maximum_page_latency_seconds": max(elapsed),
+        "peak_rss_bytes": max(record["peak_rss_bytes"] for record in records),
+    }
+
+
+def _recompute_aggregates(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
+    candidate_ids = [candidate["id"] for candidate in payload["candidates"]]
+    if payload["split"] == "holdout":
+        candidate_ids = [payload["winner_id"]] if payload["winner_id"] else []
+    return [
+        _aggregate_candidate(
+            candidate_id,
+            [
+                record
+                for record in payload["records"]
+                if record["candidate_id"] == candidate_id
+            ],
+        )
+        for candidate_id in candidate_ids
+    ]
+
+
+def _records_have_expected_cardinality(payload: Mapping[str, Any]) -> bool:
+    split = payload.get("split")
+    records = payload.get("records")
+    candidates = payload.get("candidates")
+    if not isinstance(records, list) or not isinstance(candidates, list):
+        return False
+    if split == "tuning":
+        expected_pages = _TUNING_PAGES
+        expected_candidates = {
+            candidate.get("id")
+            for candidate in candidates
+            if isinstance(candidate, Mapping)
+        }
+    elif split == "holdout":
+        expected_pages = _HOLDOUT_PAGES | _NEGATIVE_PAGES
+        winner = payload.get("winner_id")
+        expected_candidates = {winner} if isinstance(winner, str) else set()
+    else:
+        return False
+    actual = [
+        (record.get("candidate_id"), record.get("page_number"))
+        for record in records
+        if isinstance(record, Mapping)
+    ]
+    expected = {
+        (candidate_id, page)
+        for candidate_id in expected_candidates
+        for page in expected_pages
+    }
+    return len(actual) == len(set(actual)) and set(actual) == expected
+
+
+def derive_tuning_winner(payload: Mapping[str, Any]) -> str | None:
+    """Select the deterministic winner from complete tuning aggregates."""
+    if payload.get("split") != "tuning" or not _records_have_expected_cardinality(
+        payload
+    ):
+        return None
+    aggregates = payload.get("aggregates")
+    if not isinstance(aggregates, list):
+        return None
+    eligible = [
+        aggregate
+        for aggregate in aggregates
+        if isinstance(aggregate, Mapping)
+        and aggregate.get("record_count") == 6
+        and aggregate.get("table_pages") == 6
+        and aggregate.get("negative_pages") == 0
+        and all(
+            aggregate.get(field) == 0
+            for field in (
+                "failures",
+                "timeouts",
+                "resource_violations",
+                "cleanup_failures",
+                "false_positives",
+                "wrong_grids",
+            )
+        )
+    ]
+    if not eligible:
+        return None
+    ranked = sorted(
+        eligible,
+        key=lambda aggregate: (
+            -aggregate["exact_grid_pages"],
+            -aggregate["cell_f1"],
+            aggregate["cell_cer"],
+            -aggregate["empty_cell_accuracy"],
+            aggregate["median_page_latency_seconds"],
+            aggregate["candidate_id"],
+        ),
+    )
+    return str(ranked[0]["candidate_id"])
+
+
+def derive_holdout_decision(
+    payload: Mapping[str, Any],
+) -> Literal["PASS", "STOP"]:
+    """Apply every holdout bound conservatively, never trusting favorable drift."""
+    if payload.get("split") != "holdout" or not _records_have_expected_cardinality(
+        payload
+    ):
+        return "STOP"
+    aggregates = payload.get("aggregates")
+    if not isinstance(aggregates, list) or len(aggregates) != 1:
+        return "STOP"
+    supplied = aggregates[0]
+    if not isinstance(supplied, Mapping):
+        return "STOP"
+    try:
+        actual = _recompute_aggregates(payload)[0]
+        conditions = (
+            min(supplied["exact_grid_pages"], actual["exact_grid_pages"]) == 3,
+            min(supplied["cell_f1"], actual["cell_f1"]) >= 0.95,
+            max(supplied["cell_cer"], actual["cell_cer"]) <= 0.05,
+            min(
+                supplied["empty_cell_accuracy"],
+                actual["empty_cell_accuracy"],
+            )
+            >= 0.98,
+            max(supplied["false_positives"], actual["false_positives"]) == 0,
+            max(supplied["failures"], actual["failures"]) == 0,
+            max(supplied["timeouts"], actual["timeouts"]) == 0,
+            max(
+                supplied["resource_violations"],
+                actual["resource_violations"],
+            )
+            == 0,
+            max(supplied["cleanup_failures"], actual["cleanup_failures"]) == 0,
+            max(supplied["peak_rss_bytes"], actual["peak_rss_bytes"])
+            < 805_306_368,
+            max(
+                supplied["maximum_page_latency_seconds"],
+                actual["maximum_page_latency_seconds"],
+            )
+            <= 20.0,
+            supplied.get("candidate_id") == payload.get("winner_id"),
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        return "STOP"
+    return "PASS" if all(conditions) else "STOP"
+
+
+def _reject_forbidden_raw_keys(value: Any, *, path: str = "artifact") -> None:
+    if isinstance(value, Mapping):
+        for key, nested in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{path} keys must be strings")
+            if key.lower() in _FORBIDDEN_RAW_KEYS:
+                raise ValueError(f"{path}.{key} is forbidden in raw evidence")
+            _reject_forbidden_raw_keys(nested, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            _reject_forbidden_raw_keys(nested, path=f"{path}[{index}]")
+
+
+def _finite_nonnegative_number(value: Any, name: str) -> float:
+    number = _number(value, name)
+    if not math.isfinite(number) or number < 0:
+        raise ValueError(f"{name} must be finite and nonnegative")
+    return number
+
+
+def _validate_artifact_box(value: Any, *, name: str) -> tuple[int, int]:
+    box = _closed_mapping(value, fields=_ARTIFACT_BOX_FIELDS, name=name)
+    coordinate = (
+        _nonnegative_int(box["row"], f"{name}.row"),
+        _nonnegative_int(box["column"], f"{name}.column"),
+    )
+    _bbox(box["bbox"], f"{name}.bbox")
+    return coordinate
+
+
+def _validate_record(
+    value: Any,
+    *,
+    index: int,
+    split: str,
+    candidate_ids: set[str],
+    bindings: ArtifactBindings,
+) -> None:
+    name = f"artifact.records[{index}]"
+    record = _closed_mapping(value, fields=_RECORD_FIELDS, name=name)
+    candidate_id = _string(record["candidate_id"], f"{name}.candidate_id")
+    if candidate_id not in candidate_ids:
+        raise ValueError(f"{name}.candidate_id is not canonical")
+    page_number = _positive_int(record["page_number"], f"{name}.page_number")
+    expected_pages = (
+        _TUNING_PAGES if split == "tuning" else _HOLDOUT_PAGES | _NEGATIVE_PAGES
+    )
+    if page_number not in expected_pages:
+        raise ValueError(f"{name}.page_number is outside the frozen split")
+    if record["id"] != f"{split}:{candidate_id}:{page_number}":
+        raise ValueError(f"{name}.id is not canonical")
+    if record["split"] != split:
+        raise ValueError(f"{name}.split is inconsistent")
+    negative = _bool(record["negative"], f"{name}.negative")
+    if negative != (page_number in _NEGATIVE_PAGES):
+        raise ValueError(f"{name}.negative is inconsistent")
+    status = _string(record["status"], f"{name}.status")
+    if status not in _RECORD_STATUSES:
+        raise ValueError(f"{name}.status is unsupported")
+    rows = _nonnegative_int(record["rows"], f"{name}.rows")
+    columns = _nonnegative_int(record["columns"], f"{name}.columns")
+    reference_rows = _nonnegative_int(
+        record["reference_rows"], f"{name}.reference_rows"
+    )
+    reference_columns = _nonnegative_int(
+        record["reference_columns"], f"{name}.reference_columns"
+    )
+    if negative and (reference_rows or reference_columns):
+        raise ValueError(f"{name} negative reference dimensions must be zero")
+    predicted_boxes = record["predicted_boxes"]
+    reference_boxes = record["reference_boxes"]
+    if not isinstance(predicted_boxes, list) or not isinstance(reference_boxes, list):
+        raise ValueError(f"{name} boxes must be arrays")
+    predicted_coordinates = [
+        _validate_artifact_box(box, name=f"{name}.predicted_boxes[{box_index}]")
+        for box_index, box in enumerate(predicted_boxes)
+    ]
+    reference_coordinates = [
+        _validate_artifact_box(box, name=f"{name}.reference_boxes[{box_index}]")
+        for box_index, box in enumerate(reference_boxes)
+    ]
+    if len(set(predicted_coordinates)) != len(predicted_coordinates):
+        raise ValueError(f"{name} has duplicate predicted coordinates")
+    if len(set(reference_coordinates)) != len(reference_coordinates):
+        raise ValueError(f"{name} has duplicate reference coordinates")
+    if status == "detected":
+        if rows * columns != len(predicted_boxes):
+            raise ValueError(f"{name} detected grid cardinality is inconsistent")
+    elif predicted_boxes or rows or columns:
+        raise ValueError(f"{name} non-detected record cannot retain a grid")
+    if not negative and reference_rows * reference_columns != len(reference_boxes):
+        raise ValueError(f"{name} reference grid cardinality is inconsistent")
+    cells = record["cells"]
+    if not isinstance(cells, list):
+        raise ValueError(f"{name}.cells must be an array")
+    cell_coordinates: list[tuple[int, int]] = []
+    for cell_index, cell_value in enumerate(cells):
+        cell_name = f"{name}.cells[{cell_index}]"
+        cell = _closed_mapping(
+            cell_value, fields=_ARTIFACT_CELL_FIELDS, name=cell_name
+        )
+        coordinate = (
+            _nonnegative_int(cell["row"], f"{cell_name}.row"),
+            _nonnegative_int(cell["column"], f"{cell_name}.column"),
+        )
+        cell_coordinates.append(coordinate)
+        for field_name in (
+            "character_edits",
+            "reference_characters",
+            "word_edits",
+            "reference_words",
+        ):
+            _nonnegative_int(cell[field_name], f"{cell_name}.{field_name}")
+        _bool(cell["reference_blank"], f"{cell_name}.reference_blank")
+        _bool(cell["predicted_blank"], f"{cell_name}.predicted_blank")
+        _bool(cell["prediction_present"], f"{cell_name}.prediction_present")
+    if len(set(cell_coordinates)) != len(cell_coordinates):
+        raise ValueError(f"{name} has duplicate cell coordinates")
+    if set(reference_coordinates) - set(cell_coordinates):
+        raise ValueError(f"{name} is missing annotated cell evidence")
+    _finite_nonnegative_number(record["elapsed_seconds"], f"{name}.elapsed_seconds")
+    _nonnegative_int(record["peak_rss_bytes"], f"{name}.peak_rss_bytes")
+    resource = _closed_mapping(
+        record["resource"], fields=_RESOURCE_FIELDS, name=f"{name}.resource"
+    )
+    for field_name in _RESOURCE_FIELDS:
+        _bool(resource[field_name], f"{name}.resource.{field_name}")
+    expected_resource = {
+        "timed_out": status == "timeout",
+        "resource_violation": status == "resource_limit",
+        "cleanup_failed": status == "cleanup_error",
+    }
+    if dict(resource) != expected_resource:
+        raise ValueError(f"{name}.resource flags are inconsistent")
+    record_bindings = _closed_mapping(
+        record["bindings"], fields=_BINDING_FIELDS, name=f"{name}.bindings"
+    )
+    expected_bindings = {
+        "config_sha256": bindings.config_sha256,
+        "manifest_sha256": bindings.manifest_sha256,
+        "source_sha256": bindings.source_sha256,
+        "render_sha256": bindings.render_sha256_by_page.get(page_number),
+        "tesseract_sha256": bindings.tesseract_sha256,
+        "tessdata_sha256": bindings.tessdata_sha256,
+        "host_sha256": bindings.host_sha256,
+        "toolchain_sha256": bindings.toolchain_sha256,
+    }
+    for field_name, expected in expected_bindings.items():
+        actual = _sha256(
+            record_bindings[field_name],
+            f"{name}.bindings.{field_name}",
+        )
+        if actual != expected:
+            raise ValueError(f"{name}.{field_name} does not bind canonical input")
+
+
+def _validate_aggregate(value: Any, *, index: int) -> None:
+    name = f"artifact.aggregates[{index}]"
+    aggregate = _closed_mapping(value, fields=_AGGREGATE_FIELDS, name=name)
+    _string(aggregate["candidate_id"], f"{name}.candidate_id")
+    for field_name in _INTEGER_AGGREGATE_FIELDS:
+        _nonnegative_int(aggregate[field_name], f"{name}.{field_name}")
+    for field_name in (
+        "cell_precision",
+        "cell_recall",
+        "cell_f1",
+        "empty_cell_accuracy",
+    ):
+        _fraction(aggregate[field_name], f"{name}.{field_name}")
+    for field_name in (
+        "cell_cer",
+        "cell_wer",
+        "median_page_latency_seconds",
+        "maximum_page_latency_seconds",
+    ):
+        _finite_nonnegative_number(aggregate[field_name], f"{name}.{field_name}")
+
+
+def validate_artifact(payload: Mapping[str, Any], *, split: str) -> None:
+    """Validate closed raw evidence against canonical external inputs."""
+    if split not in {"tuning", "holdout"}:
+        raise ValueError("split must be tuning or holdout")
+    _reject_forbidden_raw_keys(payload)
+    artifact = _closed_mapping(payload, fields=_ARTIFACT_FIELDS, name="artifact")
+    if artifact["schema_version"] != 1 or not _is_int(artifact["schema_version"]):
+        raise ValueError("artifact.schema_version must equal 1")
+    if artifact["split"] != split:
+        raise ValueError("artifact split is inconsistent")
+    bindings = _canonical_artifact_bindings()
+    source = _closed_mapping(
+        artifact["source"], fields=_ARTIFACT_SOURCE_FIELDS, name="artifact.source"
+    )
+    if (
+        source["id"] != CANONICAL_SOURCE_ID
+        or _sha256(source["sha256"], "artifact.source.sha256")
+        != bindings.source_sha256
+        or _positive_int(source["size_bytes"], "artifact.source.size_bytes")
+        != CANONICAL_SOURCE_SIZE
+    ):
+        raise ValueError("artifact source does not bind the canonical source")
+    if (
+        _sha256(artifact["config_sha256"], "artifact.config_sha256")
+        != bindings.config_sha256
+    ):
+        raise ValueError("artifact config SHA-256 is not canonical")
+    if (
+        _sha256(artifact["manifest_sha256"], "artifact.manifest_sha256")
+        != bindings.manifest_sha256
+    ):
+        raise ValueError("artifact manifest SHA-256 is not canonical")
+    host = _closed_mapping(artifact["host"], fields=_HOST_FIELDS, name="artifact.host")
+    _string(host["platform"], "artifact.host.platform")
+    _string(host["architecture"], "artifact.host.architecture")
+    _nonnegative_int(host["logical_cpus"], "artifact.host.logical_cpus")
+    _positive_int(host["memory_bytes"], "artifact.host.memory_bytes")
+    if _canonical_json_sha256(host) != bindings.host_sha256:
+        raise ValueError("artifact host hash does not bind the canonical host")
+    toolchain = _closed_mapping(
+        artifact["toolchain"], fields=_TOOLCHAIN_FIELDS, name="artifact.toolchain"
+    )
+    for field_name in _TOOLCHAIN_FIELDS:
+        _string(toolchain[field_name], f"artifact.toolchain.{field_name}")
+    if _canonical_json_sha256(toolchain) != bindings.toolchain_sha256:
+        raise ValueError(
+            "artifact toolchain hash does not bind the canonical toolchain"
+        )
+    access = _closed_mapping(
+        artifact["access"], fields=_ACCESS_FIELDS, name="artifact.access"
+    )
+    for field_name in _ACCESS_FIELDS:
+        _nonnegative_int(access[field_name], f"artifact.access.{field_name}")
+    expected_access = (
+        {
+            "tuning_pages_opened": 6,
+            "holdout_pages_opened": 0,
+            "negative_pages_opened": 0,
+        }
+        if split == "tuning"
+        else {
+            "tuning_pages_opened": 0,
+            "holdout_pages_opened": 3,
+            "negative_pages_opened": 3,
+        }
+    )
+    if dict(access) != expected_access:
+        raise ValueError("artifact access counts violate split isolation")
+    candidates = artifact["candidates"]
+    if not isinstance(candidates, list):
+        raise ValueError("artifact.candidates must be an array")
+    config = load_config(DEFAULT_CONFIG)
+    expected_candidates = _artifact_candidate_descriptors(config)
+    for index, candidate_value in enumerate(candidates):
+        candidate = _closed_mapping(
+            candidate_value,
+            fields=_ARTIFACT_CANDIDATE_FIELDS,
+            name=f"artifact.candidates[{index}]",
+        )
+        _string(candidate["id"], f"artifact.candidates[{index}].id")
+        _sha256(
+            candidate["configuration_sha256"],
+            f"artifact.candidates[{index}].configuration_sha256",
+        )
+    if candidates != expected_candidates:
+        raise ValueError("artifact candidate hashes are not canonical")
+    candidate_ids = {candidate["id"] for candidate in candidates}
+    winner_id = artifact["winner_id"]
+    if winner_id is not None and winner_id not in candidate_ids:
+        raise ValueError("artifact winner_id is not a canonical candidate")
+    records = artifact["records"]
+    if not isinstance(records, list):
+        raise ValueError("artifact.records must be an array")
+    for index, record in enumerate(records):
+        _validate_record(
+            record,
+            index=index,
+            split=split,
+            candidate_ids=candidate_ids,
+            bindings=bindings,
+        )
+    if not _records_have_expected_cardinality(artifact):
+        raise ValueError("artifact record cardinality or uniqueness is invalid")
+    aggregates = artifact["aggregates"]
+    if not isinstance(aggregates, list):
+        raise ValueError("artifact.aggregates must be an array")
+    for index, aggregate in enumerate(aggregates):
+        _validate_aggregate(aggregate, index=index)
+    recomputed = _recompute_aggregates(artifact)
+    if aggregates != recomputed:
+        raise ValueError("artifact aggregate is stale or inconsistent")
+    if split == "tuning":
+        if artifact["decision"] is not None:
+            raise ValueError("tuning artifact decision must be null")
+        if winner_id != derive_tuning_winner(artifact):
+            raise ValueError("artifact tuning winner is stale")
+    else:
+        if winner_id is None:
+            raise ValueError("holdout artifact requires a frozen winner")
+        decision = artifact["decision"]
+        if decision not in {"PASS", "STOP"}:
+            raise ValueError("holdout artifact decision is invalid")
+        if decision != derive_holdout_decision(artifact):
+            raise ValueError("artifact decision is stale")
+
+
+def _record_bindings(
+    bindings: ArtifactBindings, *, page_number: int
+) -> dict[str, str]:
+    render_sha256 = bindings.render_sha256_by_page.get(page_number)
+    if render_sha256 is None:
+        raise ValueError("page render is not canonically bound")
+    return {
+        "config_sha256": bindings.config_sha256,
+        "manifest_sha256": bindings.manifest_sha256,
+        "source_sha256": bindings.source_sha256,
+        "render_sha256": render_sha256,
+        "tesseract_sha256": bindings.tesseract_sha256,
+        "tessdata_sha256": bindings.tessdata_sha256,
+        "host_sha256": bindings.host_sha256,
+        "toolchain_sha256": bindings.toolchain_sha256,
+    }
+
+
+def _empty_cell_evidence(annotation: PageAnnotation) -> list[dict[str, Any]]:
+    if annotation.table is None:
+        return []
+    return [
+        {
+            "row": cell.row,
+            "column": cell.column,
+            "character_edits": 0,
+            "reference_characters": 0,
+            "word_edits": 0,
+            "reference_words": 0,
+            "reference_blank": cell.blank,
+            "predicted_blank": False,
+            "prediction_present": False,
+        }
+        for cell in annotation.table.cells
+    ]
+
+
+def _content_evidence(
+    annotation: PageAnnotation,
+    recognition: GridRecognition,
+) -> list[dict[str, Any]]:
+    table = annotation.table
+    if table is None:
+        return []
+    references = {
+        (cell.row, cell.column): (cell.text, cell.blank) for cell in table.cells
+    }
+    predictions = {
+        (cell.row, cell.column): cell.text for cell in recognition.cells
+    }
+    counts = measure_cell_content(
+        references,
+        predictions,
+        reference_shape=(table.rows, table.columns),
+        predicted_shape=(recognition.rows, recognition.columns),
+    )
+    evidence: list[dict[str, Any]] = []
+    for coordinate, values in sorted(counts.cells.items()):
+        (
+            character_edits,
+            reference_characters,
+            word_edits,
+            reference_words,
+            reference_blank,
+            predicted_blank,
+        ) = values
+        evidence.append(
+            {
+                "row": coordinate[0],
+                "column": coordinate[1],
+                "character_edits": character_edits,
+                "reference_characters": reference_characters,
+                "word_edits": word_edits,
+                "reference_words": reference_words,
+                "reference_blank": reference_blank,
+                "predicted_blank": predicted_blank,
+                "prediction_present": coordinate in predictions,
+            }
+        )
+    return evidence
+
+
+def _box_evidence(
+    boxes: Sequence[tuple[int, int, Box]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "row": row,
+            "column": column,
+            "bbox": [box.left, box.top, box.right, box.bottom],
+        }
+        for row, column, box in boxes
+    ]
+
+
+def _run_page(
+    opened: OpenedPage,
+    *,
+    candidate: Mapping[str, Any],
+    config: Mapping[str, Any],
+    tessdata: Path,
+    bindings: ArtifactBindings,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    annotation = opened.annotation
+    image: Image.Image | None = None
+    working: Image.Image | None = None
+    status = "candidate_error"
+    rows = columns = 0
+    predicted_boxes: list[dict[str, Any]] = []
+    peak_rss_bytes = 0
+    cells = _empty_cell_evidence(annotation)
+    try:
+        image = Image.open(io.BytesIO(opened.render_bytes))
+        image.load()
+        detection = detect_ruled_table(
+            image, detector_config(config, candidate["id"])
+        )
+        status = detection.status
+        if detection.grid is not None:
+            grid = detection.grid
+            rows, columns = grid.rows, grid.columns
+            predicted_boxes = _box_evidence(
+                [
+                    (cell.row, cell.column, cell.original_box)
+                    for cell in grid.cells
+                ]
+            )
+            table = annotation.table
+            exact_grid = (
+                table is not None
+                and grid.rows == table.rows
+                and grid.columns == table.columns
+            )
+            if exact_grid:
+                working = prepare_working_image(
+                    image, detection.deskew_angle_degrees
+                )
+                try:
+                    recognition = recognize_grid(
+                        grid,
+                        working_image=working,
+                        candidate_id=candidate["id"],
+                        cell_inset_pixels=candidate["cell_inset_pixels"],
+                        psm=candidate["psm"],
+                        tessdata=tessdata,
+                        limits=process_limits(),
+                    )
+                finally:
+                    working.close()
+                    working = None
+                cells = _content_evidence(annotation, recognition)
+                peak_rss_bytes = max(
+                    (
+                        int(cell.resource.get("peak_rss_bytes", 0))
+                        for cell in recognition.cells
+                    ),
+                    default=0,
+                )
+    except TableRecognitionError as error:
+        status = error.error_kind
+        if status == "resource_limit":
+            peak_rss_bytes = config["process_limits"]["max_rss_bytes"]
+    except Exception:
+        status = "candidate_error"
+    finally:
+        if working is not None:
+            working.close()
+        if image is not None:
+            image.close()
+    table = annotation.table
+    reference_boxes = (
+        _box_evidence(
+            [
+                (
+                    cell.row,
+                    cell.column,
+                    Box(*cell.bbox),
+                )
+                for cell in table.cells
+            ]
+        )
+        if table is not None
+        else []
+    )
+    page_number = opened.page.page_number
+    return {
+        "id": f"{opened.page.split}:{candidate['id']}:{page_number}",
+        "candidate_id": candidate["id"],
+        "page_number": page_number,
+        "split": opened.page.split,
+        "negative": opened.page.negative,
+        "status": status,
+        "rows": rows,
+        "columns": columns,
+        "reference_rows": table.rows if table is not None else 0,
+        "reference_columns": table.columns if table is not None else 0,
+        "predicted_boxes": predicted_boxes,
+        "reference_boxes": reference_boxes,
+        "cells": cells,
+        "elapsed_seconds": time.monotonic() - started,
+        "peak_rss_bytes": peak_rss_bytes,
+        "resource": {
+            "timed_out": status == "timeout",
+            "resource_violation": status == "resource_limit",
+            "cleanup_failed": status == "cleanup_error",
+        },
+        "bindings": _record_bindings(bindings, page_number=page_number),
+    }
+
+
+def _bindings_for_run(
+    manifest: CorpusManifest,
+    *,
+    config_path: Path,
+    tessdata: Path,
+    host: Mapping[str, Any],
+    toolchain: Mapping[str, Any],
+) -> ArtifactBindings:
+    tesseract = shutil.which("tesseract")
+    if tesseract is None:
+        raise ValueError("Tesseract executable is unavailable")
+    pages = manifest.tuning + manifest.holdout + manifest.negative
+    return ArtifactBindings(
+        config_sha256=_sha256_file(config_path),
+        manifest_sha256=manifest.manifest_sha256,
+        source_sha256=manifest.source_sha256,
+        render_sha256_by_page={
+            page.page_number: page.render_sha256 for page in pages
+        },
+        tesseract_sha256=_sha256_file(Path(tesseract)),
+        tessdata_sha256=_sha256_file(tessdata / "vie.traineddata"),
+        host_sha256=_canonical_json_sha256(host),
+        toolchain_sha256=_canonical_json_sha256(toolchain),
+    )
+
+
+def run_split(
+    split: Literal["tuning", "holdout"],
+    *,
+    manifest_path: Path = DEFAULT_MANIFEST,
+    config_path: Path = DEFAULT_CONFIG,
+    tessdata: Path = DEFAULT_TESSDATA,
+    frozen_winner: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Run exactly one isolated split and return closed aggregate-only evidence."""
+    if split not in {"tuning", "holdout"}:
+        raise ValueError("split must be tuning or holdout")
+    config = load_config(config_path)
+    manifest = load_manifest(manifest_path, mode=split)
+    if split == "holdout":
+        sealed = manifest.holdout + manifest.negative
+        if any(page.review_status != "human_verified" for page in sealed):
+            raise ValueError("holdout annotations must all be human_verified")
+        if frozen_winner is None:
+            raise ValueError("holdout requires a frozen tuning winner artifact")
+        validate_artifact(frozen_winner, split="tuning")
+        winner_id = frozen_winner["winner_id"]
+        if not isinstance(winner_id, str):
+            raise ValueError("holdout requires a non-null frozen winner")
+        selected_candidates = [
+            candidate
+            for candidate in config["detector_candidates"]
+            if candidate["id"] == winner_id
+        ]
+        pages = manifest.holdout + manifest.negative
+    else:
+        winner_id = None
+        selected_candidates = list(config["detector_candidates"])
+        pages = manifest.tuning
+    opened_pages = [manifest.open_page(page.page_number) for page in pages]
+    host = _host_description()
+    toolchain = _toolchain_description()
+    bindings = _bindings_for_run(
+        manifest,
+        config_path=config_path,
+        tessdata=tessdata,
+        host=host,
+        toolchain=toolchain,
+    )
+    records = [
+        _run_page(
+            opened,
+            candidate=candidate,
+            config=config,
+            tessdata=tessdata,
+            bindings=bindings,
+        )
+        for candidate in selected_candidates
+        for opened in opened_pages
+    ]
+    payload: dict[str, Any] = {
+        "schema_version": 1,
+        "split": split,
+        "source": {
+            "id": manifest.source_id,
+            "sha256": manifest.source_sha256,
+            "size_bytes": manifest.source_size_bytes,
+        },
+        "config_sha256": bindings.config_sha256,
+        "manifest_sha256": bindings.manifest_sha256,
+        "host": host,
+        "toolchain": toolchain,
+        "access": {
+            "tuning_pages_opened": manifest.access_counts["tuning"],
+            "holdout_pages_opened": manifest.access_counts["holdout"],
+            "negative_pages_opened": manifest.access_counts["negative"],
+        },
+        "candidates": _artifact_candidate_descriptors(config),
+        "records": records,
+        "aggregates": [],
+        "winner_id": winner_id,
+        "decision": None,
+    }
+    payload["aggregates"] = _recompute_aggregates(payload)
+    if split == "tuning":
+        payload["winner_id"] = derive_tuning_winner(payload)
+    else:
+        payload["decision"] = derive_holdout_decision(payload)
+    return payload
+
+
+def _format_metric(value: Any) -> str:
+    if isinstance(value, float):
+        return f"{value:.6f}"
+    return str(value)
+
+
+def render_report(payload: Mapping[str, Any]) -> str:
+    """Render deterministic aggregate-only Markdown without raw records."""
+    split = payload.get("split")
+    if split not in {"tuning", "holdout"}:
+        raise ValueError("artifact split is invalid")
+    aggregates = payload.get("aggregates")
+    if not isinstance(aggregates, list):
+        raise ValueError("artifact aggregates are invalid")
+    access = payload.get("access")
+    source = payload.get("source")
+    if not isinstance(access, Mapping) or not isinstance(source, Mapping):
+        raise ValueError("artifact public provenance is invalid")
+    lines = [
+        "# Ruled-table OCR spike",
+        "",
+        "## Public provenance",
+        f"- Source id: `{source.get('id')}`",
+        f"- Source SHA-256: `{source.get('sha256')}`",
+        f"- Manifest SHA-256: `{payload.get('manifest_sha256')}`",
+        f"- Configuration SHA-256: `{payload.get('config_sha256')}`",
+        f"- Split: `{split}`",
+        (
+            "- Access: "
+            f"tuning={access.get('tuning_pages_opened')}, "
+            f"holdout={access.get('holdout_pages_opened')}, "
+            f"negative={access.get('negative_pages_opened')}"
+        ),
+        "",
+        "## Bounds",
+        "- Cell match IoU: `>= 0.80`",
+        "- Cell F1: `>= 0.95`",
+        "- Cell CER: `<= 0.05`",
+        "- Empty-cell accuracy: `>= 0.98`",
+        "- Peak RSS: `< 805306368` bytes",
+        "- Page latency: `<= 20` seconds",
+        "- Negative false positives: `0`",
+        "",
+        "## Candidate aggregates",
+        (
+            "| Candidate | Records | Exact grids | TP | FP | FN | Char edits / refs "
+            "| Word edits / refs | F1 | CER | WER | Empty accuracy | Median s "
+            "| Max s | Peak RSS | Failures | Negative FP |"
+        ),
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for aggregate in sorted(aggregates, key=lambda item: item["candidate_id"]):
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{aggregate['candidate_id']}`",
+                    str(aggregate["record_count"]),
+                    str(aggregate["exact_grid_pages"]),
+                    str(aggregate["cell_tp"]),
+                    str(aggregate["cell_fp"]),
+                    str(aggregate["cell_fn"]),
+                    (
+                        f"{aggregate['character_edits']} / "
+                        f"{aggregate['reference_characters']}"
+                    ),
+                    (
+                        f"{aggregate['word_edits']} / "
+                        f"{aggregate['reference_words']}"
+                    ),
+                    _format_metric(aggregate["cell_f1"]),
+                    _format_metric(aggregate["cell_cer"]),
+                    _format_metric(aggregate["cell_wer"]),
+                    _format_metric(aggregate["empty_cell_accuracy"]),
+                    _format_metric(aggregate["median_page_latency_seconds"]),
+                    _format_metric(aggregate["maximum_page_latency_seconds"]),
+                    str(aggregate["peak_rss_bytes"]),
+                    str(aggregate["failures"]),
+                    str(aggregate["false_positives"]),
+                ]
+            )
+            + " |"
+        )
+    winner = payload.get("winner_id")
+    lines.extend(
+        [
+            "",
+            "## Frozen tuning result",
+            f"- Winner: `{winner}`" if winner is not None else "- Winner: none",
+            f"- Frozen configuration SHA-256: `{payload.get('config_sha256')}`",
+            "",
+            "## Holdout gate",
+            "| Condition | Measured | Threshold | Result |",
+            "|---|---:|---:|---|",
+        ]
+    )
+    if split == "holdout" and len(aggregates) == 1:
+        aggregate = aggregates[0]
+        gate_rows = [
+            (
+                "Exact table grids",
+                aggregate["exact_grid_pages"],
+                "3 / 3",
+                aggregate["exact_grid_pages"] == 3,
+            ),
+            ("Cell F1", aggregate["cell_f1"], ">= 0.95", aggregate["cell_f1"] >= 0.95),
+            ("Cell CER", aggregate["cell_cer"], "<= 0.05", aggregate["cell_cer"] <= 0.05),
+            (
+                "Empty-cell accuracy",
+                aggregate["empty_cell_accuracy"],
+                ">= 0.98",
+                aggregate["empty_cell_accuracy"] >= 0.98,
+            ),
+            (
+                "Negative false positives",
+                aggregate["false_positives"],
+                "0",
+                aggregate["false_positives"] == 0,
+            ),
+            (
+                "Peak RSS bytes",
+                aggregate["peak_rss_bytes"],
+                "< 805306368",
+                aggregate["peak_rss_bytes"] < 805_306_368,
+            ),
+            (
+                "Maximum page latency seconds",
+                aggregate["maximum_page_latency_seconds"],
+                "<= 20",
+                aggregate["maximum_page_latency_seconds"] <= 20,
+            ),
+        ]
+        for label, measured, threshold, passed in gate_rows:
+            lines.append(
+                f"| {label} | {_format_metric(measured)} | {threshold} | "
+                f"{'PASS' if passed else 'FAIL'} |"
+            )
+        decision = derive_holdout_decision(payload)
+    else:
+        for label, threshold in (
+            ("Exact table grids", "3 / 3"),
+            ("Cell F1", ">= 0.95"),
+            ("Cell CER", "<= 0.05"),
+            ("Empty-cell accuracy", ">= 0.98"),
+            ("Negative false positives", "0"),
+            ("Peak RSS bytes", "< 805306368"),
+            ("Maximum page latency seconds", "<= 20"),
+        ):
+            lines.append(f"| {label} | not measured | {threshold} | FAIL |")
+        decision = "STOP"
+    lines.extend(
+        [
+            "",
+            f"## Decision: {decision}",
+            "",
+            "## Limitations",
+            "- Supports one table per page with visible rules and no merged cells.",
+            "- The corpus is intentionally tiny and is not representative of all documents.",
+            "- This spike grants no production or full-document authorization.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _load_json_artifact(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_bytes())
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError("artifact is not valid UTF-8 JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("artifact must be an object")
+    return payload
+
+
+def _write_json_artifact(path: Path, payload: Mapping[str, Any]) -> None:
+    encoded = (
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    _atomic_write_bytes(path, encoded)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    inventory = subparsers.add_parser("inventory")
+    inventory.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    inventory.add_argument("--output", type=Path, default=DEFAULT_REPORT)
+    tune = subparsers.add_parser("tune")
+    tune.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    tune.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    tune.add_argument("--tessdata", type=Path, default=DEFAULT_TESSDATA)
+    tune.add_argument("--output", type=Path, default=DEFAULT_RAW_ARTIFACT)
+    holdout = subparsers.add_parser("holdout")
+    holdout.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    holdout.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    holdout.add_argument("--tessdata", type=Path, default=DEFAULT_TESSDATA)
+    holdout.add_argument("--winner", type=Path, required=True)
+    holdout.add_argument("--output", type=Path, required=True)
+    validate = subparsers.add_parser("validate")
+    validate.add_argument("artifact", type=Path)
+    validate.add_argument("--split", choices=("tuning", "holdout"), required=True)
+    report = subparsers.add_parser("report")
+    report.add_argument("artifact", type=Path)
+    report.add_argument("--output", type=Path, default=DEFAULT_REPORT)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    if args.command == "inventory":
+        manifest = load_manifest(args.manifest, mode="tuning")
+        write_corpus_report(manifest, args.output)
+    elif args.command == "tune":
+        payload = run_split(
+            "tuning",
+            manifest_path=args.manifest,
+            config_path=args.config,
+            tessdata=args.tessdata,
+        )
+        _write_json_artifact(args.output, payload)
+    elif args.command == "holdout":
+        # Review metadata is checked by run_split before this path is opened.
+        manifest = load_manifest(args.manifest, mode="holdout")
+        if any(
+            page.review_status != "human_verified"
+            for page in manifest.holdout + manifest.negative
+        ):
+            raise ValueError("holdout annotations must all be human_verified")
+        winner = _load_json_artifact(args.winner)
+        payload = run_split(
+            "holdout",
+            manifest_path=args.manifest,
+            config_path=args.config,
+            tessdata=args.tessdata,
+            frozen_winner=winner,
+        )
+        _write_json_artifact(args.output, payload)
+    elif args.command == "validate":
+        validate_artifact(
+            _load_json_artifact(args.artifact),
+            split=args.split,
+        )
+    elif args.command == "report":
+        payload = _load_json_artifact(args.artifact)
+        _atomic_write_bytes(args.output, render_report(payload).encode("utf-8"))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
