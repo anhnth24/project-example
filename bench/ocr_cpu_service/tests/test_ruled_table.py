@@ -867,6 +867,7 @@ def _record(
                     "reference_words": 2,
                     "reference_blank": False,
                     "predicted_blank": False,
+                    "prediction_present": True,
                 }
             ]
             if table and status == "detected"
