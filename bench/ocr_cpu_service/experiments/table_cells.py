@@ -121,8 +121,8 @@ class ProcessLimits:
 class CellRecognition:
     row: int
     column: int
-    text: str
-    candidate_seconds: float
+    text: str = field(repr=False)
+    elapsed_seconds: float
     resource: Mapping[str, Any] = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -136,17 +136,17 @@ class CellRecognition:
         if not isinstance(self.text, str):
             raise TypeError("cell text must be a string")
         if (
-            isinstance(self.candidate_seconds, bool)
-            or not isinstance(self.candidate_seconds, (int, float))
-            or not math.isfinite(float(self.candidate_seconds))
-            or self.candidate_seconds < 0
+            isinstance(self.elapsed_seconds, bool)
+            or not isinstance(self.elapsed_seconds, (int, float))
+            or not math.isfinite(float(self.elapsed_seconds))
+            or self.elapsed_seconds < 0
         ):
-            raise ValueError("candidate_seconds must be finite and nonnegative")
+            raise ValueError("elapsed_seconds must be finite and nonnegative")
         try:
             resource = dict(self.resource)
         except (TypeError, ValueError) as error:
             raise TypeError("cell resource must be a mapping") from error
-        object.__setattr__(self, "candidate_seconds", float(self.candidate_seconds))
+        object.__setattr__(self, "elapsed_seconds", float(self.elapsed_seconds))
         object.__setattr__(self, "resource", MappingProxyType(resource))
 
 
@@ -396,21 +396,41 @@ def recognize_grid(
                 ),
                 max_output_bytes=limits.max_output_bytes_per_cell,
             )
+        except TimeoutError as error:
+            raise _failure("timeout") from error
         except Exception as error:
             raise _failure("candidate_error") from error
+        try:
+            cold_peak_rss = int(
+                worker.metadata["cold_initialization"]["rss_measurement"][
+                    "peak_rss_bytes"
+                ]
+            )
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise _failure("candidate_error") from error
+        if cold_peak_rss < 0:
+            raise _failure("candidate_error")
+        if cold_peak_rss >= limits.max_rss_bytes:
+            raise _failure("resource_limit")
 
         for cell in grid.cells:
             crop_path = page_directory / (
                 f"cell-{cell.row:04d}-{cell.column:04d}.png"
             )
-            crop = prepare_cell_crop(
-                working_image,
-                cell,
-                inset_pixels=cell_inset_pixels,
-            )
             try:
-                crop.save(crop_path, format="PNG")
-                blank = is_blank_crop(crop)
+                crop = prepare_cell_crop(
+                    working_image,
+                    cell,
+                    inset_pixels=cell_inset_pixels,
+                )
+            except (TypeError, ValueError) as error:
+                raise _failure("invalid_grid") from error
+            try:
+                try:
+                    crop.save(crop_path, format="PNG")
+                    blank = is_blank_crop(crop)
+                except (OSError, ValueError) as error:
+                    raise _failure("candidate_error") from error
             finally:
                 crop.close()
 
@@ -420,7 +440,7 @@ def recognize_grid(
                         row=cell.row,
                         column=cell.column,
                         text="",
-                        candidate_seconds=0.0,
+                        elapsed_seconds=0.0,
                         resource={
                             "method": "skipped_blank_crop",
                             "peak_rss_bytes": 0,
@@ -471,9 +491,16 @@ def recognize_grid(
             )
             try:
                 peak_rss = int(measurement.resource["peak_rss_bytes"])
+                elapsed_seconds = float(
+                    measurement.resource["wall_seconds"]
+                )
             except (KeyError, TypeError, ValueError) as error:
                 raise _failure("candidate_error") from error
-            if peak_rss < 0:
+            if (
+                peak_rss < 0
+                or not math.isfinite(elapsed_seconds)
+                or elapsed_seconds < 0
+            ):
                 raise _failure("candidate_error")
             if peak_rss >= limits.max_rss_bytes:
                 raise _failure("resource_limit")
@@ -482,7 +509,7 @@ def recognize_grid(
                     row=cell.row,
                     column=cell.column,
                     text=_normalize_cell_text(measurement.text),
-                    candidate_seconds=measurement.candidate_seconds,
+                    elapsed_seconds=elapsed_seconds,
                     resource=measurement.resource,
                 )
             )
