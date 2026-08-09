@@ -1415,7 +1415,14 @@ _ARTIFACT_CELL_FIELDS = frozenset(
     }
 )
 _RESOURCE_FIELDS = frozenset(
-    {"timed_out", "resource_violation", "cleanup_failed"}
+    {
+        "timed_out",
+        "output_limited",
+        "candidate_failed",
+        "resource_violation",
+        "cleanup_failed",
+        "primary_error_kind",
+    }
 )
 _BINDING_FIELDS = frozenset(
     {
@@ -1447,6 +1454,8 @@ _AGGREGATE_FIELDS = frozenset(
         "negative_pages",
         "failures",
         "timeouts",
+        "output_limit_failures",
+        "candidate_failures",
         "resource_violations",
         "cleanup_failures",
         "false_positives",
@@ -1833,6 +1842,12 @@ def _aggregate_candidate(
             record["status"] not in successful_statuses for record in records
         ),
         "timeouts": sum(record["resource"]["timed_out"] for record in records),
+        "output_limit_failures": sum(
+            record["resource"]["output_limited"] for record in records
+        ),
+        "candidate_failures": sum(
+            record["resource"]["candidate_failed"] for record in records
+        ),
         "resource_violations": sum(
             record["resource"]["resource_violation"] for record in records
         ),
@@ -2150,12 +2165,39 @@ def _validate_record(
     resource = _closed_mapping(
         record["resource"], fields=_RESOURCE_FIELDS, name=f"{name}.resource"
     )
-    for field_name in _RESOURCE_FIELDS:
+    for field_name in (
+        "timed_out",
+        "output_limited",
+        "candidate_failed",
+        "resource_violation",
+        "cleanup_failed",
+    ):
         _bool(resource[field_name], f"{name}.resource.{field_name}")
+    primary_error_kind = resource["primary_error_kind"]
+    if primary_error_kind is not None:
+        primary_error_kind = _string(
+            primary_error_kind, f"{name}.resource.primary_error_kind"
+        )
+        if primary_error_kind not in _RECORD_STATUSES - {
+            "detected",
+            "not_detected",
+        }:
+            raise ValueError(f"{name}.resource.primary_error_kind is unsupported")
+    if status in {"detected", "not_detected"}:
+        expected_primary = None
+    elif status == "cleanup_error":
+        if primary_error_kind is None:
+            raise ValueError(f"{name} cleanup failure lost its primary error kind")
+        expected_primary = primary_error_kind
+    else:
+        expected_primary = status
     expected_resource = {
-        "timed_out": status == "timeout",
-        "resource_violation": status == "resource_limit",
+        "timed_out": expected_primary == "timeout",
+        "output_limited": expected_primary == "output_limit",
+        "candidate_failed": expected_primary == "candidate_error",
+        "resource_violation": expected_primary == "resource_limit",
         "cleanup_failed": status == "cleanup_error",
+        "primary_error_kind": expected_primary,
     }
     if dict(resource) != expected_resource:
         raise ValueError(f"{name}.resource flags are inconsistent")
@@ -2329,8 +2371,20 @@ def validate_artifact(payload: Mapping[str, Any], *, split: str) -> None:
             raise ValueError("artifact decision is stale")
 
 
-def freeze_tuning_winner(payload: Mapping[str, Any]) -> dict[str, Any]:
+def freeze_tuning_winner(
+    payload: Mapping[str, Any],
+    *,
+    tuning_artifact_bytes: bytes,
+) -> dict[str, Any]:
     """Create a closed winner binding only after full tuning validation."""
+    if not isinstance(tuning_artifact_bytes, bytes):
+        raise TypeError("tuning_artifact_bytes must be bytes")
+    try:
+        decoded = json.loads(tuning_artifact_bytes)
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise ValueError("tuning artifact bytes are not valid UTF-8 JSON") from error
+    if decoded != payload:
+        raise ValueError("tuning artifact bytes do not encode the validated payload")
     validate_artifact(payload, split="tuning")
     winner_id = payload["winner_id"]
     if not isinstance(winner_id, str):
@@ -2348,12 +2402,25 @@ def freeze_tuning_winner(payload: Mapping[str, Any]) -> dict[str, Any]:
         "configuration_sha256": candidates[0]["configuration_sha256"],
         "config_sha256": payload["config_sha256"],
         "manifest_sha256": payload["manifest_sha256"],
-        "tuning_artifact_sha256": _canonical_json_sha256(payload),
+        "tuning_artifact_sha256": hashlib.sha256(
+            tuning_artifact_bytes
+        ).hexdigest(),
     }
 
 
-def validate_frozen_winner(payload: Mapping[str, Any]) -> None:
+def validate_frozen_winner(
+    payload: Mapping[str, Any],
+    *,
+    tuning_artifact_path: Path,
+) -> dict[str, Any]:
     """Bind a frozen winner to canonical config, manifest, and candidate bytes."""
+    if not isinstance(tuning_artifact_path, Path):
+        raise TypeError("tuning_artifact_path must be a Path")
+    if tuning_artifact_path.name != "tuning.json":
+        raise ValueError("canonical tuning artifact must be named tuning.json")
+    tuning_bytes = tuning_artifact_path.read_bytes()
+    tuning = _load_json_bytes(tuning_bytes, name="tuning artifact")
+    validate_artifact(tuning, split="tuning")
     winner = _closed_mapping(
         payload, fields=_FROZEN_WINNER_FIELDS, name="frozen_winner"
     )
@@ -2371,10 +2438,12 @@ def validate_frozen_winner(payload: Mapping[str, Any]) -> None:
         != bindings.manifest_sha256
     ):
         raise ValueError("frozen winner manifest binding is not canonical")
-    _sha256(
+    expected_tuning_sha256 = _sha256(
         winner["tuning_artifact_sha256"],
         "frozen_winner.tuning_artifact_sha256",
     )
+    if hashlib.sha256(tuning_bytes).hexdigest() != expected_tuning_sha256:
+        raise ValueError("frozen winner tuning artifact SHA-256 mismatch")
     expected_candidates = _artifact_candidate_descriptors(load_config(DEFAULT_CONFIG))
     matches = [
         candidate
@@ -2391,6 +2460,25 @@ def validate_frozen_winner(payload: Mapping[str, Any]) -> None:
         != matches[0]["configuration_sha256"]
     ):
         raise ValueError("frozen winner configuration binding is not canonical")
+    if tuning["winner_id"] != winner_id:
+        raise ValueError("frozen winner does not match recomputed tuning winner")
+    tuning_candidates = [
+        candidate
+        for candidate in tuning["candidates"]
+        if candidate["id"] == tuning["winner_id"]
+    ]
+    if (
+        len(tuning_candidates) != 1
+        or tuning_candidates[0]["configuration_sha256"]
+        != winner["configuration_sha256"]
+    ):
+        raise ValueError("frozen winner configuration does not match tuning artifact")
+    if (
+        tuning["config_sha256"] != winner["config_sha256"]
+        or tuning["manifest_sha256"] != winner["manifest_sha256"]
+    ):
+        raise ValueError("frozen winner provenance does not match tuning artifact")
+    return tuning
 
 
 def _record_bindings(
@@ -2504,6 +2592,7 @@ def _run_page(
     image: Image.Image | None = None
     working: Image.Image | None = None
     status = "candidate_error"
+    primary_error_kind: str | None = "candidate_error"
     rows = columns = 0
     predicted_boxes: list[dict[str, Any]] = []
     peak_rss_bytes = 0
@@ -2515,6 +2604,9 @@ def _run_page(
             image, detector_config(config, candidate["id"])
         )
         status = detection.status
+        primary_error_kind = (
+            None if status in {"detected", "not_detected"} else status
+        )
         if detection.grid is not None:
             grid = detection.grid
             rows, columns = grid.rows, grid.columns
@@ -2556,6 +2648,7 @@ def _run_page(
                     default=0,
                 )
     except TableRecognitionError as error:
+        primary_error_kind = error.error_kind
         status = (
             "cleanup_error"
             if error.cleanup_failure is not None
@@ -2565,6 +2658,7 @@ def _run_page(
             peak_rss_bytes = config["process_limits"]["max_rss_bytes"]
     except Exception:
         status = "candidate_error"
+        primary_error_kind = "candidate_error"
     finally:
         if working is not None:
             working.close()
@@ -2607,9 +2701,12 @@ def _run_page(
         "elapsed_seconds": time.monotonic() - started,
         "peak_rss_bytes": peak_rss_bytes,
         "resource": {
-            "timed_out": status == "timeout",
-            "resource_violation": status == "resource_limit",
+            "timed_out": primary_error_kind == "timeout",
+            "output_limited": primary_error_kind == "output_limit",
+            "candidate_failed": primary_error_kind == "candidate_error",
+            "resource_violation": primary_error_kind == "resource_limit",
             "cleanup_failed": status == "cleanup_error",
+            "primary_error_kind": primary_error_kind,
         },
         "bindings": _record_bindings(bindings, page_number=page_number),
     }
@@ -2729,6 +2826,45 @@ def _preflight_official_inputs(
     return config, manifest
 
 
+def _create_holdout_marker(
+    path: Path,
+    *,
+    frozen_winner: Mapping[str, Any],
+    manifest: CorpusManifest,
+) -> None:
+    if path.name != "holdout.started.json":
+        raise ValueError("holdout marker must use the canonical filename")
+    marker = {
+        "schema_version": 1,
+        "split": "holdout",
+        "config_sha256": frozen_winner["config_sha256"],
+        "manifest_sha256": frozen_winner["manifest_sha256"],
+        "tuning_artifact_sha256": frozen_winner["tuning_artifact_sha256"],
+        "winner_id": frozen_winner["winner_id"],
+        "holdout_pages": len(manifest.holdout),
+        "negative_pages": len(manifest.negative),
+    }
+    encoded = (
+        json.dumps(marker, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    ).encode("utf-8")
+    try:
+        descriptor = os.open(
+            path,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+            0o600,
+        )
+    except FileExistsError as error:
+        raise ValueError("holdout run marker exists; holdout was already attempted") from error
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(encoded)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        # A partial marker intentionally remains and blocks an unsafe retry.
+        raise
+
+
 def run_split(
     split: Literal["tuning", "holdout"],
     *,
@@ -2738,6 +2874,8 @@ def run_split(
     pdf_path: Path = DEFAULT_PDF,
     tessdata: Path = DEFAULT_TESSDATA,
     frozen_winner: Mapping[str, Any] | None = None,
+    tuning_artifact_path: Path | None = None,
+    holdout_marker_path: Path | None = None,
 ) -> dict[str, Any]:
     """Run exactly one isolated split and return closed aggregate-only evidence."""
     if split not in {"tuning", "holdout"}:
@@ -2753,7 +2891,16 @@ def run_split(
     if split == "holdout":
         if frozen_winner is None:
             raise ValueError("holdout requires a frozen tuning winner artifact")
-        validate_frozen_winner(frozen_winner)
+        if tuning_artifact_path is None:
+            raise ValueError("holdout requires the canonical tuning artifact")
+        if holdout_marker_path is None:
+            raise ValueError("holdout requires a one-time run marker path")
+        if tuning_artifact_path.parent.resolve() != holdout_marker_path.parent.resolve():
+            raise ValueError("tuning artifact and holdout marker must be siblings")
+        validate_frozen_winner(
+            frozen_winner,
+            tuning_artifact_path=tuning_artifact_path,
+        )
         winner_id = frozen_winner["winner_id"]
         selected_candidates = [
             candidate
@@ -2765,7 +2912,6 @@ def run_split(
         winner_id = None
         selected_candidates = list(config["detector_candidates"])
         pages = manifest.tuning
-    opened_pages = [manifest.open_page(page.page_number) for page in pages]
     host = _host_description()
     toolchain = _toolchain_description()
     bindings = _bindings_for_run(
@@ -2775,6 +2921,13 @@ def run_split(
         host=host,
         toolchain=toolchain,
     )
+    if split == "holdout":
+        _create_holdout_marker(
+            holdout_marker_path,
+            frozen_winner=frozen_winner,
+            manifest=manifest,
+        )
+    opened_pages = [manifest.open_page(page.page_number) for page in pages]
     records = [
         _run_page(
             opened,
@@ -2827,7 +2980,28 @@ def render_report(
     payload: Mapping[str, Any],
     holdout_payload: Mapping[str, Any] | None = None,
 ) -> str:
-    """Render deterministic aggregate-only Markdown without raw records."""
+    """Fully validate canonical evidence before rendering aggregate Markdown."""
+    if payload.get("split") != "tuning":
+        raise ValueError("report requires a tuning artifact")
+    validate_artifact(payload, split="tuning")
+    winner_id = payload["winner_id"]
+    if winner_id is None:
+        if holdout_payload is not None:
+            raise ValueError("tuning without a winner must not include holdout")
+    else:
+        if holdout_payload is None:
+            raise ValueError("tuning winner requires a holdout artifact")
+        validate_artifact(holdout_payload, split="holdout")
+        if holdout_payload["winner_id"] != winner_id:
+            raise ValueError("holdout winner does not match frozen tuning winner")
+    return _render_validated_report(payload, holdout_payload)
+
+
+def _render_validated_report(
+    payload: Mapping[str, Any],
+    holdout_payload: Mapping[str, Any] | None = None,
+) -> str:
+    """Render only evidence already validated by the public entry point."""
     split = payload.get("split")
     if split not in {"tuning", "holdout"}:
         raise ValueError("artifact split is invalid")
@@ -3004,14 +3178,18 @@ def render_report(
     return "\n".join(lines)
 
 
-def _load_json_artifact(path: Path) -> dict[str, Any]:
+def _load_json_bytes(data: bytes, *, name: str) -> dict[str, Any]:
     try:
-        payload = json.loads(path.read_bytes())
+        payload = json.loads(data)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ValueError("artifact is not valid UTF-8 JSON") from error
+        raise ValueError(f"{name} is not valid UTF-8 JSON") from error
     if not isinstance(payload, dict):
-        raise ValueError("artifact must be an object")
+        raise ValueError(f"{name} must be an object")
     return payload
+
+
+def _load_json_artifact(path: Path) -> dict[str, Any]:
+    return _load_json_bytes(path.read_bytes(), name="artifact")
 
 
 def _write_json_artifact(path: Path, payload: Mapping[str, Any]) -> None:
@@ -3049,7 +3227,7 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--split", choices=("tuning", "holdout"), required=True)
     report = subparsers.add_parser("report")
     report.add_argument("--tuning", type=Path, required=True)
-    report.add_argument("--holdout", type=Path, required=True)
+    report.add_argument("--holdout", type=Path)
     report.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -3086,6 +3264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if manifest.manifest_sha256 != CANONICAL_MANIFEST_SHA256:
             raise ValueError("frozen manifest SHA-256 is not canonical")
         winner = _load_json_artifact(args.frozen_winner)
+        tuning_artifact_path = args.frozen_winner.parent / "tuning.json"
         payload = run_split(
             "holdout",
             manifest_path=args.manifest,
@@ -3094,16 +3273,24 @@ def main(argv: Sequence[str] | None = None) -> int:
             pdf_path=args.pdf,
             tessdata=args.tessdata,
             frozen_winner=winner,
+            tuning_artifact_path=tuning_artifact_path,
+            holdout_marker_path=(
+                args.frozen_winner.parent / "holdout.started.json"
+            ),
         )
         _write_json_artifact(args.output, payload)
     elif args.command == "validate":
-        payload = _load_json_artifact(args.input)
+        artifact_bytes = args.input.read_bytes()
+        payload = _load_json_bytes(artifact_bytes, name="artifact")
         validate_artifact(
             payload,
             split=args.split,
         )
         if args.split == "tuning" and payload["winner_id"] is not None:
-            frozen = freeze_tuning_winner(payload)
+            frozen = freeze_tuning_winner(
+                payload,
+                tuning_artifact_bytes=artifact_bytes,
+            )
             _write_json_artifact(args.input.parent / "winner.json", frozen)
     elif args.command == "report":
         tuning = _load_json_artifact(args.tuning)
