@@ -1326,6 +1326,8 @@ def test_holdout_cli_fails_before_opening_draft_canonical_holdout():
         main(
             [
                 "holdout",
+                    "--config",
+                    str(CONFIG),
                 "--manifest",
                 str(manifest),
                 "--annotations",
@@ -1428,6 +1430,7 @@ def test_failure_pages_micro_average_full_reference_deletions(
     assert aggregate["reference_words"] == 12
     assert aggregate["cell_cer"] == pytest.approx(expected_cer)
     payload["aggregates"] = recomputed
+    payload["winner_id"] = derive_tuning_winner(payload)
     with patch(
         "experiments.ruled_table._canonical_artifact_bindings",
         return_value=_canonical_bindings_fixture(),
