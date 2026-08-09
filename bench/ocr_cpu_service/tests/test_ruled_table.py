@@ -1263,7 +1263,8 @@ def test_report_is_deterministic_aggregate_only_and_private():
         assert secret not in report_one
     assert "predicted_boxes" not in report_one
     assert "reference_boxes" not in report_one
-    assert "cells" not in report_one
+    assert "character_edits" not in report_one
+    assert "prediction_present" not in report_one
     assert "PASS" in report_one
     assert "one table per page" in report_one
     assert "visible rules" in report_one
