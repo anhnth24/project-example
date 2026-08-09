@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import sys
+import traceback
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -22,6 +24,7 @@ from experiments.table_cells import (  # noqa: E402
     InvalidGridError,
     PageOutputLimitError,
     ProcessLimits,
+    TableCleanupError,
     TableRecognitionError,
     build_cell_candidate,
     enforce_page_output_budget,
@@ -403,6 +406,32 @@ def test_grid_recognition_caps_cells_at_1500() -> None:
         GridRecognition(rows=51, columns=30, cells=cells)
 
 
+@pytest.mark.parametrize(
+    ("rows", "columns", "expected"),
+    [
+        (51, 1, "rows"),
+        (1, 31, "columns"),
+    ],
+)
+def test_grid_recognition_enforces_exact_dimension_caps(
+    rows: int,
+    columns: int,
+    expected: str,
+) -> None:
+    cells = tuple(
+        CellRecognition(
+            row=index // columns,
+            column=index % columns,
+            text="",
+            elapsed_seconds=0.0,
+            resource={},
+        )
+        for index in range(rows * columns)
+    )
+    with pytest.raises(ValueError, match=expected):
+        GridRecognition(rows=rows, columns=columns, cells=cells)
+
+
 def test_cell_resources_are_ignored_by_repr_and_equality() -> None:
     left = CellRecognition(0, 0, "PRIVATE TEXT", 1.0, {"peak_rss_bytes": 1})
     right = CellRecognition(0, 0, "PRIVATE TEXT", 1.0, {"peak_rss_bytes": 999})
@@ -576,6 +605,110 @@ def test_page_deadline_is_checked_after_each_response(
     assert worker.close_count == 1
 
 
+def test_all_blank_page_times_out_during_preprocessing_without_sleep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = Clock()
+    monkeypatch.setattr(
+        "experiments.table_cells.time.monotonic", clock.monotonic
+    )
+    worker = FakeWorker([])
+    grid = rectangular_grid()
+    image = Image.new("L", (200, 100), 255)
+
+    def delayed_blank(_crop: Image.Image) -> bool:
+        clock.now = 21.0
+        return True
+
+    try:
+        with (
+            patch(
+                "experiments.table_cells.is_blank_crop",
+                side_effect=delayed_blank,
+            ),
+            pytest.raises(TableRecognitionError) as caught,
+        ):
+            recognize_with_worker(
+                tmp_path,
+                worker,
+                grid=grid,
+                image=image,
+            )
+    finally:
+        image.close()
+    assert caught.value.error_kind == "timeout"
+    assert worker.paths == []
+    assert worker.close_count == 1
+
+
+def test_page_deadline_is_enforced_during_tessdata_hashing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ticks = iter((0.0, 0.0, 0.0, 21.0))
+    monkeypatch.setattr(
+        "experiments.table_cells.time.monotonic", lambda: next(ticks)
+    )
+    grid = rectangular_grid(rows=1, columns=1)
+    image = nonblank_grid_image(grid)
+    try:
+        with pytest.raises(TableRecognitionError) as caught:
+            recognize_grid(
+                grid,
+                working_image=image,
+                candidate_id="hash-timeout",
+                cell_inset_pixels=4,
+                psm=6,
+                tessdata=candidate_tessdata(tmp_path),
+                limits=limits(),
+            )
+    finally:
+        image.close()
+    assert caught.value.error_kind == "timeout"
+
+
+def test_candidate_setup_failure_has_no_private_traceback_context(
+    tmp_path: Path,
+) -> None:
+    canary = f"PRIVATE_SETUP_CANARY:{tmp_path}"
+    grid = rectangular_grid(rows=1, columns=1)
+    image = nonblank_grid_image(grid)
+    try:
+        with (
+            patch(
+                "experiments.table_cells.hash_vie_traineddata",
+                side_effect=RuntimeError(canary),
+            ),
+            pytest.raises(TableRecognitionError) as caught,
+        ):
+            recognize_grid(
+                grid,
+                working_image=image,
+                candidate_id="setup-failure",
+                cell_inset_pixels=4,
+                psm=6,
+                tessdata=tmp_path / "private-tessdata",
+                limits=limits(),
+            )
+    finally:
+        image.close()
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__,
+        )
+    )
+    assert caught.value.error_kind == "candidate_error"
+    assert canary not in formatted
+    assert str(tmp_path) not in formatted
+
+
 def test_remaining_page_deadline_is_passed_to_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -629,6 +762,152 @@ def test_crops_and_owned_page_directory_are_removed_on_failure(
         image.close()
     assert worker.close_count == 1
     assert not page_directory.exists()
+
+
+def test_primary_failure_is_preserved_and_close_fault_is_reported_safely(
+    tmp_path: Path,
+) -> None:
+    class CloseFaultWorker(FakeWorker):
+        def close(self) -> None:
+            self.close_count += 1
+            if self.close_count == 1:
+                raise RuntimeError(f"PRIVATE_CLOSE_CANARY:{tmp_path}")
+
+    page_directory = tmp_path / "close-fault-page"
+    page_directory.mkdir()
+    worker = CloseFaultWorker(error=RuntimeError("PRIVATE_PRIMARY_CANARY"))
+    grid = rectangular_grid(rows=1, columns=1)
+    image = nonblank_grid_image(grid)
+    try:
+        with (
+            patch(
+                "experiments.table_cells.tempfile.mkdtemp",
+                return_value=str(page_directory),
+            ),
+            patch(
+                "experiments.table_cells._isolated_worker",
+                return_value=worker,
+            ),
+            pytest.raises(TableRecognitionError) as caught,
+        ):
+            recognize_grid(
+                grid,
+                working_image=image,
+                candidate_id="close-fault",
+                cell_inset_pixels=4,
+                psm=6,
+                tessdata=candidate_tessdata(tmp_path),
+                limits=limits(),
+            )
+    finally:
+        image.close()
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__,
+        )
+    )
+    assert caught.value.error_kind == "candidate_error"
+    assert isinstance(caught.value.cleanup_failure, TableCleanupError)
+    assert "PRIVATE" not in formatted
+    assert str(tmp_path) not in formatted
+    assert worker.close_count == 2
+    assert not page_directory.exists()
+
+
+def test_recursive_temp_cleanup_fault_is_retried_reported_and_leak_free(
+    tmp_path: Path,
+) -> None:
+    page_directory = tmp_path / "rmtree-fault-page"
+    page_directory.mkdir()
+    worker = FakeWorker([])
+    grid = rectangular_grid(rows=1, columns=1)
+    image = Image.new("L", (100, 50), 255)
+    real_rmtree = shutil.rmtree
+    calls = 0
+
+    def faulty_rmtree(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError(f"PRIVATE_RMTREE_CANARY:{path}")
+        real_rmtree(path)
+
+    try:
+        with (
+            patch(
+                "experiments.table_cells.tempfile.mkdtemp",
+                return_value=str(page_directory),
+            ),
+            patch(
+                "experiments.table_cells._isolated_worker",
+                return_value=worker,
+            ),
+            patch(
+                "experiments.table_cells.shutil.rmtree",
+                side_effect=faulty_rmtree,
+            ),
+            pytest.raises(TableCleanupError) as caught,
+        ):
+            recognize_grid(
+                grid,
+                working_image=image,
+                candidate_id="rmtree-fault",
+                cell_inset_pixels=4,
+                psm=6,
+                tessdata=candidate_tessdata(tmp_path),
+                limits=limits(),
+            )
+    finally:
+        image.close()
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value),
+            caught.value,
+            caught.value.__traceback__,
+        )
+    )
+    assert caught.value.error_kind == "cleanup_error"
+    assert "PRIVATE" not in formatted
+    assert str(tmp_path) not in formatted
+    assert calls == 2
+    assert not page_directory.exists()
+
+
+def test_cleanup_time_counts_toward_page_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    class DelayedCloseWorker(FakeWorker):
+        def close(self) -> None:
+            self.close_count += 1
+            clock.now = 21.0
+
+    clock = Clock()
+    monkeypatch.setattr(
+        "experiments.table_cells.time.monotonic", clock.monotonic
+    )
+    worker = DelayedCloseWorker([])
+    grid = rectangular_grid(rows=1, columns=1)
+    image = Image.new("L", (100, 50), 255)
+    try:
+        with pytest.raises(TableRecognitionError) as caught:
+            recognize_with_worker(
+                tmp_path,
+                worker,
+                grid=grid,
+                image=image,
+            )
+    finally:
+        image.close()
+    assert caught.value.error_kind == "timeout"
+    assert worker.close_count == 1
 
 
 def test_invalid_cell_crop_maps_to_sanitized_invalid_grid(
@@ -689,6 +968,22 @@ def test_markdown_rejects_grid_smaller_than_two_by_two() -> None:
     with pytest.raises(InvalidGridError) as caught:
         serialize_markdown(recognition)
     assert caught.value.error_kind == "invalid_grid"
+
+
+def test_serializer_revalidates_exact_grid_bounds_and_cell_count() -> None:
+    recognition = grid_recognition(
+        rows=2,
+        columns=2,
+        texts=("A", "B", "C", "D"),
+    )
+    object.__setattr__(recognition, "rows", 51)
+    with pytest.raises(InvalidGridError):
+        serialize_markdown(recognition)
+
+    object.__setattr__(recognition, "rows", 2)
+    object.__setattr__(recognition, "cells", recognition.cells[:-1])
+    with pytest.raises(InvalidGridError):
+        serialize_markdown(recognition)
 
 
 def test_candidate_execution_never_uses_shell(tmp_path: Path) -> None:
