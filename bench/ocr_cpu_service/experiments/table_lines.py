@@ -515,12 +515,12 @@ def _covers_point(line: _Line, point: int, tolerance: int) -> bool:
     )
 
 
-def _covers_interval(
+def _matches_interval(
     line: _Line, start: int, end: int, tolerance: int
 ) -> bool:
     return any(
-        segment_start <= start + tolerance
-        and segment_end >= end - tolerance
+        abs(segment_start - start) <= tolerance
+        and abs(segment_end - end) <= tolerance
         for segment_start, segment_end in line.segments
     )
 
@@ -613,7 +613,7 @@ def _intersection_components(
     )
 
 
-def _component_has_continuous_lines(
+def _component_has_closed_lines(
     component: _IntersectionComponent,
     horizontal: Sequence[_Line],
     vertical: Sequence[_Line],
@@ -624,10 +624,10 @@ def _component_has_continuous_lines(
     y1 = horizontal[component.horizontal[0]].coordinate
     y2 = horizontal[component.horizontal[-1]].coordinate
     return all(
-        _covers_interval(horizontal[index], x1, x2, tolerance)
+        _matches_interval(horizontal[index], x1, x2, tolerance)
         for index in component.horizontal
     ) and all(
-        _covers_interval(vertical[index], y1, y2, tolerance)
+        _matches_interval(vertical[index], y1, y2, tolerance)
         for index in component.vertical
     )
 
@@ -838,7 +838,7 @@ def detect_ruled_table(
         elif (
             component.edge_count
             != len(component.horizontal) * len(component.vertical)
-            or not _component_has_continuous_lines(
+            or not _component_has_closed_lines(
                 component,
                 horizontal,
                 vertical,

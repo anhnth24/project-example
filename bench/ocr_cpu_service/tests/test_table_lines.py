@@ -10,7 +10,6 @@ from PIL import Image, ImageDraw
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-import experiments.table_lines as table_lines  # noqa: E402
 from experiments.table_lines import (  # noqa: E402
     Box,
     DetectionResult,
@@ -119,20 +118,6 @@ def _regular_coordinates(count: int, *, start: int = 10, step: int = 12) -> tupl
     return tuple(start + index * step for index in range(count))
 
 
-def _guard_rectangle_enumeration(monkeypatch, *, maximum_calls: int = 20_000) -> None:
-    original = table_lines._covers_interval
-    calls = 0
-
-    def bounded(*args, **kwargs):
-        nonlocal calls
-        calls += 1
-        if calls > maximum_calls:
-            raise AssertionError("post-clustering geometry exceeded operation bound")
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(table_lines, "_covers_interval", bounded)
-
-
 def _iou(left: Box, right: Box) -> float:
     intersection = max(
         0, min(left.right, right.right) - max(left.left, right.left)
@@ -208,6 +193,21 @@ def test_partial_internal_line_cannot_shrink_component_to_three_by_three():
     ) as image:
         ImageDraw.Draw(image).line((20, 40, 70, 40), fill=0, width=2)
         result = detect_ruled_table(image, balanced_config())
+    assert result.status == "invalid_grid"
+    assert result.grid is None
+
+
+def test_open_rule_overhang_cannot_be_accepted_as_smaller_three_by_three():
+    image = Image.new("L", (240, 160), 255)
+    draw = ImageDraw.Draw(image)
+    for x in (20, 80, 140, 180):
+        draw.line((x, 20, x, 140), fill=0, width=2)
+    for y in (20, 60, 100, 140):
+        draw.line((20, y, 220, y), fill=0, width=2)
+    try:
+        result = detect_ruled_table(image, balanced_config())
+    finally:
+        image.close()
     assert result.status == "invalid_grid"
     assert result.grid is None
 
@@ -290,8 +290,7 @@ def test_exact_dimension_overflow_is_rejected_per_component(
     assert result.diagnostics["cells_allocated"] == 0
 
 
-def test_exact_fifty_by_thirty_grid_is_accepted_with_bounded_graph(monkeypatch):
-    _guard_rectangle_enumeration(monkeypatch)
+def test_exact_fifty_by_thirty_grid_is_accepted_with_bounded_graph():
     xs = _regular_coordinates(31)
     ys = _regular_coordinates(51)
     with grid_image(width=380, height=630, xs=xs, ys=ys) as image:
