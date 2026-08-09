@@ -14,16 +14,28 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from experiments.ruled_table import (  # noqa: E402
     CANONICAL_CONFIG_SHA256,
     CANONICAL_SOURCE_SHA256,
+    ArtifactBindings,
+    CellContentCounts,
+    CellMatchCounts,
     CellReference,
     PageAnnotation,
     TableReference,
+    derive_holdout_decision,
+    derive_tuning_winner,
     load_annotation,
     load_config,
     load_manifest,
+    main,
+    match_cells,
+    measure_cell_content,
     render_frozen_pages,
+    render_report,
+    run_split,
     template_fingerprint,
+    validate_artifact,
     write_corpus_report,
 )
+from experiments.table_lines import Box  # noqa: E402
 
 
 SERVICE_ROOT = Path(__file__).parents[1]
@@ -764,3 +776,541 @@ def test_report_is_exact_and_private_annotation_data_never_leaks(tmp_path):
     assert "UNIQUE PRIVATE ANNOTATION PHRASE" not in report
     assert "private/unique-customer-path.json" not in report
     assert "d" * 64 not in report
+
+
+def _canonical_json_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _artifact_bindings(*, render_sha256: str = "c" * 64) -> dict:
+    return {
+        "config_sha256": CANONICAL_CONFIG_SHA256,
+        "manifest_sha256": "b" * 64,
+        "source_sha256": CANONICAL_SOURCE_SHA256,
+        "render_sha256": render_sha256,
+        "tesseract_sha256": "d" * 64,
+        "tessdata_sha256": "e" * 64,
+        "host_sha256": _canonical_json_sha256(
+            {
+                "platform": "OCR_SECRET_PLATFORM",
+                "architecture": "reference-secret-architecture",
+                "logical_cpus": 4,
+                "memory_bytes": 1_000_000_000,
+            }
+        ),
+        "toolchain_sha256": _canonical_json_sha256(
+            {
+                "python": "PATH_SECRET_PYTHON",
+                "pillow": "ENV_SECRET_PILLOW",
+                "tesseract": "5.3.4",
+            }
+        ),
+    }
+
+
+def _candidate_descriptors() -> list[dict]:
+    config = json.loads(CONFIG.read_text(encoding="utf-8"))
+    return [
+        {
+            "id": candidate["id"],
+            "configuration_sha256": _canonical_json_sha256(candidate),
+        }
+        for candidate in config["detector_candidates"]
+    ]
+
+
+def _record(
+    candidate_id: str,
+    page_number: int,
+    *,
+    split: str,
+    negative: bool = False,
+    status: str | None = None,
+    elapsed_seconds: float = 1.0,
+    peak_rss_bytes: int = 100,
+) -> dict:
+    if status is None:
+        status = "not_detected" if negative else "detected"
+    table = not negative
+    return {
+        "id": f"{split}:{candidate_id}:{page_number}",
+        "candidate_id": candidate_id,
+        "page_number": page_number,
+        "split": split,
+        "negative": negative,
+        "status": status,
+        "rows": 1 if table and status == "detected" else 0,
+        "columns": 1 if table and status == "detected" else 0,
+        "reference_rows": 1 if table else 0,
+        "reference_columns": 1 if table else 0,
+        "predicted_boxes": (
+            [{"row": 0, "column": 0, "bbox": [0, 0, 100, 100]}]
+            if table and status == "detected"
+            else []
+        ),
+        "reference_boxes": (
+            [{"row": 0, "column": 0, "bbox": [0, 0, 100, 100]}]
+            if table
+            else []
+        ),
+        "cells": (
+            [
+                {
+                    "row": 0,
+                    "column": 0,
+                    "character_edits": 0,
+                    "reference_characters": 10,
+                    "word_edits": 0,
+                    "reference_words": 2,
+                    "reference_blank": False,
+                    "predicted_blank": False,
+                }
+            ]
+            if table and status == "detected"
+            else []
+        ),
+        "elapsed_seconds": elapsed_seconds,
+        "peak_rss_bytes": peak_rss_bytes,
+        "resource": {
+            "timed_out": status == "timeout",
+            "resource_violation": status == "resource_limit",
+            "cleanup_failed": status == "cleanup_error",
+        },
+        "bindings": _artifact_bindings(),
+    }
+
+
+def _aggregate(candidate_id: str, records: list[dict]) -> dict:
+    tables = [record for record in records if not record["negative"]]
+    negatives = [record for record in records if record["negative"]]
+    cells = [cell for record in records for cell in record["cells"]]
+    tp = sum(len(record["predicted_boxes"]) for record in tables)
+    reference_boxes = sum(len(record["reference_boxes"]) for record in tables)
+    fp = sum(
+        max(0, len(record["predicted_boxes"]) - len(record["reference_boxes"]))
+        for record in tables
+    )
+    fn = reference_boxes - tp + fp
+    precision = tp / (tp + fp) if tp + fp else 1.0
+    recall = tp / (tp + fn) if tp + fn else 1.0
+    f1 = (
+        2 * precision * recall / (precision + recall)
+        if precision + recall
+        else 0.0
+    )
+    character_edits = sum(cell["character_edits"] for cell in cells)
+    reference_characters = sum(cell["reference_characters"] for cell in cells)
+    word_edits = sum(cell["word_edits"] for cell in cells)
+    reference_words = sum(cell["reference_words"] for cell in cells)
+    blank_correct = sum(
+        cell["reference_blank"] == cell["predicted_blank"] for cell in cells
+    )
+    elapsed = sorted(record["elapsed_seconds"] for record in records)
+    median = (
+        elapsed[len(elapsed) // 2]
+        if len(elapsed) % 2
+        else (elapsed[len(elapsed) // 2 - 1] + elapsed[len(elapsed) // 2]) / 2
+    )
+    successful = {"detected", "not_detected"}
+    exact_grid_pages = sum(
+        record["status"] == "detected"
+        and record["rows"] == record["reference_rows"]
+        and record["columns"] == record["reference_columns"]
+        for record in tables
+    )
+    return {
+        "candidate_id": candidate_id,
+        "record_count": len(records),
+        "table_pages": len(tables),
+        "negative_pages": len(negatives),
+        "failures": sum(record["status"] not in successful for record in records),
+        "timeouts": sum(record["resource"]["timed_out"] for record in records),
+        "resource_violations": sum(
+            record["resource"]["resource_violation"] for record in records
+        ),
+        "cleanup_failures": sum(
+            record["resource"]["cleanup_failed"] for record in records
+        ),
+        "false_positives": sum(
+            record["status"] == "detected" for record in negatives
+        ),
+        "wrong_grids": len(tables) - exact_grid_pages,
+        "exact_grid_pages": exact_grid_pages,
+        "cell_tp": tp,
+        "cell_fp": fp,
+        "cell_fn": fn,
+        "character_edits": character_edits,
+        "reference_characters": reference_characters,
+        "word_edits": word_edits,
+        "reference_words": reference_words,
+        "blank_correct": blank_correct,
+        "blank_total": len(cells),
+        "cell_precision": precision,
+        "cell_recall": recall,
+        "cell_f1": f1,
+        "cell_cer": (
+            character_edits / reference_characters
+            if reference_characters
+            else float(character_edits > 0)
+        ),
+        "cell_wer": (
+            word_edits / reference_words
+            if reference_words
+            else float(word_edits > 0)
+        ),
+        "empty_cell_accuracy": blank_correct / len(cells) if cells else 1.0,
+        "median_page_latency_seconds": median,
+        "maximum_page_latency_seconds": max(elapsed),
+        "peak_rss_bytes": max(record["peak_rss_bytes"] for record in records),
+    }
+
+
+def artifact_fixture(split: str = "holdout") -> dict:
+    candidate_ids = [item["id"] for item in _candidate_descriptors()]
+    if split == "tuning":
+        records = [
+            _record(candidate_id, page, split="tuning")
+            for candidate_id in candidate_ids
+            for page in (255, 460, 537, 450, 541, 772)
+        ]
+        aggregates = [
+            _aggregate(
+                candidate_id,
+                [row for row in records if row["candidate_id"] == candidate_id],
+            )
+            for candidate_id in candidate_ids
+        ]
+        winner_id = "balanced-psm6"
+        decision = None
+        access = {
+            "tuning_pages_opened": 6,
+            "holdout_pages_opened": 0,
+            "negative_pages_opened": 0,
+        }
+    else:
+        winner_id = "balanced-psm6"
+        records = [
+            *[
+                _record(winner_id, page, split="holdout")
+                for page in (394, 503, 809)
+            ],
+            *[
+                _record(winner_id, page, split="holdout", negative=True)
+                for page in (20, 60, 100)
+            ],
+        ]
+        aggregates = [_aggregate(winner_id, records)]
+        decision = "PASS"
+        access = {
+            "tuning_pages_opened": 0,
+            "holdout_pages_opened": 3,
+            "negative_pages_opened": 3,
+        }
+    return {
+        "schema_version": 1,
+        "split": split,
+        "source": {
+            "id": "official-89-2026-tt-btc",
+            "sha256": CANONICAL_SOURCE_SHA256,
+            "size_bytes": 17_281_751,
+        },
+        "config_sha256": CANONICAL_CONFIG_SHA256,
+        "manifest_sha256": "b" * 64,
+        "host": {
+            "platform": "OCR_SECRET_PLATFORM",
+            "architecture": "reference-secret-architecture",
+            "logical_cpus": 4,
+            "memory_bytes": 1_000_000_000,
+        },
+        "toolchain": {
+            "python": "PATH_SECRET_PYTHON",
+            "pillow": "ENV_SECRET_PILLOW",
+            "tesseract": "5.3.4",
+        },
+        "access": access,
+        "candidates": _candidate_descriptors(),
+        "records": records,
+        "aggregates": aggregates,
+        "winner_id": winner_id,
+        "decision": decision,
+    }
+
+
+def _canonical_bindings_fixture() -> ArtifactBindings:
+    values = _artifact_bindings()
+    return ArtifactBindings(
+        config_sha256=values["config_sha256"],
+        manifest_sha256=values["manifest_sha256"],
+        source_sha256=values["source_sha256"],
+        render_sha256_by_page={
+            page: values["render_sha256"]
+            for page in (20, 60, 100, 255, 394, 450, 460, 503, 537, 541, 772, 809)
+        },
+        tesseract_sha256=values["tesseract_sha256"],
+        tessdata_sha256=values["tessdata_sha256"],
+        host_sha256=values["host_sha256"],
+        toolchain_sha256=values["toolchain_sha256"],
+    )
+
+
+def test_iou_matching_is_one_to_one_at_exact_threshold():
+    references = [Box(0, 0, 100, 100), Box(100, 0, 200, 100)]
+    predictions = [Box(0, 0, 80, 100), Box(0, 0, 100, 100)]
+    counts = match_cells(references, predictions, threshold=0.80)
+    assert counts == CellMatchCounts(tp=1, fp=1, fn=1)
+
+
+def test_iou_empty_sets_score_as_perfect_after_additive_counts():
+    counts = match_cells([], [], threshold=0.80)
+    assert counts == CellMatchCounts(tp=0, fp=0, fn=0)
+    assert counts.precision == counts.recall == counts.f1 == 1.0
+
+
+def test_content_counts_are_additive_for_missing_and_extra_cells():
+    counts = measure_cell_content(
+        {
+            (0, 0): ("Việt Nam", False),
+            (0, 1): ("", True),
+        },
+        {
+            (0, 0): "Việt Nam",
+            (1, 0): "thừa",
+        },
+    )
+    assert counts == CellContentCounts(
+        character_edits=4,
+        reference_characters=8,
+        word_edits=1,
+        reference_words=2,
+        blank_correct=1,
+        blank_total=2,
+        cells={
+            (0, 0): (0, 8, 0, 2, False, False),
+            (0, 1): (0, 0, 0, 0, True, False),
+            (1, 0): (4, 0, 1, 0, False, False),
+        },
+    )
+
+
+def test_content_alignment_requires_confirmed_exact_grid():
+    with pytest.raises(ValueError, match="exact rows and columns"):
+        measure_cell_content(
+            {(0, 0): ("a", False)},
+            {(0, 0): "a"},
+            reference_shape=(1, 1),
+            predicted_shape=(1, 2),
+        )
+
+
+def test_tuning_winner_uses_exact_ranking_and_lexical_tie_break():
+    payload = artifact_fixture("tuning")
+    assert derive_tuning_winner(payload) == "balanced-psm6"
+    payload["aggregates"][0]["exact_grid_pages"] = 5
+    assert derive_tuning_winner(payload) == "balanced-psm6"
+    payload["aggregates"][1]["failures"] = 1
+    assert derive_tuning_winner(payload) == "balanced-psm7"
+
+
+def test_holdout_gate_requires_every_condition():
+    payload = artifact_fixture()
+    assert derive_holdout_decision(payload) == "PASS"
+    payload["aggregates"][0]["cell_cer"] = 0.050001
+    assert derive_holdout_decision(payload) == "STOP"
+
+
+@pytest.mark.parametrize(
+    ("field", "passing", "stopping"),
+    [
+        ("cell_f1", 0.95, 0.949999),
+        ("cell_cer", 0.05, 0.050001),
+        ("empty_cell_accuracy", 0.98, 0.979999),
+        ("peak_rss_bytes", 805_306_367, 805_306_368),
+        ("maximum_page_latency_seconds", 20.0, 20.000001),
+    ],
+)
+def test_holdout_gate_exact_boundaries(field, passing, stopping):
+    payload = artifact_fixture()
+    payload["aggregates"][0][field] = passing
+    assert derive_holdout_decision(payload) == "PASS"
+    payload["aggregates"][0][field] = stopping
+    assert derive_holdout_decision(payload) == "STOP"
+
+
+def test_negative_false_positive_forces_stop():
+    payload = artifact_fixture()
+    payload["records"][-1]["status"] = "detected"
+    assert derive_holdout_decision(payload) == "STOP"
+
+
+def test_validate_artifact_accepts_closed_external_bound_artifact():
+    payload = artifact_fixture()
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        validate_artifact(payload, split="holdout")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value["records"].pop(),
+        lambda value: value["records"].append(copy.deepcopy(value["records"][0])),
+        lambda value: value["records"][0]["cells"][0].__setitem__("unknown", 1),
+        lambda value: value["records"][0]["cells"][0].__setitem__(
+            "recognized_text", "OCR_TEXT_SECRET"
+        ),
+        lambda value: value["records"][0].__setitem__(
+            "reference", "REFERENCE_SECRET"
+        ),
+        lambda value: value["records"][0].__setitem__("markdown", "MARKDOWN_SECRET"),
+        lambda value: value["records"][0].__setitem__(
+            "environment", {"TOKEN": "ENV_SECRET"}
+        ),
+    ],
+)
+def test_validate_artifact_rejects_cardinality_and_recursive_schema_drift(mutation):
+    payload = artifact_fixture()
+    mutation(payload)
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError),
+    ):
+        validate_artifact(payload, split="holdout")
+
+
+def test_validate_artifact_rejects_stale_aggregate_and_decision():
+    payload = artifact_fixture()
+    payload["aggregates"][0]["cell_tp"] += 1
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="aggregate"),
+    ):
+        validate_artifact(payload, split="holdout")
+
+    payload = artifact_fixture()
+    payload["decision"] = "STOP"
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="decision"),
+    ):
+        validate_artifact(payload, split="holdout")
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("config_sha256",), "f" * 64),
+        (("manifest_sha256",), "f" * 64),
+        (("source", "sha256"), "f" * 64),
+        (("host", "logical_cpus"), 5),
+        (("toolchain", "python"), "different"),
+        (("records", 0, "bindings", "render_sha256"), "f" * 64),
+        (("records", 0, "bindings", "tesseract_sha256"), "f" * 64),
+        (("records", 0, "bindings", "tessdata_sha256"), "f" * 64),
+    ],
+)
+def test_validate_artifact_rejects_wrong_external_hashes(path, value):
+    payload = artifact_fixture()
+    _set_config_path(payload, path, value)
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="hash|SHA|bind|canonical"),
+    ):
+        validate_artifact(payload, split="holdout")
+
+
+def test_validate_tuning_requires_access_six_zero_zero_and_all_candidate_records():
+    payload = artifact_fixture("tuning")
+    payload["access"]["holdout_pages_opened"] = 1
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="access"),
+    ):
+        validate_artifact(payload, split="tuning")
+
+
+def test_report_is_deterministic_aggregate_only_and_private():
+    payload = artifact_fixture()
+    report_one = render_report(payload)
+    report_two = render_report(copy.deepcopy(payload))
+    assert report_one.encode("utf-8") == report_two.encode("utf-8")
+    for secret in (
+        "OCR_SECRET_PLATFORM",
+        "reference-secret-architecture",
+        "PATH_SECRET_PYTHON",
+        "ENV_SECRET_PILLOW",
+    ):
+        assert secret not in report_one
+    assert "predicted_boxes" not in report_one
+    assert "reference_boxes" not in report_one
+    assert "cells" not in report_one
+    assert "PASS" in report_one
+    assert "one table per page" in report_one
+    assert "visible rules" in report_one
+    assert "no merged cells" in report_one
+    assert "no production or full-document authorization" in report_one
+
+
+def test_holdout_run_fails_review_gate_before_opening_any_page(tmp_path):
+    manifest_path = write_manifest_fixture(tmp_path)
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for page in payload["pages"]:
+        if page["split"] == "holdout":
+            page["review_status"] = "draft"
+            page["reviewer"] = "pending-human-review"
+            page["revision"] = 0
+    _write_json(manifest_path, payload)
+    with (
+        patch("experiments.ruled_table.CorpusManifest.open_page") as opened,
+        pytest.raises(ValueError, match="human_verified"),
+    ):
+        run_split(
+            "holdout",
+            manifest_path=manifest_path,
+            tessdata=tmp_path / "never-opened",
+            frozen_winner=artifact_fixture("tuning"),
+        )
+    opened.assert_not_called()
+
+
+def test_holdout_cli_fails_before_opening_draft_canonical_holdout():
+    manifest = SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json"
+    before = manifest.read_bytes()
+    with (
+        patch("experiments.ruled_table.CorpusManifest.open_page") as opened,
+        pytest.raises(ValueError, match="human_verified"),
+    ):
+        main(
+            [
+                "holdout",
+                "--manifest",
+                str(manifest),
+                "--tessdata",
+                str(SERVICE_ROOT.parents[1] / "tessdata_best"),
+                "--winner",
+                "unused.json",
+                "--output",
+                "unused-output.json",
+            ]
+        )
+    opened.assert_not_called()
+    assert manifest.read_bytes() == before
