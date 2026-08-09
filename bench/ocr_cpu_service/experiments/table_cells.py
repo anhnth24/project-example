@@ -262,7 +262,7 @@ def is_blank_crop(crop: Image.Image) -> bool:
     total = crop.width * crop.height
     if total <= 0:
         raise ValueError("blank detection requires a positive-area crop")
-    bright = sum(pixel >= 223 for pixel in crop.getdata())
+    bright = sum(pixel >= 223 for pixel in crop.get_flattened_data())
     return bright * 1_000 >= total * 995
 
 
