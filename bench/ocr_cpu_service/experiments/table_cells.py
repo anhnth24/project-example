@@ -13,7 +13,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from PIL import Image, ImageDraw
 
@@ -35,6 +35,7 @@ FailureKind = Literal[
     "output_limit",
     "candidate_error",
     "resource_limit",
+    "cleanup_error",
 ]
 _MAX_CELLS = 1_500
 _MAX_OUTPUT_BYTES_PER_CELL = 65_536
@@ -166,6 +167,10 @@ class GridRecognition:
             or self.columns <= 0
         ):
             raise ValueError("recognition dimensions must be positive integers")
+        if self.rows > 50:
+            raise ValueError("recognition rows exceeds maximum 50")
+        if self.columns > 30:
+            raise ValueError("recognition columns exceeds maximum 30")
         if not isinstance(self.cells, tuple):
             raise ValueError("recognition cells must be an immutable tuple")
         expected_count = self.rows * self.columns
@@ -188,7 +193,15 @@ class TableRecognitionError(RuntimeError):
 
     def __init__(self, error_kind: FailureKind) -> None:
         self.error_kind = error_kind
+        self.cleanup_failure: TableCleanupError | None = None
         super().__init__(f"ruled-table recognition failed: {error_kind}")
+
+    def report_cleanup_failure(self, failure: TableCleanupError) -> None:
+        self.cleanup_failure = failure
+        self.args = (
+            f"ruled-table recognition failed: {self.error_kind}; "
+            "cleanup failed: cleanup_error",
+        )
 
 
 class InvalidGridError(TableRecognitionError):
@@ -199,6 +212,27 @@ class InvalidGridError(TableRecognitionError):
 class PageOutputLimitError(TableRecognitionError):
     def __init__(self) -> None:
         super().__init__("output_limit")
+
+
+class TableCleanupError(TableRecognitionError):
+    def __init__(self) -> None:
+        super().__init__("cleanup_error")
+
+
+@dataclass(frozen=True, slots=True)
+class _PageDeadline:
+    expires_at: float
+    clock: Callable[[], float]
+
+    def check(self) -> None:
+        if self.clock() >= self.expires_at:
+            raise TableRecognitionError("timeout")
+
+    def remaining(self, *, maximum: float | None = None) -> float:
+        remaining = self.expires_at - self.clock()
+        if remaining <= 0:
+            raise TableRecognitionError("timeout")
+        return min(remaining, maximum) if maximum is not None else remaining
 
 
 def prepare_cell_crop(
@@ -268,18 +302,35 @@ def is_blank_crop(crop: Image.Image) -> bool:
     return bright * 1_000 >= total * 995
 
 
-def hash_vie_traineddata(tessdata: Path) -> str:
+def hash_vie_traineddata(
+    tessdata: Path,
+    *,
+    _deadline: _PageDeadline | None = None,
+) -> str:
     """Hash the exact local Vietnamese Tesseract model."""
+    if _deadline is not None:
+        _deadline.check()
     text = str(tessdata)
     if text.lower().startswith(("http:/", "https:/")):
         raise ValueError("tessdata must be an HTTPS-free local path")
     model = tessdata / "vie.traineddata"
     if not tessdata.is_dir() or not model.is_file():
         raise ValueError("local tessdata must contain vie.traineddata")
+    if _deadline is not None:
+        _deadline.check()
     digest = hashlib.sha256()
     with model.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+        while True:
+            if _deadline is not None:
+                _deadline.check()
+            chunk = stream.read(1024 * 1024)
+            if _deadline is not None:
+                _deadline.check()
+            if not chunk:
+                break
             digest.update(chunk)
+    if _deadline is not None:
+        _deadline.check()
     return digest.hexdigest()
 
 
@@ -289,20 +340,28 @@ def build_cell_candidate(
     psm: int,
     tessdata: Path,
     limits: ProcessLimits,
+    _deadline: _PageDeadline | None = None,
 ) -> CommandCandidateSpec:
     """Build one exact local Tesseract Vietnamese cell candidate."""
+    if _deadline is not None:
+        _deadline.check()
     if not _is_int(psm) or psm not in {6, 7}:
         raise ValueError("cell PSM must be 6 or 7")
     if not isinstance(tessdata, Path):
         raise TypeError("tessdata must be a Path")
     if not isinstance(limits, ProcessLimits):
         raise TypeError("limits must be ProcessLimits")
-    tessdata_sha256 = hash_vie_traineddata(tessdata)
+    tessdata_sha256 = hash_vie_traineddata(
+        tessdata,
+        _deadline=_deadline,
+    )
+    if _deadline is not None:
+        _deadline.check()
     environment = sanitized_candidate_environment(
         cpu_threads=limits.cpu_threads
     )
     environment["TESSDATA_PREFIX"] = str(tessdata)
-    return CommandCandidateSpec(
+    candidate = CommandCandidateSpec(
         id=candidate_id,
         label=f"Tesseract vie PSM {psm}",
         argv=(
@@ -322,6 +381,9 @@ def build_cell_candidate(
             "tessdata_sha256": tessdata_sha256,
         },
     )
+    if _deadline is not None:
+        _deadline.check()
+    return candidate
 
 
 def enforce_page_output_budget(
@@ -361,6 +423,43 @@ def _failure(error_kind: FailureKind) -> TableRecognitionError:
     return TableRecognitionError(error_kind)
 
 
+def _cleanup_grid_resources(
+    *,
+    worker: Any,
+    page_directory: Path | None,
+    deadline: _PageDeadline,
+) -> TableCleanupError | None:
+    cleanup_failed = False
+    if worker is not None:
+        try:
+            close_timeout = deadline.remaining()
+        except TableRecognitionError:
+            close_timeout = 0.0
+        try:
+            worker.close(timeout_seconds=close_timeout)
+        except Exception:
+            cleanup_failed = True
+            try:
+                worker.close(timeout_seconds=0.0)
+            except Exception:
+                pass
+    if page_directory is not None:
+        for _attempt in range(2):
+            try:
+                shutil.rmtree(page_directory)
+                break
+            except FileNotFoundError:
+                break
+            except Exception:
+                cleanup_failed = True
+        try:
+            if page_directory.exists():
+                cleanup_failed = True
+        except OSError:
+            cleanup_failed = True
+    return TableCleanupError() if cleanup_failed else None
+
+
 def recognize_grid(
     grid: Grid,
     *,
@@ -376,52 +475,77 @@ def recognize_grid(
         raise TypeError("grid must be a detected Grid")
     if len(grid.cells) > _MAX_CELLS:
         raise InvalidGridError()
-    started = time.monotonic()
-    deadline = started + limits.page_timeout_seconds
-    spec = build_cell_candidate(
-        candidate_id=candidate_id,
-        psm=psm,
-        tessdata=tessdata,
-        limits=limits,
+    deadline = _PageDeadline(
+        expires_at=time.monotonic() + limits.page_timeout_seconds,
+        clock=time.monotonic,
     )
-    page_directory = Path(tempfile.mkdtemp(prefix="ruled-table-page-"))
+    page_directory: Path | None = None
     worker = None
+    result: GridRecognition | None = None
+    primary_failure: TableRecognitionError | None = None
     cells: list[CellRecognition] = []
     output_sizes: list[int] = []
     try:
         try:
+            deadline.check()
+            spec = build_cell_candidate(
+                candidate_id=candidate_id,
+                psm=psm,
+                tessdata=tessdata,
+                limits=limits,
+                _deadline=deadline,
+            )
+            deadline.check()
+        except TableRecognitionError:
+            raise
+        except Exception:
+            raise _failure("candidate_error") from None
+        try:
+            page_directory = Path(tempfile.mkdtemp(prefix="ruled-table-page-"))
+            deadline.check()
+        except TableRecognitionError:
+            raise
+        except Exception:
+            raise _failure("candidate_error") from None
+        try:
             worker = _isolated_worker(
                 spec,
-                timeout_seconds=min(
-                    limits.cell_timeout_seconds,
-                    limits.page_timeout_seconds,
+                timeout_seconds=deadline.remaining(
+                    maximum=limits.cell_timeout_seconds,
                 ),
                 max_rss_bytes=limits.max_rss_bytes,
                 max_output_bytes=limits.max_output_bytes_per_cell,
             )
-        except TimeoutError as error:
-            raise _failure("timeout") from error
+            deadline.check()
+        except TimeoutError:
+            raise _failure("timeout") from None
         except (
             CandidateResourceLimitError,
             CandidateResourceSamplingError,
-        ) as error:
-            raise _failure("resource_limit") from error
-        except Exception as error:
-            raise _failure("candidate_error") from error
+        ):
+            raise _failure("resource_limit") from None
+        except TableRecognitionError:
+            raise
+        except Exception:
+            raise _failure("candidate_error") from None
         try:
             cold_peak_rss = int(
                 worker.metadata["cold_initialization"]["rss_measurement"][
                     "peak_rss_bytes"
                 ]
             )
-        except (AttributeError, KeyError, TypeError, ValueError) as error:
-            raise _failure("candidate_error") from error
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise _failure("candidate_error") from None
         if cold_peak_rss < 0:
             raise _failure("candidate_error")
         if cold_peak_rss >= limits.max_rss_bytes:
             raise _failure("resource_limit")
+        deadline.check()
 
         for cell in grid.cells:
+            deadline.check()
+            if page_directory is None:
+                raise _failure("candidate_error")
             crop_path = page_directory / (
                 f"cell-{cell.row:04d}-{cell.column:04d}.png"
             )
@@ -431,16 +555,24 @@ def recognize_grid(
                     cell,
                     inset_pixels=cell_inset_pixels,
                 )
-            except (TypeError, ValueError) as error:
-                raise _failure("invalid_grid") from error
+                deadline.check()
+            except TableRecognitionError:
+                raise
+            except (TypeError, ValueError):
+                raise _failure("invalid_grid") from None
             try:
                 try:
                     crop.save(crop_path, format="PNG")
+                    deadline.check()
                     blank = is_blank_crop(crop)
-                except (OSError, ValueError) as error:
-                    raise _failure("candidate_error") from error
+                    deadline.check()
+                except TableRecognitionError:
+                    raise
+                except (OSError, ValueError):
+                    raise _failure("candidate_error") from None
             finally:
                 crop.close()
+            deadline.check()
 
             if blank:
                 cells.append(
@@ -457,12 +589,9 @@ def recognize_grid(
                         },
                     )
                 )
+                deadline.check()
                 continue
 
-            before_request = time.monotonic()
-            remaining = deadline - before_request
-            if remaining <= 0:
-                raise _failure("timeout")
             try:
                 measurement = worker.recognize(
                     BenchmarkPage(
@@ -473,42 +602,42 @@ def recognize_grid(
                         path=crop_path,
                         reference=None,
                     ),
-                    timeout_seconds=min(
-                        limits.cell_timeout_seconds,
-                        remaining,
+                    timeout_seconds=deadline.remaining(
+                        maximum=limits.cell_timeout_seconds,
                     ),
                 )
-            except TimeoutError as error:
-                raise _failure("timeout") from error
-            except CandidateOutputLimitError as error:
-                raise _failure("output_limit") from error
+            except TimeoutError:
+                raise _failure("timeout") from None
+            except CandidateOutputLimitError:
+                raise _failure("output_limit") from None
             except (
                 CandidateResourceLimitError,
                 CandidateResourceSamplingError,
-            ) as error:
-                raise _failure("resource_limit") from error
+            ):
+                raise _failure("resource_limit") from None
             except TableRecognitionError:
                 raise
-            except Exception as error:
-                raise _failure("candidate_error") from error
+            except Exception:
+                raise _failure("candidate_error") from None
 
-            if time.monotonic() >= deadline:
-                raise _failure("timeout")
+            deadline.check()
             raw_bytes = len(measurement.text.encode("utf-8"))
             if raw_bytes > limits.max_output_bytes_per_cell:
                 raise _failure("output_limit")
+            deadline.check()
             output_sizes.append(raw_bytes)
             enforce_page_output_budget(
                 output_sizes,
                 maximum=limits.max_output_bytes_per_page,
             )
+            deadline.check()
             try:
                 peak_rss = int(measurement.resource["peak_rss_bytes"])
                 elapsed_seconds = float(
                     measurement.resource["wall_seconds"]
                 )
-            except (KeyError, TypeError, ValueError) as error:
-                raise _failure("candidate_error") from error
+            except (KeyError, TypeError, ValueError):
+                raise _failure("candidate_error") from None
             if (
                 peak_rss < 0
                 or not math.isfinite(elapsed_seconds)
@@ -517,29 +646,51 @@ def recognize_grid(
                 raise _failure("candidate_error")
             if peak_rss >= limits.max_rss_bytes:
                 raise _failure("resource_limit")
+            deadline.check()
+            normalized_text = _normalize_cell_text(measurement.text)
+            deadline.check()
             cells.append(
                 CellRecognition(
                     row=cell.row,
                     column=cell.column,
-                    text=_normalize_cell_text(measurement.text),
+                    text=normalized_text,
                     elapsed_seconds=elapsed_seconds,
                     resource=measurement.resource,
                 )
             )
-        return GridRecognition(
+            deadline.check()
+        result = GridRecognition(
             rows=grid.rows,
             columns=grid.columns,
             cells=tuple(cells),
         )
-    finally:
-        try:
-            if worker is not None:
-                try:
-                    worker.close()
-                except Exception:
-                    pass
-        finally:
-            shutil.rmtree(page_directory, ignore_errors=True)
+        deadline.check()
+    except TableRecognitionError as error:
+        primary_failure = error
+    except Exception:
+        primary_failure = _failure("candidate_error")
+
+    cleanup_failure = _cleanup_grid_resources(
+        worker=worker,
+        page_directory=page_directory,
+        deadline=deadline,
+    )
+    try:
+        deadline.check()
+    except TableRecognitionError as error:
+        if primary_failure is None:
+            primary_failure = error
+
+    if cleanup_failure is not None:
+        if primary_failure is not None:
+            primary_failure.report_cleanup_failure(cleanup_failure)
+            raise primary_failure from None
+        raise cleanup_failure from None
+    if primary_failure is not None:
+        raise primary_failure from None
+    if result is None:
+        raise _failure("candidate_error") from None
+    return result
 
 
 def _markdown_cell(text: str) -> str:
@@ -550,6 +701,16 @@ def _markdown_cell(text: str) -> str:
 
 def serialize_markdown(recognition: GridRecognition) -> str:
     """Serialize a complete simple ruled table deterministically."""
+    if not isinstance(recognition, GridRecognition):
+        raise InvalidGridError()
+    try:
+        GridRecognition(
+            rows=recognition.rows,
+            columns=recognition.columns,
+            cells=recognition.cells,
+        )
+    except (TypeError, ValueError):
+        raise InvalidGridError() from None
     if recognition.rows < 2 or recognition.columns < 2:
         raise InvalidGridError()
     matrix = [

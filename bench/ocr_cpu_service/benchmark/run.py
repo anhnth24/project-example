@@ -102,6 +102,12 @@ class CandidateWorkerProtocolError(RuntimeError):
     error_kind = "worker_protocol"
 
 
+class CandidateWorkerCleanupError(RuntimeError):
+    """A candidate worker required forced cleanup after a close fault."""
+
+    error_kind = "worker_cleanup"
+
+
 class Candidate(Protocol):
     id: str
     label: str
@@ -445,24 +451,60 @@ class IsolatedCandidateWorker:
             resource=_validated_resource_measurement(resource),
         )
 
-    def close(self) -> None:
+    def close(self, *, timeout_seconds: float | None = None) -> None:
         if self._closed:
             return
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or timeout_seconds < 0
+        ):
+            raise ValueError("timeout_seconds must be finite and nonnegative")
+        cleanup_deadline = (
+            time.monotonic() + float(timeout_seconds)
+            if timeout_seconds is not None
+            else None
+        )
+        close_fault = False
         try:
             if self._process.poll() is None:
                 if self._process.stdin is not None:
                     try:
                         self._process.stdin.write('{"event":"shutdown"}\n')
                         self._process.stdin.flush()
-                    except BrokenPipeError:
-                        pass
+                    except (BrokenPipeError, OSError, ValueError):
+                        close_fault = True
                 try:
-                    self._process.wait(timeout=5)
+                    graceful_timeout = 5.0
+                    if cleanup_deadline is not None:
+                        graceful_timeout = min(
+                            graceful_timeout,
+                            max(0.0, cleanup_deadline - time.monotonic()),
+                        )
+                    self._process.wait(timeout=graceful_timeout)
                 except subprocess.TimeoutExpired:
                     pass
-            _terminate_process_group(self._process)
+        except (OSError, ValueError):
+            close_fault = True
         finally:
-            self._closed = True
+            try:
+                grace_seconds = 0.5
+                if cleanup_deadline is not None:
+                    grace_seconds = min(
+                        grace_seconds,
+                        max(0.0, cleanup_deadline - time.monotonic()),
+                    )
+                _terminate_process_group(
+                    self._process,
+                    grace_seconds=grace_seconds,
+                )
+            except (OSError, ValueError, subprocess.SubprocessError):
+                close_fault = True
+            finally:
+                self._closed = self._process.poll() is not None
+        if close_fault:
+            raise CandidateWorkerCleanupError from None
 
 
 def _isolated_worker(

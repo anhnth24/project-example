@@ -154,6 +154,7 @@ class FakeWorker:
         self.peak_rss_bytes = peak_rss_bytes
         self.paths: list[Path] = []
         self.timeouts: list[float | None] = []
+        self.close_timeouts: list[float | None] = []
         self.close_count = 0
         self.metadata = {
             "cold_initialization": {
@@ -182,8 +183,9 @@ class FakeWorker:
             },
         )
 
-    def close(self) -> None:
+    def close(self, *, timeout_seconds: float | None = None) -> None:
         self.close_count += 1
+        self.close_timeouts.append(timeout_seconds)
 
 
 def recognize_with_worker(
@@ -403,7 +405,7 @@ def test_grid_recognition_caps_cells_at_1500() -> None:
         for index in range(1_501)
     )
     with pytest.raises(ValueError, match="1500"):
-        GridRecognition(rows=51, columns=30, cells=cells)
+        GridRecognition(rows=50, columns=30, cells=cells)
 
 
 @pytest.mark.parametrize(
@@ -593,11 +595,28 @@ def test_worker_startup_failures_are_typed_sanitized_and_cleaned(
 def test_page_deadline_is_checked_after_each_response(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    clock = iter((0.0, 0.0, 21.0))
+    class Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    class DelayedResponseWorker(FakeWorker):
+        def recognize(
+            self, page: object, *, timeout_seconds: float | None = None
+        ) -> RecognitionMeasurement:
+            measurement = super().recognize(
+                page,
+                timeout_seconds=timeout_seconds,
+            )
+            clock.now = 21.0
+            return measurement
+
+    clock = Clock()
     monkeypatch.setattr(
-        "experiments.table_cells.time.monotonic", lambda: next(clock)
+        "experiments.table_cells.time.monotonic", clock.monotonic
     )
-    worker = FakeWorker(["A"])
+    worker = DelayedResponseWorker(["A"])
     grid = rectangular_grid(rows=1, columns=1)
     with pytest.raises(TableRecognitionError) as caught:
         recognize_with_worker(tmp_path, worker, grid=grid)
@@ -712,20 +731,30 @@ def test_candidate_setup_failure_has_no_private_traceback_context(
 def test_remaining_page_deadline_is_passed_to_worker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    clock = iter((0.0, 4.0, 4.25))
+    class Clock:
+        now = 0.0
+
+        def monotonic(self) -> float:
+            return self.now
+
+    clock = Clock()
     monkeypatch.setattr(
-        "experiments.table_cells.time.monotonic", lambda: next(clock)
+        "experiments.table_cells.time.monotonic", clock.monotonic
     )
     worker = FakeWorker(["A"])
     grid = rectangular_grid(rows=1, columns=1)
-    recognize_with_worker(
-        tmp_path,
-        worker,
-        grid=grid,
-        process_limits=limits(
-            page_timeout_seconds=5.0, cell_timeout_seconds=10.0
-        ),
-    )
+    with patch(
+        "experiments.table_cells.is_blank_crop",
+        side_effect=lambda _crop: setattr(clock, "now", 4.0) or False,
+    ):
+        recognize_with_worker(
+            tmp_path,
+            worker,
+            grid=grid,
+            process_limits=limits(
+                page_timeout_seconds=5.0, cell_timeout_seconds=10.0
+            ),
+        )
     assert worker.timeouts == [1.0]
 
 
@@ -768,8 +797,9 @@ def test_primary_failure_is_preserved_and_close_fault_is_reported_safely(
     tmp_path: Path,
 ) -> None:
     class CloseFaultWorker(FakeWorker):
-        def close(self) -> None:
+        def close(self, *, timeout_seconds: float | None = None) -> None:
             self.close_count += 1
+            self.close_timeouts.append(timeout_seconds)
             if self.close_count == 1:
                 raise RuntimeError(f"PRIVATE_CLOSE_CANARY:{tmp_path}")
 
@@ -885,8 +915,9 @@ def test_cleanup_time_counts_toward_page_deadline(
             return self.now
 
     class DelayedCloseWorker(FakeWorker):
-        def close(self) -> None:
+        def close(self, *, timeout_seconds: float | None = None) -> None:
             self.close_count += 1
+            self.close_timeouts.append(timeout_seconds)
             clock.now = 21.0
 
     clock = Clock()
@@ -908,6 +939,7 @@ def test_cleanup_time_counts_toward_page_deadline(
         image.close()
     assert caught.value.error_kind == "timeout"
     assert worker.close_count == 1
+    assert worker.close_timeouts == [20.0]
 
 
 def test_invalid_cell_crop_maps_to_sanitized_invalid_grid(
