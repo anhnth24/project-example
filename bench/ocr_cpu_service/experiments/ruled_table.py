@@ -109,6 +109,7 @@ _MANIFEST_PAGE_FIELDS = frozenset(
         "split",
         "negative",
         "template_family",
+        "template_fingerprint",
         "render_path",
         "render_sha256",
         "annotation_path",
@@ -170,6 +171,7 @@ class ManifestPage:
     split: str
     negative: bool
     template_family: str
+    template_fingerprint: str | None
     render_path: str
     render_sha256: str
     annotation_path: str
@@ -255,6 +257,8 @@ class CorpusManifest:
             annotation_path,
             expected_render_sha256=page.render_sha256,
         )
+        if template_fingerprint(annotation) != page.template_fingerprint:
+            raise ValueError("template fingerprint mismatch")
         if (
             annotation.source_sha256 != self.source_sha256
             or annotation.page_number != page.page_number
@@ -385,7 +389,7 @@ def _validate_config(payload: object) -> dict[str, Any]:
         config["source"], fields=_SOURCE_CONFIG_FIELDS, name="config.source"
     )
     if source["id"] != CANONICAL_SOURCE_ID:
-        raise ValueError("config.source.id is not the fixed source identity")
+        raise ValueError("config.source.id is not the canonical source identity")
     if _sha256(source["expected_sha256"], "config.source.expected_sha256") != (
         CANONICAL_SOURCE_SHA256
     ):
@@ -422,14 +426,19 @@ def _validate_config(payload: object) -> dict[str, Any]:
     if cells > 1_500:
         raise ValueError("geometry_limits.max_cells exceeds 1500")
     if rows * columns > cells:
-        raise ValueError("max_rows * max_columns must not exceed max_cells")
+        raise ValueError(
+            "canonical geometry semantics require max_rows * max_columns "
+            "not to exceed max_cells"
+        )
     if (
         _positive_int(
             geometry["max_table_regions"], "geometry_limits.max_table_regions"
         )
         != 1
     ):
-        raise ValueError("geometry_limits.max_table_regions must equal 1")
+        raise ValueError(
+            "canonical geometry semantics require max_table_regions to equal 1"
+        )
     _fraction(
         geometry["cell_match_iou"],
         "geometry_limits.cell_match_iou",
@@ -512,7 +521,9 @@ def _validate_config(payload: object) -> dict[str, Any]:
 
     gate = _closed_mapping(config["gate"], fields=_GATE_FIELDS, name="config.gate")
     if _bool(gate["exact_grid_required"], "gate.exact_grid_required") is not True:
-        raise ValueError("gate.exact_grid_required must be true")
+        raise ValueError(
+            "canonical gate semantics require exact_grid_required to be true"
+        )
     _fraction(
         gate["minimum_cell_f1"], "gate.minimum_cell_f1", zero_allowed=False
     )
@@ -526,6 +537,17 @@ def _validate_config(payload: object) -> dict[str, Any]:
         gate["maximum_negative_false_positives"],
         "gate.maximum_negative_false_positives",
     )
+    canonical_payload = json.loads(DEFAULT_CONFIG.read_bytes())
+    for section in (
+        "source",
+        "render",
+        "geometry_limits",
+        "process_limits",
+        "detector_candidates",
+        "gate",
+    ):
+        if config[section] != canonical_payload[section]:
+            raise ValueError(f"config.{section} must match canonical semantics exactly")
     return dict(config)
 
 
@@ -537,10 +559,9 @@ def load_config(path: Path) -> dict[str, Any]:
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
         raise ValueError("config is not valid UTF-8 JSON") from error
     config = _validate_config(payload)
-    if path.resolve() == DEFAULT_CONFIG.resolve():
-        actual_sha256 = hashlib.sha256(raw).hexdigest()
-        if actual_sha256 != CANONICAL_CONFIG_SHA256:
-            raise ValueError("canonical config SHA-256 mismatch")
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != CANONICAL_CONFIG_SHA256:
+        raise ValueError("canonical config SHA-256 mismatch")
     return config
 
 
@@ -587,9 +608,20 @@ def _parse_annotation(
         columns = _positive_int(
             table_payload["columns"], "annotation.table.columns"
         )
+        if rows > 50:
+            raise ValueError("annotation.table.max_rows limit is 50")
+        if columns > 30:
+            raise ValueError("annotation.table.max_columns limit is 30")
+        cell_count = rows * columns
+        if cell_count > 1_500:
+            raise ValueError("annotation table exceeds maximum 1500 cells")
         cells_value = table_payload["cells"]
         if not isinstance(cells_value, list):
             raise ValueError("annotation.table.cells must be an array")
+        if len(cells_value) > 1_500:
+            raise ValueError("annotation table exceeds maximum 1500 cells")
+        if len(cells_value) != cell_count:
+            raise ValueError("cells must form a complete rectangular matrix")
         cells: list[CellReference] = []
         coordinates: set[tuple[int, int]] = set()
         for index, cell_value in enumerate(cells_value):
@@ -623,26 +655,75 @@ def _parse_annotation(
             tx1, ty1, tx2, ty2 = table_bbox
             if x1 < tx1 or y1 < ty1 or x2 > tx2 or y2 > ty2:
                 raise ValueError("cell box lies outside table bounds")
+            if row >= rows or column >= columns:
+                raise ValueError("cells must form a complete rectangular matrix")
+            if (row, column) in coordinates:
+                raise ValueError("cells must form a complete rectangular matrix")
             coordinates.add((row, column))
             cells.append(CellReference(row, column, bbox, text, blank))
-        expected_coordinates = {
-            (row, column) for row in range(rows) for column in range(columns)
-        }
-        if (
-            len(cells) != rows * columns
-            or len(coordinates) != len(cells)
-            or coordinates != expected_coordinates
-        ):
+        if len(coordinates) != cell_count:
             raise ValueError("cells must form a complete rectangular matrix")
-        for index, left in enumerate(cells):
-            for right in cells[index + 1 :]:
-                if _boxes_overlap(left.bbox, right.bbox):
+
+        by_coordinate = {(cell.row, cell.column): cell for cell in cells}
+        ordered = tuple(
+            by_coordinate[(row, column)]
+            for row in range(rows)
+            for column in range(columns)
+        )
+        for cell in ordered:
+            if cell.column:
+                left_cell = by_coordinate[(cell.row, cell.column - 1)]
+                if _boxes_overlap(left_cell.bbox, cell.bbox):
                     raise ValueError("overlapping cells are not allowed")
+            if cell.row:
+                upper_cell = by_coordinate[(cell.row - 1, cell.column)]
+                if _boxes_overlap(upper_cell.bbox, cell.bbox):
+                    raise ValueError("overlapping cells are not allowed")
+
+        row_bounds = [
+            (
+                by_coordinate[(row, 0)].bbox[1],
+                by_coordinate[(row, 0)].bbox[3],
+            )
+            for row in range(rows)
+        ]
+        column_bounds = [
+            (
+                by_coordinate[(0, column)].bbox[0],
+                by_coordinate[(0, column)].bbox[2],
+            )
+            for column in range(columns)
+        ]
+        if (
+            column_bounds[0][0] != table_bbox[0]
+            or row_bounds[0][0] != table_bbox[1]
+            or column_bounds[-1][1] != table_bbox[2]
+            or row_bounds[-1][1] != table_bbox[3]
+            or any(
+                column_bounds[index][1] != column_bounds[index + 1][0]
+                for index in range(columns - 1)
+            )
+            or any(
+                row_bounds[index][1] != row_bounds[index + 1][0]
+                for index in range(rows - 1)
+            )
+            or any(
+                cell.bbox
+                != (
+                    column_bounds[cell.column][0],
+                    row_bounds[cell.row][0],
+                    column_bounds[cell.column][1],
+                    row_bounds[cell.row][1],
+                )
+                for cell in ordered
+            )
+        ):
+            raise ValueError("cell boxes must share rectangular grid topology")
         table = TableReference(
             bbox=table_bbox,
             rows=rows,
             columns=columns,
-            cells=tuple(sorted(cells, key=lambda cell: (cell.row, cell.column))),
+            cells=ordered,
         )
 
     if require_verified_holdout and split == "holdout":
@@ -669,6 +750,43 @@ def _boxes_overlap(
         min(left[2], right[2]) > max(left[0], right[0])
         and min(left[3], right[3]) > max(left[1], right[1])
     )
+
+
+def template_fingerprint(annotation: PageAnnotation) -> str | None:
+    """Hash scale/position-invariant rectangular-grid topology."""
+    table = annotation.table
+    if table is None:
+        return None
+    left, top, right, bottom = table.bbox
+    width = right - left
+    height = bottom - top
+
+    def normalize(value: int, origin: int, extent: int) -> int:
+        return round((value - origin) * 1_000 / extent)
+
+    descriptor = {
+        "schema_version": 1,
+        "rows": table.rows,
+        "columns": table.columns,
+        "cells": [
+            [
+                cell.row,
+                cell.column,
+                normalize(cell.bbox[0], left, width),
+                normalize(cell.bbox[1], top, height),
+                normalize(cell.bbox[2], left, width),
+                normalize(cell.bbox[3], top, height),
+            ]
+            for cell in table.cells
+        ],
+    }
+    encoded = json.dumps(
+        descriptor,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def load_annotation(
@@ -721,6 +839,16 @@ def _parse_manifest_page(value: object, index: int) -> ManifestPage:
     template_family = _string(
         page["template_family"], f"manifest.pages[{index}].template_family"
     )
+    fingerprint_value = page["template_fingerprint"]
+    if negative:
+        if fingerprint_value is not None:
+            raise ValueError("negative page template_fingerprint must be null")
+        fingerprint = None
+    else:
+        fingerprint = _sha256(
+            fingerprint_value,
+            f"manifest.pages[{index}].template_fingerprint",
+        )
     render_path = _relative_private_path(
         page["render_path"], f"manifest.pages[{index}].render_path"
     )
@@ -750,6 +878,7 @@ def _parse_manifest_page(value: object, index: int) -> ManifestPage:
         split=split,
         negative=negative,
         template_family=template_family,
+        template_fingerprint=fingerprint,
         render_path=render_path,
         render_sha256=render_sha256,
         annotation_path=annotation_path,
@@ -780,6 +909,9 @@ def _validate_manifest_pages(pages: Sequence[ManifestPage]) -> None:
         raise ValueError("page 450 must be present in tuning")
 
     table_pages = tuning + holdout
+    fingerprints = [page.template_fingerprint for page in table_pages]
+    if len(set(fingerprints)) != len(fingerprints):
+        raise ValueError("duplicate structural template fingerprint")
     families = [page.template_family for page in table_pages]
     if len(set(families)) != len(families):
         tuning_families = {page.template_family for page in tuning}
@@ -995,6 +1127,7 @@ def render_frozen_pages(
                 "split": rendered.split,
                 "negative": rendered.negative,
                 "template_family": rendered.template_family,
+                "template_fingerprint": template_fingerprint(annotation),
                 "render_path": rendered.path.relative_to(output_root).as_posix(),
                 "render_sha256": rendered.sha256,
                 "annotation_path": annotation_path.relative_to(
@@ -1032,7 +1165,12 @@ def write_corpus_report(manifest: CorpusManifest, output: Path) -> None:
     """Write the privacy-preserving corpus inventory and no annotation data."""
     pages = manifest.tuning + manifest.holdout + manifest.negative
     verified = sum(page.review_status == "human_verified" for page in pages)
-    template_families = len({page.template_family for page in pages})
+    template_families = len(
+        {
+            page.template_fingerprint
+            for page in manifest.tuning + manifest.holdout
+        }
+    ) + (1 if manifest.negative else 0)
     report = (
         "# Ruled-table OCR corpus\n"
         "\n"

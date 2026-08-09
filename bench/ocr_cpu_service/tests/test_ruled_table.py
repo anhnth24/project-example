@@ -21,6 +21,7 @@ from experiments.ruled_table import (  # noqa: E402
     load_config,
     load_manifest,
     render_frozen_pages,
+    template_fingerprint,
     write_corpus_report,
 )
 
@@ -105,11 +106,18 @@ def _manifest_page(
     template_family: str,
     annotation_payload: dict | None = None,
 ) -> dict:
-    annotation_payload = annotation_payload or (
-        _negative_annotation(page_number=page_number)
-        if negative
-        else valid_annotation(page_number=page_number, split=split)
-    )
+    if annotation_payload is None:
+        annotation_payload = (
+            _negative_annotation(page_number=page_number)
+            if negative
+            else valid_annotation(page_number=page_number, split=split)
+        )
+        if not negative:
+            midpoint = 20 + (page_number // 10) % 180
+            annotation_payload["table"]["cells"][0]["bbox"][2] = midpoint
+            annotation_payload["table"]["cells"][1]["bbox"][0] = midpoint
+            annotation_payload["table"]["cells"][2]["bbox"][2] = midpoint
+            annotation_payload["table"]["cells"][3]["bbox"][0] = midpoint
     annotation_payload["source_sha256"] = CANONICAL_SOURCE_SHA256
     render = root / "renders" / f"page-{page_number:04d}.png"
     annotation = root / "annotations" / f"page-{page_number:04d}.json"
@@ -119,11 +127,16 @@ def _manifest_page(
     annotation_payload["render_sha256"] = render_sha256
     _write_json(annotation, annotation_payload)
     review = annotation_payload["review"]
+    parsed_annotation = load_annotation(
+        annotation,
+        expected_render_sha256=render_sha256,
+    )
     return {
         "page_number": page_number,
         "split": split,
         "negative": negative,
         "template_family": template_family,
+        "template_fingerprint": template_fingerprint(parsed_annotation),
         "render_path": render.relative_to(root).as_posix(),
         "render_sha256": render_sha256,
         "annotation_path": annotation.relative_to(root).as_posix(),
@@ -205,6 +218,75 @@ def test_canonical_config_is_exact_and_immutable():
     assert config["geometry_limits"]["max_rows"] * config["geometry_limits"][
         "max_columns"
     ] <= config["geometry_limits"]["max_cells"]
+
+
+def _set_config_path(payload: dict, path: tuple[object, ...], value: object) -> None:
+    current: object = payload
+    for component in path[:-1]:
+        current = current[component]
+    current[path[-1]] = value
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("source", "id"), "other-source"),
+        (("source", "expected_sha256"), "a" * 64),
+        (("source", "max_bytes"), 17_281_750),
+        (("render", "dpi"), 299),
+        (("render", "max_pixels"), 49_999_999),
+        (("render", "max_dimension"), 9_999),
+        (("geometry_limits", "max_rows"), 49),
+        (("geometry_limits", "max_columns"), 29),
+        (("geometry_limits", "max_cells"), 1_499),
+        (("geometry_limits", "max_table_regions"), 2),
+        (("geometry_limits", "cell_match_iou"), 0.79),
+        (("process_limits", "cpu_threads"), 2),
+        (("process_limits", "page_timeout_seconds"), 19),
+        (("process_limits", "cell_timeout_seconds"), 9),
+        (("process_limits", "max_output_bytes_per_cell"), 65_535),
+        (("process_limits", "max_output_bytes_per_page"), 1_048_575),
+        (("process_limits", "max_rss_bytes"), 805_306_367),
+        (("process_limits", "sample_interval_ms"), 9),
+        (("detector_candidates", 0, "id"), "strict-renamed"),
+        (("detector_candidates", 1, "id"), "balanced-renamed"),
+        (("detector_candidates", 2, "id"), "balanced-psm8"),
+        (("detector_candidates", 1, "dark_max"), 159),
+        (("detector_candidates", 1, "min_horizontal_fraction"), 0.19),
+        (("detector_candidates", 1, "min_vertical_fraction"), 0.07),
+        (("detector_candidates", 1, "max_gap_pixels"), 11),
+        (("detector_candidates", 1, "cluster_tolerance_pixels"), 4),
+        (("detector_candidates", 1, "intersection_tolerance_pixels"), 4),
+        (
+            ("detector_candidates", 1, "deskew_angles_degrees"),
+            [-1.0, 0.0, 1.0],
+        ),
+        (("detector_candidates", 1, "cell_inset_pixels"), 3),
+        (("detector_candidates", 1, "psm"), 7),
+        (("gate", "exact_grid_required"), False),
+        (("gate", "minimum_cell_f1"), 0.94),
+        (("gate", "maximum_cell_cer"), 0.06),
+        (("gate", "minimum_empty_cell_accuracy"), 0.97),
+        (("gate", "maximum_negative_false_positives"), 1),
+    ],
+)
+def test_config_rejects_every_nested_semantic_drift(tmp_path, path, value):
+    payload = json.loads(CONFIG.read_text(encoding="utf-8"))
+    _set_config_path(payload, path, value)
+    altered = tmp_path / "altered.json"
+    _write_json(altered, payload)
+    with pytest.raises(ValueError, match="canonical|semantics|candidate"):
+        load_config(altered)
+
+
+def test_config_accepts_only_byte_identical_custom_copy(tmp_path):
+    copied = tmp_path / "copied.json"
+    copied.write_bytes(CONFIG.read_bytes())
+    assert load_config(copied) == load_config(CONFIG)
+
+    copied.write_bytes(CONFIG.read_bytes() + b" ")
+    with pytest.raises(ValueError, match="canonical config SHA-256"):
+        load_config(copied)
 
 
 @pytest.mark.parametrize(
@@ -343,6 +425,78 @@ def test_annotation_returns_frozen_typed_contract(tmp_path):
     )
     with pytest.raises(AttributeError):
         result.page_number = 1
+
+
+def test_template_fingerprint_uses_normalized_geometry(tmp_path):
+    original_path = tmp_path / "original.json"
+    _write_json(original_path, valid_annotation())
+    original = load_annotation(
+        original_path,
+        expected_render_sha256="b" * 64,
+    )
+
+    scaled = valid_annotation()
+    scaled["table"]["bbox"] = [110, 220, 510, 420]
+    for cell in scaled["table"]["cells"]:
+        x1, y1, x2, y2 = cell["bbox"]
+        cell["bbox"] = [
+            110 + (x1 - 10) * 2,
+            220 + (y1 - 20) * 2,
+            110 + (x2 - 10) * 2,
+            220 + (y2 - 20) * 2,
+        ]
+    scaled_path = tmp_path / "scaled.json"
+    _write_json(scaled_path, scaled)
+    scaled_annotation = load_annotation(
+        scaled_path,
+        expected_render_sha256="b" * 64,
+    )
+    assert template_fingerprint(original) == template_fingerprint(scaled_annotation)
+
+    changed = copy.deepcopy(scaled)
+    changed["table"]["cells"][0]["bbox"][2] = 290
+    changed["table"]["cells"][1]["bbox"][0] = 290
+    changed["table"]["cells"][2]["bbox"][2] = 290
+    changed["table"]["cells"][3]["bbox"][0] = 290
+    changed_path = tmp_path / "changed.json"
+    _write_json(changed_path, changed)
+    changed_annotation = load_annotation(
+        changed_path,
+        expected_render_sha256="b" * 64,
+    )
+    assert template_fingerprint(original) != template_fingerprint(changed_annotation)
+
+
+@pytest.mark.parametrize(
+    ("rows", "columns", "match"),
+    [
+        (51, 1, "max_rows"),
+        (1, 31, "max_columns"),
+    ],
+)
+def test_annotation_rejects_geometry_dimensions_before_matrix_allocation(
+    tmp_path, rows, columns, match
+):
+    annotation = valid_annotation()
+    annotation["table"]["rows"] = rows
+    annotation["table"]["columns"] = columns
+    path = tmp_path / "annotation.json"
+    _write_json(path, annotation)
+    with pytest.raises(ValueError, match=match):
+        load_annotation(path, expected_render_sha256="b" * 64)
+
+
+def test_annotation_rejects_cell_overflow_before_cell_validation(tmp_path):
+    annotation = valid_annotation()
+    annotation["table"]["rows"] = 50
+    annotation["table"]["columns"] = 30
+    annotation["table"]["cells"] = [
+        {"not": "a valid cell"} for _ in range(1_501)
+    ]
+    path = tmp_path / "annotation.json"
+    _write_json(path, annotation)
+    with pytest.raises(ValueError, match="maximum 1500 cells"):
+        load_annotation(path, expected_render_sha256="b" * 64)
 
 
 def test_annotation_requires_complete_non_overlapping_matrix(tmp_path):
@@ -514,6 +668,33 @@ def test_manifest_rejects_invalid_closed_schema(tmp_path, mutate, match):
         load_manifest(path, mode="tuning")
 
 
+def test_manifest_rejects_duplicate_structural_fingerprint_despite_distinct_ids(
+    tmp_path,
+):
+    path = write_manifest_fixture(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["pages"][6]["template_fingerprint"] = payload["pages"][0][
+        "template_fingerprint"
+    ]
+    assert payload["pages"][6]["template_family"] != payload["pages"][0][
+        "template_family"
+    ]
+    _write_json(path, payload)
+    with pytest.raises(ValueError, match="duplicate structural template fingerprint"):
+        load_manifest(path, mode="tuning")
+
+
+def test_open_page_verifies_fingerprint_against_annotation(tmp_path):
+    path = write_manifest_fixture(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    page = next(item for item in payload["pages"] if item["page_number"] == 450)
+    page["template_fingerprint"] = "f" * 64
+    _write_json(path, payload)
+    loaded = load_manifest(path, mode="tuning")
+    with pytest.raises(ValueError, match="template fingerprint mismatch"):
+        loaded.open_page(450)
+
+
 def test_manifest_exposes_exact_frozen_splits(tmp_path):
     manifest = load_manifest(write_manifest_fixture(tmp_path), mode="holdout")
     assert manifest.source_sha256 == CANONICAL_SOURCE_SHA256
@@ -525,26 +706,32 @@ def test_manifest_exposes_exact_frozen_splits(tmp_path):
 
 def test_render_rejects_source_size_before_read_or_hash(tmp_path):
     source = tmp_path / "oversized.pdf"
-    source.write_bytes(b"x" * 16)
-    config = json.loads(CONFIG.read_text(encoding="utf-8"))
-    config["source"]["max_bytes"] = 15
-    config_path = tmp_path / "config.json"
-    _write_json(config_path, config)
+    source.write_bytes(b"x")
     original_read_bytes = Path.read_bytes
+    original_stat = Path.stat
 
     def guarded_read_bytes(path: Path) -> bytes:
         if path == source:
             raise AssertionError("must not read oversized source")
         return original_read_bytes(path)
 
-    with patch.object(Path, "read_bytes", guarded_read_bytes):
+    def oversized_stat(path: Path):
+        result = original_stat(path)
+        if path == source:
+            return type("OversizedStat", (), {"st_size": 17_281_752})()
+        return result
+
+    with (
+        patch.object(Path, "read_bytes", guarded_read_bytes),
+        patch.object(Path, "stat", oversized_stat),
+    ):
         with pytest.raises(ValueError, match="source size limit"):
             render_frozen_pages(
                 source,
                 pages=[],
                 output_root=tmp_path / "output",
                 manifest_path=tmp_path / "manifest.json",
-                config_path=config_path,
+                config_path=CONFIG,
             )
 
 
