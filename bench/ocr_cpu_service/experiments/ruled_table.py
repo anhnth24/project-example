@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Mapping, Sequence
 
 from benchmark.render import RenderLimits, open_pdf, render_page
+from experiments.table_lines import DetectorConfig
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
@@ -563,6 +564,45 @@ def load_config(path: Path) -> dict[str, Any]:
     if actual_sha256 != CANONICAL_CONFIG_SHA256:
         raise ValueError("canonical config SHA-256 mismatch")
     return config
+
+
+def detector_config(
+    config: Mapping[str, Any], candidate_id: str
+) -> DetectorConfig:
+    """Build one typed geometry candidate from validated canonical config."""
+    candidates = config.get("detector_candidates")
+    geometry = config.get("geometry_limits")
+    render = config.get("render")
+    if (
+        not isinstance(candidates, list)
+        or not isinstance(geometry, Mapping)
+        or not isinstance(render, Mapping)
+    ):
+        raise ValueError("config must contain validated detector geometry")
+    matches = [
+        candidate
+        for candidate in candidates
+        if isinstance(candidate, Mapping) and candidate.get("id") == candidate_id
+    ]
+    if len(matches) != 1:
+        raise ValueError("candidate_id must identify one canonical candidate")
+    candidate = matches[0]
+    return DetectorConfig(
+        dark_max=candidate["dark_max"],
+        min_horizontal_fraction=candidate["min_horizontal_fraction"],
+        min_vertical_fraction=candidate["min_vertical_fraction"],
+        max_gap_pixels=candidate["max_gap_pixels"],
+        cluster_tolerance_pixels=candidate["cluster_tolerance_pixels"],
+        intersection_tolerance_pixels=candidate[
+            "intersection_tolerance_pixels"
+        ],
+        deskew_angles_degrees=tuple(candidate["deskew_angles_degrees"]),
+        max_rows=geometry["max_rows"],
+        max_columns=geometry["max_columns"],
+        max_cells=geometry["max_cells"],
+        max_pixels=render["max_pixels"],
+        max_dimension=render["max_dimension"],
+    )
 
 
 def _parse_annotation(
