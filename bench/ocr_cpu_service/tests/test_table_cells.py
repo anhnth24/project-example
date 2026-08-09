@@ -669,9 +669,10 @@ def test_all_blank_page_times_out_during_preprocessing_without_sleep(
 def test_page_deadline_is_enforced_during_tessdata_hashing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    ticks = iter((0.0, 0.0, 0.0, 21.0))
+    ticks = [0.0, 0.0, 0.0, 21.0]
     monkeypatch.setattr(
-        "experiments.table_cells.time.monotonic", lambda: next(ticks)
+        "experiments.table_cells.time.monotonic",
+        lambda: ticks.pop(0) if ticks else 21.0,
     )
     grid = rectangular_grid(rows=1, columns=1)
     image = nonblank_grid_image(grid)
