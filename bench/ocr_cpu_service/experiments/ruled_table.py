@@ -3049,7 +3049,7 @@ def _parser() -> argparse.ArgumentParser:
     validate.add_argument("--split", choices=("tuning", "holdout"), required=True)
     report = subparsers.add_parser("report")
     report.add_argument("--tuning", type=Path, required=True)
-    report.add_argument("--holdout", type=Path)
+    report.add_argument("--holdout", type=Path, required=True)
     report.add_argument("--output", type=Path, required=True)
     return parser
 
