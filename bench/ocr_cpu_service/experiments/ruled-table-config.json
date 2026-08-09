@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "source": {
+    "id": "official-89-2026-tt-btc",
+    "expected_sha256": "952c45ffc0f10bfc176bd9ae6b3d204fd3a034294ee270278957b9c11e1471dc",
+    "max_bytes": 17281751
+  },
+  "render": {
+    "dpi": 300,
+    "max_pixels": 50000000,
+    "max_dimension": 10000
+  },
+  "geometry_limits": {
+    "max_rows": 50,
+    "max_columns": 30,
+    "max_cells": 1500,
+    "max_table_regions": 1,
+    "cell_match_iou": 0.8
+  },
+  "process_limits": {
+    "cpu_threads": 1,
+    "page_timeout_seconds": 20,
+    "cell_timeout_seconds": 10,
+    "max_output_bytes_per_cell": 65536,
+    "max_output_bytes_per_page": 1048576,
+    "max_rss_bytes": 805306368,
+    "sample_interval_ms": 10
+  },
+  "detector_candidates": [
+    {
+      "id": "strict-psm6",
+      "dark_max": 128,
+      "min_horizontal_fraction": 0.25,
+      "min_vertical_fraction": 0.1,
+      "max_gap_pixels": 8,
+      "cluster_tolerance_pixels": 4,
+      "intersection_tolerance_pixels": 4,
+      "deskew_angles_degrees": [
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5
+      ],
+      "cell_inset_pixels": 4,
+      "psm": 6
+    },
+    {
+      "id": "balanced-psm6",
+      "dark_max": 160,
+      "min_horizontal_fraction": 0.2,
+      "min_vertical_fraction": 0.08,
+      "max_gap_pixels": 12,
+      "cluster_tolerance_pixels": 5,
+      "intersection_tolerance_pixels": 5,
+      "deskew_angles_degrees": [
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5
+      ],
+      "cell_inset_pixels": 4,
+      "psm": 6
+    },
+    {
+      "id": "balanced-psm7",
+      "dark_max": 160,
+      "min_horizontal_fraction": 0.2,
+      "min_vertical_fraction": 0.08,
+      "max_gap_pixels": 12,
+      "cluster_tolerance_pixels": 5,
+      "intersection_tolerance_pixels": 5,
+      "deskew_angles_degrees": [
+        -1.5,
+        -1.0,
+        -0.5,
+        0.0,
+        0.5,
+        1.0,
+        1.5
+      ],
+      "cell_inset_pixels": 4,
+      "psm": 7
+    }
+  ],
+  "gate": {
+    "exact_grid_required": true,
+    "minimum_cell_f1": 0.95,
+    "maximum_cell_cer": 0.05,
+    "minimum_empty_cell_accuracy": 0.98,
+    "maximum_negative_false_positives": 0
+  }
+}
