@@ -27,6 +27,7 @@ from experiments.ruled_table import (  # noqa: E402
     PageAnnotation,
     PositionedBox,
     TableReference,
+    _aggregate_candidate,
     _empty_cell_evidence,
     _parser,
     _recompute_aggregates,
@@ -899,8 +900,23 @@ def _record(
         "peak_rss_bytes": peak_rss_bytes,
         "resource": {
             "timed_out": status == "timeout",
+            "output_limited": status == "output_limit",
+            "candidate_failed": status == "candidate_error",
             "resource_violation": status == "resource_limit",
             "cleanup_failed": status == "cleanup_error",
+            "primary_error_kind": (
+                status
+                if status
+                in {
+                    "invalid_grid",
+                    "timeout",
+                    "output_limit",
+                    "candidate_error",
+                    "resource_limit",
+                    "cleanup_error",
+                }
+                else None
+            ),
         },
         "bindings": _artifact_bindings(),
     }
@@ -951,6 +967,12 @@ def _aggregate(candidate_id: str, records: list[dict]) -> dict:
         "negative_pages": len(negatives),
         "failures": sum(record["status"] not in successful for record in records),
         "timeouts": sum(record["resource"]["timed_out"] for record in records),
+        "output_limit_failures": sum(
+            record["resource"]["output_limited"] for record in records
+        ),
+        "candidate_failures": sum(
+            record["resource"]["candidate_failed"] for record in records
+        ),
         "resource_violations": sum(
             record["resource"]["resource_violation"] for record in records
         ),
@@ -1060,6 +1082,24 @@ def artifact_fixture(split: str = "holdout") -> dict:
         "winner_id": winner_id,
         "decision": decision,
     }
+
+
+def no_winner_tuning_artifact() -> dict:
+    payload = artifact_fixture("tuning")
+    for record in payload["records"]:
+        record["status"] = "invalid_grid"
+        record["rows"] = 0
+        record["columns"] = 0
+        record["predicted_boxes"] = []
+        record["resource"]["primary_error_kind"] = "invalid_grid"
+        for cell in record["cells"]:
+            cell["character_edits"] = cell["reference_characters"]
+            cell["word_edits"] = cell["reference_words"]
+            cell["predicted_blank"] = False
+            cell["prediction_present"] = False
+    payload["aggregates"] = _recompute_aggregates(payload)
+    payload["winner_id"] = None
+    return payload
 
 
 def _canonical_bindings_fixture() -> ArtifactBindings:
@@ -1272,9 +1312,16 @@ def test_validate_tuning_requires_access_six_zero_zero_and_all_candidate_records
 
 
 def test_report_is_deterministic_aggregate_only_and_private():
-    payload = artifact_fixture()
-    report_one = render_report(payload)
-    report_two = render_report(copy.deepcopy(payload))
+    tuning = artifact_fixture("tuning")
+    holdout = artifact_fixture("holdout")
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        report_one = render_report(tuning, holdout)
+        report_two = render_report(
+            copy.deepcopy(tuning), copy.deepcopy(holdout)
+        )
     assert report_one.encode("utf-8") == report_two.encode("utf-8")
     for secret in (
         "OCR_SECRET_PLATFORM",
@@ -1292,6 +1339,44 @@ def test_report_is_deterministic_aggregate_only_and_private():
     assert "visible rules" in report_one
     assert "no merged cells" in report_one
     assert "no production or full-document authorization" in report_one
+
+
+def test_public_report_api_rejects_private_canary_before_rendering():
+    tuning = artifact_fixture("tuning")
+    holdout = artifact_fixture("holdout")
+    holdout["records"][0]["printable_private_field"] = "PRIVATE_DIRECT_CANARY"
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="unknown keys"),
+    ):
+        render_report(tuning, holdout)
+
+
+def test_tuning_without_winner_reports_stop_without_holdout():
+    tuning = no_winner_tuning_artifact()
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        report = render_report(tuning)
+        assert "## Decision: STOP" in report
+        with pytest.raises(ValueError, match="must not include holdout"):
+            render_report(tuning, artifact_fixture("holdout"))
+
+
+def test_tuning_winner_requires_holdout_report_artifact():
+    tuning = artifact_fixture("tuning")
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="requires.*holdout"),
+    ):
+        render_report(tuning)
 
 
 def test_holdout_run_fails_review_gate_before_opening_any_page(tmp_path):
@@ -1410,6 +1495,7 @@ def test_failure_pages_micro_average_full_reference_deletions(
         record["rows"] = 0
         record["columns"] = 0
         record["predicted_boxes"] = []
+        record["resource"]["primary_error_kind"] = "invalid_grid"
         record["cells"][0].update(
             {
                 "character_edits": 10,
@@ -1507,7 +1593,13 @@ def _detected_grid_for_annotation(annotation: PageAnnotation) -> DetectionResult
     return DetectionResult("detected", 0.0, (220, 130), grid, {})
 
 
-def test_recognition_cleanup_failure_clears_geometry_and_keeps_deletions(tmp_path):
+@pytest.mark.parametrize(
+    "primary_kind",
+    ["timeout", "output_limit", "resource_limit", "candidate_error"],
+)
+def test_recognition_cleanup_failure_preserves_primary_and_cleanup(
+    tmp_path, primary_kind
+):
     annotation_path = tmp_path / "annotation.json"
     _write_json(annotation_path, valid_annotation())
     annotation = load_annotation(
@@ -1532,7 +1624,7 @@ def test_recognition_cleanup_failure_clears_geometry_and_keeps_deletions(tmp_pat
     image.save(encoded, format="PNG")
     image.close()
     opened = OpenedPage(manifest_page, annotation, encoded.getvalue())
-    failure = TableRecognitionError("timeout")
+    failure = TableRecognitionError(primary_kind)
     failure.report_cleanup_failure(TableCleanupError())
     config = load_config(CONFIG)
     candidate = config["detector_candidates"][0]
@@ -1552,6 +1644,17 @@ def test_recognition_cleanup_failure_clears_geometry_and_keeps_deletions(tmp_pat
         )
     assert record["status"] == "cleanup_error"
     assert record["resource"]["cleanup_failed"] is True
+    assert record["resource"]["primary_error_kind"] == primary_kind
+    assert record["resource"]["timed_out"] is (primary_kind == "timeout")
+    assert record["resource"]["output_limited"] is (
+        primary_kind == "output_limit"
+    )
+    assert record["resource"]["candidate_failed"] is (
+        primary_kind == "candidate_error"
+    )
+    assert record["resource"]["resource_violation"] is (
+        primary_kind == "resource_limit"
+    )
     assert record["rows"] == record["columns"] == 0
     assert record["predicted_boxes"] == []
     assert sum(item["character_edits"] for item in record["cells"]) == sum(
@@ -1559,6 +1662,18 @@ def test_recognition_cleanup_failure_clears_geometry_and_keeps_deletions(tmp_pat
     )
     assert sum(item["word_edits"] for item in record["cells"]) == sum(
         item["reference_words"] for item in record["cells"]
+    )
+    aggregate = _aggregate_candidate(candidate["id"], [record])
+    assert aggregate["cleanup_failures"] == 1
+    assert aggregate["timeouts"] == (primary_kind == "timeout")
+    assert aggregate["output_limit_failures"] == (
+        primary_kind == "output_limit"
+    )
+    assert aggregate["candidate_failures"] == (
+        primary_kind == "candidate_error"
+    )
+    assert aggregate["resource_violations"] == (
+        primary_kind == "resource_limit"
     )
 
 
@@ -1570,6 +1685,7 @@ def test_validator_accepts_consistent_failure_and_rejects_retained_geometry():
     record["columns"] = 0
     record["predicted_boxes"] = []
     record["resource"]["timed_out"] = True
+    record["resource"]["primary_error_kind"] = "timeout"
     record["cells"][0].update(
         {
             "character_edits": 10,
@@ -1660,16 +1776,16 @@ def test_task_five_cli_exposes_exact_planned_arguments():
     )
     assert report.tuning == Path("tuning.json")
     assert report.holdout == Path("holdout.json")
-    with pytest.raises(SystemExit):
-        parser.parse_args(
-            [
-                "report",
-                "--tuning",
-                "tuning.json",
-                "--output",
-                "report.md",
-            ]
-        )
+    tuning_only_report = parser.parse_args(
+        [
+            "report",
+            "--tuning",
+            "tuning.json",
+            "--output",
+            "report.md",
+        ]
+    )
+    assert tuning_only_report.holdout is None
 
 
 def test_inventory_require_review_rejects_before_page_open(tmp_path):
@@ -1779,13 +1895,18 @@ def test_byte_identical_custom_inputs_pass_preflight_before_open(tmp_path):
     assert opened.call_count == 1
 
 
-def test_frozen_winner_is_closed_and_binds_exact_candidate():
+def test_frozen_winner_binds_exact_validated_tuning_bytes(tmp_path):
     tuning = artifact_fixture("tuning")
+    tuning_path = tmp_path / "raw" / "tuning.json"
+    _write_json(tuning_path, tuning)
     with patch(
         "experiments.ruled_table._canonical_artifact_bindings",
         return_value=_canonical_bindings_fixture(),
     ):
-        frozen = freeze_tuning_winner(tuning)
+        frozen = freeze_tuning_winner(
+            tuning,
+            tuning_artifact_bytes=tuning_path.read_bytes(),
+        )
         assert set(frozen) == {
             "schema_version",
             "winner_id",
@@ -1794,7 +1915,40 @@ def test_frozen_winner_is_closed_and_binds_exact_candidate():
             "manifest_sha256",
             "tuning_artifact_sha256",
         }
-        validate_frozen_winner(frozen)
+        validate_frozen_winner(
+            frozen,
+            tuning_artifact_path=tuning_path,
+        )
+    assert frozen["tuning_artifact_sha256"] == hashlib.sha256(
+        tuning_path.read_bytes()
+    ).hexdigest()
+
+    tuning_path.write_bytes(tuning_path.read_bytes() + b" ")
+    with (
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        pytest.raises(ValueError, match="tuning artifact.*SHA-256"),
+    ):
+        validate_frozen_winner(
+            frozen,
+            tuning_artifact_path=tuning_path,
+        )
+
+
+def test_frozen_winner_rejects_fabricated_candidate_against_tuning(tmp_path):
+    tuning = artifact_fixture("tuning")
+    tuning_path = tmp_path / "raw" / "tuning.json"
+    _write_json(tuning_path, tuning)
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        frozen = freeze_tuning_winner(
+            tuning,
+            tuning_artifact_bytes=tuning_path.read_bytes(),
+        )
     frozen["configuration_sha256"] = "f" * 64
     with (
         patch(
@@ -1803,7 +1957,140 @@ def test_frozen_winner_is_closed_and_binds_exact_candidate():
         ),
         pytest.raises(ValueError, match="configuration"),
     ):
-        validate_frozen_winner(frozen)
+        validate_frozen_winner(
+            frozen,
+            tuning_artifact_path=tuning_path,
+        )
+
+
+def _valid_frozen_files(tmp_path: Path) -> tuple[Path, dict]:
+    tuning = artifact_fixture("tuning")
+    tuning_path = tmp_path / "raw" / "tuning.json"
+    _write_json(tuning_path, tuning)
+    with patch(
+        "experiments.ruled_table._canonical_artifact_bindings",
+        return_value=_canonical_bindings_fixture(),
+    ):
+        frozen = freeze_tuning_winner(
+            tuning,
+            tuning_artifact_bytes=tuning_path.read_bytes(),
+        )
+    return tuning_path, frozen
+
+
+def test_holdout_marker_is_atomic_and_blocks_crashed_rerun_before_access(
+    tmp_path,
+):
+    tuning_path, frozen = _valid_frozen_files(tmp_path)
+    marker = tuning_path.parent / "holdout.started.json"
+    manifest = load_manifest(
+        SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json",
+        mode="holdout",
+    )
+    config = load_config(CONFIG)
+    with (
+        patch(
+            "experiments.ruled_table._preflight_official_inputs",
+            return_value=(config, manifest),
+        ),
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        patch(
+            "experiments.ruled_table.CorpusManifest.open_page",
+            side_effect=RuntimeError("simulated crash after marker"),
+        ) as opened,
+        pytest.raises(RuntimeError, match="simulated crash"),
+    ):
+        run_split(
+            "holdout",
+            frozen_winner=frozen,
+            tuning_artifact_path=tuning_path,
+            holdout_marker_path=marker,
+        )
+    assert opened.call_count == 1
+    marker_payload = json.loads(marker.read_bytes())
+    assert set(marker_payload) == {
+        "schema_version",
+        "split",
+        "config_sha256",
+        "manifest_sha256",
+        "tuning_artifact_sha256",
+        "winner_id",
+        "holdout_pages",
+        "negative_pages",
+    }
+    assert "path" not in json.dumps(marker_payload)
+
+    with (
+        patch(
+            "experiments.ruled_table._preflight_official_inputs",
+            return_value=(config, manifest),
+        ),
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        patch("experiments.ruled_table.CorpusManifest.open_page") as opened_again,
+        pytest.raises(ValueError, match="already.*attempted|marker"),
+    ):
+        run_split(
+            "holdout",
+            frozen_winner=frozen,
+            tuning_artifact_path=tuning_path,
+            holdout_marker_path=marker,
+        )
+    opened_again.assert_not_called()
+    assert manifest.access_counts == {
+        "tuning": 0,
+        "holdout": 0,
+        "negative": 0,
+    }
+
+
+@pytest.mark.parametrize("fabrication", ["hash", "candidate"])
+def test_fabricated_frozen_winner_fails_before_marker_or_page(
+    tmp_path, fabrication
+):
+    tuning_path, frozen = _valid_frozen_files(tmp_path)
+    if fabrication == "hash":
+        frozen["tuning_artifact_sha256"] = "f" * 64
+    else:
+        strict = _candidate_descriptors()[0]
+        frozen["winner_id"] = strict["id"]
+        frozen["configuration_sha256"] = strict["configuration_sha256"]
+    marker = tuning_path.parent / "holdout.started.json"
+    manifest = load_manifest(
+        SERVICE_ROOT / ".data" / "ruled-table" / "manifest.json",
+        mode="holdout",
+    )
+    config = load_config(CONFIG)
+    with (
+        patch(
+            "experiments.ruled_table._preflight_official_inputs",
+            return_value=(config, manifest),
+        ),
+        patch(
+            "experiments.ruled_table._canonical_artifact_bindings",
+            return_value=_canonical_bindings_fixture(),
+        ),
+        patch("experiments.ruled_table.CorpusManifest.open_page") as opened,
+        pytest.raises(ValueError, match="tuning artifact|winner"),
+    ):
+        run_split(
+            "holdout",
+            frozen_winner=frozen,
+            tuning_artifact_path=tuning_path,
+            holdout_marker_path=marker,
+        )
+    opened.assert_not_called()
+    assert not marker.exists()
+    assert manifest.access_counts == {
+        "tuning": 0,
+        "holdout": 0,
+        "negative": 0,
+    }
 
 
 @pytest.mark.parametrize("kind", ["stale", "noncanonical", "private"])
