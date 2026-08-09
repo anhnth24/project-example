@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import psutil
 import pytest
@@ -22,6 +22,7 @@ from benchmark.run import (  # noqa: E402
     CandidateWorkerProtocolError,
     IsolatedCandidateWorker,
     _isolated_worker,
+    _process_tree_rss,
     run_candidate,
     sanitized_candidate_environment,
 )
@@ -641,3 +642,68 @@ def test_run_candidate_maps_hard_rss_limit_for_existing_user(
     assert not result.success
     assert result.record["error_kind"] == "resource_limit"
     assert result.record["resource_limit_violation"] is True
+
+
+@pytest.mark.parametrize(
+    "gone",
+    [
+        psutil.NoSuchProcess(pid=101),
+        psutil.ZombieProcess(pid=101),
+        ProcessLookupError("descendant exited"),
+    ],
+)
+def test_process_tree_rss_skips_only_confirmed_gone_descendant(
+    gone: BaseException,
+) -> None:
+    root = Mock()
+    root.memory_info.return_value = Mock(rss=12_345)
+    child = Mock()
+    child.memory_info.side_effect = gone
+    root.children.return_value = [child]
+
+    assert _process_tree_rss(root) == 12_345
+    root.memory_info.assert_called_once_with()
+    root.children.assert_called_once_with(recursive=True)
+
+
+@pytest.mark.parametrize(
+    "root_failure",
+    [
+        psutil.NoSuchProcess(pid=100),
+        psutil.ZombieProcess(pid=100),
+        ProcessLookupError("root exited"),
+    ],
+)
+def test_process_tree_rss_root_disappearance_remains_failure(
+    root_failure: BaseException,
+) -> None:
+    root = Mock()
+    root.memory_info.side_effect = root_failure
+
+    with pytest.raises(type(root_failure)):
+        _process_tree_rss(root)
+    root.children.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("failure_location", "failure"),
+    [
+        ("enumeration", psutil.AccessDenied(pid=100)),
+        ("descendant", psutil.AccessDenied(pid=101)),
+    ],
+)
+def test_process_tree_rss_access_denied_remains_fail_closed(
+    failure_location: str,
+    failure: BaseException,
+) -> None:
+    root = Mock()
+    root.memory_info.return_value = Mock(rss=12_345)
+    child = Mock()
+    if failure_location == "enumeration":
+        root.children.side_effect = failure
+    else:
+        root.children.return_value = [child]
+        child.memory_info.side_effect = failure
+
+    with pytest.raises(psutil.AccessDenied):
+        _process_tree_rss(root)
