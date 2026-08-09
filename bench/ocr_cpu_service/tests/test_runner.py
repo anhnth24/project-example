@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest.mock import patch
 
 import psutil
 import pytest
@@ -486,10 +487,10 @@ def test_request_rss_cap_kills_worker_and_candidate_tree(tmp_path: Path) -> None
         "import os\n"
         "from pathlib import Path\n"
         "import time\n"
-        "allocation = bytearray(100 * 1024 * 1024)\n"
         "Path(os.environ['PROCESS_IDS']).write_text(\n"
         "    json.dumps({'recognizer': os.getpid()}), encoding='utf-8'\n"
         ")\n"
+        "allocation = bytearray(100 * 1024 * 1024)\n"
         "time.sleep(60)\n",
         encoding="utf-8",
     )
