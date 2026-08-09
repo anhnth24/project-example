@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import select
@@ -88,7 +89,12 @@ class Candidate(Protocol):
     label: str
     metadata: dict[str, Any]
 
-    def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
+    def recognize(
+        self,
+        page: BenchmarkPage,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> RecognitionMeasurement:
         """Recognize one page with explicit timing and RSS semantics."""
 
 
@@ -283,9 +289,29 @@ class IsolatedCandidateWorker:
             **_json_compatible(provenance or {}),
         }
 
-    def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
+    def recognize(
+        self,
+        page: BenchmarkPage,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> RecognitionMeasurement:
         if self._process.stdin is None:
             raise RuntimeError("candidate worker stdin is unavailable")
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and positive")
+        effective_timeout = min(
+            self._timeout_seconds,
+            (
+                float(timeout_seconds)
+                if timeout_seconds is not None
+                else self._timeout_seconds
+            ),
+        )
         self._process.stdin.write(
             json.dumps(
                 {
@@ -298,7 +324,7 @@ class IsolatedCandidateWorker:
         )
         self._process.stdin.flush()
         event, resource = _read_event_with_process_tree_rss(
-            self._process, timeout_seconds=self._timeout_seconds
+            self._process, timeout_seconds=effective_timeout
         )
         if event.get("event") == "failure":
             if event.get("error_kind") == "output_limit":

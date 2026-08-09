@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Mapping, Sequence
 
 from benchmark.render import RenderLimits, open_pdf, render_page
+from experiments.table_cells import ProcessLimits
 from experiments.table_lines import DetectorConfig
 
 
@@ -564,6 +565,12 @@ def load_config(path: Path) -> dict[str, Any]:
     if actual_sha256 != CANONICAL_CONFIG_SHA256:
         raise ValueError("canonical config SHA-256 mismatch")
     return config
+
+
+def process_limits(path: Path = DEFAULT_CONFIG) -> ProcessLimits:
+    """Build typed process bounds from the validated canonical config."""
+    config = load_config(path)
+    return ProcessLimits(**config["process_limits"])
 
 
 def detector_config(
