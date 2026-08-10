@@ -73,11 +73,20 @@ model, thay cho stack local hiện tại. Hiện trạng và ràng buộc:
    deployment config (env); mọi giá trị pin vào index signature (embedding) và
    ghi vào observability job (OCR).
 4. **Điều kiện kích hoạt phần embedding (fail-closed):**
-   - benchmark embedding trên golden corpus vi bằng harness ADR 0005:
-     Recall@5 ≥ 0.85 (min 3 runs) và so sánh trực tiếp với AITeamVN 0.9261;
-     quyết định dimension (4096 vs 1024 MRL) kèm số liệu;
+   - ✅ **Benchmark PASS (2026-08-10, DKP-02):** harness ADR 0005, gating
+     protocol đầy đủ (3 runs độc lập, 2 families, clean worktree
+     `0271ae51`), golden corpus 268 queries:
+     `qwen/qwen3-embedding-8b` **4096-d Recall@5 min = 0.9436** (vượt gate
+     0.85 và **vượt baseline AITeamVN 0.9261**), nDCG gap 0.0;
+     **1024-d MRL Recall@5 min = 0.9181** (vượt gate, gap 0.0152 ≤ 0.02,
+     1/4 storage Qdrant). Evidence:
+     `bench/markhand_web/reports/openrouter-embedding-evaluation.md`,
+     `bench/markhand_web/embedding/results/openrouter-adr0016/`.
+     Còn chờ: product owner chốt dimension (4096 chất lượng cao nhất vs
+     1024 tiết kiệm storage — cả hai đều đạt gate);
    - security review cho secrets/egress + LLM content policy;
-   - index generation migration theo ADR 0011 (expand → shadow → cutover).
+   - index generation migration theo ADR 0011 (expand → shadow → cutover)
+     cho corpus hiện hữu.
    Khuyến nghị bổ sung cho OCR (không chặn, vì đã Accepted): đo CER/WER trên
    corpus scan vi bằng `fileconv accuracy` để có baseline chất lượng so với số
    liệu Tesseract cũ trong `bench/REPORT_ACCURACY.md`.

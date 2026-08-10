@@ -257,7 +257,7 @@ mini-phase riêng nếu muốn giao sớm hơn. Sau khi owner chốt vị trí, 
 | ID draft | Outcome | Trạng thái / phụ thuộc |
 |---|---|---|
 | DKP-01 | ADR 0016 (OCR accepted; embedding gated) + policy/config | OCR: done 2026-08-10; embedding: chờ security review |
-| DKP-02 | Benchmark `qwen/qwen3-embedding-8b` (4096 vs 1024 MRL) trên golden corpus, gate ≥ 0.85 | OpenRouter key (đã có) |
+| DKP-02 | Benchmark `qwen/qwen3-embedding-8b` (4096 vs 1024 MRL) trên golden corpus, gate ≥ 0.85 | **Done 2026-08-10** — 4096-d: 0.9436 (vượt AITeamVN 0.9261); 1024-d: 0.9181 (pass gate); còn chốt dimension |
 | DKP-03 | Đo hậu kiểm OCR CER/WER (Qwen3.7 Flash vs baseline Tesseract cũ vs 1 VLM đối chứng) | OpenRouter key (đã có) |
 | DKP-04 | Core: vision OCR thay thế hoàn toàn Tesseract, canonical page contract | **Done 2026-08-10** (PR này) |
 | DKP-05 | Server: deferred OCR (sandbox render artifact) + worker stage vision OCR | **Done 2026-08-10** (token/cost per-job observability còn lại) |

@@ -1,7 +1,7 @@
 {
   "canonicalBinding": {
     "environmentSha256": "dad44433ef987c9b5ac507aa1d61495ada6c03a030f55e38c56243ca17e9f706",
-    "gatesSha256": "a8d5836c0ab3c239a6aa4b9b7813404d9cdb4f1b7fa9aacb18ac8bc17508aaa4",
+    "gatesSha256": "d9b0883a0670cc021e04d09dade714ad04740bc8e19b73c37809f279a82021ae",
     "registryRevision": 1,
     "slaSha256": "106df904febee51ebc196a69f441deb3a5a27b8d1e9e7c7c00265f7205251763",
     "thresholdDecisionsSha256": "f1141bb59ada52b1c5c2019df91841556b00390f4c28f24a3f16cbcd68e6f4cd",

@@ -37,10 +37,16 @@ ADR 0004 (GLM cloud embedding interim) is superseded.
 ADR 0016 (2026-08-10) retired the on-prem vLLM cutover gate
 (`G0-RET-VLLM-CUTOVER` removed from `gates.yaml`): the alternative server
 runtime is OpenRouter `qwen/qwen3-embedding-8b` (`provider-cloud`) behind the
-explicit egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`. It becomes the
-default pin only after passing `G0-RET-RECALL-AT-5` / `G0-RET-BEST-MODEL-GAP`
-on the golden corpus (DKP-02). AITeamVN `local-neural` remains the measured
-baseline (Recall@5 0.9261) and the air-gapped profile.
+explicit egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`.
+
+**DKP-02 measured (2026-08-10, gating protocol, 3 runs, catalog
+`embedding/openrouter-models.yaml`):** 4096-d Recall@5 min **0.9436** (beats
+the AITeamVN local baseline 0.9261), nDCG gap 0.0; 1024-d MRL Recall@5 min
+**0.9181**, gap 0.0152 ≤ 0.02 — both pass `G0-RET-RECALL-AT-5` /
+`G0-RET-BEST-MODEL-GAP`. Evidence: `reports/openrouter-embedding-evaluation.md`
++ `embedding/results/openrouter-adr0016/`. Default-pin cutover still needs the
+dimension decision + ADR 0011 migration. AITeamVN `local-neural` remains the
+air-gapped profile.
 
 Fixtures/corpus must be synthetic or de-identified, versioned and license-reviewed.
 Large raw benchmark output remains a CI artifact; committed reports contain environment

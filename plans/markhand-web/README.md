@@ -171,8 +171,10 @@ sách cloud embedding (được phép sau egress opt-in tường minh
 
 Còn mở:
 
-- Benchmark `qwen/qwen3-embedding-8b` trên golden corpus trước khi thành pin
-  mặc định (DKP-02); quyết định dimension 4096 vs 1024 MRL.
+- Chốt dimension embedding OpenRouter và duyệt cutover pin mặc định — benchmark
+  DKP-02 đã **PASS** (2026-08-10): 4096-d Recall@5 0.9436 (vượt AITeamVN
+  0.9261), 1024-d MRL 0.9181 (vượt gate 0.85, 1/4 storage); evidence
+  `bench/markhand_web/reports/openrouter-embedding-evaluation.md`.
 - SLA/SLO, RPO/RTO và retention backup.
 - Format/giới hạn upload của POC.
 - Qdrant shared collection hay phân cohort.

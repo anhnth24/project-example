@@ -52,7 +52,7 @@
         "P0-05",
         "P0-06"
       ],
-      "notes": "POC/1B embedding: AITeamVN local CPU (`local-neural`, ADR 0005). ADR 0016 (2026-08-10) retired the on-prem vLLM cutover; the alternative runtime is OpenRouter qwen/qwen3-embedding-8b (`provider-cloud`, explicit egress opt-in) and must pass this same gate on the golden corpus before becoming the default pin (DKP-02). Environment local-cpu-quality approved for P0-05/P0-06."
+      "notes": "POC/1B embedding: AITeamVN local CPU (`local-neural`, ADR 0005). ADR 0016 (2026-08-10) retired the on-prem vLLM cutover; the alternative runtime is OpenRouter qwen/qwen3-embedding-8b (`provider-cloud`, explicit egress opt-in). DKP-02 measured 2026-08-10 under the full gating protocol (catalog embedding/openrouter-models.yaml): 4096-d Recall@5 min 0.9436 (beats AITeamVN 0.9261), 1024-d MRL 0.9181 — both PASS; evidence reports/openrouter-embedding-evaluation.md + embedding/results/openrouter-adr0016/. Default-pin cutover still needs the dimension decision + ADR 0011 migration. Environment local-cpu-quality approved for P0-05/P0-06."
     },
     {
       "id": "G0-RET-BEST-MODEL-GAP",
