@@ -33,7 +33,7 @@ native, security/egress và migration strategy.
 | [0013](0013-intelligence-durable-ids.md) | Accepted | Durable intelligence IDs (`sha256-v1`) and desktop rebuild |
 | [0014](0014-vietnamese-word-segmentation-fts.md) | Proposed | Vietnamese word segmentation for FTS lexical retrieval (P1B-R01) |
 | [0015](0015-purge-content-retention-semantics.md) | Proposed | Immutable-content retention semantics for document purge (P1B-I07) |
-| [0016](0016-openrouter-qwen-ocr-embedding.md) | Proposed | OpenRouter Qwen vision OCR primary + `qwen3-embedding-8b` cho Markhand Web (supersedes 0005 khi Accepted) |
+| [0016](0016-openrouter-qwen-ocr-embedding.md) | Accepted (OCR) / gated (embedding) | Vision OCR OpenRouter thay thế hoàn toàn Tesseract; `qwen3-embedding-8b` cutover chờ benchmark (supersedes 0005 khi kích hoạt) |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.

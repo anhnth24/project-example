@@ -1,11 +1,14 @@
 # ADR 0016: OpenRouter Qwen cho OCR và embedding của Markhand Web
 
-- Status: Proposed
+- Status: Accepted (phần OCR — quyết định trực tiếp của product owner
+  2026-08-10, đã implement); phần embedding cutover vẫn gated theo điều kiện
+  bên dưới
 - Date: 2026-08-10
 - Owners: retrieval-owner, worker-owner
-- Approver: product-owner (pending)
+- Approver: product-owner (OCR: approved 2026-08-10; embedding: pending
+  benchmark evidence)
 - Supersedes: [ADR 0005](0005-vietnamese-embedding-model-quality.md) (embedding
-  runtime selection cho Markhand Web — chỉ khi ADR này được Accepted kèm evidence)
+  runtime selection cho Markhand Web — khi phần embedding được kích hoạt)
 - Related issues/PRs: draft DKP-01…DKP-07 trong
   [`brainstorm-260810-1456-document-knowledge-platform-openrouter-report.md`](../../plans/reports/brainstorm-260810-1456-document-knowledge-platform-openrouter-report.md)
 
@@ -32,28 +35,43 @@ model, thay cho stack local hiện tại. Hiện trạng và ràng buộc:
 
 ## Decision
 
-1. **OCR:** vision-LLM qua OpenRouter là primary OCR path cho trang `needs_ocr`
-   trên Markhand Web; Tesseract local là fallback bắt buộc (per-page, tự động) và
-   là engine duy nhất cho deployment air-gapped/offline. Cả hai engine xuất cùng
-   canonical Markdown page contract (`<!-- Trang N (OCR) -->`); downstream không
-   phụ thuộc engine. Vision OCR chạy ở worker stage ngoài sandbox (sandbox vẫn
-   không có network); egress allowlist `openrouter.ai`; request đặt
-   `provider.data_collection: deny`.
-2. **Embedding:** Markhand Web dùng `qwen/qwen3-embedding-8b` qua OpenRouter
-   (`runtime_path=provider-cloud`) cho index build và query. Server bỏ hạn chế
-   dev-only cho `provider-cloud` **chỉ khi** deployment bật flag cho phép cloud
-   embeddings và khai báo data classification tương thích; profile air-gapped giữ
-   `local-neural` (AITeamVN) như một generation riêng.
-3. **Model pin:** model slug + revision/snapshot + dimension nằm trong deployment
-   config (env), không hardcode trong code; mọi giá trị pin vào index signature.
-4. **Điều kiện Accepted (fail-closed):** ADR này chỉ chuyển Accepted khi có đủ:
+1. **OCR (Accepted, đã implement 2026-08-10):** vision-LLM qua OpenRouter là
+   **đường OCR duy nhất**; **Tesseract/PaddleOCR local bị loại bỏ hoàn toàn**
+   theo chỉ đạo trực tiếp của product owner (không giữ fallback local).
+   `pdf-inspector` tiếp tục quyết định trang nào cần OCR — trang có text layer
+   tin cậy không đi qua OCR. Trang `needs_ocr`/ảnh được render (PDFium 300 DPI),
+   thu về ≤2400px, encode JPEG q90 rồi gửi provider (Qwen chỉ nhận ảnh). Output
+   giữ canonical page contract (`<!-- Trang N (OCR) -->`); system prompt là hợp
+   đồng "chép trung thực" tổng quát cho cả văn bản pháp luật lẫn tài liệu dự án
+   (giữ số hiệu/điều-khoản-điểm/mã định danh/bảng/công thức/code; `[không rõ:
+   ...]` khi không chắc; chỉ xuất Markdown) — override được qua
+   `FILECONV_OCR_SYSTEM_PROMPT`. Reasoning tắt trong request OCR. Thiếu
+   key/endpoint → `DependencyMissing` fail-closed, không âm thầm bỏ trang.
+   Cấu hình: `FILECONV_OCR_API_KEY` (fallback `FILECONV_LLM_API_KEY`),
+   `FILECONV_OCR_BASE_URL` (mặc định OpenRouter; endpoint local vLLM/Ollama
+   vision là phương án offline), `FILECONV_OCR_MODEL` (mặc định
+   `qwen/qwen3.7-flash`), `FILECONV_OCR_TIMEOUT_SECS`.
+   **Server:** converter sandbox giữ nguyên no-network và không bao giờ nhận
+   API key — convert ảnh/scan trong sandbox fail-closed; OCR server-side là
+   worker stage riêng ngoài sandbox (DKP-05, chưa implement); egress allowlist
+   `openrouter.ai`; request nên đặt `provider.data_collection: deny`.
+2. **Embedding (gated):** Markhand Web dùng `qwen/qwen3-embedding-8b` qua
+   OpenRouter (`runtime_path=provider-cloud`) cho index build và query. Server
+   bỏ hạn chế dev-only cho `provider-cloud` **chỉ khi** deployment bật flag cho
+   phép cloud embeddings và khai báo data classification tương thích; profile
+   air-gapped giữ `local-neural` (AITeamVN) như một generation riêng.
+3. **Model pin:** model slug + revision/snapshot + dimension override được qua
+   deployment config (env); mọi giá trị pin vào index signature (embedding) và
+   ghi vào observability job (OCR).
+4. **Điều kiện kích hoạt phần embedding (fail-closed):**
    - benchmark embedding trên golden corpus vi bằng harness ADR 0005:
      Recall@5 ≥ 0.85 (min 3 runs) và so sánh trực tiếp với AITeamVN 0.9261;
      quyết định dimension (4096 vs 1024 MRL) kèm số liệu;
-   - benchmark OCR CER/WER trên corpus scan vi: Qwen3.7 Flash vs Tesseract vs ≥1
-     VLM đối chứng; vision chỉ thành primary khi thắng Tesseract có số liệu;
    - security review cho secrets/egress + LLM content policy;
-   - product-owner approval bằng văn bản trên hai kết quả trên.
+   - index generation migration theo ADR 0011 (expand → shadow → cutover).
+   Khuyến nghị bổ sung cho OCR (không chặn, vì đã Accepted): đo CER/WER trên
+   corpus scan vi bằng `fileconv accuracy` để có baseline chất lượng so với số
+   liệu Tesseract cũ trong `bench/REPORT_ACCURACY.md`.
 
 ## Consequences
 
@@ -78,8 +96,11 @@ model, thay cho stack local hiện tại. Hiện trạng và ràng buộc:
   Vẫn giữ làm profile air-gapped.
 - **vLLM GPU on-prem (target cũ của ADR 0005):** không còn là target bắt buộc;
   chi phí GPU và vận hành cao hơn OpenRouter cho quy mô hiện tại.
+- **Giữ Tesseract làm fallback per-page:** bị product owner loại bỏ trực tiếp
+  (2026-08-10) — đơn giản hoá stack, bỏ bundle native runtime; offline dùng
+  endpoint vision local thay thế.
 - **OCR bằng tier cao hơn (Qwen3.7 Plus / Qwen3-VL):** giữ làm ứng viên đối chứng
-  trong benchmark DKP-03; Flash được chọn trước vì cost, nhưng không được miễn gate.
+  trong benchmark DKP-03 (đo hậu kiểm chất lượng); Flash được chọn vì cost.
 - **Đục network cho sandbox để OCR trong convert stage:** bị loại — phá invariant
   cô lập converter; stage riêng ngoài sandbox giữ nguyên threat model upload.
 
@@ -90,17 +111,24 @@ model, thay cho stack local hiện tại. Hiện trạng và ràng buộc:
 python3 bench/markhand_web/scripts/run_embedding_eval.py --runs 3
 python3 bench/markhand_web/scripts/run_retrieval_eval.py
 
-# OCR gate
+# OCR baseline chất lượng (hậu kiểm)
 ./target/release/fileconv accuracy <scan-manifest.tsv> bench/REPORT_OCR_VISION.md
+
+# OCR fail-closed + prompt contract (đã có trong repo)
+cargo test -p fileconv-core --features llm image_ocr
+cargo test -p fileconv-core --features llm conv::pdf
 
 # Policy/config
 cargo test -p fileconv-server embedding   # runtime_path/policy/normalize-client
 cargo test -p fileconv-knowledge --lib identity::tests
 ```
 
-Denial/negative bắt buộc: provider lỗi → OCR fallback Tesseract giữ job thành
-công; embedding lỗi → job pending/backoff, không mất dữ liệu, không trộn
-generation; signature mismatch từ chối retrieval; key không xuất hiện trong log.
+Denial/negative bắt buộc (OCR đã có test): thiếu key/feature →
+`DependencyMissing` fail-closed; trang text-layer rác giữ untrusted text +
+warning (PartialSuccess) thay vì bịa nội dung; sandbox không nhận OCR API key
+(poc-isolation-smoke). Embedding: lỗi → job pending/backoff, không mất dữ liệu,
+không trộn generation; signature mismatch từ chối retrieval; key không xuất
+hiện trong log.
 
 ## Exception lifecycle
 
@@ -108,6 +136,6 @@ generation; signature mismatch từ chối retrieval; key không xuất hiện t
 |---|---|
 | Exception | Air-gapped/offline deployment không dùng OpenRouter |
 | Owner | operations-owner |
-| Scope | OCR = Tesseract-only; embedding = `local-neural` generation riêng |
+| Scope | OCR = endpoint vision local (`FILECONV_OCR_BASE_URL`) hoặc không OCR (chỉ tài liệu có text layer); embedding = `local-neural` generation riêng |
 | Expiry | Không hết hạn — là mode được hỗ trợ chính thức |
-| Retest | Mỗi release: e2e ingest không network pass |
+| Retest | Mỗi release: e2e ingest không egress ngoài endpoint local pass |

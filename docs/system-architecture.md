@@ -23,8 +23,9 @@ có giao điểm ở cả hai bên:
 - **CLI (`fileconv`) / Desktop "Markhand" / MCP (`fileconv-mcp`)** gọi thẳng
   `fileconv-core` trong tiến trình (path-dep, không HTTP) — `Converter::convert_path`/
   `convert_path_detailed` định tuyến theo `FormatKind` rồi chạm các native runtime
-  PDF/OCR/audio (PDFium, Tesseract, Whisper) có cache. Nhóm này chạy **offline**,
-  không cần Docker/Compose.
+  PDF/audio (PDFium, Whisper) có cache. Nhóm này chạy offline trừ OCR ảnh/trang
+  scan — OCR gọi vision-LLM API (OpenRouter mặc định, `FILECONV_OCR_*`); không
+  cần Docker/Compose.
 - **Browser SPA (`web/`)** không bao giờ link `fileconv-core` — chỉ nói HTTP/SSE với
   **`fileconv-server`** (`crates/server`): route/service/repository sở hữu auth,
   PostgreSQL, Qdrant (vector), MinIO (object store); retrieval/grounding đi qua
@@ -82,14 +83,14 @@ convert pdf
    • catch_unwind ──┐ panic/thiếu? fallback
    ▼               ▼
                   pdf-extract =0.8.2  (chỉ khi thiếu lib PDFium)
- trang needs_ocr → render PDFium 300 DPI → Tesseract OCR
+ trang needs_ocr → render PDFium 300 DPI → vision-LLM OCR (OpenRouter)
  pdf_ocr_images (mặc định tắt) → OCR thêm ảnh nhúng ≥200×200px
 ```
 
 **Thread-safety lock**: libpdfium KHÔNG thread-safe. Mỗi region dùng PDFium được
 serialized qua `PDFIUM_CALL: Mutex<()>` trong `crates/core/src/conv/pdf/pdfium.rs`
 (cùng file giữ cache PDFium `thread_local`), gồm cả render+OCR các trang quét.
-Trade-off: concurrent scanned-PDF conversions queue tại lock (move Tesseract ngoài nếu cần throughput cao).
+Trade-off: concurrent scanned-PDF conversions queue tại lock (tách bước gọi vision OCR ra ngoài nếu cần throughput cao).
 
 Đánh đổi (đo thực): corpus cũ pdf-inspector **~18ms/trang** (có cấu trúc + đa cột)
 vs PDFium **~5.67ms/trang** (chỉ text). Đường range song song mới đo **~7.8ms/trang**
@@ -109,21 +110,21 @@ Chi tiết: [`../bench/REPORT_CASAN_PDF.md`](../bench/REPORT_CASAN_PDF.md).
 | html | htmd 0.5 | skip script/style/noscript; thay html2md (cũ phình output) |
 | csv | csv + legacy maps | UTF-8/TCVN3/VNI/VPS; delimiter sniff; strip BOM |
 | text (txt/log/md/markdown) | `viet_legacy` | strip BOM UTF-8, decode legacy Việt (TCVN3/ABC H-font hoa chỉ qua opt-in hint, không suy từ TXT/CSV) |
-| image | Tesseract/Paddle | preprocess, split scan columns, PSM retry; Paddle opt-in/fallback |
+| image | vision-LLM (OpenRouter) | decode limits chống bomb → ≤2400px → JPEG q90 → prompt chép trung thực |
 | audio | whisper-rs 0.16 + symphonia 0.5 | 16k mono; tự tìm PhoWhisper; lọc segment no-speech/marker nhạc |
 
 ### Post-processing
 Mọi output: NFC (bắt buộc) → optional cắt tại `max_chars` kèm `<!-- (đã cắt...) -->`.
 
 ### ConverterOptions
-`ocr_langs`, `ocr_engine` (`tesseract|auto|paddle`), `whisper_model`, `audio_lang` (`"vi"`),
+`ocr_langs` (hint ngôn ngữ cho prompt vision OCR), `whisper_model`, `audio_lang` (`"vi"`),
 `audio_threads` (4), `audio_no_speech_threshold` (0.6), `pdf_ocr` (true),
 `pdf_ocr_images` (false), `pdf_pages: Option<Vec<u32>>` (1-indexed),
 `xlsx_sheet: Option<String>`, `max_chars: Option<usize>`.
 
 ### Module công khai
 `audio` (feature `audio`; AudioEngine, Transcript, decode_to_pcm16k_mono) ·
-`image_ocr` (ocr_image, ocr_dynimage, tesseract_available) ·
+`image_ocr` (ocr_image, ocr_dynimage, VisionOcrConfig, vision_ocr_available) ·
 `chunk` · `probe` · `pptx_preview` · `tables` · `viet_legacy`
 (TCVN3/VNI/VPS detect/decode; `Tcvn3CaseHint` opt-in cho font hoa) ·
 `diagnostics` (ConversionReport/ConversionWarning/ConversionOutcome/DetailedConvertError) ·

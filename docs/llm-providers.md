@@ -67,6 +67,24 @@ dùng nhập model đã cài trên máy; Markhand không hardcode hoặc bundle 
 weight. Cách này dùng được với local Vietnamese VLM server, nhưng chất lượng và
 license phụ thuộc model người dùng chọn.
 
+## Vision OCR (convert pipeline)
+
+OCR ảnh/trang PDF scan chạy qua vision-LLM — Tesseract/Paddle local đã bị loại
+bỏ (2026-08-10). Cấu hình riêng, tách khỏi chat LLM:
+
+```bash
+export FILECONV_OCR_API_KEY=...        # fallback: FILECONV_LLM_API_KEY
+export FILECONV_OCR_BASE_URL=...       # mặc định https://openrouter.ai/api
+export FILECONV_OCR_MODEL=...          # mặc định qwen/qwen3.7-flash
+export FILECONV_OCR_SYSTEM_PROMPT=...  # tuỳ chọn — thay prompt "chép trung thực"
+export FILECONV_OCR_TIMEOUT_SECS=180
+```
+
+Trang có text layer tin cậy (pdf-inspector) không đi qua OCR. Thiếu key/endpoint
+→ convert ảnh/scan báo `DependencyMissing` rõ ràng, không âm thầm bỏ trang.
+Endpoint local (Ollama/vLLM vision) không cần key. Reasoning bị tắt trong request
+OCR để giảm latency/cost.
+
 ## Cursor/Codex subscription bridge
 
 Markhand không đọc cookie, browser session hay file token. Người dùng cài CLI

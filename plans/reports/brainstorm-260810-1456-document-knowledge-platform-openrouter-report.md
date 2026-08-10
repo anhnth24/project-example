@@ -90,40 +90,49 @@ tracking riêng (xem §7).
 
 ## 5. Thiết kế đề xuất
 
-### 5.1 Track A — OCR: Qwen3.7 Flash primary, Tesseract fallback
+### 5.1 Track A — OCR: vision-LLM duy nhất, Tesseract bị loại bỏ hoàn toàn
 
-Nguyên tắc spec §17: downstream không phụ thuộc OCR engine; hai engine cùng canonical
-output (Markdown theo trang, marker `<!-- Trang N (OCR) -->` như hiện tại; giữ nguyên
-phát hiện `needs_ocr` bằng pdf-inspector và render PDFium 300 DPI).
+**ĐÃ IMPLEMENT (2026-08-10, theo chỉ đạo product owner — bỏ hẳn Tesseract,
+không giữ fallback local).**
 
-**Core (`fileconv-core`):**
+Nguyên tắc spec §17 giữ nguyên: downstream không phụ thuộc OCR engine; canonical
+output Markdown theo trang, marker `<!-- Trang N (OCR) -->`; `pdf-inspector` vẫn
+là nơi quyết định trang nào cần OCR — trang text layer tin cậy không đi qua OCR.
 
-- Thêm engine `vision` vào lựa chọn OCR (`ConverterOptions.ocr_engine`), config qua
-  `FILECONV_LLM_*` (OpenRouter đã là preset OpenAI-compatible; `vision_ocr` đã có,
-  cần biến thể nhận ảnh in-memory từ PDFium thay vì chỉ file path).
-- Semantics **vision-first**: gọi vision cho trang `needs_ocr`; lỗi/timeout/output
-  rỗng/nghi hallucination → Tesseract cùng trang; report ghi engine đã dùng per page.
-- Desktop/CLI dùng trực tiếp đường này (desktop hiện từ chối hard-OCR PDF — gỡ được
-  hạn chế đó luôn).
+**Core (`fileconv-core`) — đã landed:**
 
-**Server (`fileconv-server`):**
+- `image_ocr.rs` viết lại thành vision-OCR client: decode có `Limits` chống
+  bomb → thu về ≤2400px cạnh dài → encode JPEG q90 (Qwen chỉ nhận ảnh) → gọi
+  API OpenAI-compatible (OpenRouter mặc định, model mặc định
+  `qwen/qwen3.7-flash`), reasoning tắt. Tesseract/Paddle/preprocess/PSM/column
+  split bị xoá; `OcrEngine`/`ocr_engine` option bị gỡ khỏi public API.
+- System prompt "chép trung thực" tổng quát hoá từ prompt product owner đưa
+  (phục vụ cả văn bản pháp luật lẫn tài liệu dự án): giữ metadata ký số, số
+  trang in, chương/điều/khoản/điểm, mã định danh (89/2026/TT-BTC, BR-PAY-022,
+  POST /payments…), bảng/ô gộp, công thức, code; `[không rõ: ...]` khi không
+  chắc; chỉ xuất Markdown. Override qua `FILECONV_OCR_SYSTEM_PROMPT`.
+- Config env: `FILECONV_OCR_API_KEY` (fallback `FILECONV_LLM_API_KEY`),
+  `FILECONV_OCR_BASE_URL`, `FILECONV_OCR_MODEL`, `FILECONV_OCR_TIMEOUT_SECS`.
+  Thiếu cấu hình → `DependencyMissing` fail-closed; trang text-layer rác giữ
+  untrusted text + warning (PartialSuccess) như trước.
+- Đã verify thực tế bằng OpenRouter key: ảnh PNG OCR đúng (~3s), PDF native 45
+  trang convert 2.6s không gọi OCR, fixture `needs_ocr` OCR qua Qwen ra đúng
+  page contract.
 
-- **Không mở network cho sandbox.** Convert stage trong sandbox chạy như hiện tại
-  (Tesseract cho trang flagged) **và** xuất thêm artifact: danh sách trang `needs_ocr`
-  + PNG render của các trang đó.
-- Job stage mới `vision_ocr` chạy ở worker tin cậy (ngoài sandbox): gọi OpenRouter
-  cho từng trang flagged, thay block trang tương ứng trong Markdown khi thành công;
-  thất bại thì giữ nguyên kết quả Tesseract → fallback tự nhiên, đúng spec §17.
-- Egress allowlist chỉ `openrouter.ai`; request đặt `provider.data_collection: deny`.
-- Secret: `MARKHAND_OCR_API_KEY` (hoặc secret OpenRouter dùng chung) qua env/secret
-  mount, redacted Debug, không log.
+**Server (`fileconv-server`) — phần còn lại (DKP-05):**
+
+- Sandbox giữ no-network và **không bao giờ** nhận OCR API key (đã thêm assert
+  vào `poc-isolation-smoke.sh`); convert ảnh/scan trong sandbox hiện fail-closed
+  với lỗi cấu hình OCR (vertical slice đã cập nhật assert hành vi này).
+- Job stage mới `vision_ocr` chạy ở worker tin cậy (ngoài sandbox): sandbox xuất
+  artifact PNG các trang `needs_ocr`, worker gọi OpenRouter rồi ghép block trang.
+  Egress allowlist `openrouter.ai`; `provider.data_collection: deny`.
 - Observability (§56–57): job ghi `ocr_engine`, số trang OCR, duration, token
   usage/cost, `requires_review`; không log nội dung trang.
 
-**Gate trước khi bật mặc định:** `fileconv accuracy` (CER/WER) trên corpus scan vi
-(bench/*.sh tái tạo) so Qwen3.7 Flash vs Tesseract vs ≥1 VLM đối chứng; chỉ đặt
-primary khi thắng Tesseract có số liệu. Model slug pin snapshot
-(`qwen3.7-flash-20260727`) trong config deployment, không hardcode trong code.
+**Đo hậu kiểm chất lượng (khuyến nghị):** `fileconv accuracy` (CER/WER) trên
+corpus scan vi so với baseline Tesseract cũ trong `bench/REPORT_ACCURACY.md`,
+kèm ứng viên đối chứng (Qwen3-VL/Plus) nếu Flash không đạt.
 
 ### 5.2 Track B — Embedding: `qwen/qwen3-embedding-8b` qua OpenRouter
 
@@ -194,10 +203,10 @@ embedding_text → …), tận dụng tối đa cái đã có:
 ### 5.4 Kiến trúc sau cải tổ
 
 ```text
-Upload → quarantine → sandbox convert (parser + Tesseract + render trang needs_ocr)
+Upload → quarantine → sandbox convert (parser, no-network; xuất PNG trang needs_ocr)
                             │
-                    vision_ocr stage (worker, OpenRouter Qwen3.7 Flash,
-                            │           fallback = giữ kết quả Tesseract)
+                    vision_ocr stage (worker ngoài sandbox, OpenRouter
+                            │           Qwen3.7 Flash — DKP-05)
                             ▼
               Markdown canonical → Normalizer → Structure/Entity extractor
                             ▼
@@ -215,7 +224,7 @@ Upload → quarantine → sandbox convert (parser + Tesseract + render trang nee
 
 | Rủi ro | Giảm thiểu |
 |---|---|
-| Qwen3.7 Flash OCR kém trên eval độc lập (84.1%, chót bảng) | Gate CER/WER trên corpus vi trước khi primary; benchmark thêm Qwen3-VL/Plus; Tesseract fallback per-page |
+| Qwen3.7 Flash OCR kém trên eval độc lập (84.1%, chót bảng) | Đo hậu kiểm CER/WER trên corpus vi so baseline Tesseract cũ; nếu không đạt, đổi `FILECONV_OCR_MODEL` sang Qwen3-VL/Plus (không cần đổi code) |
 | Cloud egress toàn bộ ảnh trang + chunk text | ADR 0016 + security review; `data_collection: deny`; air-gapped profile giữ local |
 | OpenRouter routing nhiều provider → vector không ổn định giữa provider | Pin `provider.order` / revision trong config; normalize client-side; shadow verify trước cutover |
 | Recall@5 của qwen3-embedding-8b trên corpus vi chưa đo (AITeamVN đang 0.9261) | Gate benchmark là điều kiện Ready; giữ AITeamVN đến khi thắng số liệu |
@@ -231,16 +240,16 @@ Cần quyết định tracking của owner: gap này **không** thuộc Phase 3 
 mini-phase riêng nếu muốn giao sớm hơn. Sau khi owner chốt vị trí, dùng skill
 `issue-creator` cho từng issue theo đúng format canonical.
 
-**Đợt 1 — cải tổ OCR/embedding (làm được ngay sau ADR 0016 duyệt):**
+**Đợt 1 — cải tổ OCR/embedding:**
 
-| ID draft | Outcome | Phụ thuộc |
+| ID draft | Outcome | Trạng thái / phụ thuộc |
 |---|---|---|
-| DKP-01 | ADR 0016 accepted + policy/config cloud embedding & vision OCR | product owner, security review |
-| DKP-02 | Benchmark `qwen/qwen3-embedding-8b` (4096 vs 1024 MRL) trên golden corpus, gate ≥ 0.85 | DKP-01, OpenRouter key |
-| DKP-03 | Benchmark OCR Qwen3.7 Flash vs Tesseract vs 1 VLM đối chứng (CER/WER corpus scan vi) | DKP-01, OpenRouter key |
-| DKP-04 | Core: engine OCR `vision` + fallback per-page, canonical page contract | DKP-03 |
-| DKP-05 | Server: stage `vision_ocr` ngoài sandbox + artifact trang render + observability job (engine/token/cost) | DKP-04 |
-| DKP-06 | Server: OpenRouter embedding runtime (preset, normalize-client, policy prod) | DKP-01, DKP-02 |
+| DKP-01 | ADR 0016 (OCR accepted; embedding gated) + policy/config | OCR: done 2026-08-10; embedding: chờ security review |
+| DKP-02 | Benchmark `qwen/qwen3-embedding-8b` (4096 vs 1024 MRL) trên golden corpus, gate ≥ 0.85 | OpenRouter key (đã có) |
+| DKP-03 | Đo hậu kiểm OCR CER/WER (Qwen3.7 Flash vs baseline Tesseract cũ vs 1 VLM đối chứng) | OpenRouter key (đã có) |
+| DKP-04 | Core: vision OCR thay thế hoàn toàn Tesseract, canonical page contract | **Done 2026-08-10** (PR này) |
+| DKP-05 | Server: stage `vision_ocr` ngoài sandbox + artifact trang render + observability job (engine/token/cost) | DKP-04 done |
+| DKP-06 | Server: OpenRouter embedding runtime (preset, normalize-client, policy prod) | DKP-02 |
 | DKP-07 | Index generation migration: backfill → shadow verify → cutover (gộp chunking mới nếu Đợt 2 sẵn sàng) | DKP-06 |
 
 **Đợt 2 — knowledge model (thứ tự spec §79):**
