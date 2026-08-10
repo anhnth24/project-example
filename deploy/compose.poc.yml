@@ -560,6 +560,7 @@ services:
       MARKHAND_OCR_BASE_URL: ${MARKHAND_OCR_BASE_URL:-}
       MARKHAND_OCR_MODEL: ${MARKHAND_OCR_MODEL:-}
       MARKHAND_OCR_TIMEOUT_SECS: ${MARKHAND_OCR_TIMEOUT_SECS:-}
+      MARKHAND_OCR_BATCH_PAGES: ${MARKHAND_OCR_BATCH_PAGES:-}
     # Converter sandbox stays no-egress (internal `convert` network + kernel
     # CLONE_NEWNET). `ocr-egress` exists only for the worker-side vision OCR
     # stage (ADR 0016); scanned-page images leave the host through it.

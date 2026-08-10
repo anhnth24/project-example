@@ -323,6 +323,12 @@ async fn run_convert_worker(
                 .parse()
                 .map_err(|_| "MARKHAND_WORKER_MAX_JOB_SECS must be an integer".to_string())?,
         );
+    } else if config.vision_ocr.is_some() {
+        // Deferred OCR chạy SAU sandbox trong cùng convert job: tài liệu scan
+        // dài cần trần job cao hơn wall-timeout converter (bench 2026-08-10:
+        // 5 trang/request ≈ 30–70s; 839 trang ≈ 168 request). Lease vẫn được
+        // heartbeat suốt stage OCR; override bằng MARKHAND_WORKER_MAX_JOB_SECS.
+        config.max_job_duration = config.max_job_duration.max(Duration::from_secs(3600));
     }
     if let Ok(value) = std::env::var("MARKHAND_WORKER_CLAIM_LIMIT") {
         let claim_limit: u32 = value

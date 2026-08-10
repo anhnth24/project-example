@@ -132,6 +132,15 @@ là nơi quyết định trang nào cần OCR — trang text layer tin cậy kh�
   retry/backoff → dead-letter. Tracing ghi số trang + thời lượng (không nội dung).
 - Compose POC: worker-convert nối thêm network `ocr-egress` (sandbox không thấy
   — CLONE_NEWNET); đã verify sandbox thật render + export artifact (live test).
+- **Batching theo bench product owner (2026-08-10):** worker OCR gom
+  `MARKHAND_OCR_BATCH_PAGES` trang/request (mặc định 5, tối đa 16);
+  `max_tokens` nội suy bench (1→8K, 5→~12K, 10→16K), timeout/request =
+  `min(cap, 60s + 15s×trang)` (cap `MARKHAND_OCR_TIMEOUT_SECS`, mặc định
+  300s); batch lỗi parse/truncation/transient tự **bisect** xuống 1 trang
+  ("chạy bù"); response tách bằng marker `<!-- markhand:page k -->`,
+  parse fail-closed. Convert job có OCR nâng trần mặc định lên 3600s
+  (lease heartbeat suốt stage). Live verify: 3 trang/1 request PASS trong
+  1.76s với marker đúng thứ tự.
 - **Live e2e toàn chuỗi PASS (2026-08-10, ~36s):**
   `crates/server/tests/live_openrouter_e2e.rs` chạy trên stack thật
   (Postgres/MinIO/Qdrant dev compose) với key OpenRouter thật: HTTP upload PNG

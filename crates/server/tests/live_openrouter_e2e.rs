@@ -107,6 +107,57 @@ async fn json_post(
     (status, json)
 }
 
+/// PNG fixture → JPEG bytes (production artifact từ sandbox là JPEG).
+fn fixture_jpeg(marker: &str) -> Vec<u8> {
+    let png = tiny_png_ocr_bytes(marker);
+    let decoded = image::load_from_memory(&png).expect("decode fixture png");
+    let mut jpeg = Vec::new();
+    let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90);
+    decoded
+        .to_rgb8()
+        .write_with_encoder(encoder)
+        .expect("encode jpeg");
+    jpeg
+}
+
+/// Live check cho batch OCR nhiều trang/request (bench product owner):
+/// 3 ảnh marker khác nhau trong MỘT request; model phải trả đủ 3 khối đúng
+/// thứ tự theo contract `<!-- markhand:page k -->`.
+#[tokio::test]
+#[ignore = "requires real OpenRouter API key"]
+async fn live_openrouter_batch_ocr_returns_pages_in_order() {
+    let Some(api_key) = openrouter_key() else {
+        eprintln!("skipped: MARKHAND_TEST_OPENROUTER_API_KEY not set");
+        return;
+    };
+    let runtime = VisionOcrRuntime::new(
+        "https://openrouter.ai/api".into(),
+        api_key,
+        fileconv_core::image_ocr::DEFAULT_VISION_OCR_MODEL.into(),
+        fileconv_core::image_ocr::default_vision_ocr_system_prompt("vie+eng"),
+        300,
+    )
+    .expect("vision runtime")
+    .with_batch_pages(5);
+    let markers = ["SOAK15", "OCR22", "TRANG33"];
+    let jpegs: Vec<Vec<u8>> = markers.iter().map(|marker| fixture_jpeg(marker)).collect();
+    let refs: Vec<&[u8]> = jpegs.iter().map(|bytes| bytes.as_slice()).collect();
+    let started = std::time::Instant::now();
+    let pages = runtime.ocr_jpeg_batch(&refs).await.expect("batch OCR");
+    assert_eq!(pages.len(), markers.len());
+    for (page, marker) in pages.iter().zip(markers) {
+        assert!(
+            page.to_ascii_uppercase().contains(marker),
+            "trang phải chứa marker {marker}: {page:?}"
+        );
+    }
+    eprintln!(
+        "LIVE BATCH OCR OK: {} trang / 1 request trong {:?}",
+        markers.len(),
+        started.elapsed()
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires live DB/MinIO/Qdrant + real OpenRouter API key + built fileconv"]
 async fn live_openrouter_upload_ocr_embed_search_e2e() {

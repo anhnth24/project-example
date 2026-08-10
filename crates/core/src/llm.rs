@@ -1222,6 +1222,8 @@ pub(crate) fn vision_ocr_jpeg(
         // thinking mặc định làm mỗi trang chậm/đắt hơn nhiều. OpenRouter bỏ
         // qua field này với model không hỗ trợ.
         "reasoning": {"enabled": false},
+        // Trần output một trang theo bench product owner (8K token/trang).
+        "max_tokens": 8000,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": [

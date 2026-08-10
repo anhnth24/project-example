@@ -904,6 +904,10 @@ impl ConvertWorker {
     /// Deferred-OCR stage: thay placeholder `markhand:ocr-pending` bằng nội dung
     /// OCR từ provider vision (worker có network; sandbox thì không). Markdown
     /// không có placeholder được trả nguyên vẹn byte-for-byte.
+    ///
+    /// Trang được gom theo `runtime.batch_pages()` trang/request (bench product
+    /// owner 2026-08-10); batch lỗi parse/truncation/transient được **bisect**
+    /// xuống nửa nhỏ hơn rồi tới 1 trang ("chạy bù") trước khi fail job.
     #[allow(clippy::too_many_arguments)]
     async fn resolve_deferred_ocr(
         &self,
@@ -934,27 +938,63 @@ impl ConvertWorker {
             .map(|artifact| (artifact.name, artifact.bytes))
             .collect();
         let started = std::time::Instant::now();
-        let mut resolved_pages = 0_usize;
-        for name in &pending {
-            let placeholder = fileconv_core::image_ocr::ocr_pending_placeholder(name);
-            let Some(bytes) = artifact_bytes.remove(name) else {
-                // Placeholder không có artifact tương ứng (tài liệu giả mạo
-                // marker) — strip để không lộ marker nội bộ vào nội dung.
-                markdown = markdown.replace(&placeholder, "");
-                continue;
-            };
-            let runtime = Arc::clone(&runtime);
-            let text = self
-                .heartbeat_while(ctx, job, lease_token, attempts, deadline, async move {
-                    runtime.ocr_jpeg(&bytes).await
+
+        // Placeholder giả mạo (không có artifact) bị strip; phần còn lại giữ
+        // đúng thứ tự trang để batch là "các trang liên tiếp".
+        let mut ordered: Vec<(String, Vec<u8>)> = Vec::with_capacity(pending.len());
+        for name in pending {
+            match artifact_bytes.remove(&name) {
+                Some(bytes) => ordered.push((name, bytes)),
+                None => {
+                    let placeholder = fileconv_core::image_ocr::ocr_pending_placeholder(&name);
+                    markdown = markdown.replace(&placeholder, "");
+                }
+            }
+        }
+        let total_pages = ordered.len();
+        let batch_size = runtime.batch_pages().max(1);
+        let mut queue: std::collections::VecDeque<Vec<(String, Vec<u8>)>> = ordered
+            .chunks(batch_size)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+        let mut splits = 0_usize;
+        let mut requests = 0_usize;
+        while let Some(group) = queue.pop_front() {
+            let bytes: Vec<&[u8]> = group.iter().map(|(_, jpeg)| jpeg.as_slice()).collect();
+            let runtime_for_call = Arc::clone(&runtime);
+            requests += 1;
+            let outcome = self
+                .heartbeat_while(ctx, job, lease_token, attempts, deadline, async {
+                    Ok::<_, ConvertWorkerError>(runtime_for_call.ocr_jpeg_batch(&bytes).await)
                 })
                 .await?;
-            markdown = markdown.replace(&placeholder, text.trim());
-            resolved_pages += 1;
+            match outcome {
+                Ok(texts) => {
+                    debug_assert_eq!(texts.len(), group.len());
+                    for ((name, _), text) in group.iter().zip(texts) {
+                        let placeholder = fileconv_core::image_ocr::ocr_pending_placeholder(name);
+                        markdown = markdown.replace(&placeholder, text.trim());
+                    }
+                }
+                Err(error) if group.len() > 1 && error.is_batch_splittable() => {
+                    // Bench "chạy bù": nửa sau xử lý trước sẽ đảo thứ tự chèn
+                    // queue nên push nửa sau trước, nửa đầu sau (front).
+                    splits += 1;
+                    let middle = group.len() / 2;
+                    let mut group = group;
+                    let tail = group.split_off(middle);
+                    queue.push_front(tail);
+                    queue.push_front(group);
+                }
+                Err(error) => return Err(ConvertWorkerError::VisionOcr(error)),
+            }
         }
         tracing::info!(
             job_id = %job.id,
-            pages = resolved_pages,
+            pages = total_pages,
+            requests,
+            splits,
+            batch_size,
             elapsed_ms = started.elapsed().as_millis() as u64,
             "vision OCR resolved deferred pages"
         );
