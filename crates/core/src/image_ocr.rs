@@ -95,6 +95,11 @@ impl VisionOcrConfig {
 pub struct OcrRunConfig {
     /// Override vision OCR; `None` = đọc từ env (`FILECONV_OCR_*`).
     pub vision: Option<VisionOcrConfig>,
+    /// **Deferred OCR** (cho converter chạy trong sandbox không có network):
+    /// thay vì gọi API, ghi JPEG đã chuẩn hoá vào thư mục này và trả placeholder
+    /// [`ocr_pending_placeholder`]; stage tin cậy phía sau (worker) gọi provider
+    /// rồi thay placeholder bằng nội dung. Không cần API key trong sandbox.
+    pub defer_dir: Option<std::path::PathBuf>,
 }
 
 /// Resolve cấu hình hiệu lực cho một lần chạy.
@@ -353,8 +358,71 @@ fn describe_langs(langs: &str) -> String {
     }
 }
 
+/// Prefix/suffix của placeholder OCR chờ xử lý (deferred mode).
+const OCR_PENDING_OPEN: &str = "<!-- markhand:ocr-pending ";
+const OCR_PENDING_CLOSE: &str = " -->";
+/// Tên file artifact: `markhand-ocr-<random>.jpg` (tempfile random, không đoán được).
+pub const OCR_ARTIFACT_PREFIX: &str = "markhand-ocr-";
+pub const OCR_ARTIFACT_SUFFIX: &str = ".jpg";
+
+/// Placeholder chèn vào Markdown khi OCR bị defer sang stage sau.
+pub fn ocr_pending_placeholder(artifact_name: &str) -> String {
+    format!("{OCR_PENDING_OPEN}{artifact_name}{OCR_PENDING_CLOSE}")
+}
+
+fn is_valid_ocr_artifact_name(name: &str) -> bool {
+    name.starts_with(OCR_ARTIFACT_PREFIX)
+        && name.ends_with(OCR_ARTIFACT_SUFFIX)
+        && name.len() > OCR_ARTIFACT_PREFIX.len() + OCR_ARTIFACT_SUFFIX.len()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+}
+
+/// Liệt kê artifact name trong các placeholder OCR-pending của một Markdown
+/// (dedupe, giữ thứ tự). Tên không hợp lệ (path traversal, ký tự lạ) bị bỏ qua.
+pub fn pending_ocr_artifacts(markdown: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut rest = markdown;
+    while let Some(start) = rest.find(OCR_PENDING_OPEN) {
+        rest = &rest[start + OCR_PENDING_OPEN.len()..];
+        let Some(end) = rest.find(OCR_PENDING_CLOSE) else {
+            break;
+        };
+        let name = &rest[..end];
+        if is_valid_ocr_artifact_name(name) && !names.iter().any(|existing| existing == name) {
+            names.push(name.to_string());
+        }
+        rest = &rest[end + OCR_PENDING_CLOSE.len()..];
+    }
+    names
+}
+
+/// Ghi JPEG vào defer dir với tên random (exclusive create) và trả placeholder.
+fn defer_ocr_to_dir(dir: &Path, jpeg: &[u8]) -> Result<String, OcrAttemptError> {
+    std::fs::create_dir_all(dir)
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Encode, error))?;
+    let mut file = tempfile::Builder::new()
+        .prefix(OCR_ARTIFACT_PREFIX)
+        .suffix(OCR_ARTIFACT_SUFFIX)
+        .tempfile_in(dir)
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Encode, error))?;
+    io::Write::write_all(&mut file, jpeg)
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Encode, error))?;
+    let (_, path) = file
+        .keep()
+        .map_err(|error| OcrAttemptError::from_io(OcrStage::Encode, error.error))?;
+    let name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or_else(|| {
+            OcrAttemptError::failed(OcrStage::Encode, "tên artifact OCR không hợp lệ")
+        })?;
+    Ok(ocr_pending_placeholder(name))
+}
+
 /// Model hay bọc kết quả trong ```markdown fence dù đã dặn — gỡ fence bao ngoài.
-fn strip_wrapping_fence(text: &str) -> String {
+pub fn strip_ocr_wrapping_fence(text: &str) -> String {
     let trimmed = text.trim();
     let Some(first_line_end) = trimmed.find('\n') else {
         return trimmed.to_string();
@@ -413,6 +481,10 @@ pub fn ocr_dynimage_detailed(
 ) -> Result<String, OcrAttemptError> {
     ensure_ocr_image_bounds(img.width(), img.height())
         .map_err(|error| OcrAttemptError::from_io(OcrStage::Bounds, error))?;
+    if let Some(dir) = &config.defer_dir {
+        let jpeg = encode_for_vision(img)?;
+        return defer_ocr_to_dir(dir, &jpeg);
+    }
     let vision = effective_vision_config(config);
     if !vision.is_configured() {
         return Err(OcrAttemptError::not_configured(
@@ -422,7 +494,7 @@ pub fn ocr_dynimage_detailed(
     }
     let jpeg = encode_for_vision(img)?;
     let text = call_vision_api(&vision, &jpeg, langs)?;
-    Ok(strip_wrapping_fence(&text))
+    Ok(strip_ocr_wrapping_fence(&text))
 }
 
 #[cfg(feature = "llm")]
@@ -454,6 +526,7 @@ mod tests {
     fn unconfigured() -> OcrRunConfig {
         OcrRunConfig {
             vision: Some(VisionOcrConfig::default()),
+            defer_dir: None,
         }
     }
 
@@ -526,13 +599,52 @@ mod tests {
     #[test]
     fn strips_wrapping_code_fence_only() {
         assert_eq!(
-            strip_wrapping_fence("```markdown\n# Tiêu đề\nNội dung\n```"),
+            strip_ocr_wrapping_fence("```markdown\n# Tiêu đề\nNội dung\n```"),
             "# Tiêu đề\nNội dung"
         );
-        assert_eq!(strip_wrapping_fence("```\ntext\n```"), "text");
+        assert_eq!(strip_ocr_wrapping_fence("```\ntext\n```"), "text");
         let inner_fence = "Đoạn văn\n\n```rust\nfn main() {}\n```\n\nKết";
-        assert_eq!(strip_wrapping_fence(inner_fence), inner_fence);
-        assert_eq!(strip_wrapping_fence("một dòng"), "một dòng");
+        assert_eq!(strip_ocr_wrapping_fence(inner_fence), inner_fence);
+        assert_eq!(strip_ocr_wrapping_fence("một dòng"), "một dòng");
+    }
+
+    #[test]
+    fn deferred_mode_writes_jpeg_artifact_and_returns_placeholder() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = OcrRunConfig {
+            vision: Some(VisionOcrConfig::default()), // KHÔNG có key — defer không cần
+            defer_dir: Some(dir.path().to_path_buf()),
+        };
+        let img = DynamicImage::ImageLuma8(GrayImage::from_pixel(64, 64, image::Luma([12])));
+        let placeholder = ocr_dynimage_detailed(&img, "vie+eng", &config).expect("defer");
+        let names = pending_ocr_artifacts(&placeholder);
+        assert_eq!(names.len(), 1, "placeholder phải parse được: {placeholder}");
+        let artifact = dir.path().join(&names[0]);
+        let bytes = std::fs::read(&artifact).expect("artifact tồn tại");
+        assert_eq!(&bytes[..2], &[0xFF, 0xD8], "artifact phải là JPEG");
+        // Hai lần defer cùng ảnh → tên khác nhau (random, không đoán được).
+        let second = ocr_dynimage_detailed(&img, "vie+eng", &config).expect("defer 2");
+        assert_ne!(placeholder, second);
+    }
+
+    #[test]
+    fn pending_ocr_artifacts_rejects_traversal_and_dedupes() {
+        let good = ocr_pending_placeholder("markhand-ocr-abc123.jpg");
+        let md = format!(
+            "A\n\n{good}\n\nB\n\n{good}\n\n\
+             <!-- markhand:ocr-pending ../etc/passwd -->\n\
+             <!-- markhand:ocr-pending markhand-ocr-x/../y.jpg -->\n\
+             <!-- markhand:ocr-pending other-name.jpg -->\n\
+             <!-- markhand:ocr-pending markhand-ocr-def456.jpg -->"
+        );
+        assert_eq!(
+            pending_ocr_artifacts(&md),
+            vec![
+                "markhand-ocr-abc123.jpg".to_string(),
+                "markhand-ocr-def456.jpg".to_string()
+            ]
+        );
+        assert!(pending_ocr_artifacts("không có placeholder").is_empty());
     }
 
     #[test]

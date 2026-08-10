@@ -302,6 +302,15 @@ async fn run_convert_worker(
     rotation: Arc<OrgRotation>,
 ) -> Result<(), String> {
     let mut config = ConvertWorkerConfig::new(worker_id, sandbox_config_from_env()?);
+    config.vision_ocr = fileconv_server::services::vision_ocr::VisionOcrRuntime::from_env()
+        .map_err(|error| format!("invalid vision OCR configuration: {error}"))?
+        .map(Arc::new);
+    if config.vision_ocr.is_none() {
+        eprintln!(
+            "fileconv-worker: MARKHAND_OCR_API_KEY/MARKHAND_OCR_BASE_URL not set — \
+             documents requiring OCR will fail until vision OCR is configured"
+        );
+    }
     config.lease_ttl = Duration::from_secs(state.config().limits().job_lease_seconds);
     if let Ok(value) = std::env::var("MARKHAND_WORKER_HEARTBEAT_INTERVAL_SECS") {
         config.heartbeat_interval = Duration::from_secs(value.parse().map_err(|_| {
@@ -874,6 +883,8 @@ fn sandbox_config_from_env() -> Result<SandboxConfig, String> {
             "/usr/local/bin/fileconv".into(),
             "one".into(),
             "{input}".into(),
+            "--ocr-defer-dir".into(),
+            ".".into(),
         ],
     };
     let mut limits = ResourceLimits::default();

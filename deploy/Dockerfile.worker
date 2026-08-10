@@ -64,7 +64,7 @@ COPY --from=builder /src/target/release/fileconv /usr/local/bin/fileconv
 COPY --from=builder /opt/pdfium /opt/pdfium
 
 ENV FILECONV_PDFIUM_LIB=/opt/pdfium/lib \
-    MARKHAND_CONVERTER_ARGV_JSON='["/usr/local/bin/fileconv","one","{input}"]'
+    MARKHAND_CONVERTER_ARGV_JSON='["/usr/local/bin/fileconv","one","{input}","--ocr-defer-dir","."]'
 
 # Explicitly refuse any accidental model mount under the historical path.
 # Operators must not copy PhoWhisper into this image.

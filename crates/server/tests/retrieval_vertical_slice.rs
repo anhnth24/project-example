@@ -389,10 +389,13 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         let mut convert_config = ConvertWorkerConfig::new(
             format!("vertical-convert-{ext}-{}", Uuid::new_v4()),
             SandboxConfig {
+                // Production argv: deferred OCR ghi JPEG vào workspace sandbox.
                 argv_template: vec![
                     fileconv.display().to_string(),
                     "one".into(),
                     "{input}".into(),
+                    "--ocr-defer-dir".into(),
+                    ".".into(),
                 ],
                 limits: ResourceLimits {
                     wall_timeout: Duration::from_secs(30),
@@ -428,16 +431,16 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         .await
         .unwrap_or_else(|error| panic!("{ext} load convert job: {error}"));
         if ext == "png" {
-            // Vision OCR (OpenRouter) cần network + API key; sandbox cắt network
-            // và không truyền key nên convert ảnh phải fail-closed với lỗi cấu
-            // hình OCR rõ ràng. OCR ảnh server-side sẽ là worker stage riêng
-            // ngoài sandbox (DKP-05) — chưa thuộc slice này.
+            // Deferred OCR: sandbox render JPEG + placeholder thành công, nhưng
+            // suite live không cấu hình MARKHAND_OCR_* (không gọi provider thật
+            // trong CI) → stage vision OCR của worker phải fail-closed với lỗi
+            // cấu hình rõ ràng, không nuốt trang.
             assert!(
                 matches!(
                     convert_run,
                     ConvertWorkerRun::Failed { job_id, .. } if job_id == convert_job_id
                 ),
-                "{ext} phải fail-closed khi thiếu vision OCR: {convert_run:?}"
+                "{ext} phải fail-closed khi thiếu vision OCR runtime: {convert_run:?}"
             );
             let error_text = convert_last_error.clone().unwrap_or_default();
             assert!(

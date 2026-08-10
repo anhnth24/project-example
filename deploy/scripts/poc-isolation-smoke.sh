@@ -118,13 +118,17 @@ require_regex "$COMPOSE_FILE" 'internal:[[:space:]]*true' "convert network is in
 if awk '
   /^  worker-convert:/ {found=1; next}
   found && /^  [a-z0-9-]+:/ {exit}
-  found && /networks:[[:space:]]*\[convert\]/ {net=1}
+  found && /networks:[[:space:]]*\[convert, ocr-egress\]/ {net=1}
   END { exit !(found && net) }
 ' "$COMPOSE_FILE"; then
-  pass "worker-convert attached only to convert network"
+  pass "worker-convert attached to convert + ocr-egress networks only"
 else
-  fail "worker-convert must use networks: [convert] only"
+  fail "worker-convert must use networks: [convert, ocr-egress] only"
 fi
+# Deferred OCR: the sandboxed converter must not receive the vision OCR key —
+# only the worker process (MARKHAND_OCR_*) calls the provider.
+require_regex "$COMPOSE_FILE" 'MARKHAND_OCR_API_KEY' \
+  "worker-convert exposes vision OCR configuration to the worker process"
 require_file "$WORKER_SECCOMP"
 require_regex "$COMPOSE_FILE" 'seccomp=.*worker-sandbox-seccomp\.json' \
   "convert worker uses the sandbox-specific seccomp allowlist"

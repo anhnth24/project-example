@@ -116,7 +116,8 @@ fn main() -> Result<()> {
             {
                 opts.max_chars = Some(m);
             }
-            let conv = Converter::with_options(opts);
+            let ocr_config = ocr_run_config_from_args(rest);
+            let conv = Converter::with_options_and_ocr_config(opts, ocr_config);
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
             Ok(())
@@ -162,7 +163,10 @@ fn main() -> Result<()> {
             {
                 opts.max_chars = Some(m);
             }
-            match Converter::with_options(opts).convert_path_detailed(Path::new(f)) {
+            let ocr_config = ocr_run_config_from_args(rest);
+            match Converter::with_options_and_ocr_config(opts, ocr_config)
+                .convert_path_detailed(Path::new(f))
+            {
                 Ok(report) => {
                     println!(
                         "{}",
@@ -248,6 +252,20 @@ fn main() -> Result<()> {
             Ok(())
         }
         other => bail!("lệnh không hợp lệ: {other}"),
+    }
+}
+
+/// `--ocr-defer-dir <dir>`: deferred OCR — ghi JPEG trang scan vào dir và chèn
+/// placeholder thay vì gọi provider (dùng cho converter sandbox không network).
+fn ocr_run_config_from_args(rest: &[String]) -> fileconv_core::OcrRunConfig {
+    let defer_dir = rest
+        .iter()
+        .position(|argument| argument == "--ocr-defer-dir")
+        .and_then(|index| rest.get(index + 1))
+        .map(std::path::PathBuf::from);
+    fileconv_core::OcrRunConfig {
+        vision: None,
+        defer_dir,
     }
 }
 

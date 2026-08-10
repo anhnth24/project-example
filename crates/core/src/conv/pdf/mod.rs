@@ -240,6 +240,7 @@ mod tests {
     fn unconfigured_ocr_config() -> OcrRunConfig {
         OcrRunConfig {
             vision: Some(crate::image_ocr::VisionOcrConfig::default()),
+            defer_dir: None,
         }
     }
 

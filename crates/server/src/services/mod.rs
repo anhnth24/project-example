@@ -31,3 +31,4 @@ pub mod reconciliation;
 pub mod retrieval;
 pub mod stream_auth;
 pub mod upload;
+pub mod vision_ocr;
