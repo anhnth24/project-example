@@ -6,7 +6,7 @@
 // gets the same "jump to source" affordance a sighted user gets by clicking
 // the superscript number.
 import type { CitationPin } from './CitationCard';
-import { splitAnswerIntoFootnoteSegments } from './citationFootnotes';
+import { splitAnswerIntoFootnoteSegments } from './citationFootnoteUtils';
 
 export function footnoteAnchorId(scopeId: string, n: number): string {
   return `${scopeId}-cite-${n}`;

@@ -20,7 +20,7 @@ import { buildLibraryDocPath } from '../../lib/router';
 import { RouteLink } from '../RouteLink';
 import { footnoteAnchorId } from './AnswerText';
 import { hasDeepLink, locationLabel, type CitationPin } from './CitationCard';
-import { buildCitationFootnotes, distinctDocumentCount } from './citationFootnotes';
+import { buildCitationFootnotes, distinctDocumentCount } from './citationFootnoteUtils';
 
 const UNKNOWN_COLLECTION_LABEL = 'Bộ sưu tập không xác định';
 

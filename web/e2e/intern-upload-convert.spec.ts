@@ -27,7 +27,6 @@ test('upload converts and preview shows markdown output', async ({ page }) => {
       return;
     }
     const authorization = request.headers()['authorization'] ?? '';
-    await new Promise((resolve) => setTimeout(resolve, 200));
     const replayed = await page.evaluate(
       async ({ authorization: auth, collectionId, fileName, base64Contents }) => {
         const bytes = Uint8Array.from(atob(base64Contents), (c) => c.charCodeAt(0));

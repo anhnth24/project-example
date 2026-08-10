@@ -4,7 +4,7 @@ import {
   buildCitationFootnotes,
   distinctDocumentCount,
   splitAnswerIntoFootnoteSegments,
-} from './citationFootnotes';
+} from './citationFootnoteUtils';
 
 function pin(overrides: Partial<CitationPin> & { citeId: string }): CitationPin {
   return {
