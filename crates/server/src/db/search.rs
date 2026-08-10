@@ -300,7 +300,16 @@ pub async fn load_lineage_versions(
 /// Full-text search over active-generation, version-filtered chunks.
 ///
 /// Query text is accent-folded (`accent-fold-v1`) before `plainto_tsquery` so it
-/// matches `markhand_accent_fold` tsvector content.
+/// matches `markhand_accent_fold` tsvector content. The tsquery is an OR of two
+/// foldings of the same query:
+///
+/// 1. token-joined (`normalize_fts_query`) — stop-word filtered semantic tokens;
+/// 2. separator-preserving (`normalize_search_text`) — PostgreSQL's lexer then
+///    tokenizes the query EXACTLY like it tokenized the folded body. Without
+///    this leg, identifiers whose body-side tokenization differs from plain
+///    whitespace tokens are unfindable — e.g. hex ids containing a
+///    `<digits>e<digits>` run (`…-6571e715cb97…`) are split as scientific-
+///    notation floats in the tsvector and never match the space-joined tokens.
 pub async fn fts_search(
     txn: &Transaction<'_>,
     ctx: &OrgContext,
@@ -313,7 +322,8 @@ pub async fn fts_search(
         return Ok(Vec::new());
     }
     let folded = normalize_fts_query(query);
-    if folded.trim().is_empty() {
+    let folded_raw = fileconv_core::intelligence::normalize_search_text(query);
+    if folded.trim().is_empty() && folded_raw.trim().is_empty() {
         return Ok(Vec::new());
     }
     let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
@@ -327,7 +337,8 @@ pub async fn fts_search(
             let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
-                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $4))::real AS rank
+                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $4)
+                                          || plainto_tsquery('simple', $8))::real AS rank
                  FROM chunks c
                  JOIN documents d
                    ON d.org_id = c.org_id AND d.id = c.document_id
@@ -345,7 +356,8 @@ pub async fn fts_search(
                    AND dv.is_current
                    AND im.is_active
                    AND im.state = 'active'
-                   AND c.tsv @@ plainto_tsquery('simple', $4)
+                   AND c.tsv @@ (plainto_tsquery('simple', $4)
+                                 || plainto_tsquery('simple', $8))
                    AND {acl}
                  ORDER BY rank DESC, c.id
                  LIMIT $3"
@@ -360,6 +372,7 @@ pub async fn fts_search(
                     &ctx.user_id(),
                     &visibility.required_permission(),
                     &acl_read_access_param(),
+                    &folded_raw,
                 ],
             )
             .await?
@@ -380,7 +393,8 @@ pub async fn fts_search(
             let sql = format!(
                 "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
                         d.collection_id,
-                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $5))::real AS rank
+                        ts_rank_cd(c.tsv, plainto_tsquery('simple', $5)
+                                          || plainto_tsquery('simple', $10))::real AS rank
                  FROM chunks c
                  JOIN documents d
                    ON d.org_id = c.org_id AND d.id = c.document_id
@@ -398,7 +412,8 @@ pub async fn fts_search(
                    AND c.version_id = ANY($3)
                    AND im.is_active
                    AND im.state = 'active'
-                   AND c.tsv @@ plainto_tsquery('simple', $5)
+                   AND c.tsv @@ (plainto_tsquery('simple', $5)
+                                 || plainto_tsquery('simple', $10))
                    AND {acl}
                  ORDER BY rank DESC, c.id
                  LIMIT $4"
@@ -415,6 +430,7 @@ pub async fn fts_search(
                     &PERMISSION_QA_QUERY,
                     &acl_read_access_param(),
                     &PERMISSION_QA_HISTORY,
+                    &folded_raw,
                 ],
             )
             .await?

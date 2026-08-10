@@ -1365,8 +1365,12 @@ async fn in_flight_ask_emits_no_content_after_acl_revoke() {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
+            let visibility = search_visibility_snapshot(world.pool(), alpha, &alpha.marker)
+                .await
+                .unwrap_or_else(|error| format!("snapshot unavailable: {error}"));
             panic!(
-                "in-flight ask requires own indexed marker visible before stream; last: {search}"
+                "in-flight ask requires own indexed marker visible before stream; \
+                 last: {search}; visibility: {visibility}"
             );
         }
         tokio::time::sleep(SEARCH_VISIBILITY_POLL_BACKOFF).await;
