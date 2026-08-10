@@ -133,10 +133,8 @@ pub enum ConvertError {
 
 #[derive(Debug, Clone)]
 pub struct ConverterOptions {
-    /// Ngôn ngữ OCR cho ảnh (mặc định "vie+eng").
+    /// Ngôn ngữ OCR cho ảnh (mặc định "vie+eng") — hint cho prompt vision OCR.
     pub ocr_langs: String,
-    /// Tesseract mặc định; Paddle/Auto là tier tùy chọn.
-    pub ocr_engine: image_ocr::OcrEngine,
     /// Đường dẫn model whisper GGML cho audio (None = audio chưa khả dụng).
     pub whisper_model: Option<PathBuf>,
     /// Ngôn ngữ audio (mặc định "vi").
@@ -162,7 +160,6 @@ impl Default for ConverterOptions {
     fn default() -> Self {
         Self {
             ocr_langs: "vie+eng".to_string(),
-            ocr_engine: image_ocr::OcrEngine::Tesseract,
             whisper_model: None,
             audio_lang: "vi".to_string(),
             audio_threads: 4,
@@ -242,8 +239,7 @@ impl Converter {
         path: &Path,
     ) -> Result<ConversionReport, DetailedConvertError> {
         let format = FormatKind::from_path(path);
-        let output =
-            image_ocr::with_ocr_engine(self.opts.ocr_engine, || self.convert_format(path, format))?;
+        let output = self.convert_format(path, format)?;
 
         // Chuẩn hoá Unicode NFC: tài liệu tiếng Việt cũ (nhất là từ macOS/PDF legacy)
         // hay ở dạng NFD (ê + dấu rời) — gây lệch so khớp/tìm kiếm/embedding dù nhìn
@@ -457,7 +453,6 @@ mod tests {
     fn legacy_converter_options_exhaustive_literal_still_compiles() {
         let _ = ConverterOptions {
             ocr_langs: "vie+eng".to_string(),
-            ocr_engine: image_ocr::OcrEngine::Tesseract,
             whisper_model: None,
             audio_lang: "vi".to_string(),
             audio_threads: 4,
@@ -628,7 +623,7 @@ mod tests {
 
     #[test]
     fn detailed_error_kinds_only_at_exact_stages() {
-        let dep = DetailedConvertError::dependency_missing("tesseract spawn NotFound");
+        let dep = DetailedConvertError::dependency_missing("vision OCR chưa cấu hình");
         assert_eq!(dep.kind, ConvertErrorKind::DependencyMissing);
         assert!(matches!(dep.error, ConvertError::Failed(_)));
         let internal = DetailedConvertError::internal("pdf-extract panic");
@@ -638,7 +633,7 @@ mod tests {
         let dto = dep.to_dto();
         let value = serde_json::to_value(&dto).unwrap();
         assert_eq!(value["kind"], "dependency_missing");
-        assert!(value["message"].as_str().unwrap().contains("tesseract"));
+        assert!(value["message"].as_str().unwrap().contains("OCR"));
         assert!(value.get("message").is_some() && value.get("kind").is_some());
     }
 

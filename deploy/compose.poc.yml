@@ -535,7 +535,7 @@ services:
       MARKHAND_WORKER_KIND: convert
       MARKHAND_WORKER_ID: poc-convert-1
       MARKHAND_CONVERTER_TIMEOUT_SECS: ${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}
-      # RLIMIT_AS needs virtual headroom for PDFium/Tesseract; the container
+      # RLIMIT_AS needs virtual headroom for PDFium; the container
       # cgroup below still caps resident memory at MARKHAND_WORKER_MEM_LIMIT.
       # The converter's rayon pool sizes itself from the host CPU count, so the
       # address space it reserves grows with the machine: 1 GiB was enough on an
@@ -543,7 +543,6 @@ services:
       # surfaces as a misleading "PDFium not found" conversion error.
       MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-4294967296}
       FILECONV_PDFIUM_LIB: /opt/pdfium/lib
-      TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
     # No egress: only the internal `convert` network (Postgres + MinIO).
     networks: [convert]
     tmpfs:

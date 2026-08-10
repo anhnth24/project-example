@@ -22,7 +22,7 @@ mà **đỡ tốn token**: trích xuất ngoài context + chỉ lấy phần c�
 | `summarize(path, {max_chars?})` | Tóm tắt tài liệu |
 | `extract_json(path, {instruction, max_chars?})` | Trích trường ngữ nghĩa → JSON (vd hoá đơn/HĐ) |
 | `translate(path, {target, max_chars?})` | Dịch sang ngôn ngữ đích |
-| `ocr_hard(path)` | OCR ảnh KHÓ bằng **vision-LLM** (đa cột, IN HOA, viết tay, con dấu) — hơn Tesseract cho các ca này |
+| `ocr_hard(path)` | OCR ảnh bằng **vision-LLM** với provider/model tuỳ chọn (`FILECONV_LLM_*`) — convert thường đã OCR vision qua `FILECONV_OCR_*` |
 
 ### Cấu hình LLM (tuỳ chọn)
 ```

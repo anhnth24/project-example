@@ -5,8 +5,9 @@
 //! `needs_ocr` cho trang scan/ảnh HOẶC trang có **text-layer rác** (font GID,
 //! encoding hỏng) — bắt được lỗi mà cách đếm ký tự không thấy.
 //!
-//! Trang `needs_ocr` → render bằng PDFium ở 300 DPI rồi **OCR Tesseract** (pdf-inspector
-//! không OCR). Trang trộn (text + ảnh) có thể OCR thêm ảnh nhúng khi bật `pdf_ocr_images`.
+//! Trang `needs_ocr` → render bằng PDFium ở 300 DPI, encode JPEG rồi **OCR bằng
+//! vision-LLM** (OpenRouter mặc định — pdf-inspector không OCR). Trang trộn
+//! (text + ảnh) có thể OCR thêm ảnh nhúng khi bật `pdf_ocr_images`.
 //!
 //! Fallback: nếu pdf-inspector lỗi → đường PDFium (đếm ký tự); nếu vẫn không được /
 //! thiếu libpdfium → `pdf-extract`.
@@ -169,14 +170,12 @@ pub(crate) fn to_markdown_detailed(
             if let Some(error) = last_ocr_error {
                 return Err(pdf_ocr_hard_failure(error, "OCR trang PDF thất bại"));
             }
-            // No OCR attempt recorded: probe binary availability at this stage.
-            let binary = image_ocr::effective_tesseract_binary(ocr_config);
-            if !image_ocr::tesseract_available() {
-                return Err(DetailedConvertError::dependency_missing(format!(
-                    "PDF là bản scan nhưng không tìm thấy Tesseract OCR ({}); \
-                     hãy cài lại Markhand Desktop hoặc đặt FILECONV_TESSERACT",
-                    binary.display()
-                )));
+            // No OCR attempt recorded: probe vision configuration at this stage.
+            if !image_ocr::vision_ocr_available(ocr_config) {
+                return Err(DetailedConvertError::dependency_missing(
+                    "PDF là bản scan nhưng vision OCR chưa được cấu hình; đặt \
+                     FILECONV_OCR_API_KEY (OpenRouter) hoặc FILECONV_OCR_BASE_URL",
+                ));
             }
             Err(DetailedConvertError::failed(
                 "PDF không có text layer và OCR không nhận được nội dung",
@@ -187,7 +186,7 @@ pub(crate) fn to_markdown_detailed(
 
 fn pdf_ocr_hard_failure(error: OcrAttemptError, prefix: &str) -> DetailedConvertError {
     match error {
-        OcrAttemptError::TesseractNotFound { message, .. } => {
+        OcrAttemptError::NotConfigured { message, .. } => {
             DetailedConvertError::dependency_missing(format!("{prefix}: {message}"))
         }
         other => DetailedConvertError::failed(format!("{prefix}: {other}")),
@@ -236,8 +235,12 @@ mod tests {
         out.into_bytes()
     }
 
-    fn missing_tesseract_bin() -> PathBuf {
-        PathBuf::from("/nonexistent/fileconv-core-t7-missing-tesseract")
+    /// OCR config chủ đích KHÔNG cấu hình (không key, endpoint mặc định) —
+    /// deterministic, không phụ thuộc env FILECONV_OCR_* của môi trường chạy test.
+    fn unconfigured_ocr_config() -> OcrRunConfig {
+        OcrRunConfig {
+            vision: Some(crate::image_ocr::VisionOcrConfig::default()),
+        }
     }
 
     fn review_fixture_path() -> PathBuf {
@@ -297,16 +300,14 @@ mod tests {
             "test requires real detector needs_ocr — not a substituted flag"
         );
 
-        // Force OCR spawn failure via injectable binary (no env mutation). Real
+        // Force OCR failure via unconfigured vision config (no env mutation). Real
         // needs_ocr path must fall back to untrusted text → PartialSuccess.
         let report = Converter::with_options_and_ocr_config(
             ConverterOptions {
                 pdf_ocr: true,
                 ..ConverterOptions::default()
             },
-            OcrRunConfig {
-                tesseract_binary: Some(missing_tesseract_bin()),
-            },
+            unconfigured_ocr_config(),
         )
         .convert_path_detailed(&fixture)
         .expect("garbage text layer must recover as PartialSuccess, not hard-fail");
@@ -337,9 +338,7 @@ mod tests {
                             pdf_ocr: true,
                             ..ConverterOptions::default()
                         },
-                        OcrRunConfig {
-                            tesseract_binary: Some(missing_tesseract_bin()),
-                        },
+                        unconfigured_ocr_config(),
                     )
                     .convert_path_detailed(path.as_path())
                     .expect("fixture convert")
@@ -365,7 +364,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_tesseract_on_scan_pdf_is_dependency_missing() {
+    fn unconfigured_vision_ocr_on_scan_pdf_is_dependency_missing() {
         if !super::pdfium::pdfium_available() {
             return; // Rendering a scan requires the optional PDFium runtime.
         }
@@ -404,12 +403,10 @@ mod tests {
                 pdf_ocr: true,
                 ..ConverterOptions::default()
             },
-            OcrRunConfig {
-                tesseract_binary: Some(missing_tesseract_bin()),
-            },
+            unconfigured_ocr_config(),
         )
         .convert_path_detailed(&path)
-        .expect_err("scan + missing tesseract must hard-fail");
+        .expect_err("scan + unconfigured vision OCR must hard-fail");
         assert_eq!(err.kind, ConvertErrorKind::DependencyMissing);
         let dto = err.to_dto();
         assert_eq!(dto.kind, ConvertErrorKind::DependencyMissing);
@@ -418,8 +415,9 @@ mod tests {
         let json = serde_json::to_value(&dto).expect("dto json");
         assert_eq!(json["kind"], "dependency_missing");
         assert!(
-            json["message"].as_str().unwrap().contains("Tesseract")
-                || json["message"].as_str().unwrap().contains("tesseract")
+            json["message"].as_str().unwrap().contains("OCR"),
+            "message must mention OCR config: {}",
+            json["message"]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

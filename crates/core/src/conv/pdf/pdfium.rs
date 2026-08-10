@@ -21,7 +21,7 @@ static PDFIUM_INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // OnceCell, không khóa từng lời gọi, nên mọi vùng đụng PDFium phải giữ khóa
 // này suốt vùng đó. Khóa ôm cả đoạn OCR trang scan cho đơn giản — hai PDF scan
 // convert song song sẽ xếp hàng ở đoạn render+OCR; nếu throughput thành vấn đề
-// thì tách Tesseract ra ngoài khóa.
+// thì tách bước gọi vision OCR ra ngoài khóa.
 static PDFIUM_CALL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Giữ khóa serialize PDFium trong suốt lifetime của guard trả về.

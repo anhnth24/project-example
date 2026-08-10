@@ -200,7 +200,7 @@ pub(super) fn finalize_fast_pages(
 ///
 /// Page markers let us independently validate every page that the detector
 /// considers suspicious. A genuine scan has an empty/low-confidence section
-/// and falls through to the normal PDFium/Tesseract path.
+/// and falls through to the normal PDFium/vision-OCR path.
 pub(super) fn via_pdf_inspector_filtered_fast(
     path: &Path,
     bytes: &[u8],
@@ -308,7 +308,7 @@ pub(super) fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Opti
     finalize_fast_pages(path, &selected, merged, Some(native_pages))
 }
 
-/// Đường chính: pdf-inspector cho text/cấu trúc + PDFium/Tesseract cho trang scan.
+/// Đường chính: pdf-inspector cho text/cấu trúc + PDFium/vision-OCR cho trang scan.
 #[allow(clippy::too_many_arguments)] // Explicit conversion controls are safer at this module boundary.
 pub(super) fn via_pdf_inspector(
     path: &Path,

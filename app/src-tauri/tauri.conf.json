@@ -49,10 +49,7 @@
       },
       "deb": {
         "section": "utils",
-        "recommends": [
-          "tesseract-ocr",
-          "tesseract-ocr-vie"
-        ]
+        "recommends": []
       }
     },
     "icon": [

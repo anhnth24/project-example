@@ -18,7 +18,7 @@ impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
             wall_timeout: Duration::from_secs(120),
-            // RLIMIT_AS includes PDFium/Tesseract mappings, not only resident
+            // RLIMIT_AS includes PDFium mappings, not only resident
             // memory; container/cgroup limits remain the physical-memory guard.
             memory_bytes: 1024 * 1024 * 1024,
             cpu_seconds: 60,

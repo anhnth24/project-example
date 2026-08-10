@@ -10,10 +10,13 @@ name = "fileconv"
 path = "src/main.rs"
 
 [features]
-default = ["audio"]
+default = ["audio", "llm"]
 # Whisper/audio bench path. POC worker images build with --no-default-features
 # so whisper.cpp is not compiled and PhoWhisper cannot be bundled by accident.
 audio = ["fileconv-core/audio"]
+# Vision OCR (OpenRouter) cho ảnh/trang PDF scan. Worker image POC build
+# --no-default-features: sandbox không có network nên OCR fail-closed sẵn.
+llm = ["fileconv-core/llm"]
 
 [dependencies]
 fileconv-core = { path = "../core" }

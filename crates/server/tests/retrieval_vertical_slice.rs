@@ -146,7 +146,8 @@ fn vertical_format_cases() -> Vec<(
             "budget.png",
             "image/png",
             "SOAK15",
-            // Shared real OCR fixture; missing OCR runtime must fail the live suite.
+            // Shared OCR fixture. Vision OCR không chạy được trong sandbox
+            // (no network) nên case này assert hành vi fail-closed bên dưới.
             tiny_png_ocr_bytes("SOAK15"),
         ),
         (
@@ -426,6 +427,26 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         })
         .await
         .unwrap_or_else(|error| panic!("{ext} load convert job: {error}"));
+        if ext == "png" {
+            // Vision OCR (OpenRouter) cần network + API key; sandbox cắt network
+            // và không truyền key nên convert ảnh phải fail-closed với lỗi cấu
+            // hình OCR rõ ràng. OCR ảnh server-side sẽ là worker stage riêng
+            // ngoài sandbox (DKP-05) — chưa thuộc slice này.
+            assert!(
+                matches!(
+                    convert_run,
+                    ConvertWorkerRun::Failed { job_id, .. } if job_id == convert_job_id
+                ),
+                "{ext} phải fail-closed khi thiếu vision OCR: {convert_run:?}"
+            );
+            let error_text = convert_last_error.clone().unwrap_or_default();
+            assert!(
+                error_text.contains("OCR"),
+                "{ext} last_error phải nêu thiếu cấu hình OCR: {convert_last_error:?}"
+            );
+            observed_formats.push(ext.to_string());
+            continue;
+        }
         assert!(
             matches!(
                 convert_run,

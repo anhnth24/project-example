@@ -233,13 +233,9 @@ mod imp {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // Allowlist-only passthrough so the converter can load pinned native deps
-        // (PDFium / Tesseract) without inheriting worker secrets.
-        for key in [
-            "FILECONV_PDFIUM_LIB",
-            "FILECONV_TESSDATA",
-            "TESSDATA_PREFIX",
-            "LANG",
-        ] {
+        // (PDFium) without inheriting worker secrets. Vision OCR không chạy trong
+        // sandbox (CLONE_NEWNET chặn network) — API key KHÔNG được truyền vào đây.
+        for key in ["FILECONV_PDFIUM_LIB", "LANG"] {
             if let Ok(value) = std::env::var(key) {
                 if !value.is_empty() {
                     command.env(key, value);
@@ -541,7 +537,7 @@ mod imp {
             let mut landlock_allow = vec![
                 (workspace.clone(), LANDLOCK_ACCESS_FS_ALL_V1),
                 (executable_path, LANDLOCK_ACCESS_FS_EXEC_FILE),
-                // Preflight uses /bin/true; converter shells out to tesseract under /usr/bin.
+                // Preflight uses /bin/true.
                 (cstring_path("/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (
@@ -554,31 +550,19 @@ mod imp {
                 (cstring_path("/usr/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/etc/ld.so.cache")?, ACCESS_FS_READ_FILE),
                 // std::process::Command::output() opens /dev/null for child
-                // stdin. Without this exact device rule nested OCR spawn gets
-                // EACCES before exec, even though tesseract itself is allowed.
+                // stdin. Without this exact device rule nested helper spawn
+                // gets EACCES before exec.
                 (
                     cstring_path("/dev/null")?,
                     ACCESS_FS_READ_FILE | ACCESS_FS_WRITE_FILE,
                 ),
-                // Pinned PDFium + Debian Tesseract tessdata locations.
+                // Pinned PDFium location.
                 (
                     cstring_path("/opt/pdfium")?,
                     LANDLOCK_ACCESS_FS_READ_EXECUTE,
                 ),
-                (
-                    cstring_path("/usr/share/tesseract-ocr")?,
-                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
-                ),
-                (
-                    cstring_path("/usr/share/tessdata")?,
-                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
-                ),
             ];
-            for key in [
-                "FILECONV_PDFIUM_LIB",
-                "FILECONV_TESSDATA",
-                "TESSDATA_PREFIX",
-            ] {
+            for key in ["FILECONV_PDFIUM_LIB"] {
                 if let Ok(value) = std::env::var(key) {
                     let trimmed = value.trim();
                     let path = Path::new(trimmed);
@@ -1017,21 +1001,12 @@ mod imp {
             }
         }
 
+        /// Vision OCR cần network + API key; sandbox cắt network (CLONE_NEWNET)
+        /// và không truyền key. Convert ảnh trong sandbox phải fail-closed với
+        /// lỗi cấu hình OCR rõ ràng — không im lặng trả markdown rỗng.
         #[test]
-        #[ignore = "requires a built fileconv binary and Tesseract"]
-        fn live_png_ocr_runs_inside_production_sandbox() {
-            let tesseract_probe = run(
-                &shell_config("/usr/bin/tesseract --version", Duration::from_secs(5)),
-                input(),
-                &SandboxCancel::default(),
-            )
-            .expect("tesseract probe sandbox");
-            assert_eq!(
-                tesseract_probe.exit,
-                SandboxExit::Success,
-                "tesseract probe stderr={}",
-                String::from_utf8_lossy(&tesseract_probe.stderr)
-            );
+        #[ignore = "requires a built fileconv binary"]
+        fn live_png_convert_fails_closed_without_vision_ocr_inside_sandbox() {
             let fileconv = std::env::var_os("MARKHAND_TEST_FILECONV_BIN")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
@@ -1061,16 +1036,16 @@ mod imp {
                 &SandboxCancel::default(),
             )
             .expect("sandbox run");
-            assert_eq!(
+            assert_ne!(
                 output.exit,
                 SandboxExit::Success,
-                "stderr={}",
-                String::from_utf8_lossy(&output.stderr)
+                "image convert must fail closed without vision OCR; stdout={}",
+                String::from_utf8_lossy(&output.stdout)
             );
             assert!(
-                String::from_utf8_lossy(&output.stdout).contains("SOAK15"),
-                "stdout={}",
-                String::from_utf8_lossy(&output.stdout)
+                String::from_utf8_lossy(&output.stderr).contains("OCR"),
+                "stderr must explain missing OCR config: {}",
+                String::from_utf8_lossy(&output.stderr)
             );
         }
 

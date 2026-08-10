@@ -35,8 +35,9 @@ Chỉ build backend: `cargo build -p fileconv-desktop` (từ thư mục gốc re
 - **Rust** + **Node 20+** + pnpm 10.
 - **Linux**: `webkit2gtk-4.1`, `libgtk-3`, (tùy chọn) `libayatana-appindicator3`, `librsvg2`.
 - Build `fileconv-core` cần **cmake + clang** (biên dịch whisper.cpp lần đầu ~1–2 phút).
-- Tùy chọn để convert đầy đủ (xem `CLAUDE.md` ở gốc repo): `tesseract-ocr(+vie)`, libpdfium,
-  model whisper (mục Cài đặt trong app để trỏ tới `ggml-*.bin`).
+- Tùy chọn để convert đầy đủ (xem `CLAUDE.md` ở gốc repo): libpdfium, API key vision
+  OCR (`FILECONV_OCR_API_KEY` — OpenRouter mặc định), model whisper (mục Cài đặt
+  trong app để trỏ tới `ggml-*.bin`).
 
 ## Cấu trúc
 
@@ -105,9 +106,9 @@ Neural embeddings là cấu hình riêng: Ollama/LM Studio/vLLM/OpenAI/Gemini. N
 tắt, index dùng local hash 256D. Nếu bật cloud embedding, toàn bộ chunk được gửi
 khi build index (UI cảnh báo rõ), không chỉ top-K.
 
-OCR engine chọn Tesseract, PaddleOCR hoặc Auto. Paddle là Python/model tùy chọn;
-thiếu runtime sẽ fallback Tesseract. Scan nhiều cột được tách và kiểm tra score
-trước khi thay output toàn trang.
+OCR ảnh/trang scan chạy qua vision-LLM (OpenRouter mặc định, cấu hình
+`FILECONV_OCR_*`). Thiếu API key thì convert ảnh/scan báo lỗi cấu hình rõ ràng;
+tài liệu có text layer tin cậy không cần OCR.
 
 ### Build bộ cài
 

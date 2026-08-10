@@ -5,9 +5,10 @@ use std::process::Command;
 
 /// Tạo `Command` không mở cửa sổ console trên Windows.
 ///
-/// App desktop (GUI, không có console) spawn tesseract/python/CLI: Windows sẽ
-/// cấp console mới cho tiến trình con và cửa sổ đen nháy lên mỗi lần convert.
+/// App desktop (GUI, không có console) spawn subscription CLI: Windows sẽ
+/// cấp console mới cho tiến trình con và cửa sổ đen nháy lên mỗi lần gọi.
 /// `CREATE_NO_WINDOW` chặn việc đó; stdout/stderr vẫn capture qua pipe như thường.
+#[cfg_attr(not(feature = "llm"), allow(dead_code))]
 pub(crate) fn background_command(program: impl AsRef<OsStr>) -> Command {
     #[allow(unused_mut)]
     let mut command = Command::new(program);

@@ -52,7 +52,6 @@ pub struct Node {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub ocr_langs: String,
-    pub ocr_engine: String,
     pub pdf_ocr: bool,
     pub pdf_ocr_images: bool,
     pub audio_lang: String,
@@ -80,7 +79,6 @@ impl Default for Settings {
         let d = ConverterOptions::default();
         Self {
             ocr_langs: d.ocr_langs,
-            ocr_engine: "tesseract".into(),
             pdf_ocr: d.pdf_ocr,
             pdf_ocr_images: d.pdf_ocr_images,
             audio_lang: d.audio_lang,
@@ -109,7 +107,6 @@ impl Settings {
     fn to_options(&self) -> ConverterOptions {
         ConverterOptions {
             ocr_langs: self.ocr_langs.clone(),
-            ocr_engine: fileconv_core::image_ocr::OcrEngine::from_name(&self.ocr_engine),
             whisper_model: self.whisper_model.as_ref().map(PathBuf::from),
             audio_lang: self.audio_lang.clone(),
             audio_threads: self.audio_threads,
@@ -1045,22 +1042,16 @@ fn get_live_watch_status(state: State<AppState>) -> watch::WatchStatus {
     state.watch_service.status()
 }
 
+/// `ocr_langs` giờ là hint ngôn ngữ cho prompt vision OCR — chỉ cần các mã
+/// không rỗng (vd "vie+eng", "vie+eng+jpn").
 fn bundled_ocr_langs_are_valid(langs: &str) -> bool {
-    !langs.trim().is_empty() && langs.split('+').all(|lang| matches!(lang, "vie" | "eng"))
+    !langs.trim().is_empty() && langs.split('+').all(|lang| !lang.trim().is_empty())
 }
 
 #[tauri::command]
 fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
     if !bundled_ocr_langs_are_valid(&settings.ocr_langs) {
-        return Err(
-            "bản desktop đi kèm model OCR vie và eng; hãy chọn vie, eng hoặc vie+eng".into(),
-        );
-    }
-    if !matches!(
-        settings.ocr_engine.as_str(),
-        "tesseract" | "paddle" | "auto"
-    ) {
-        return Err("OCR engine phải là tesseract, paddle hoặc auto".into());
+        return Err("ngôn ngữ OCR không được để trống (vd vie+eng)".into());
     }
     if settings.audio_lang.trim().is_empty() {
         return Err("ngôn ngữ audio không được để trống".into());
@@ -1106,36 +1097,8 @@ fn configure_bundled_document_runtime(resource_dir: &Path) {
         }
     }
 
-    if std::env::var_os("FILECONV_TESSERACT").is_none() {
-        let executable = if cfg!(target_os = "windows") {
-            runtime.join("ocr/bin/tesseract.exe")
-        } else if cfg!(target_os = "macos") {
-            resource_dir
-                .parent()
-                .unwrap_or(resource_dir)
-                .join("MacOS/tesseract")
-        } else {
-            runtime.join("ocr/bin/tesseract")
-        };
-        if executable.is_file() {
-            std::env::set_var("FILECONV_TESSERACT", executable);
-        }
-    }
-
-    if std::env::var_os("FILECONV_TESSDATA").is_none() {
-        let tessdata = runtime.join("ocr/tessdata");
-        if tessdata.join("vie.traineddata").is_file() && tessdata.join("eng.traineddata").is_file()
-        {
-            std::env::set_var("FILECONV_TESSDATA", tessdata);
-        }
-    }
-
-    if std::env::var_os("FILECONV_OCR_LIB_DIR").is_none() {
-        let libraries = runtime.join("ocr/lib");
-        if libraries.is_dir() {
-            std::env::set_var("FILECONV_OCR_LIB_DIR", libraries);
-        }
-    }
+    // OCR chạy qua vision-LLM (FILECONV_OCR_*); desktop không còn bundle
+    // Tesseract/tessdata trong native runtime.
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1164,8 +1127,7 @@ pub fn run() {
                 .unwrap_or_default();
             if !bundled_ocr_langs_are_valid(&settings.ocr_langs) {
                 eprintln!(
-                    "Markhand: OCR language '{}' không có trong runtime đi kèm; \
-                     chuyển về vie+eng",
+                    "Markhand: OCR language '{}' không hợp lệ; chuyển về vie+eng",
                     settings.ocr_langs
                 );
                 settings.ocr_langs = "vie+eng".into();
@@ -1559,13 +1521,12 @@ mod tests {
 
     #[test]
     fn detailed_hard_failure_dto_serializes_message_and_kind() {
-        let dto = fileconv_core::DetailedConvertError::dependency_missing(
-            "không tìm thấy binary Tesseract",
-        )
-        .to_dto();
+        let dto =
+            fileconv_core::DetailedConvertError::dependency_missing("vision OCR chưa cấu hình")
+                .to_dto();
         let value = serde_json::to_value(&dto).unwrap();
         assert_eq!(value["kind"], "dependency_missing");
-        assert!(value["message"].as_str().unwrap().contains("Tesseract"));
+        assert!(value["message"].as_str().unwrap().contains("OCR"));
         assert_ne!(value["kind"], value["message"]);
         // Desktop helper must produce the same structured shape.
         let mapped = detailed_failed("lock lỗi");
