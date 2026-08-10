@@ -70,8 +70,10 @@ P4-01..12 → P4-13 ────────────────────
 
 ## P4-07 — HA/degraded modes/distributed limiting
 
-- **Plan/files:** Stateless replicas, worker fairness, PG/MinIO/Qdrant HA, vLLM/GLM
-  circuits, extractive mode, pause ingest, shared global limiter.
+- **Plan/files:** Stateless replicas, worker fairness, PG/MinIO/Qdrant HA;
+  circuit breaker cho provider ngoài (OpenRouter OCR/embedding, GLM) với
+  retry/backoff và extractive/lexical degraded mode; pause ingest; shared
+  global limiter.
 - **Depends:** SLA/deployment ADR. **Acceptance/tests:** Aggregate limits survive
   replica restart; authorized degraded behavior; fault/failover/load tests.
 - **Security:** Auth/storage failure fail closed. **Out:** multi-site active-active.

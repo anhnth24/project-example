@@ -34,10 +34,13 @@ ADR 0005 (Accepted 2026-07-20): Markhand Web uses **AITeamVN local CPU**
 evidence and dev stack. GLM cloud is **Q&A only** — not server embedding.
 ADR 0004 (GLM cloud embedding interim) is superseded.
 
-Optional desktop-only cloud embedding presets may still use `glm-cloud-interim`;
-Markhand Web server must not send customer corpus chunks to cloud embed APIs.
-On-prem vLLM on Profile B remains the production cutover
-(`G0-RET-VLLM-CUTOVER`).
+ADR 0016 (2026-08-10) retired the on-prem vLLM cutover gate
+(`G0-RET-VLLM-CUTOVER` removed from `gates.yaml`): the alternative server
+runtime is OpenRouter `qwen/qwen3-embedding-8b` (`provider-cloud`) behind the
+explicit egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`. It becomes the
+default pin only after passing `G0-RET-RECALL-AT-5` / `G0-RET-BEST-MODEL-GAP`
+on the golden corpus (DKP-02). AITeamVN `local-neural` remains the measured
+baseline (Recall@5 0.9261) and the air-gapped profile.
 
 Fixtures/corpus must be synthetic or de-identified, versioned and license-reviewed.
 Large raw benchmark output remains a CI artifact; committed reports contain environment

@@ -95,6 +95,10 @@ model, thay cho stack local hiện tại. Hiện trạng và ràng buộc:
   Qwen3.7 Flash chỉ có một upstream provider.
 - Migration: index generation mới theo ADR 0011 (expand → backfill → shadow →
   cutover); nếu chunking version đổi trong cùng giai đoạn thì gộp một generation.
+- Roadmap/gates: gate `G0-RET-VLLM-CUTOVER` retired khỏi `gates.yaml`
+  (2026-08-10); `G0-RET-RECALL-AT-5`/`G0-RET-BEST-MODEL-GAP` giữ nguyên và áp
+  cho benchmark OpenRouter (DKP-02). Tech stack/quyết định mở trong
+  `plans/markhand-web/README.md` đã cập nhật tương ứng.
 - Operational: job observability phải ghi engine/token/cost; key qua secret mount,
   redacted, không log.
 
