@@ -1624,8 +1624,14 @@
       {
         "layer": "Document engine",
         "technology": "fileconv-core",
-        "responsibility": "Convert, OCR, chunk và deterministic intelligence",
+        "responsibility": "Convert, chunk và deterministic intelligence; OCR qua vision-LLM (deferred trong sandbox)",
         "delivery": "Existing core"
+      },
+      {
+        "layer": "Vision OCR",
+        "technology": "OpenRouter Qwen vision (MARKHAND_OCR_*)",
+        "responsibility": "OCR ảnh/trang scan ở worker stage ngoài sandbox; Tesseract đã loại bỏ (ADR 0016)",
+        "delivery": "Delivered 2026-08-10"
       },
       {
         "layer": "System of record",
@@ -1647,9 +1653,9 @@
       },
       {
         "layer": "Embeddings",
-        "technology": "AITeamVN local → on-prem vLLM",
-        "responsibility": "POC/1B: AITeamVN/Vietnamese_Embedding on-prem CPU (local-neural, Compose :8088); target: vLLM GPU self-host; cắt sang vLLM = rebuild index",
-        "delivery": "Phase 0 → 1B (local); cutover trước production"
+        "technology": "AITeamVN local / OpenRouter qwen3-embedding-8b",
+        "responsibility": "POC/1B baseline: AITeamVN on-prem CPU (local-neural, Compose :8088, Recall@5 0.9261). ADR 0016 thay target vLLM GPU bằng OpenRouter provider-cloud (egress opt-in MARKHAND_ALLOW_CLOUD_EMBEDDINGS); thành pin mặc định sau benchmark golden corpus (DKP-02); đổi runtime = rebuild index generation",
+        "delivery": "Phase 0 → 1B (local); OpenRouter option delivered 2026-08-10"
       },
       {
         "layer": "Chat and extraction",

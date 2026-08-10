@@ -110,17 +110,22 @@ P1A-01 ──────────> P0-03
   Accepted). Selected: `AITeamVN/Vietnamese_Embedding` Recall@5 **0.9261**, nDCG
   gap **0.0** vs BKAI comparator; `runtime_path=local-neural` on
   `local-cpu-quality`. GLM cloud embedding path (ADR 0004) superseded — GLM
-  retained for Q&A only. GPU/vLLM capacity deferred (`G0-RET-VLLM-CUTOVER`,
-  không chặn Phase 1B).
+  retained for Q&A only. *Cập nhật 2026-08-10 (ADR 0016):* hướng cutover
+  GPU/vLLM đã bị loại bỏ — gate `G0-RET-VLLM-CUTOVER` retired; runtime thay thế
+  là OpenRouter `qwen/qwen3-embedding-8b` (`provider-cloud`, egress opt-in) và
+  phải qua cùng gate Recall@5/nDCG trên golden corpus trước khi thành pin mặc
+  định (DKP-02).
 
 - **Plan file:** [P0-05 detailed implementation plan](../../../../reports/plan-2026-07-20-p0-05-danh-gia-embedding-tieng-viet.md)
 - **Objective:** Chốt provider/model/revision/dimension/normalization đủ để lập
-  trình Phase 0→1B; giữ đường cắt sang on-prem vLLM.
+  trình Phase 0→1B; ~~giữ đường cắt sang on-prem vLLM~~ (retired 2026-08-10 —
+  ADR 0016: đường thay thế là OpenRouter `qwen/qwen3-embedding-8b`).
 - **Plan:** So hai family local trên golden corpus: `AITeamVN/Vietnamese_Embedding`
   vs `bkai` bi-encoder; pin tokenizer/batch/truncation/dimensions/normalize; đo
-  theo category. Target (sau): so `bge-m3` và multilingual-e5 trên Profile B
-  GPU/vLLM. ~~Interim GLM cloud compare~~ superseded by local selection (journal
-  2026-07-20).
+  theo category. ~~Target (sau): so `bge-m3` và multilingual-e5 trên Profile B
+  GPU/vLLM~~ retired (ADR 0016) — benchmark tiếp theo là OpenRouter
+  `qwen/qwen3-embedding-8b` (DKP-02, cùng harness/gate). ~~Interim GLM cloud
+  compare~~ superseded by local selection (journal 2026-07-20).
 - **Files:** `bench/markhand_web/embedding/`, `scripts/run_embedding_eval.py`,
   `reports/embedding-evaluation.md`, `docs/adr/0005-vietnamese-embedding-model-quality.md`,
   `docs/adr/0004-interim-glm-cloud-embedding.md` (superseded).
@@ -128,13 +133,16 @@ P1A-01 ──────────> P0-03
 - **Acceptance (POC/1B — đạt):** ≥2 local model families; cấu hình chọn đạt gate
   quality và best-model-gap; config/signature immutable trong report;
   `runtime_path=local-neural`.
-- **Acceptance (target — deferred cutover):** ≥2 model family local trên Profile B
-  GPU; có VRAM/throughput/saturation.
+- **Acceptance (target — retired):** ~~≥2 model family local trên Profile B
+  GPU; có VRAM/throughput/saturation~~ — thay bằng DKP-02 (OpenRouter benchmark
+  trên golden corpus, ADR 0016).
 - **Tests/evidence:** Recall/MRR/nDCG trên `embedding/results/summary.json`;
   hybrid retrieval `retrieval/summary.json`; dev stack `embedding-cpu` @ `:8088`.
-- **Security/migration:** Embedding on-prem; không gửi customer/restricted corpus
-  lên cloud cho index. GLM chỉ Q&A top-K. Index signature phân biệt
-  `local-neural` vs `vllm-local`; cắt sang vLLM = rebuild generation mới.
+- **Security/migration:** (2026-07-20) Embedding on-prem; không gửi
+  customer/restricted corpus lên cloud cho index. GLM chỉ Q&A top-K. Index
+  signature phân biệt runtime path; đổi runtime/model = rebuild generation mới.
+  *ADR 0016 (2026-08-10) nới chính sách:* cloud embedding được phép sau egress
+  opt-in tường minh `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`.
 - **Out of scope:** Autoscaling; đổi desktop local-hash fallback mặc định.
 
 ## P0-06 — Chunking, hybrid tuning và index signature

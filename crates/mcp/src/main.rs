@@ -262,7 +262,7 @@ impl Fileconv {
     }
 
     #[tool(
-        description = "OCR tài liệu KHÓ bằng vision-LLM (ảnh đa cột, IN HOA mất dấu, chữ viết tay, con dấu) — chất lượng cao hơn Tesseract cho các ca này. Nhận file ảnh (png/jpg/webp). CẦN cấu hình LLM (FILECONV_LLM_*) với model vision; ảnh sẽ được gửi tới provider."
+        description = "OCR tài liệu KHÓ bằng vision-LLM (ảnh đa cột, IN HOA mất dấu, chữ viết tay, con dấu) với provider/model vision tuỳ chọn qua FILECONV_LLM_*. Nhận file ảnh (png/jpg/webp). Convert thường đã OCR bằng vision (FILECONV_OCR_*); tool này dành cho ca cần model khác. Ảnh sẽ được gửi tới provider."
     )]
     async fn ocr_hard(&self, Parameters(req): Parameters<DetectReq>) -> Result<String, String> {
         tokio::task::spawn_blocking(move || {
@@ -366,10 +366,10 @@ mod tests {
 
     #[test]
     fn detailed_hard_failure_serializes_message_and_kind_dto() {
-        let err = DetailedConvertError::dependency_missing("không tìm thấy binary Tesseract");
+        let err = DetailedConvertError::dependency_missing("vision OCR chưa cấu hình");
         let json = serde_json::to_value(err.to_dto()).expect("dto");
         assert_eq!(json["kind"], "dependency_missing");
-        assert!(json["message"].as_str().unwrap().contains("Tesseract"));
+        assert!(json["message"].as_str().unwrap().contains("OCR"));
         assert!(json.get("error").is_none(), "use message, not error key");
         assert_eq!(err.kind, ConvertErrorKind::DependencyMissing);
     }

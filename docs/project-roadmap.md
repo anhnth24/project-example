@@ -79,8 +79,11 @@ Issue catalog: [`../plans/markhand-web/backlog/`](../plans/markhand-web/backlog/
 ### OCR / Vision tier
 - [x] **Local VLM/Vintern integration** qua endpoint vision OpenAI-compatible,
       model do người dùng chọn; không bundle weight/license chưa rõ.
-- [x] **PaddleOCR vi** opt-in qua JSON bridge, column reading-order và Tesseract fallback.
-- [ ] **Chữ viết tay** — cần dữ liệu thật có nhãn (sample hiện là font-render, không phải viết tay thật; accuracy ~47.9% là giới hạn Tesseract).
+- [x] ~~PaddleOCR vi opt-in~~ retired cùng Tesseract (2026-08-10, ADR 0016) —
+      OCR chuyển hoàn toàn sang vision-LLM (OpenRouter mặc định, `FILECONV_OCR_*`);
+      server dùng deferred OCR qua sandbox artifact.
+- [ ] **Đo hậu kiểm CER/WER** vision OCR trên corpus scan vi (so baseline
+      Tesseract cũ trong `bench/REPORT_ACCURACY.md`), gồm cả chữ viết tay.
 
 ### Output / cấu trúc
 - [x] **Bảng → HTML** cho merge cell/multiline, sanitize khi preview.

@@ -4,7 +4,7 @@
 //!   fileconv speed <corpus_dir> [report.md]   - đo tốc độ theo file & page
 //!   fileconv accuracy <manifest> [report.md]  - đo độ chính xác CER/WER vs ground truth
 //!   fileconv one <file>                       - convert 1 file, in markdown ra stdout
-//!   fileconv info                             - hiển thị định dạng file hỗ trợ, đường dẫn pdfium/tessdata (có tồn tại không), và model whisper tìm thấy trong models/
+//!   fileconv info                             - hiển thị định dạng file hỗ trợ, đường dẫn pdfium (có tồn tại không), và model whisper tìm thấy trong models/
 //!
 //! Manifest accuracy: mỗi dòng "<đường_dẫn_file>\t<đường_dẫn_text_chuẩn>\t<nhãn_kịch_bản>".
 
@@ -94,13 +94,6 @@ fn main() -> Result<()> {
             {
                 opts.ocr_langs = l.clone();
             }
-            if let Some(engine) = rest
-                .iter()
-                .position(|argument| argument == "--ocr-engine")
-                .and_then(|index| rest.get(index + 1))
-            {
-                opts.ocr_engine = fileconv_core::image_ocr::OcrEngine::from_name(engine);
-            }
             if let Some(p) = rest
                 .iter()
                 .position(|a| a == "--pages")
@@ -123,7 +116,8 @@ fn main() -> Result<()> {
             {
                 opts.max_chars = Some(m);
             }
-            let conv = Converter::with_options(opts);
+            let ocr_config = ocr_run_config_from_args(rest);
+            let conv = Converter::with_options_and_ocr_config(opts, ocr_config);
             let r = conv.convert_path(Path::new(f))?;
             println!("{}", r.markdown);
             Ok(())
@@ -147,13 +141,6 @@ fn main() -> Result<()> {
             {
                 opts.ocr_langs = l.clone();
             }
-            if let Some(engine) = rest
-                .iter()
-                .position(|argument| argument == "--ocr-engine")
-                .and_then(|index| rest.get(index + 1))
-            {
-                opts.ocr_engine = fileconv_core::image_ocr::OcrEngine::from_name(engine);
-            }
             if let Some(p) = rest
                 .iter()
                 .position(|a| a == "--pages")
@@ -176,7 +163,10 @@ fn main() -> Result<()> {
             {
                 opts.max_chars = Some(m);
             }
-            match Converter::with_options(opts).convert_path_detailed(Path::new(f)) {
+            let ocr_config = ocr_run_config_from_args(rest);
+            match Converter::with_options_and_ocr_config(opts, ocr_config)
+                .convert_path_detailed(Path::new(f))
+            {
                 Ok(report) => {
                     println!(
                         "{}",
@@ -232,7 +222,6 @@ fn main() -> Result<()> {
                 .unwrap_or_else(|| Path::new("."));
             for (label, path) in [
                 ("PDFium lib", base_dir.join("pdfium").join("lib")),
-                ("Tesseract data", base_dir.join("tessdata_best")),
                 ("Whisper models", base_dir.join("models")),
             ] {
                 let status = if path.exists() {
@@ -263,6 +252,20 @@ fn main() -> Result<()> {
             Ok(())
         }
         other => bail!("lệnh không hợp lệ: {other}"),
+    }
+}
+
+/// `--ocr-defer-dir <dir>`: deferred OCR — ghi JPEG trang scan vào dir và chèn
+/// placeholder thay vì gọi provider (dùng cho converter sandbox không network).
+fn ocr_run_config_from_args(rest: &[String]) -> fileconv_core::OcrRunConfig {
+    let defer_dir = rest
+        .iter()
+        .position(|argument| argument == "--ocr-defer-dir")
+        .and_then(|index| rest.get(index + 1))
+        .map(std::path::PathBuf::from);
+    fileconv_core::OcrRunConfig {
+        vision: None,
+        defer_dir,
     }
 }
 
@@ -838,10 +841,9 @@ mod tests {
 
     #[test]
     fn detailed_hard_failure_dto_has_structured_message_and_kind() {
-        let dto = DetailedConvertError::dependency_missing(
-            "không tìm thấy binary Tesseract (/nonexistent)",
-        )
-        .to_dto();
+        let dto =
+            DetailedConvertError::dependency_missing("vision OCR chưa cấu hình (thiếu API key)")
+                .to_dto();
         let value = serde_json::to_value(&dto).expect("serialize dto");
         assert_eq!(value["kind"], "dependency_missing");
         assert_eq!(dto.kind, ConvertErrorKind::DependencyMissing);
@@ -849,7 +851,7 @@ mod tests {
             value["message"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("Tesseract"),
+                .contains("OCR"),
             "message field must carry human text: {value}"
         );
         // Kind must be a sibling JSON field — not only embedded inside message text.

@@ -38,8 +38,10 @@ use crate::storage::{ObjectNamespace, StorageError};
 
 use super::limits::ResourceLimits;
 use super::sandbox::{
-    self, SandboxCancel, SandboxConfig, SandboxError, SandboxExit, SandboxInput, SandboxOutput,
+    self, OcrArtifact, SandboxCancel, SandboxConfig, SandboxError, SandboxExit, SandboxInput,
+    SandboxOutput,
 };
+use crate::services::vision_ocr::{VisionOcrError, VisionOcrRuntime};
 
 const DEFAULT_CLAIM_LIMIT: u32 = 1;
 const DEFAULT_HEARTBEAT_INTERVAL_SECS: u64 = 5;
@@ -61,6 +63,9 @@ pub struct ConvertWorkerConfig {
     pub fail_quota_refund: bool,
     pub lose_staged_handle_after_put: bool,
     pub pause_after_staging: Option<ConvertWorkerPause>,
+    /// Vision OCR stage ngoài sandbox (deferred OCR). `None` = chưa cấu hình:
+    /// job có trang cần OCR sẽ fail với lỗi cấu hình rõ ràng.
+    pub vision_ocr: Option<Arc<VisionOcrRuntime>>,
 }
 
 impl ConvertWorkerConfig {
@@ -80,6 +85,7 @@ impl ConvertWorkerConfig {
             fail_quota_refund: false,
             lose_staged_handle_after_put: false,
             pause_after_staging: None,
+            vision_ocr: None,
         }
     }
 
@@ -89,10 +95,14 @@ impl ConvertWorkerConfig {
             lease_ttl,
             heartbeat_interval: Duration::from_secs(DEFAULT_HEARTBEAT_INTERVAL_SECS),
             sandbox: SandboxConfig {
+                // `--ocr-defer-dir .`: trang scan được render thành JPEG trong
+                // workspace sandbox; worker OCR ngoài sandbox (deferred OCR).
                 argv_template: vec![
                     "/usr/local/bin/fileconv".into(),
                     "one".into(),
                     "{input}".into(),
+                    "--ocr-defer-dir".into(),
+                    ".".into(),
                 ],
                 limits: ResourceLimits::default(),
             },
@@ -105,6 +115,7 @@ impl ConvertWorkerConfig {
             fail_quota_refund: false,
             lose_staged_handle_after_put: false,
             pause_after_staging: None,
+            vision_ocr: None,
         }
     }
 
@@ -858,7 +869,17 @@ impl ConvertWorker {
                 return Err(ConvertWorkerError::ConverterFailed);
             }
         }
-        let markdown = sandbox_output.stdout;
+        let markdown = self
+            .resolve_deferred_ocr(
+                ctx,
+                job,
+                lease_token,
+                attempts,
+                deadline,
+                sandbox_output.stdout,
+                sandbox_output.ocr_artifacts,
+            )
+            .await?;
         let markdown_sha256 = hex::encode(Sha256::digest(&markdown));
         let markdown_len =
             u64::try_from(markdown.len()).map_err(|_| ConvertWorkerError::InvalidMarkdownLength)?;
@@ -878,6 +899,106 @@ impl ConvertWorker {
             identity,
             checkpoint: saved.checkpoint,
         })
+    }
+
+    /// Deferred-OCR stage: thay placeholder `markhand:ocr-pending` bằng nội dung
+    /// OCR từ provider vision (worker có network; sandbox thì không). Markdown
+    /// không có placeholder được trả nguyên vẹn byte-for-byte.
+    ///
+    /// Trang được gom theo `runtime.batch_pages()` trang/request (bench product
+    /// owner 2026-08-10); batch lỗi parse/truncation/transient được **bisect**
+    /// xuống nửa nhỏ hơn rồi tới 1 trang ("chạy bù") trước khi fail job.
+    #[allow(clippy::too_many_arguments)]
+    async fn resolve_deferred_ocr(
+        &self,
+        ctx: &OrgContext,
+        job: &Job,
+        lease_token: &str,
+        attempts: i32,
+        deadline: TokioInstant,
+        stdout: Vec<u8>,
+        artifacts: Vec<OcrArtifact>,
+    ) -> Result<Vec<u8>, ConvertWorkerError> {
+        let pending = match std::str::from_utf8(&stdout) {
+            Ok(text) => fileconv_core::image_ocr::pending_ocr_artifacts(text),
+            // Placeholder do chính chúng ta sinh luôn là UTF-8; stdout non-UTF8
+            // không thể chứa placeholder hợp lệ.
+            Err(_) => Vec::new(),
+        };
+        if pending.is_empty() {
+            return Ok(stdout);
+        }
+        let Some(runtime) = self.config.vision_ocr.clone() else {
+            return Err(ConvertWorkerError::VisionOcrNotConfigured);
+        };
+        let mut markdown =
+            String::from_utf8(stdout).map_err(|_| ConvertWorkerError::ConverterFailed)?;
+        let mut artifact_bytes: HashMap<String, Vec<u8>> = artifacts
+            .into_iter()
+            .map(|artifact| (artifact.name, artifact.bytes))
+            .collect();
+        let started = std::time::Instant::now();
+
+        // Placeholder giả mạo (không có artifact) bị strip; phần còn lại giữ
+        // đúng thứ tự trang để batch là "các trang liên tiếp".
+        let mut ordered: Vec<(String, Vec<u8>)> = Vec::with_capacity(pending.len());
+        for name in pending {
+            match artifact_bytes.remove(&name) {
+                Some(bytes) => ordered.push((name, bytes)),
+                None => {
+                    let placeholder = fileconv_core::image_ocr::ocr_pending_placeholder(&name);
+                    markdown = markdown.replace(&placeholder, "");
+                }
+            }
+        }
+        let total_pages = ordered.len();
+        let batch_size = runtime.batch_pages().max(1);
+        let mut queue: std::collections::VecDeque<Vec<(String, Vec<u8>)>> = ordered
+            .chunks(batch_size)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+        let mut splits = 0_usize;
+        let mut requests = 0_usize;
+        while let Some(group) = queue.pop_front() {
+            let bytes: Vec<&[u8]> = group.iter().map(|(_, jpeg)| jpeg.as_slice()).collect();
+            let runtime_for_call = Arc::clone(&runtime);
+            requests += 1;
+            let outcome = self
+                .heartbeat_while(ctx, job, lease_token, attempts, deadline, async {
+                    Ok::<_, ConvertWorkerError>(runtime_for_call.ocr_jpeg_batch(&bytes).await)
+                })
+                .await?;
+            match outcome {
+                Ok(texts) => {
+                    debug_assert_eq!(texts.len(), group.len());
+                    for ((name, _), text) in group.iter().zip(texts) {
+                        let placeholder = fileconv_core::image_ocr::ocr_pending_placeholder(name);
+                        markdown = markdown.replace(&placeholder, text.trim());
+                    }
+                }
+                Err(error) if group.len() > 1 && error.is_batch_splittable() => {
+                    // Bench "chạy bù": nửa sau xử lý trước sẽ đảo thứ tự chèn
+                    // queue nên push nửa sau trước, nửa đầu sau (front).
+                    splits += 1;
+                    let middle = group.len() / 2;
+                    let mut group = group;
+                    let tail = group.split_off(middle);
+                    queue.push_front(tail);
+                    queue.push_front(group);
+                }
+                Err(error) => return Err(ConvertWorkerError::VisionOcr(error)),
+            }
+        }
+        tracing::info!(
+            job_id = %job.id,
+            pages = total_pages,
+            requests,
+            splits,
+            batch_size,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "vision OCR resolved deferred pages"
+        );
+        Ok(markdown.into_bytes())
     }
 
     fn verify_quarantine_metadata(
@@ -1430,6 +1551,10 @@ pub enum ConvertWorkerError {
     InvalidQuarantineMetadata,
     #[error("audio conversion is disabled for the isolated worker")]
     AudioConversionDisabled,
+    #[error("document requires vision OCR but MARKHAND_OCR_* is not configured")]
+    VisionOcrNotConfigured,
+    #[error("vision OCR stage failed")]
+    VisionOcr(#[from] VisionOcrError),
 }
 
 impl ConvertWorkerError {
@@ -1456,6 +1581,8 @@ impl ConvertWorkerError {
                 | Self::AudioConversionDisabled
                 | Self::SourceNotQuarantine
                 | Self::InvalidQuarantineMetadata
+                | Self::VisionOcrNotConfigured
+                | Self::VisionOcr(_)
         )
     }
 
@@ -1487,6 +1614,8 @@ impl ConvertWorkerError {
             Self::SourceNotQuarantine => "convert source not quarantine",
             Self::InvalidQuarantineMetadata => "convert quarantine metadata invalid",
             Self::AudioConversionDisabled => "convert audio disabled",
+            Self::VisionOcrNotConfigured => "vision OCR not configured (MARKHAND_OCR_API_KEY)",
+            Self::VisionOcr(_) => "vision OCR provider request failed",
         }
     }
 }

@@ -127,11 +127,12 @@ Bảng này là nguồn dữ liệu cho tab **Tech stack** trong
 | Web client | React + Vite + TypeScript | SPA cho library, upload, search, Q&A và admin | Phase 2 |
 | API | Rust + axum + OpenAPI | REST API, SSE progress, auth middleware và OrgContext | Phase 1B |
 | Shared knowledge | Rust crate knowledge | Hybrid rank/merge, grounding, citation và index signature | Phase 1A |
-| Document engine | fileconv-core | Convert, OCR, chunk và deterministic intelligence | Existing core |
+| Document engine | fileconv-core | Convert, chunk và deterministic intelligence; OCR qua vision-LLM (deferred trong sandbox) | Existing core |
+| Vision OCR | OpenRouter Qwen vision (`MARKHAND_OCR_*`) | OCR ảnh/trang scan ở worker stage ngoài sandbox; Tesseract đã loại bỏ (ADR 0016) | Delivered 2026-08-10 |
 | System of record | PostgreSQL + FTS | Metadata, ACL, auth, jobs, quota, audit và lexical search | Phase 1B |
 | Vector retrieval | Qdrant | Vector candidates; kết quả luôn được hydrate và kiểm ACL lại | Phase 1B |
 | Object storage | MinIO | File gốc, quarantine, Markdown và derived artifacts | Phase 1B |
-| Embeddings | AITeamVN local → on-prem vLLM | POC/1B: `AITeamVN/Vietnamese_Embedding` on-prem CPU (`local-neural`, Compose `:8088`); target: vLLM GPU self-host; cắt sang vLLM = rebuild index | Phase 0 → 1B (local); cutover trước production |
+| Embeddings | AITeamVN local / OpenRouter `qwen3-embedding-8b` | POC/1B baseline: AITeamVN on-prem CPU (`local-neural`, Compose `:8088`, Recall@5 0.9261). ADR 0016 thay target vLLM GPU bằng OpenRouter `provider-cloud` (egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS`); thành pin mặc định sau benchmark golden corpus (DKP-02); đổi runtime = rebuild index generation | Phase 0 → 1B (local); OpenRouter option delivered 2026-08-10 |
 | Chat and extraction | GLM via LLM client | Grounded Q&A, summarize và structured extraction theo policy (**không** dùng cho embedding/index) | Phase 1B → 3 |
 | Identity | JWT + rotating refresh + OIDC | Session cho POC; SSO/OIDC và key rotation cho production | Phase 1B → 4 |
 | Observability | OpenTelemetry + structured logs | Trace, metrics, audit correlation và redacted diagnostics | Phase F → 4 |
@@ -161,19 +162,29 @@ Bảng này là nguồn dữ liệu cho tab **Tech stack** trong
 - Zero unresolved high/critical findings; accepted risk phải có approver,
   compensating controls, expiry và retest date.
 
-## Quyết định còn mở — Phase 0 phải chốt
+## Quyết định còn mở
 
-- On-prem GPU/VRAM và throughput vLLM khi cutover (embedding POC/1B dùng AITeamVN local — ADR 0005).
+Đã chốt 2026-08-10 (ADR 0016) và loại khỏi danh sách: GPU/VRAM/throughput vLLM
+cutover (bỏ — thay bằng OpenRouter, gate `G0-RET-VLLM-CUTOVER` retired); chính
+sách cloud embedding (được phép sau egress opt-in tường minh
+`MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`; GLM vẫn chỉ Q&A).
+
+Còn mở:
+
+- Chốt dimension embedding OpenRouter và duyệt cutover pin mặc định — benchmark
+  DKP-02 đã **PASS** (2026-08-10): 4096-d Recall@5 0.9436 (vượt AITeamVN
+  0.9261), 1024-d MRL 0.9181 (vượt gate 0.85, 1/4 storage); evidence
+  `bench/markhand_web/reports/openrouter-embedding-evaluation.md`.
 - SLA/SLO, RPO/RTO và retention backup.
 - Format/giới hạn upload của POC.
 - Qdrant shared collection hay phân cohort.
 - PostgreSQL partition strategy và việc bắt buộc RLS.
 - Canonical storage của Markdown/derived artifacts.
-- Chính sách GLM cloud theo phân loại dữ liệu (Q&A/summarize; **không** embedding server;
-  customer data không ra cloud cho index build).
 - JWT signing/key rotation/session/MFA.
 - ACL chi tiết cho private/org/groups.
-- License PhoWhisper khi deploy server.
+- License PhoWhisper khi deploy server (audio).
+- Data classification nào được phép qua OpenRouter per-org (OCR gửi ảnh trang;
+  embedding gửi chunk text) — thiết kế opt-out per-org.
 
 ## Phạm vi POC
 

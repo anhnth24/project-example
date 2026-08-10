@@ -41,7 +41,7 @@ chứ không tự định nghĩa lại.
 |---|---|
 | `src/lib.rs` | `Converter`, `FormatKind` (Pdf, Docx, Pptx, Xlsx, Csv, Html, **Text**, Image, Audio, Unknown), `ConverterOptions`; `convert_path_detailed()` là API chính (NFC + cắt output + soft warnings + derive title); `convert_path()` là lớp compatibility mỏng gọi `convert_path_detailed()` rồi bỏ warnings |
 | `src/conv/mod.rs` | khai báo module convert theo format |
-| `src/conv/pdf/` | pipeline PDF **3-tier**, chia module: `mod.rs` (điều phối), `inspector.rs` (pdf-inspector — cấu trúc + `needs_ocr`), `pdfium.rs` (bind libpdfium, cache `thread_local`, khóa `PDFIUM_CALL`), `native_text.rs`, `ocr.rs` (render 300DPI + Tesseract), `fallback.rs` (pdf-extract), `recovery.rs`, `postprocess.rs` |
+| `src/conv/pdf/` | pipeline PDF **3-tier**, chia module: `mod.rs` (điều phối), `inspector.rs` (pdf-inspector — cấu trúc + `needs_ocr`), `pdfium.rs` (bind libpdfium, cache `thread_local`, khóa `PDFIUM_CALL`), `native_text.rs`, `ocr.rs` (render 300DPI + vision OCR / deferred), `fallback.rs` (pdf-extract), `recovery.rs`, `postprocess.rs` |
 | `src/conv/docx.rs` | docx-rust: heading theo style, gom run theo (bold,italic), xử lý `<w:br>/<w:tab>` |
 | `src/conv/xlsx.rs` | calamine: đọc MỌI sheet (xls/xlsb/ods) |
 | `src/conv/pptx.rs` | zip + quick-xml: slide sort theo số thứ tự |
@@ -49,7 +49,7 @@ chứ không tự định nghĩa lại.
 | `src/conv/csv_conv.rs` | csv: strip BOM, TCVN3 fallback, sniff delimiter, chứa `rows_to_md_table` chung |
 | `src/conv/text.rs` | txt/log/md/markdown: strip BOM UTF-8 + decode qua `viet_legacy` |
 | `src/proc.rs` | `background_command()`: CREATE_NO_WINDOW trên Windows (tránh flash console) |
-| `src/image_ocr.rs` | Tesseract CLI + tiền xử lý ảnh (grayscale/upscale/unsharpen/normalize); dùng `proc::background_command` |
+| `src/image_ocr.rs` | vision-LLM OCR (OpenRouter mặc định, `FILECONV_OCR_*`): decode limits → ≤2400px → JPEG q90 → prompt chép trung thực; deferred mode ghi artifact cho sandbox (ADR 0016 — Tesseract/Paddle đã loại bỏ) |
 | `src/audio.rs` | (feature `audio`) AudioEngine — cache Whisper **process-wide** (bounded LRU), decode symphonia + resample 16k, lang "vi" |
 | `src/chunk.rs` | tách chunk RAG theo heading-path |
 | `src/viet_legacy.rs` | decode TCVN3/VNI/VPS; opt-in `Tcvn3CaseHint` (TCVN3/ABC all-capital H-font) — TXT/CSV không suy hoa |
@@ -172,7 +172,7 @@ schema/table, version, watch rules), nhóm knowledge RAG (`rebuild_knowledge_ind
 | Thêm / sửa định dạng | `crates/core/src/conv/<fmt>.rs` (hoặc `conv/pdf/` cho PDF) + định tuyến ở `lib.rs` |
 | Đổi tiền xử lý OCR | `crates/core/src/image_ocr.rs` |
 | Đổi PDFium cache/lock | `crates/core/src/conv/pdf/pdfium.rs` |
-| Đổi phụ thuộc native OCR (Tesseract/whisper) | `image_ocr.rs` / `audio.rs` |
+| Đổi OCR provider/prompt hoặc whisper | `image_ocr.rs` / `audio.rs` |
 | Spawn subprocess (CLI, OCR, LLM) | dùng `crate::proc::background_command` chứ không `Command::new` (tránh console flash Windows) |
 | Thêm CLI flag | `crates/cli/src/main.rs` |
 | Thêm MCP tool | `crates/mcp/src/main.rs` (+ `crates/core/src/llm.rs` nếu cần LLM) |

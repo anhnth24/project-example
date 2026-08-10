@@ -108,7 +108,8 @@ only shares Postgres + MinIO. Docker's default seccomp profile blocks the
 `mount`/`unshare` sequence used by the in-process convert sandbox. Convert uses
 `deploy/poc/worker-sandbox-seccomp.json`, which retains a default-deny allowlist
 and adds only those sandbox syscalls; `seccomp=unconfined` remains forbidden.
-Landlock allowlists PDFium (`/opt/pdfium`) and Tesseract tessdata paths.
+Landlock allowlists PDFium (`/opt/pdfium`). Vision OCR (OpenRouter) chạy ngoài
+sandbox; API key không bao giờ được truyền vào converter.
 
 ### Index signatures
 

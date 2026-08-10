@@ -1,0 +1,54 @@
+version: 1
+issue: DKP-02
+track: openrouter-adr0016
+chunkingVersion: heading-chunks-2000-v1
+# Match crates/knowledge/src/desktop/sqlite.rs: format!("{}\n{}", heading, text)
+payloadFormat: "{heading}\\n{text}"
+normalize: l2
+ranking: "max-pool-chunk-cosine -> document"
+provider: openai-compatible
+baseUrl: https://openrouter.ai/api
+apiKeyEnv: FILECONV_EMBEDDING_API_KEY
+gates:
+  recallAt5:
+    operator: ">="
+    value: 0.85
+    gateId: G0-RET-RECALL-AT-5
+    statistic: min
+  bestModelNdcgGap:
+    operator: "<="
+    value: 0.02
+    gateId: G0-RET-BEST-MODEL-GAP
+    statistic: max
+models:
+  - id: qwen3-embedding-8b-full
+    role: adr0016-candidate
+    family: qwen3-embedding-8b
+    provider: openai-compatible
+    model: qwen/qwen3-embedding-8b
+    # OpenRouter slugs are mutable aliases; this is an observation date, not a SHA.
+    revision: openai-alias-observed-2026-08-10
+    dimensions: 4096
+    dimensionsRequest: null
+    maxSeqLength: 32768
+    wordSegment: false
+    batchSize: 64
+    notes: >-
+      Full 4096-d Qwen3 Embedding 8B via OpenRouter (`provider-cloud`,
+      ADR 0016). Same desktop payload/ranking protocol as ADR 0005 tracks;
+      compare against AITeamVN local baseline Recall@5 0.9261.
+  - id: qwen3-embedding-8b-d1024
+    role: adr0016-candidate
+    family: qwen3-embedding-8b-matryoshka
+    provider: openai-compatible
+    model: qwen/qwen3-embedding-8b
+    revision: openai-alias-observed-2026-08-10
+    dimensions: 1024
+    dimensionsRequest: 1024
+    maxSeqLength: 32768
+    wordSegment: false
+    batchSize: 64
+    notes: >-
+      MRL 1024-d Qwen3 Embedding 8B (dimensions request) — the configuration
+      wired in deploy/dev/worker.env.example and the live e2e; 4x less Qdrant
+      storage than full 4096-d.

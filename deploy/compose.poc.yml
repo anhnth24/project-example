@@ -409,6 +409,11 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      # Cloud embedding (OpenRouter qwen3-embedding-8b) needs the explicit
+      # egress opt-in below plus runtime_path=provider-cloud (ADR 0016).
+      MARKHAND_ALLOW_CLOUD_EMBEDDINGS: ${MARKHAND_ALLOW_CLOUD_EMBEDDINGS:-}
+      MARKHAND_EMBEDDING_NORMALIZE: ${MARKHAND_EMBEDDING_NORMALIZE:-}
+      MARKHAND_EMBEDDING_SEND_DIMENSIONS: ${MARKHAND_EMBEDDING_SEND_DIMENSIONS:-}
       MARKHAND_CHAT_BASE_URL: ${MARKHAND_CHAT_BASE_URL:-http://mock-embedding:8080/v1}
       MARKHAND_CHAT_API_KEY: ${MARKHAND_CHAT_API_KEY:-poc-chat-key}
       MARKHAND_CHAT_MODEL: ${MARKHAND_CHAT_MODEL:-markhand-mock-chat}
@@ -463,6 +468,11 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      # Cloud embedding (OpenRouter qwen3-embedding-8b) needs the explicit
+      # egress opt-in below plus runtime_path=provider-cloud (ADR 0016).
+      MARKHAND_ALLOW_CLOUD_EMBEDDINGS: ${MARKHAND_ALLOW_CLOUD_EMBEDDINGS:-}
+      MARKHAND_EMBEDDING_NORMALIZE: ${MARKHAND_EMBEDDING_NORMALIZE:-}
+      MARKHAND_EMBEDDING_SEND_DIMENSIONS: ${MARKHAND_EMBEDDING_SEND_DIMENSIONS:-}
       MARKHAND_CHAT_BASE_URL: ${MARKHAND_CHAT_BASE_URL:-http://mock-embedding:8080/v1}
       MARKHAND_CHAT_API_KEY: ${MARKHAND_CHAT_API_KEY:-poc-chat-key}
       MARKHAND_CHAT_MODEL: ${MARKHAND_CHAT_MODEL:-markhand-mock-chat}
@@ -535,7 +545,7 @@ services:
       MARKHAND_WORKER_KIND: convert
       MARKHAND_WORKER_ID: poc-convert-1
       MARKHAND_CONVERTER_TIMEOUT_SECS: ${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}
-      # RLIMIT_AS needs virtual headroom for PDFium/Tesseract; the container
+      # RLIMIT_AS needs virtual headroom for PDFium; the container
       # cgroup below still caps resident memory at MARKHAND_WORKER_MEM_LIMIT.
       # The converter's rayon pool sizes itself from the host CPU count, so the
       # address space it reserves grows with the machine: 1 GiB was enough on an
@@ -543,9 +553,18 @@ services:
       # surfaces as a misleading "PDFium not found" conversion error.
       MARKHAND_CONVERTER_MEMORY_BYTES: ${MARKHAND_CONVERTER_MEMORY_BYTES:-4294967296}
       FILECONV_PDFIUM_LIB: /opt/pdfium/lib
-      TESSDATA_PREFIX: /usr/share/tesseract-ocr/5/tessdata
-    # No egress: only the internal `convert` network (Postgres + MinIO).
-    networks: [convert]
+      # Vision OCR (deferred, ADR 0016): the trusted worker process — NOT the
+      # sandboxed converter — sends rendered page JPEGs to the provider. Keys
+      # never enter the sandbox (kernel netns has no egress regardless).
+      MARKHAND_OCR_API_KEY: ${MARKHAND_OCR_API_KEY:-}
+      MARKHAND_OCR_BASE_URL: ${MARKHAND_OCR_BASE_URL:-}
+      MARKHAND_OCR_MODEL: ${MARKHAND_OCR_MODEL:-}
+      MARKHAND_OCR_TIMEOUT_SECS: ${MARKHAND_OCR_TIMEOUT_SECS:-}
+      MARKHAND_OCR_BATCH_PAGES: ${MARKHAND_OCR_BATCH_PAGES:-}
+    # Converter sandbox stays no-egress (internal `convert` network + kernel
+    # CLONE_NEWNET). `ocr-egress` exists only for the worker-side vision OCR
+    # stage (ADR 0016); scanned-page images leave the host through it.
+    networks: [convert, ocr-egress]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=512m
       - /var/lib/markhand:rw,noexec,nosuid,nodev,size=64m
@@ -599,6 +618,11 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      # Cloud embedding (OpenRouter qwen3-embedding-8b) needs the explicit
+      # egress opt-in below plus runtime_path=provider-cloud (ADR 0016).
+      MARKHAND_ALLOW_CLOUD_EMBEDDINGS: ${MARKHAND_ALLOW_CLOUD_EMBEDDINGS:-}
+      MARKHAND_EMBEDDING_NORMALIZE: ${MARKHAND_EMBEDDING_NORMALIZE:-}
+      MARKHAND_EMBEDDING_SEND_DIMENSIONS: ${MARKHAND_EMBEDDING_SEND_DIMENSIONS:-}
     networks: [private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
@@ -645,6 +669,11 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      # Cloud embedding (OpenRouter qwen3-embedding-8b) needs the explicit
+      # egress opt-in below plus runtime_path=provider-cloud (ADR 0016).
+      MARKHAND_ALLOW_CLOUD_EMBEDDINGS: ${MARKHAND_ALLOW_CLOUD_EMBEDDINGS:-}
+      MARKHAND_EMBEDDING_NORMALIZE: ${MARKHAND_EMBEDDING_NORMALIZE:-}
+      MARKHAND_EMBEDDING_SEND_DIMENSIONS: ${MARKHAND_EMBEDDING_SEND_DIMENSIONS:-}
     networks: [private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
@@ -697,6 +726,11 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      # Cloud embedding (OpenRouter qwen3-embedding-8b) needs the explicit
+      # egress opt-in below plus runtime_path=provider-cloud (ADR 0016).
+      MARKHAND_ALLOW_CLOUD_EMBEDDINGS: ${MARKHAND_ALLOW_CLOUD_EMBEDDINGS:-}
+      MARKHAND_EMBEDDING_NORMALIZE: ${MARKHAND_EMBEDDING_NORMALIZE:-}
+      MARKHAND_EMBEDDING_SEND_DIMENSIONS: ${MARKHAND_EMBEDDING_SEND_DIMENSIONS:-}
     networks: [private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
@@ -754,6 +788,11 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      # Cloud embedding (OpenRouter qwen3-embedding-8b) needs the explicit
+      # egress opt-in below plus runtime_path=provider-cloud (ADR 0016).
+      MARKHAND_ALLOW_CLOUD_EMBEDDINGS: ${MARKHAND_ALLOW_CLOUD_EMBEDDINGS:-}
+      MARKHAND_EMBEDDING_NORMALIZE: ${MARKHAND_EMBEDDING_NORMALIZE:-}
+      MARKHAND_EMBEDDING_SEND_DIMENSIONS: ${MARKHAND_EMBEDDING_SEND_DIMENSIONS:-}
     networks: [private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
@@ -810,6 +849,11 @@ services:
       MARKHAND_EMBEDDING_REVISION: ${MARKHAND_EMBEDDING_REVISION:-poc-local}
       MARKHAND_EMBEDDING_DIMENSIONS: ${MARKHAND_EMBEDDING_DIMENSIONS:-8}
       MARKHAND_EMBEDDING_RUNTIME_PATH: ${MARKHAND_EMBEDDING_RUNTIME_PATH:-local-neural}
+      # Cloud embedding (OpenRouter qwen3-embedding-8b) needs the explicit
+      # egress opt-in below plus runtime_path=provider-cloud (ADR 0016).
+      MARKHAND_ALLOW_CLOUD_EMBEDDINGS: ${MARKHAND_ALLOW_CLOUD_EMBEDDINGS:-}
+      MARKHAND_EMBEDDING_NORMALIZE: ${MARKHAND_EMBEDDING_NORMALIZE:-}
+      MARKHAND_EMBEDDING_SEND_DIMENSIONS: ${MARKHAND_EMBEDDING_SEND_DIMENSIONS:-}
     networks: [private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
@@ -849,6 +893,10 @@ networks:
   convert:
     driver: bridge
     internal: true
+  # Worker-side vision OCR egress (OpenRouter). The nested converter sandbox
+  # never sees this network (CLONE_NEWNET) or the OCR API key.
+  ocr-egress:
+    driver: bridge
 
 volumes:
   postgres_data:

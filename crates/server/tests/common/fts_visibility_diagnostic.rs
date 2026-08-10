@@ -144,7 +144,6 @@ async fn load_target_document_chunk_aggregate(
          JOIN index_metadata im
            ON im.org_id = c.org_id AND im.id = c.index_metadata_id
          WHERE c.org_id = $1 AND c.document_id = $2",
-        structural = structural,
     );
     let row = txn
         .query_one(

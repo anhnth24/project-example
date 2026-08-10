@@ -133,6 +133,56 @@ mod imp {
         pub pid1_host_pid: Option<u32>,
         /// Path retained for tests/evidence; RAII cleanup has removed it by return.
         pub workspace_path: PathBuf,
+        /// Deferred-OCR JPEG artifacts (`markhand-ocr-*.jpg`) the converter wrote
+        /// into the workspace. Collected before RAII cleanup; caps enforced.
+        pub ocr_artifacts: Vec<OcrArtifact>,
+    }
+
+    /// One deferred-OCR page image produced inside the sandbox.
+    #[derive(Debug, Clone)]
+    pub struct OcrArtifact {
+        pub name: String,
+        pub bytes: Vec<u8>,
+    }
+
+    /// Caps for deferred-OCR artifact collection (fail-closed when exceeded).
+    const MAX_OCR_ARTIFACTS: usize = 512;
+    const MAX_OCR_ARTIFACT_BYTES: u64 = 8 * 1024 * 1024;
+    const MAX_OCR_ARTIFACTS_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
+
+    fn collect_ocr_artifacts(workspace: &Path) -> Result<Vec<OcrArtifact>, SandboxError> {
+        let mut artifacts = Vec::new();
+        let mut total: u64 = 0;
+        let entries = match std::fs::read_dir(workspace) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(artifacts),
+        };
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            if !name.starts_with("markhand-ocr-") || !name.ends_with(".jpg") {
+                continue;
+            }
+            let metadata = entry.metadata().map_err(SandboxError::Io)?;
+            if !metadata.is_file() {
+                continue;
+            }
+            if metadata.len() > MAX_OCR_ARTIFACT_BYTES {
+                return Err(SandboxError::OcrArtifactsTooLarge);
+            }
+            total = total.saturating_add(metadata.len());
+            if total > MAX_OCR_ARTIFACTS_TOTAL_BYTES || artifacts.len() >= MAX_OCR_ARTIFACTS {
+                return Err(SandboxError::OcrArtifactsTooLarge);
+            }
+            let bytes = std::fs::read(entry.path()).map_err(SandboxError::Io)?;
+            artifacts.push(OcrArtifact {
+                name: name.to_string(),
+                bytes,
+            });
+        }
+        Ok(artifacts)
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -143,6 +193,8 @@ mod imp {
         IsolationUnavailable,
         #[error("sandbox io failed")]
         Io(#[from] io::Error),
+        #[error("deferred OCR artifacts exceed sandbox caps")]
+        OcrArtifactsTooLarge,
     }
 
     #[derive(Clone, Debug, Default)]
@@ -233,13 +285,9 @@ mod imp {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // Allowlist-only passthrough so the converter can load pinned native deps
-        // (PDFium / Tesseract) without inheriting worker secrets.
-        for key in [
-            "FILECONV_PDFIUM_LIB",
-            "FILECONV_TESSDATA",
-            "TESSDATA_PREFIX",
-            "LANG",
-        ] {
+        // (PDFium) without inheriting worker secrets. Vision OCR không chạy trong
+        // sandbox (CLONE_NEWNET chặn network) — API key KHÔNG được truyền vào đây.
+        for key in ["FILECONV_PDFIUM_LIB", "LANG"] {
             if let Ok(value) = std::env::var(key) {
                 if !value.is_empty() {
                     command.env(key, value);
@@ -318,6 +366,13 @@ mod imp {
             stderr_capture.truncated = true;
         }
         drop(cgroup_guard);
+        // Thu artifact deferred-OCR TRƯỚC khi RAII xoá workspace; chỉ khi
+        // converter thoát thành công (tránh đọc file dở dang sau kill/timeout).
+        let ocr_artifacts = if exit == SandboxExit::Success {
+            collect_ocr_artifacts(workspace.path())?
+        } else {
+            Vec::new()
+        };
         drop(workspace);
         Ok(SandboxOutput {
             exit,
@@ -327,6 +382,7 @@ mod imp {
             stderr_truncated: stderr_capture.truncated,
             pid1_host_pid: Some(pid1_host_pid),
             workspace_path,
+            ocr_artifacts,
         })
     }
 
@@ -541,7 +597,7 @@ mod imp {
             let mut landlock_allow = vec![
                 (workspace.clone(), LANDLOCK_ACCESS_FS_ALL_V1),
                 (executable_path, LANDLOCK_ACCESS_FS_EXEC_FILE),
-                // Preflight uses /bin/true; converter shells out to tesseract under /usr/bin.
+                // Preflight uses /bin/true.
                 (cstring_path("/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/usr/bin")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (
@@ -554,31 +610,19 @@ mod imp {
                 (cstring_path("/usr/lib64")?, LANDLOCK_ACCESS_FS_READ_EXECUTE),
                 (cstring_path("/etc/ld.so.cache")?, ACCESS_FS_READ_FILE),
                 // std::process::Command::output() opens /dev/null for child
-                // stdin. Without this exact device rule nested OCR spawn gets
-                // EACCES before exec, even though tesseract itself is allowed.
+                // stdin. Without this exact device rule nested helper spawn
+                // gets EACCES before exec.
                 (
                     cstring_path("/dev/null")?,
                     ACCESS_FS_READ_FILE | ACCESS_FS_WRITE_FILE,
                 ),
-                // Pinned PDFium + Debian Tesseract tessdata locations.
+                // Pinned PDFium location.
                 (
                     cstring_path("/opt/pdfium")?,
                     LANDLOCK_ACCESS_FS_READ_EXECUTE,
                 ),
-                (
-                    cstring_path("/usr/share/tesseract-ocr")?,
-                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
-                ),
-                (
-                    cstring_path("/usr/share/tessdata")?,
-                    LANDLOCK_ACCESS_FS_READ_EXECUTE,
-                ),
             ];
-            for key in [
-                "FILECONV_PDFIUM_LIB",
-                "FILECONV_TESSDATA",
-                "TESSDATA_PREFIX",
-            ] {
+            for key in ["FILECONV_PDFIUM_LIB"] {
                 if let Ok(value) = std::env::var(key) {
                     let trimmed = value.trim();
                     let path = Path::new(trimmed);
@@ -1017,21 +1061,12 @@ mod imp {
             }
         }
 
+        /// Vision OCR cần network + API key nên KHÔNG chạy trong sandbox
+        /// (CLONE_NEWNET). Deferred OCR: converter render JPEG vào workspace,
+        /// in placeholder; sandbox thu artifact cho worker stage xử lý.
         #[test]
-        #[ignore = "requires a built fileconv binary and Tesseract"]
-        fn live_png_ocr_runs_inside_production_sandbox() {
-            let tesseract_probe = run(
-                &shell_config("/usr/bin/tesseract --version", Duration::from_secs(5)),
-                input(),
-                &SandboxCancel::default(),
-            )
-            .expect("tesseract probe sandbox");
-            assert_eq!(
-                tesseract_probe.exit,
-                SandboxExit::Success,
-                "tesseract probe stderr={}",
-                String::from_utf8_lossy(&tesseract_probe.stderr)
-            );
+        #[ignore = "requires a built fileconv binary"]
+        fn live_png_convert_defers_ocr_and_exports_artifacts() {
             let fileconv = std::env::var_os("MARKHAND_TEST_FILECONV_BIN")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
@@ -1045,6 +1080,8 @@ mod imp {
                         fileconv.display().to_string(),
                         "one".into(),
                         INPUT_PLACEHOLDER.into(),
+                        "--ocr-defer-dir".into(),
+                        ".".into(),
                     ],
                     limits: ResourceLimits {
                         wall_timeout: Duration::from_secs(30),
@@ -1064,14 +1101,48 @@ mod imp {
             assert_eq!(
                 output.exit,
                 SandboxExit::Success,
-                "stderr={}",
+                "deferred OCR convert must succeed offline; stderr={}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            assert!(
-                String::from_utf8_lossy(&output.stdout).contains("SOAK15"),
-                "stdout={}",
-                String::from_utf8_lossy(&output.stdout)
+            let stdout = String::from_utf8(output.stdout).expect("utf-8 markdown");
+            let pending = fileconv_core::image_ocr::pending_ocr_artifacts(&stdout);
+            assert_eq!(
+                pending.len(),
+                1,
+                "stdout must carry one placeholder: {stdout}"
             );
+            assert_eq!(output.ocr_artifacts.len(), 1, "one JPEG artifact expected");
+            assert_eq!(output.ocr_artifacts[0].name, pending[0]);
+            assert_eq!(&output.ocr_artifacts[0].bytes[..2], &[0xFF, 0xD8]);
+        }
+
+        #[test]
+        fn collect_ocr_artifacts_filters_names_and_enforces_caps() {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::write(dir.path().join("markhand-ocr-a1.jpg"), b"\xFF\xD8jpg-a").unwrap();
+            std::fs::write(dir.path().join("markhand-ocr-b2.jpg"), b"\xFF\xD8jpg-b").unwrap();
+            std::fs::write(dir.path().join("input.png"), b"not-collected").unwrap();
+            std::fs::write(dir.path().join("other.jpg"), b"not-collected").unwrap();
+            std::fs::create_dir(dir.path().join("markhand-ocr-dir.jpg")).unwrap();
+            let mut artifacts = collect_ocr_artifacts(dir.path()).expect("collect");
+            artifacts.sort_by(|a, b| a.name.cmp(&b.name));
+            assert_eq!(
+                artifacts
+                    .iter()
+                    .map(|artifact| artifact.name.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["markhand-ocr-a1.jpg", "markhand-ocr-b2.jpg"]
+            );
+            assert_eq!(artifacts[0].bytes, b"\xFF\xD8jpg-a");
+
+            // Per-file cap fails closed.
+            let big = tempfile::tempdir().expect("tempdir");
+            let oversized = vec![0_u8; (MAX_OCR_ARTIFACT_BYTES + 1) as usize];
+            std::fs::write(big.path().join("markhand-ocr-huge.jpg"), oversized).unwrap();
+            assert!(matches!(
+                collect_ocr_artifacts(big.path()),
+                Err(SandboxError::OcrArtifactsTooLarge)
+            ));
         }
 
         #[test]
@@ -1171,6 +1242,13 @@ mod imp {
         pub stderr_truncated: bool,
         pub pid1_host_pid: Option<u32>,
         pub workspace_path: PathBuf,
+        pub ocr_artifacts: Vec<OcrArtifact>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct OcrArtifact {
+        pub name: String,
+        pub bytes: Vec<u8>,
     }
 
     #[derive(Debug, thiserror::Error)]
@@ -1179,6 +1257,8 @@ mod imp {
         InvalidConfig(String),
         #[error("sandbox isolation is unavailable")]
         IsolationUnavailable,
+        #[error("deferred OCR artifacts exceed sandbox caps")]
+        OcrArtifactsTooLarge,
     }
 
     #[derive(Clone, Debug, Default)]

@@ -399,7 +399,7 @@ Phase 0 / cutover gate.
 | `embedding runtime initialization failed` | `make dev-health`; xem logs `embedding-cpu`; prefetch script |
 | Embedding 503 / loading | Model đang tải — đợi hoặc `download-aiteamvn-embedding.sh` |
 | `SignatureMismatch` | Chạy `print-index-signature.py`, cập nhật `MARKHAND_INDEX_SIGNATURE` |
-| `CloudRuntimeNotAllowed` | Dùng `local-neural`/`vllm-local` hoặc `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true` (dev) |
+| `CloudRuntimeNotAllowed` | Dùng `local-neural`/`vllm-local` hoặc egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true` (mọi profile — ADR 0016) |
 | Convert worker sandbox unavailable (Windows) | WSL2/Linux |
 | Login 401 sau seed | Chạy `seed-dev-password.sh` sau khi server đã migrate |
 | `whisper-rs` build fail | cmake/clang/libstdc++; xem contributor-setup |

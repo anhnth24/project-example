@@ -24,6 +24,8 @@ const ENV_REVISION: &str = "MARKHAND_EMBEDDING_REVISION";
 const ENV_DIMENSIONS: &str = "MARKHAND_EMBEDDING_DIMENSIONS";
 const ENV_RUNTIME_PATH: &str = "MARKHAND_EMBEDDING_RUNTIME_PATH";
 const ENV_ALLOW_CLOUD_EMBEDDINGS: &str = "MARKHAND_ALLOW_CLOUD_EMBEDDINGS";
+const ENV_NORMALIZE: &str = "MARKHAND_EMBEDDING_NORMALIZE";
+const ENV_SEND_DIMENSIONS: &str = "MARKHAND_EMBEDDING_SEND_DIMENSIONS";
 
 #[derive(Clone)]
 pub struct ApprovedEmbeddingRuntime {
@@ -31,6 +33,12 @@ pub struct ApprovedEmbeddingRuntime {
     endpoint: String,
     api_key: String,
     plan: EmbeddingPlan,
+    /// `true`: L2-normalize phía server rồi verify (provider như OpenRouter
+    /// không đảm bảo trả unit vector). `false`: yêu cầu provider đã normalize.
+    normalize_client: bool,
+    /// Gửi `dimensions` trong request (MRL — vd `qwen/qwen3-embedding-8b`
+    /// giảm chiều 4096 → 1024). Một số server local từ chối field lạ nên opt-in.
+    send_dimensions: bool,
 }
 
 impl std::fmt::Debug for ApprovedEmbeddingRuntime {
@@ -59,7 +67,16 @@ impl ApprovedEmbeddingRuntime {
             .parse::<usize>()
             .map_err(|_| EmbeddingError::InvalidConfiguration(ENV_DIMENSIONS))?;
         let runtime_path = required_env(ENV_RUNTIME_PATH)?;
-        let allow_cloud_embeddings = allow_cloud_embeddings_from_env()?;
+        let allow_cloud_embeddings = env_flag(ENV_ALLOW_CLOUD_EMBEDDINGS)?;
+        let normalize_client = match env::var(ENV_NORMALIZE) {
+            Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+                "client" => true,
+                "provider" | "" => false,
+                _ => return Err(EmbeddingError::InvalidConfiguration(ENV_NORMALIZE)),
+            },
+            Err(_) => false,
+        };
+        let send_dimensions = env_flag(ENV_SEND_DIMENSIONS)?;
         Self::new(
             base_url,
             api_key,
@@ -72,6 +89,11 @@ impl ApprovedEmbeddingRuntime {
             allow_cloud_embeddings,
             approved_signature,
         )
+        .map(|runtime| {
+            runtime
+                .with_client_normalization(normalize_client)
+                .with_request_dimensions(send_dimensions)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -118,7 +140,19 @@ impl ApprovedEmbeddingRuntime {
             endpoint,
             api_key,
             plan,
+            normalize_client: false,
+            send_dimensions: false,
         })
+    }
+
+    pub fn with_client_normalization(mut self, enabled: bool) -> Self {
+        self.normalize_client = enabled;
+        self
+    }
+
+    pub fn with_request_dimensions(mut self, enabled: bool) -> Self {
+        self.send_dimensions = enabled;
+        self
     }
 
     pub fn plan(&self) -> &EmbeddingPlan {
@@ -138,6 +172,10 @@ impl ApprovedEmbeddingRuntime {
             model: self.plan.model(),
             input: inputs,
             encoding_format: "float",
+            dimensions: self
+                .send_dimensions
+                .then(|| self.plan.expected_dimensions())
+                .flatten(),
         };
         let response = self
             .client
@@ -152,7 +190,7 @@ impl ApprovedEmbeddingRuntime {
             .json::<ProviderResponse>()
             .await
             .map_err(|_| EmbeddingError::InvalidResponse)?;
-        validate_response(response, inputs.len(), &self.plan)
+        validate_response(response, inputs.len(), &self.plan, self.normalize_client)
     }
 
     /// Fail-closed readiness probe: one tiny embedding request must succeed.
@@ -165,28 +203,31 @@ impl ApprovedEmbeddingRuntime {
     }
 }
 
-fn allow_cloud_embeddings_from_env() -> Result<bool, EmbeddingError> {
-    match env::var(ENV_ALLOW_CLOUD_EMBEDDINGS) {
+fn env_flag(name: &'static str) -> Result<bool, EmbeddingError> {
+    match env::var(name) {
         Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
             "1" | "true" | "yes" | "on" => Ok(true),
             "0" | "false" | "no" | "off" | "" => Ok(false),
-            _ => Err(EmbeddingError::InvalidConfiguration(
-                ENV_ALLOW_CLOUD_EMBEDDINGS,
-            )),
+            _ => Err(EmbeddingError::InvalidConfiguration(name)),
         },
         Err(_) => Ok(false),
     }
 }
 
+/// ADR 0016: cloud embedding (vd OpenRouter `qwen/qwen3-embedding-8b`,
+/// `runtime_path=provider-cloud`) được phép ở MỌI profile nhưng chỉ khi
+/// deployment bật cờ egress tường minh `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true` —
+/// index build gửi toàn bộ chunk text tới provider. Runtime on-prem
+/// (`vllm-local` / `local-neural`) không cần cờ.
 fn validate_runtime_policy(
     runtime_path: &str,
-    profile: Profile,
+    _profile: Profile,
     allow_cloud_embeddings: bool,
 ) -> Result<(), EmbeddingError> {
     if matches!(runtime_path, "vllm-local" | "local-neural") {
         return Ok(());
     }
-    if profile == Profile::Dev && allow_cloud_embeddings {
+    if allow_cloud_embeddings {
         return Ok(());
     }
     Err(EmbeddingError::CloudRuntimeNotAllowed)
@@ -216,6 +257,8 @@ struct ProviderRequest<'a> {
     model: &'a str,
     input: &'a [String],
     encoding_format: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dimensions: Option<usize>,
 }
 
 #[derive(Deserialize)]
@@ -233,6 +276,7 @@ fn validate_response(
     response: ProviderResponse,
     expected_count: usize,
     plan: &EmbeddingPlan,
+    normalize_client: bool,
 ) -> Result<Vec<Vec<f32>>, EmbeddingError> {
     if response.data.len() != expected_count {
         return Err(EmbeddingError::ResponseCount {
@@ -254,7 +298,12 @@ fn validate_response(
         .map(|vector| {
             vector
                 .ok_or(EmbeddingError::InvalidResponse)
-                .and_then(|values| EmbeddingVector::new(values).map_err(EmbeddingError::from))
+                .and_then(|mut values| {
+                    if normalize_client {
+                        l2_normalize(&mut values)?;
+                    }
+                    EmbeddingVector::new(values).map_err(EmbeddingError::from)
+                })
         })
         .collect::<Result<Vec<_>, _>>()?;
     validate_embedding_batch(&vectors, expected_count, plan.expected_dimensions())?;
@@ -275,6 +324,18 @@ fn is_l2_normalized(values: &[f32]) -> bool {
     norm.is_finite() && (norm - 1.0).abs() <= 0.001
 }
 
+/// Normalize phía server (mode `client`). Vector rỗng/degenerate vẫn bị từ chối.
+fn l2_normalize(values: &mut [f32]) -> Result<(), EmbeddingError> {
+    let norm = values.iter().map(|value| value * value).sum::<f32>().sqrt();
+    if !norm.is_finite() || norm <= f32::EPSILON {
+        return Err(EmbeddingError::NotNormalized);
+    }
+    for value in values.iter_mut() {
+        *value /= norm;
+    }
+    Ok(())
+}
+
 #[derive(Debug, Error)]
 pub enum EmbeddingError {
     #[error("embedding runtime configuration is missing or invalid: {0}")]
@@ -284,7 +345,7 @@ pub enum EmbeddingError {
     #[error("the local hash embedding runtime is not approved for server indexing")]
     UnapprovedRuntime,
     #[error(
-        "cloud embedding runtimes require MARKHAND_PROFILE=dev and MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true"
+        "cloud embedding runtimes require the explicit egress opt-in MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true (ADR 0016)"
     )]
     CloudRuntimeNotAllowed,
     #[error("embedding provider request failed")]
@@ -341,7 +402,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            validate_response(valid, 2, &plan).unwrap(),
+            validate_response(valid, 2, &plan, false).unwrap(),
             vec![vec![1.0, 0.0], vec![0.0, 1.0]]
         );
 
@@ -358,9 +419,44 @@ mod tests {
             ],
         };
         assert!(matches!(
-            validate_response(duplicate, 2, &plan),
+            validate_response(duplicate, 2, &plan, false),
             Err(EmbeddingError::InvalidResponse)
         ));
+    }
+
+    #[test]
+    fn client_normalization_accepts_unnormalized_provider_vectors() {
+        let plan = EmbeddingPlan::provider(
+            "mock",
+            "model",
+            "r1",
+            ProviderDeployment::from_base_url(Some("http://embedding.test/v1")).unwrap(),
+            Some(2),
+            RUNTIME_VLLM_LOCAL,
+        )
+        .unwrap();
+        let raw = || ProviderResponse {
+            data: vec![ProviderVector {
+                index: 0,
+                embedding: vec![3.0, 4.0],
+            }],
+        };
+        // Provider mode: vector chưa normalize bị từ chối (hành vi cũ giữ nguyên).
+        assert!(matches!(
+            validate_response(raw(), 1, &plan, false),
+            Err(EmbeddingError::NotNormalized)
+        ));
+        // Client mode: normalize rồi verify.
+        let vectors = validate_response(raw(), 1, &plan, true).unwrap();
+        assert_eq!(vectors, vec![vec![0.6, 0.8]]);
+        // Vector rỗng/zero vẫn fail-closed kể cả client mode.
+        let zero = ProviderResponse {
+            data: vec![ProviderVector {
+                index: 0,
+                embedding: vec![0.0, 0.0],
+            }],
+        };
+        assert!(validate_response(zero, 1, &plan, true).is_err());
     }
 
     #[test]
@@ -391,7 +487,7 @@ mod tests {
     }
 
     #[test]
-    fn cloud_embedding_runtime_requires_an_explicit_development_override() {
+    fn cloud_embedding_runtime_requires_the_explicit_egress_opt_in() {
         let config = || {
             (
                 "http://embedding.test/v1".into(),
@@ -403,9 +499,29 @@ mod tests {
                 "provider-cloud".into(),
             )
         };
-        let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
-        assert!(matches!(
-            ApprovedEmbeddingRuntime::new(
+        // Không có cờ egress → chặn ở mọi profile.
+        for profile in [Profile::Dev, Profile::Test, Profile::Prod] {
+            let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
+            assert!(matches!(
+                ApprovedEmbeddingRuntime::new(
+                    base_url,
+                    api_key,
+                    provider,
+                    model,
+                    revision,
+                    dimensions,
+                    runtime_path,
+                    profile,
+                    false,
+                    None,
+                ),
+                Err(EmbeddingError::CloudRuntimeNotAllowed)
+            ));
+        }
+        // Cờ egress tường minh (ADR 0016) → cho phép, kể cả prod.
+        for profile in [Profile::Dev, Profile::Prod] {
+            let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
+            assert!(ApprovedEmbeddingRuntime::new(
                 base_url,
                 api_key,
                 provider,
@@ -413,41 +529,11 @@ mod tests {
                 revision,
                 dimensions,
                 runtime_path,
-                Profile::Prod,
+                profile,
                 true,
                 None,
-            ),
-            Err(EmbeddingError::CloudRuntimeNotAllowed)
-        ));
-        let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
-        assert!(matches!(
-            ApprovedEmbeddingRuntime::new(
-                base_url,
-                api_key,
-                provider,
-                model,
-                revision,
-                dimensions,
-                runtime_path,
-                Profile::Dev,
-                false,
-                None,
-            ),
-            Err(EmbeddingError::CloudRuntimeNotAllowed)
-        ));
-        let (base_url, api_key, provider, model, revision, dimensions, runtime_path) = config();
-        assert!(ApprovedEmbeddingRuntime::new(
-            base_url,
-            api_key,
-            provider,
-            model,
-            revision,
-            dimensions,
-            runtime_path,
-            Profile::Dev,
-            true,
-            None,
-        )
-        .is_ok());
+            )
+            .is_ok());
+        }
     }
 }

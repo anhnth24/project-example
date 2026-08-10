@@ -180,7 +180,8 @@ pub enum ConvertErrorKind {
     BadPath,
     Unsupported,
     Failed,
-    /// Exact stage: Tesseract `Command::output` returned `ErrorKind::NotFound`.
+    /// Exact stage: required OCR/native runtime is missing or unconfigured
+    /// (vd vision OCR thiếu API key, PDFium thiếu).
     DependencyMissing,
     /// Exact stage: `catch_unwind` observed a parser panic (e.g. pdf-extract).
     Internal,
@@ -223,7 +224,7 @@ impl DetailedConvertError {
         }
     }
 
-    /// Only for the Tesseract spawn-`NotFound` stage.
+    /// Only for missing/unconfigured runtime dependencies (OCR config, PDFium).
     pub fn dependency_missing(message: impl Into<String>) -> Self {
         Self {
             error: ConvertError::Failed(message.into()),

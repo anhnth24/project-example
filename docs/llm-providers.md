@@ -67,6 +67,24 @@ dùng nhập model đã cài trên máy; Markhand không hardcode hoặc bundle 
 weight. Cách này dùng được với local Vietnamese VLM server, nhưng chất lượng và
 license phụ thuộc model người dùng chọn.
 
+## Vision OCR (convert pipeline)
+
+OCR ảnh/trang PDF scan chạy qua vision-LLM — Tesseract/Paddle local đã bị loại
+bỏ (2026-08-10). Cấu hình riêng, tách khỏi chat LLM:
+
+```bash
+export FILECONV_OCR_API_KEY=...        # fallback: FILECONV_LLM_API_KEY
+export FILECONV_OCR_BASE_URL=...       # mặc định https://openrouter.ai/api
+export FILECONV_OCR_MODEL=...          # mặc định qwen/qwen3.7-flash
+export FILECONV_OCR_SYSTEM_PROMPT=...  # tuỳ chọn — thay prompt "chép trung thực"
+export FILECONV_OCR_TIMEOUT_SECS=180
+```
+
+Trang có text layer tin cậy (pdf-inspector) không đi qua OCR. Thiếu key/endpoint
+→ convert ảnh/scan báo `DependencyMissing` rõ ràng, không âm thầm bỏ trang.
+Endpoint local (Ollama/vLLM vision) không cần key. Reasoning bị tắt trong request
+OCR để giảm latency/cost.
+
 ## Cursor/Codex subscription bridge
 
 Markhand không đọc cookie, browser session hay file token. Người dùng cài CLI
@@ -123,24 +141,30 @@ embeddings riêng với chat provider:
   (`embedding-3`, `embedding-2`), OpenAI (`text-embedding-3-*`), Gemini
   (`gemini-embedding-001`) — xem ADR 0004 (superseded for web server).
 
-### Markhand Web — embedding vs Q&A
+### Markhand Web — OCR, embedding vs Q&A
 
 | Path | Runtime | Egress |
 |---|---|---|
-| Index / hybrid search | AITeamVN local CPU (`local-neural`) | Không (on-prem) |
+| OCR ảnh/trang scan | Vision LLM qua worker stage (OpenRouter mặc định, `MARKHAND_OCR_*`); sandbox chỉ render JPEG (deferred), không network/key | Ảnh trang scan → provider |
+| Index / hybrid search | AITeamVN local (`local-neural`) **hoặc** OpenRouter `qwen/qwen3-embedding-8b` (`provider-cloud`, cần `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`) | Local: không; cloud: toàn bộ chunk text |
 | Grounded Q&A | GLM cloud (hoặc local LLM) | Chỉ top-K citation |
 
 ```bash
-# Server embedding (dev/POC) — see deploy/dev/.env.example
+# Server embedding local (dev/POC) — see deploy/dev/.env.example
 MARKHAND_EMBEDDING_BASE_URL=http://127.0.0.1:8088/v1
 MARKHAND_EMBEDDING_MODEL=AITeamVN/Vietnamese_Embedding
+
+# Server embedding OpenRouter (ADR 0016) — xem deploy/dev/worker.env.example:
+# BASE_URL=https://openrouter.ai/api/v1, MODEL=qwen/qwen3-embedding-8b,
+# RUNTIME_PATH=provider-cloud, ALLOW_CLOUD_EMBEDDINGS=true, NORMALIZE=client,
+# SEND_DIMENSIONS=true (MRL 4096→1024). Đổi config = index generation mới.
+
+# Server vision OCR (worker stage, bắt buộc cho ảnh/PDF scan)
+MARKHAND_OCR_API_KEY=...
 
 # Q&A only (cloud)
 export FILECONV_LLM_API_KEY=...
 ```
-
-Target production embedding cutover vẫn là on-prem vLLM (`BAAI/bge-m3` /
-multilingual-e5); cắt sang vLLM phải rebuild index generation.
 
 Index lưu mode/provider/model/dimensions/signature. Đổi model hoặc số chiều sẽ
 rebuild; mixed dimensions bị từ chối. Provider lỗi có thể rebuild toàn scope

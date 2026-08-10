@@ -1,0 +1,1224 @@
+{
+  "version": 1,
+  "issue": "P0-05",
+  "track": "openrouter-adr0016",
+  "catalogPath": "bench/markhand_web/embedding/openrouter-models.yaml",
+  "generatedAt": "2026-08-10T17:09:08.895080+00:00",
+  "git": {
+    "commit": "0271ae51d828213ab5f5673e8a7a57aac27a52fe",
+    "dirty": false,
+    "dirtyPaths": []
+  },
+  "hardware": {
+    "cpu": {
+      "vendor": "GenuineIntel",
+      "model": "Intel(R) Xeon(R) Processor",
+      "cores": 8,
+      "threads": 8
+    },
+    "ramGb": 47.07,
+    "gpu": {
+      "model": "none",
+      "vramGb": 0,
+      "count": 0
+    },
+    "os": {
+      "distro": "Linux-6.12.94+-x86_64-with-glibc2.39",
+      "arch": "x86_64"
+    },
+    "role": "reduced-smoke-cpu"
+  },
+  "device": "openai-api",
+  "chunkingVersion": "heading-chunks-2000-v1",
+  "payloadFormat": "{heading}\\n{text}",
+  "runsPerModel": 3,
+  "fixtureManifestSha256": "f191c5a3f893d9876d59fe83b6c2cede5a65f965218dadde8c8ac0308ae781bf",
+  "fixtureValidation": {
+    "manifestLockSha256": "f191c5a3f893d9876d59fe83b6c2cede5a65f965218dadde8c8ac0308ae781bf",
+    "checkedFiles": 32,
+    "queriesPath": "golden/queries.tsv",
+    "markdownFiles": 31
+  },
+  "chunkCount": 29,
+  "queryCount": 268,
+  "models": [
+    {
+      "modelId": "qwen3-embedding-8b-full",
+      "role": "adr0016-candidate",
+      "family": "qwen3-embedding-8b",
+      "provider": "openai-compatible",
+      "hubId": "qwen/qwen3-embedding-8b",
+      "revisionRequested": "openai-alias-observed-2026-08-10",
+      "revisionResolved": "openai-alias-observed-2026-08-10",
+      "modelMutability": "mutable-alias",
+      "observedAt": "2026-08-10T17:08:30.134618+00:00",
+      "dimensions": 4096,
+      "dimensionsRequest": null,
+      "maxSeqLength": 32768,
+      "batchSize": 64,
+      "deviceResolved": "openai-api",
+      "wordSegment": false,
+      "wordSegmenter": null,
+      "aggregate": {
+        "runs": 3,
+        "recallAt5": 0.943627,
+        "recallAt5Mean": 0.943627,
+        "recallAt10": 0.983894,
+        "hitAt5": 0.953782,
+        "mrr": 0.77367,
+        "ndcgAt10": 0.807244,
+        "ndcgAt10Mean": 0.808448,
+        "recallAt5Stdev": 0.0,
+        "rankingSha256Set": [
+          "4957c52b9c85ca5fc5ce65a251479d28137a7577b71fa7e20fa5f950631ca6e9",
+          "72077279e409548e5738aac0ba803adb16c357943f601e3642d698cf6ea7c331",
+          "ca5d7eb35c6164cd8d92a603b620e9bdb17f232fdf0fde956c376e09673d2df5"
+        ],
+        "independentLoads": true,
+        "gates": {
+          "G0-RET-RECALL-AT-5": {
+            "metric": 0.943627,
+            "threshold": 0.85,
+            "statistic": "min",
+            "meetsThreshold": true,
+            "pass": true
+          }
+        }
+      },
+      "gates": {
+        "G0-RET-RECALL-AT-5": {
+          "metric": 0.943627,
+          "threshold": 0.85,
+          "statistic": "min",
+          "meetsThreshold": true,
+          "pass": true
+        },
+        "G0-RET-BEST-MODEL-GAP": {
+          "metric": 0.0,
+          "threshold": 0.02,
+          "statistic": "max",
+          "meetsThreshold": true,
+          "pass": true,
+          "bestNdcgAt10": 0.809489,
+          "perRunGaps": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "runDetails": [
+        {
+          "modelId": "qwen3-embedding-8b-full",
+          "role": "adr0016-candidate",
+          "family": "qwen3-embedding-8b",
+          "provider": "openai-compatible",
+          "hubId": "qwen/qwen3-embedding-8b",
+          "revisionRequested": "openai-alias-observed-2026-08-10",
+          "revisionResolved": "openai-alias-observed-2026-08-10",
+          "modelMutability": "mutable-alias",
+          "observedAt": "2026-08-10T17:08:02.805341+00:00",
+          "dimensions": 4096,
+          "dimensionsRequest": null,
+          "maxSeqLength": 32768,
+          "batchSize": 64,
+          "device": "openai-api",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 1,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.943627,
+            "recallAt10": 0.983894,
+            "hitAt5": 0.953782,
+            "mrr": 0.77367,
+            "ndcgAt10": 0.807244
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.743333,
+              "ndcgAt10": 0.759383
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.875638
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.653287
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.875,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.977512
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.933333,
+              "hitAt5": 0.933333,
+              "mrr": 0.714249,
+              "ndcgAt10": 0.766312
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.906667,
+              "ndcgAt10": 0.948354
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.941667,
+              "hitAt5": 1.0,
+              "mrr": 0.975,
+              "ndcgAt10": 0.958514
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.772246,
+              "ndcgAt10": 0.810742
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.710526,
+              "ndcgAt10": 0.757039
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.652778,
+              "ndcgAt10": 0.64839
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.416667,
+              "ndcgAt10": 0.599953
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.897551
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.946481
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "72077279e409548e5738aac0ba803adb16c357943f601e3642d698cf6ea7c331",
+          "capacity": {
+            "device": "openai-api",
+            "loadMs": 0.0,
+            "embedChunksMs": 834.22,
+            "embedQueriesMs": 14537.71,
+            "vectorsPerSecond": 19.321,
+            "vramGb": null,
+            "note": "openai-compatible API; VRAM N/A"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.943627,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        },
+        {
+          "modelId": "qwen3-embedding-8b-full",
+          "role": "adr0016-candidate",
+          "family": "qwen3-embedding-8b",
+          "provider": "openai-compatible",
+          "hubId": "qwen/qwen3-embedding-8b",
+          "revisionRequested": "openai-alias-observed-2026-08-10",
+          "revisionResolved": "openai-alias-observed-2026-08-10",
+          "modelMutability": "mutable-alias",
+          "observedAt": "2026-08-10T17:08:18.319223+00:00",
+          "dimensions": 4096,
+          "dimensionsRequest": null,
+          "maxSeqLength": 32768,
+          "batchSize": 64,
+          "device": "openai-api",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 2,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.943627,
+            "recallAt10": 0.983894,
+            "hitAt5": 0.953782,
+            "mrr": 0.776121,
+            "ndcgAt10": 0.808612
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.763617
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.875638
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.653287
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.875,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.981
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.933333,
+              "hitAt5": 0.933333,
+              "mrr": 0.720916,
+              "ndcgAt10": 0.769883
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.906667,
+              "ndcgAt10": 0.948354
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.941667,
+              "hitAt5": 1.0,
+              "mrr": 0.975,
+              "ndcgAt10": 0.958514
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.772246,
+              "ndcgAt10": 0.810846
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.70614,
+              "ndcgAt10": 0.753867
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.652778,
+              "ndcgAt10": 0.64839
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.416667,
+              "ndcgAt10": 0.599953
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.897551
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.946481
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "4957c52b9c85ca5fc5ce65a251479d28137a7577b71fa7e20fa5f950631ca6e9",
+          "capacity": {
+            "device": "openai-api",
+            "loadMs": 0.0,
+            "embedChunksMs": 823.93,
+            "embedQueriesMs": 10917.63,
+            "vectorsPerSecond": 25.295,
+            "vramGb": null,
+            "note": "openai-compatible API; VRAM N/A"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.943627,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        },
+        {
+          "modelId": "qwen3-embedding-8b-full",
+          "role": "adr0016-candidate",
+          "family": "qwen3-embedding-8b",
+          "provider": "openai-compatible",
+          "hubId": "qwen/qwen3-embedding-8b",
+          "revisionRequested": "openai-alias-observed-2026-08-10",
+          "revisionResolved": "openai-alias-observed-2026-08-10",
+          "modelMutability": "mutable-alias",
+          "observedAt": "2026-08-10T17:08:30.134618+00:00",
+          "dimensions": 4096,
+          "dimensionsRequest": null,
+          "maxSeqLength": 32768,
+          "batchSize": 64,
+          "device": "openai-api",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 3,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.943627,
+            "recallAt10": 0.983894,
+            "hitAt5": 0.953782,
+            "mrr": 0.777281,
+            "ndcgAt10": 0.809489
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.753333,
+              "ndcgAt10": 0.76489
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.875638
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 0.75,
+              "ndcgAt10": 0.653287
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 0.875,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.981
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.933333,
+              "hitAt5": 0.933333,
+              "mrr": 0.722376,
+              "ndcgAt10": 0.770924
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.906667,
+              "ndcgAt10": 0.948354
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.941667,
+              "hitAt5": 1.0,
+              "mrr": 0.975,
+              "ndcgAt10": 0.958785
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.772246,
+              "ndcgAt10": 0.811605
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.710526,
+              "ndcgAt10": 0.757091
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.652778,
+              "ndcgAt10": 0.647433
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.416667,
+              "ndcgAt10": 0.599953
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.833333,
+              "ndcgAt10": 0.897551
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.946481
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "ca5d7eb35c6164cd8d92a603b620e9bdb17f232fdf0fde956c376e09673d2df5",
+          "capacity": {
+            "device": "openai-api",
+            "loadMs": 0.0,
+            "embedChunksMs": 1780.0,
+            "embedQueriesMs": 16298.81,
+            "vectorsPerSecond": 16.428,
+            "vramGb": null,
+            "note": "openai-compatible API; VRAM N/A"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.943627,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "modelId": "qwen3-embedding-8b-d1024",
+      "role": "adr0016-candidate",
+      "family": "qwen3-embedding-8b-matryoshka",
+      "provider": "openai-compatible",
+      "hubId": "qwen/qwen3-embedding-8b",
+      "revisionRequested": "openai-alias-observed-2026-08-10",
+      "revisionResolved": "openai-alias-observed-2026-08-10",
+      "modelMutability": "mutable-alias",
+      "observedAt": "2026-08-10T17:09:03.624079+00:00",
+      "dimensions": 1024,
+      "dimensionsRequest": 1024,
+      "maxSeqLength": 32768,
+      "batchSize": 64,
+      "deviceResolved": "openai-api",
+      "wordSegment": false,
+      "wordSegmenter": null,
+      "aggregate": {
+        "runs": 3,
+        "recallAt5": 0.918067,
+        "recallAt5Mean": 0.920868,
+        "recallAt10": 0.982493,
+        "hitAt5": 0.928571,
+        "mrr": 0.757713,
+        "ndcgAt10": 0.794241,
+        "ndcgAt10Mean": 0.794858,
+        "recallAt5Stdev": 0.003962,
+        "rankingSha256Set": [
+          "97f95c9b1794af1ae0572fdd3bfb1d4aafaf5acbd78660912c6e2d7072432d82",
+          "a16a0f2e575fc013ba83db41169a819b8420efb867c0bceeebf4e47fd7a219aa",
+          "f9996799b067828b7797cf66fd937fbb591029a1a42882955c54c5dfe9900e94"
+        ],
+        "independentLoads": true,
+        "gates": {
+          "G0-RET-RECALL-AT-5": {
+            "metric": 0.918067,
+            "threshold": 0.85,
+            "statistic": "min",
+            "meetsThreshold": true,
+            "pass": true
+          }
+        }
+      },
+      "gates": {
+        "G0-RET-RECALL-AT-5": {
+          "metric": 0.918067,
+          "threshold": 0.85,
+          "statistic": "min",
+          "meetsThreshold": true,
+          "pass": true
+        },
+        "G0-RET-BEST-MODEL-GAP": {
+          "metric": 0.015234,
+          "threshold": 0.02,
+          "statistic": "max",
+          "meetsThreshold": true,
+          "pass": true,
+          "bestNdcgAt10": 0.809489,
+          "perRunGaps": [
+            0.013003,
+            0.012535,
+            0.015234
+          ]
+        }
+      },
+      "runDetails": [
+        {
+          "modelId": "qwen3-embedding-8b-d1024",
+          "role": "adr0016-candidate",
+          "family": "qwen3-embedding-8b-matryoshka",
+          "provider": "openai-compatible",
+          "hubId": "qwen/qwen3-embedding-8b",
+          "revisionRequested": "openai-alias-observed-2026-08-10",
+          "revisionResolved": "openai-alias-observed-2026-08-10",
+          "modelMutability": "mutable-alias",
+          "observedAt": "2026-08-10T17:08:48.308390+00:00",
+          "dimensions": 1024,
+          "dimensionsRequest": 1024,
+          "maxSeqLength": 32768,
+          "batchSize": 64,
+          "device": "openai-api",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 1,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.918067,
+            "recallAt10": 0.982493,
+            "hitAt5": 0.928571,
+            "mrr": 0.757713,
+            "ndcgAt10": 0.794241
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.726,
+              "ndcgAt10": 0.742975
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.847372
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.766434
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.88,
+              "hitAt5": 0.88,
+              "mrr": 0.68874,
+              "ndcgAt10": 0.748001
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.906667,
+              "ndcgAt10": 0.947457
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.925,
+              "hitAt5": 1.0,
+              "mrr": 0.941667,
+              "ndcgAt10": 0.936556
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.784222,
+              "ndcgAt10": 0.816745
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.947368,
+              "hitAt5": 0.947368,
+              "mrr": 0.641228,
+              "ndcgAt10": 0.703336
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.65,
+              "ndcgAt10": 0.659289
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.4,
+              "ndcgAt10": 0.582804
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.80654
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.918143
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "97f95c9b1794af1ae0572fdd3bfb1d4aafaf5acbd78660912c6e2d7072432d82",
+          "capacity": {
+            "device": "openai-api",
+            "loadMs": 0.0,
+            "embedChunksMs": 746.04,
+            "embedQueriesMs": 7040.88,
+            "vectorsPerSecond": 38.141,
+            "vramGb": null,
+            "note": "openai-compatible API; VRAM N/A"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.918067,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        },
+        {
+          "modelId": "qwen3-embedding-8b-d1024",
+          "role": "adr0016-candidate",
+          "family": "qwen3-embedding-8b-matryoshka",
+          "provider": "openai-compatible",
+          "hubId": "qwen/qwen3-embedding-8b",
+          "revisionRequested": "openai-alias-observed-2026-08-10",
+          "revisionResolved": "openai-alias-observed-2026-08-10",
+          "modelMutability": "mutable-alias",
+          "observedAt": "2026-08-10T17:08:56.136920+00:00",
+          "dimensions": 1024,
+          "dimensionsRequest": 1024,
+          "maxSeqLength": 32768,
+          "batchSize": 64,
+          "device": "openai-api",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 2,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.926471,
+            "recallAt10": 0.982493,
+            "hitAt5": 0.936975,
+            "mrr": 0.760316,
+            "ndcgAt10": 0.796077
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.726,
+              "ndcgAt10": 0.742916
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.268518,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.847372
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.766434
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.893333,
+              "hitAt5": 0.893333,
+              "mrr": 0.696539,
+              "ndcgAt10": 0.753125
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.906667,
+              "ndcgAt10": 0.947672
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.925,
+              "hitAt5": 1.0,
+              "mrr": 0.941667,
+              "ndcgAt10": 0.93493
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.94,
+              "hitAt5": 0.94,
+              "mrr": 0.784889,
+              "ndcgAt10": 0.818257
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.947368,
+              "hitAt5": 0.947368,
+              "mrr": 0.641228,
+              "ndcgAt10": 0.703534
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.65,
+              "ndcgAt10": 0.659289
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.4,
+              "ndcgAt10": 0.583435
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.80654
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.918143
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "f9996799b067828b7797cf66fd937fbb591029a1a42882955c54c5dfe9900e94",
+          "capacity": {
+            "device": "openai-api",
+            "loadMs": 0.0,
+            "embedChunksMs": 2753.11,
+            "embedQueriesMs": 4693.04,
+            "vectorsPerSecond": 39.886,
+            "vramGb": null,
+            "note": "openai-compatible API; VRAM N/A"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.926471,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        },
+        {
+          "modelId": "qwen3-embedding-8b-d1024",
+          "role": "adr0016-candidate",
+          "family": "qwen3-embedding-8b-matryoshka",
+          "provider": "openai-compatible",
+          "hubId": "qwen/qwen3-embedding-8b",
+          "revisionRequested": "openai-alias-observed-2026-08-10",
+          "revisionResolved": "openai-alias-observed-2026-08-10",
+          "modelMutability": "mutable-alias",
+          "observedAt": "2026-08-10T17:09:03.624079+00:00",
+          "dimensions": 1024,
+          "dimensionsRequest": 1024,
+          "maxSeqLength": 32768,
+          "batchSize": 64,
+          "device": "openai-api",
+          "wordSegment": false,
+          "wordSegmenter": null,
+          "normalize": "l2",
+          "payloadFormat": "{heading}\\n{text}",
+          "chunkingVersion": "heading-chunks-2000-v1",
+          "runIndex": 3,
+          "summary": {
+            "queries": 238,
+            "noAnswerQueries": 30,
+            "recallAt5": 0.918067,
+            "recallAt10": 0.982493,
+            "hitAt5": 0.928571,
+            "mrr": 0.757775,
+            "ndcgAt10": 0.794255
+          },
+          "byCategory": {
+            "abbreviation": {
+              "queries": 25,
+              "recallAt5": 0.96,
+              "hitAt5": 0.96,
+              "mrr": 0.726,
+              "ndcgAt10": 0.742975
+            },
+            "conflict_acl_denied": {
+              "queries": 2,
+              "recallAt5": 0.5,
+              "hitAt5": 0.5,
+              "mrr": 0.267857,
+              "ndcgAt10": 0.315465
+            },
+            "conflict_as_of": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.847372
+            },
+            "conflict_current": {
+              "queries": 2,
+              "recallAt5": 0.75,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.766434
+            },
+            "conflict_history": {
+              "queries": 2,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            },
+            "diacritic_variant": {
+              "queries": 75,
+              "recallAt5": 0.88,
+              "hitAt5": 0.88,
+              "mrr": 0.68827,
+              "ndcgAt10": 0.747493
+            },
+            "long_context": {
+              "queries": 25,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.906667,
+              "ndcgAt10": 0.947457
+            },
+            "multi_doc": {
+              "queries": 20,
+              "recallAt5": 0.925,
+              "hitAt5": 1.0,
+              "mrr": 0.941667,
+              "ndcgAt10": 0.936556
+            },
+            "named_entity": {
+              "queries": 50,
+              "recallAt5": 0.92,
+              "hitAt5": 0.92,
+              "mrr": 0.784222,
+              "ndcgAt10": 0.816745
+            },
+            "no_answer": {
+              "queries": 0
+            },
+            "numeric_fact": {
+              "queries": 19,
+              "recallAt5": 0.947368,
+              "hitAt5": 0.947368,
+              "mrr": 0.64386,
+              "ndcgAt10": 0.70552
+            },
+            "prompt_injection_query": {
+              "queries": 0
+            },
+            "table_numeric": {
+              "queries": 6,
+              "recallAt5": 0.833333,
+              "hitAt5": 0.833333,
+              "mrr": 0.65,
+              "ndcgAt10": 0.659289
+            },
+            "temporal_as_of": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.4,
+              "ndcgAt10": 0.582804
+            },
+            "temporal_current": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 0.666667,
+              "ndcgAt10": 0.80654
+            },
+            "version_compare": {
+              "queries": 3,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 0.918143
+            },
+            "version_history": {
+              "queries": 1,
+              "recallAt5": 1.0,
+              "hitAt5": 1.0,
+              "mrr": 1.0,
+              "ndcgAt10": 1.0
+            }
+          },
+          "rankingSha256": "a16a0f2e575fc013ba83db41169a819b8420efb867c0bceeebf4e47fd7a219aa",
+          "capacity": {
+            "device": "openai-api",
+            "loadMs": 0.0,
+            "embedChunksMs": 742.04,
+            "embedQueriesMs": 4487.31,
+            "vectorsPerSecond": 56.795,
+            "vramGb": null,
+            "note": "openai-compatible API; VRAM N/A"
+          },
+          "thresholdObservations": {
+            "G0-RET-RECALL-AT-5": {
+              "metric": 0.918067,
+              "threshold": 0.85,
+              "statistic": "per-run",
+              "meetsThreshold": true
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "immutableConfig": {
+    "chunkingVersion": "heading-chunks-2000-v1",
+    "normalize": "l2",
+    "ranking": "max-pool-chunk-cosine -> document",
+    "payloadFormat": "{heading}\\n{text}",
+    "gates": {
+      "G0-RET-RECALL-AT-5": {
+        "threshold": 0.85,
+        "statistic": "min"
+      },
+      "G0-RET-BEST-MODEL-GAP": {
+        "threshold": 0.02,
+        "statistic": "max"
+      }
+    },
+    "models": [
+      {
+        "id": "qwen3-embedding-8b-full",
+        "hubId": "qwen/qwen3-embedding-8b",
+        "provider": "openai-compatible",
+        "revision": "openai-alias-observed-2026-08-10",
+        "revisionRequested": "openai-alias-observed-2026-08-10",
+        "modelMutability": "mutable-alias",
+        "observedAt": "2026-08-10T17:08:30.134618+00:00",
+        "dimensions": 4096,
+        "maxSeqLength": 32768,
+        "batchSize": 64,
+        "device": "openai-api",
+        "wordSegment": false,
+        "wordSegmenter": null,
+        "normalize": "l2"
+      },
+      {
+        "id": "qwen3-embedding-8b-d1024",
+        "hubId": "qwen/qwen3-embedding-8b",
+        "provider": "openai-compatible",
+        "revision": "openai-alias-observed-2026-08-10",
+        "revisionRequested": "openai-alias-observed-2026-08-10",
+        "modelMutability": "mutable-alias",
+        "observedAt": "2026-08-10T17:09:03.624079+00:00",
+        "dimensions": 1024,
+        "maxSeqLength": 32768,
+        "batchSize": 64,
+        "device": "openai-api",
+        "wordSegment": false,
+        "wordSegmenter": null,
+        "normalize": "l2"
+      }
+    ]
+  },
+  "verdict": {
+    "gatingProtocol": true,
+    "familyCount": 2,
+    "anyRecallGatePass": true,
+    "anyMeetsRecallThreshold": true,
+    "selectedPassesBothGates": true,
+    "selectedDraft": "qwen/qwen3-embedding-8b",
+    "bestObservedModel": "qwen/qwen3-embedding-8b",
+    "p0_05_closed": false,
+    "reasons": [
+      "Quality track executed with independent model loads per run.",
+      "Gate thresholds/statistics loaded from catalog YAML.",
+      "Selection requires both Recall@5 and best-model-gap gates under gating protocol.",
+      "Per-query rankings retained in run-*.json with rankingSha256 fingerprints.",
+      "Golden markdown/queries validated against manifest.lock.json.",
+      "Capacity evidence (VRAM, saturation, queue depth, target GPU) still required.",
+      "ADR remains Proposed until capacity + approver sign-off.",
+      "Restricted corpus must not leave to cloud providers; local/self-host only."
+    ]
+  }
+}

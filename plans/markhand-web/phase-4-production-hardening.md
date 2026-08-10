@@ -52,8 +52,11 @@ Theo SLA/ADR đã chốt:
 - PG HA/PITR;
 - MinIO replication;
 - Qdrant topology/snapshot;
-- vLLM failover hoặc extractive degraded mode;
-- GLM outage fallback;
+- embedding provider outage (OpenRouter/local-neural): ingest queue backoff,
+  query hạ xuống lexical FTS;
+- vision OCR provider outage (OpenRouter): convert job retry/backoff, không mất
+  dữ liệu;
+- GLM outage fallback (extractive);
 - query vẫn phục vụ khi ingest tạm pause.
 
 Mỗi dependency có readiness và circuit breaker phù hợp. Không trả stale unauthorized
@@ -124,7 +127,7 @@ Dashboard và alert:
 - SLO burn;
 - auth anomaly;
 - queue age/capacity;
-- converter/GPU saturation;
+- converter saturation / provider rate-limit (OpenRouter OCR/embedding);
 - retrieval quality/latency;
 - reconciliation drift;
 - quota leak;
@@ -135,7 +138,7 @@ Runbook bắt buộc:
 
 - stuck jobs/dead letters;
 - parser outbreak;
-- PG/Qdrant/MinIO/vLLM/GLM outage;
+- PG/Qdrant/MinIO/OpenRouter/GLM outage;
 - rebuild/rollback model;
 - quota discrepancy;
 - credential rotation;

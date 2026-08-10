@@ -52,9 +52,11 @@ Hai tầng runtime (ADR 0005; ADR 0004 superseded):
    `AITeamVN/Vietnamese_Embedding` via CPU OpenAI-compatible server
    (`runtime_path=local-neural`, Compose `:8088`). Quality gates closed on
    `local-cpu-quality` (Recall@5 0.9261, gap 0.0 vs BKAI).
-2. **Target (on-prem cutover):** vLLM trên Profile B GPU; so ít nhất `bge-m3` và
-   một model multilingual-e5 phù hợp VRAM. Bắt buộc trước production aggregate
-   scale, không chặn Phase 1B.
+2. ~~**Target (on-prem cutover):** vLLM trên Profile B GPU~~ — **retired
+   2026-08-10 (ADR 0016):** target thay bằng OpenRouter
+   `qwen/qwen3-embedding-8b` (`provider-cloud`, egress opt-in); gate
+   `G0-RET-VLLM-CUTOVER` đã gỡ khỏi registry. Pin mặc định đổi sau khi model
+   mới qua gate Recall@5/nDCG trên golden corpus (DKP-02).
 
 **GLM cloud** is **not** the Markhand Web server embedding runtime. GLM remains
 approved for grounded Q&A / summarize (top-K citation handoff only).

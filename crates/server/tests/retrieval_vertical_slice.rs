@@ -146,7 +146,8 @@ fn vertical_format_cases() -> Vec<(
             "budget.png",
             "image/png",
             "SOAK15",
-            // Shared real OCR fixture; missing OCR runtime must fail the live suite.
+            // Shared OCR fixture. Vision OCR không chạy được trong sandbox
+            // (no network) nên case này assert hành vi fail-closed bên dưới.
             tiny_png_ocr_bytes("SOAK15"),
         ),
         (
@@ -388,10 +389,13 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         let mut convert_config = ConvertWorkerConfig::new(
             format!("vertical-convert-{ext}-{}", Uuid::new_v4()),
             SandboxConfig {
+                // Production argv: deferred OCR ghi JPEG vào workspace sandbox.
                 argv_template: vec![
                     fileconv.display().to_string(),
                     "one".into(),
                     "{input}".into(),
+                    "--ocr-defer-dir".into(),
+                    ".".into(),
                 ],
                 limits: ResourceLimits {
                     wall_timeout: Duration::from_secs(30),
@@ -426,6 +430,32 @@ async fn live_upload_convert_index_citation_vertical_slice() {
         })
         .await
         .unwrap_or_else(|error| panic!("{ext} load convert job: {error}"));
+        if ext == "png" {
+            // Deferred OCR: sandbox render JPEG + placeholder thành công, nhưng
+            // suite live không cấu hình MARKHAND_OCR_* (không gọi provider thật
+            // trong CI) → stage vision OCR của worker phải fail-closed với lỗi
+            // cấu hình rõ ràng, không nuốt trang.
+            assert!(
+                matches!(
+                    convert_run,
+                    ConvertWorkerRun::Failed { job_id, .. } if job_id == convert_job_id
+                ),
+                "{ext} phải fail-closed khi thiếu vision OCR runtime: {convert_run:?}"
+            );
+            let error_text = convert_last_error.clone().unwrap_or_default();
+            assert!(
+                error_text.contains("OCR"),
+                "{ext} last_error phải nêu thiếu cấu hình OCR: {convert_last_error:?}"
+            );
+            // Job fail-closed quay lại pending (retry/backoff). Cancel để nó
+            // không được worker của các format sau claim lại (CI chậm hơn local
+            // đủ để backoff hết hạn giữa hai case → flake job_id mismatch).
+            jobs::cancel(&pool, &worker_ctx, convert_job_id)
+                .await
+                .unwrap_or_else(|error| panic!("{ext} cancel failed OCR job: {error:?}"));
+            observed_formats.push(ext.to_string());
+            continue;
+        }
         assert!(
             matches!(
                 convert_run,

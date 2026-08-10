@@ -8,7 +8,9 @@
 #
 # License: PhoWhisper and other unlicensed/unresolved models are NOT bundled.
 # Audio feature is disabled in this image so whisper.cpp is not compiled in;
-# convert path covers non-audio formats (pdf/office/html/csv/image OCR).
+# convert path covers non-audio formats (pdf/office/html/csv). Image/scan OCR
+# dùng vision-LLM (OpenRouter) và KHÔNG chạy trong converter sandbox (no
+# network); Tesseract đã bị loại bỏ khỏi image này.
 
 FROM rust:1.88.0-bookworm@sha256:af306cfa71d987911a781c37b59d7d67d934f49684058f96cf72079c3626bfe0 AS builder
 
@@ -49,9 +51,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         libssl3 \
-        tesseract-ocr=5.3.0-2 \
-        tesseract-ocr-eng=1:4.1.0-2 \
-        tesseract-ocr-vie=1:4.1.0-2 \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system --gid 10001 markhand \
@@ -65,8 +64,7 @@ COPY --from=builder /src/target/release/fileconv /usr/local/bin/fileconv
 COPY --from=builder /opt/pdfium /opt/pdfium
 
 ENV FILECONV_PDFIUM_LIB=/opt/pdfium/lib \
-    TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata \
-    MARKHAND_CONVERTER_ARGV_JSON='["/usr/local/bin/fileconv","one","{input}"]'
+    MARKHAND_CONVERTER_ARGV_JSON='["/usr/local/bin/fileconv","one","{input}","--ocr-defer-dir","."]'
 
 # Explicitly refuse any accidental model mount under the historical path.
 # Operators must not copy PhoWhisper into this image.

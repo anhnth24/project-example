@@ -1,4 +1,4 @@
-//! Page render OCR and embedded-image OCR helpers (Tesseract via image_ocr).
+//! Page render OCR and embedded-image OCR helpers (vision LLM via image_ocr).
 
 use pdfium_render::prelude::*;
 
@@ -31,13 +31,8 @@ pub(super) fn ocr_page_at(
         )
     })?;
     ocr_full_page(&page, langs, ocr_config).map_err(|error| match error {
-        OcrAttemptError::TesseractNotFound {
+        OcrAttemptError::NotConfigured { stage, message } => OcrAttemptError::NotConfigured {
             stage,
-            binary,
-            message,
-        } => OcrAttemptError::TesseractNotFound {
-            stage,
-            binary,
             message: format!("trang {}: {message}", page_0idx + 1),
         },
         OcrAttemptError::Failed {
@@ -129,8 +124,8 @@ pub(super) fn ocr_full_page(
         Ok(PageOcr::Blank)
     } else {
         Err(OcrAttemptError::failed(
-            OcrStage::Tesseract,
-            "Tesseract không trả nội dung cho trang có nét chữ",
+            OcrStage::Vision,
+            "vision OCR không trả nội dung cho trang có nét chữ",
         ))
     }
 }

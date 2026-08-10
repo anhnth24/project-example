@@ -30,17 +30,20 @@ Manifest accuracy/audio: mỗi dòng `<file>\t<ground_truth.txt>\t<nhãn>` (đư
 
 ## Phụ thuộc native bên ngoài (cần cài/tải để chạy đầy đủ)
 
-- `tesseract-ocr` + `tesseract-ocr-vie` (CLI) — OCR ảnh. Gọi qua `std::process::Command`.
+- **Vision OCR (OpenRouter mặc định)** — OCR ảnh/trang scan qua API OpenAI-compatible
+  (feature `llm`, mặc định bật ở CLI). Env: `FILECONV_OCR_API_KEY` (fallback
+  `FILECONV_LLM_API_KEY`), `FILECONV_OCR_BASE_URL`, `FILECONV_OCR_MODEL`,
+  `FILECONV_OCR_SYSTEM_PROMPT`, `FILECONV_OCR_TIMEOUT_SECS`. Tesseract/Paddle local
+  đã bị **loại bỏ hoàn toàn** (quyết định product 2026-08-10); thiếu key → lỗi
+  `DependencyMissing` rõ ràng.
 - **libpdfium**: `bash bench/download_pdfium.sh` → `./pdfium/lib`. Thiếu thì PDF tự fallback `pdf-extract`.
-- **tessdata_best** (khuyến nghị): `bash bench/download_tessdata.sh` → `./tessdata_best`.
-  Backend tự dùng nếu có (chính xác hơn với tài liệu thật/IN HOA), thiếu thì dùng model nhẹ hệ thống.
 - **model whisper**: `bash bench/download_models.sh` → `./models/ggml-{tiny,base,small}.bin`
   + **ggml-PhoWhisper-small.bin** (VinAI fine-tune tiếng Việt — đo được 90.8% vs 77.3%
   whisper-small cùng cỡ trên corpus vi; license PhoWhisper chưa rõ, kiểm tra trước khi phân phối).
 - Build whisper-rs cần cmake + C/C++ + clang (bindgen). Lần build đầu compile whisper.cpp (~1-2 phút).
 
-Đường dẫn override qua env: `FILECONV_PDFIUM_LIB`, `FILECONV_TESSDATA`.
-Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, `bench/edge`) đều gitignore.
+Đường dẫn override qua env: `FILECONV_PDFIUM_LIB`.
+Thư mục tải về (`pdfium/`, `models/`, `bench/corpus*`, `bench/edge`) đều gitignore.
 
 ## Kiến trúc
 
@@ -49,7 +52,7 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
   Mỗi converter có `to_markdown(...) -> Result<String, ConvertError>`, **gọi thẳng crate gốc**:
   - `conv/pdf.rs` — **`pdf-inspector` (chính)**: markdown CÓ CẤU TRÚC theo từng trang
     (heading theo cỡ chữ, bảng, sắp lại đa cột) + cờ `needs_ocr` (bắt cả text-layer rác/font GID).
-    Trang `needs_ocr` → render PDFium 300 DPI + OCR Tesseract (pdf-inspector không OCR).
+    Trang `needs_ocr` → render PDFium 300 DPI + OCR vision-LLM (pdf-inspector không OCR).
     Fallback: PDFium đếm ký tự → `pdf-extract`. PDFium cache 1 instance/thread (`thread_local`,
     chỉ init 1 lần/tiến trình). `pdf_ocr_images` (mặc định tắt) OCR thêm ảnh nhúng cho trang trộn.
     Đánh đổi: pdf-inspector ~35ms/trang (vs PDFium ~6ms) nhưng cho cấu trúc + đa cột.
@@ -59,9 +62,11 @@ Thư mục tải về (`pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, 
   - `conv/pptx.rs` — text Markdown; `pptx_preview.rs` parse vị trí text/ảnh/shape cho desktop SVG.
   - `conv/html.rs` — `htmd` (đã `skip_tags` script/style/noscript; thay html2md vì nó phình output).
   - `conv/csv_conv.rs` — Markdown table hoặc sanitized HTML rowspan/colspan.
-  - `image_ocr.rs` — Tesseract mặc định, Paddle opt-in; **tiền xử lý ảnh**
-    (grayscale → upscale ×2 nếu nhỏ → unsharpen → normalize); output nghi lỗi/dính
-    IN HOA retry PSM 6; scan nhiều cột tách bằng vertical projection + score fallback.
+  - `image_ocr.rs` — vision-LLM OCR (OpenRouter/OpenAI-compatible): decode có
+    `Limits` chống bomb → thu về ≤2400px cạnh dài → JPEG q90 → gửi provider với
+    system prompt "chép trung thực" (giữ số hiệu/điều khoản/bảng/công thức,
+    `[không rõ: ...]` khi không chắc); strip code fence bao ngoài. Thiếu
+    key/feature `llm` → `DependencyMissing`, không âm thầm bỏ trang.
   - `audio.rs` — `AudioEngine::load()` lấy `WhisperContext` từ cache **process-wide LRU**
  (key: canonical path + load knobs; Loading/Ready/Failed + condvar; capacity mặc định 2 /
  `FILECONV_WHISPER_CACHE_CAPACITY`); decode mp3/wav/ogg… bằng `symphonia` + resample 16kHz

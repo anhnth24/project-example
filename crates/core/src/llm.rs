@@ -1196,9 +1196,59 @@ pub fn extract_json(
     )
 }
 
+/// OCR một ảnh JPEG in-memory bằng vision chat OpenAI-compatible (OpenRouter
+/// mặc định) — engine của [`crate::image_ocr`]. Prompt hệ thống là hợp đồng
+/// "chép trung thực" (xem [`crate::image_ocr::default_vision_ocr_system_prompt`]).
+pub(crate) fn vision_ocr_jpeg(
+    cfg: &crate::image_ocr::VisionOcrConfig,
+    jpeg: &[u8],
+    langs: &str,
+) -> Result<String, ConvertError> {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(jpeg);
+    let system = cfg
+        .system_prompt
+        .clone()
+        .unwrap_or_else(|| crate::image_ocr::default_vision_ocr_system_prompt(langs));
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(cfg.timeout_secs.max(1)))
+        .build()
+        .map_err(fail)?;
+    let url = openai_chat_url(&cfg.base_url);
+    let body = serde_json::json!({
+        "model": cfg.model,
+        // OCR là chép trung thực, không cần chain-of-thought; Qwen3.7 bật
+        // thinking mặc định làm mỗi trang chậm/đắt hơn nhiều. OpenRouter bỏ
+        // qua field này với model không hỗ trợ.
+        "reasoning": {"enabled": false},
+        // Trần output một trang theo bench product owner (8K token/trang).
+        "max_tokens": 8000,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": [
+                {"type": "image_url",
+                 "image_url": {"url": format!("data:image/jpeg;base64,{b64}")}}
+            ]}
+        ]
+    });
+    let secret = Some(cfg.api_key.as_str());
+    let v = post_json(&client, &url, &body, secret, |request| {
+        if cfg.api_key.trim().is_empty() {
+            request
+        } else {
+            request.bearer_auth(&cfg.api_key)
+        }
+    })?;
+    v["choices"][0]["message"]["content"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| invalid_provider_response("vision OCR", &v, secret))
+}
+
 /// OCR/đọc tài liệu KHÓ bằng vision-LLM (đa cột, IN HOA, chữ viết tay, con dấu…):
 /// gửi ảnh cho model vision của provider, nhận Markdown. Đây là "tier chất lượng cao"
-/// cho các ca Tesseract yếu — cần API key, nội dung ảnh được gửi tới provider.
+/// — cần API key, nội dung ảnh được gửi tới provider.
 pub fn vision_ocr(cfg: &LlmConfig, image_path: &std::path::Path) -> Result<String, ConvertError> {
     use base64::Engine as _;
     if cfg.is_subscription_cli() {

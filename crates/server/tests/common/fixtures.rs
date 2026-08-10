@@ -102,11 +102,11 @@ pub fn tiny_pptx_bytes(marker: &str) -> Vec<u8> {
     ])
 }
 
-/// Deterministic PNG with high-contrast bitmap text for OCR (Tesseract).
+/// Deterministic PNG with high-contrast bitmap text for OCR.
 ///
-/// Renders uppercase A–Z / 0–9 / space from a 5×7 font, scaled for OCR. If
-/// Tesseract/`vie+eng` is missing at convert time, the vertical-slice live
-/// test must fail (no soft-skip).
+/// Renders uppercase A–Z / 0–9 / space from a 5×7 font, scaled for OCR. Vision
+/// OCR (OpenRouter) không chạy được trong converter sandbox (no network), nên
+/// các test dùng fixture này assert hành vi fail-closed của convert ảnh.
 pub fn tiny_png_ocr_bytes(marker: &str) -> Vec<u8> {
     if marker.eq_ignore_ascii_case("SOAK15") {
         return include_bytes!("../../../../bench/markhand_web/soak/fixtures/soak-png.png")

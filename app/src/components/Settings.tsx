@@ -41,7 +41,6 @@ import {
 
 const DEFAULTS: Settings = {
   ocrLangs: "vie+eng",
-  ocrEngine: "tesseract",
   pdfOcr: true,
   pdfOcrImages: false,
   audioLang: "vi",
@@ -310,23 +309,11 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               onChange={(event) => set("ocrLangs", event.target.value)}
               placeholder="vie+eng"
             />
-            <small>Có thể ghép các mã Tesseract bằng dấu “+”.</small>
+            <small>
+              Hint ngôn ngữ cho vision OCR; ghép nhiều mã bằng dấu “+”. OCR chạy
+              qua provider vision (cấu hình FILECONV_OCR_*).
+            </small>
           </label>
-          <div className="field">
-            <span>OCR engine</span>
-            <SelectControl
-              value={form.ocrEngine}
-              onChange={(value) =>
-                set("ocrEngine", value as Settings["ocrEngine"])
-              }
-              ariaLabel="Chọn OCR engine"
-              options={[
-                { value: "tesseract", label: "Tesseract · mặc định" },
-                { value: "auto", label: "Auto · Paddle fallback" },
-                { value: "paddle", label: "PaddleOCR · tùy chọn" },
-              ]}
-            />
-          </div>
         </div>
 
         <Toggle

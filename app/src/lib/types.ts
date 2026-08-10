@@ -55,7 +55,6 @@ export interface PptxPreviewSlide {
 
 export interface Settings {
   ocrLangs: string;
-  ocrEngine: "tesseract" | "paddle" | "auto";
   pdfOcr: boolean;
   pdfOcrImages: boolean;
   audioLang: string;

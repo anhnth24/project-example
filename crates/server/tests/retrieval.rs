@@ -463,6 +463,74 @@ async fn fts_rank_accent_fold_and_active_generation_gates() {
                 let rank_f32: f32 = search::read_pg_real_rank(&row, "rank");
                 assert!(rank_f32 > 0.0);
 
+                // Regression (multi_org_denial flake root cause): PostgreSQL's
+                // lexer tokenizes `<digits>e<digits>` hex runs as scientific-
+                // notation floats, so hyphenated ids like
+                // `phase1c-marker-alpha-6571e715…` produce tsvector tokens the
+                // space-joined normalized query can never AND-match. fts_search
+                // must OR a separator-preserving folded query so identifiers
+                // stay findable both raw and token-split.
+                let chunk_sci = Uuid::new_v4();
+                let identity_sci = sha64('f');
+                txn.execute(
+                    "INSERT INTO chunks (
+                        id, org_id, document_id, version_id, ordinal, heading_path, body,
+                        chunk_identity_sha256, index_metadata_id, index_signature
+                     ) VALUES ($1,$2,$3,$4,2,ARRAY['Marker'],
+                       'Đánh dấu phase1c-marker-alpha-6571e715cb974ca2a8c26cdf50bbf797 trong nội dung',
+                       $5,$6,$7)",
+                    &[
+                        &chunk_sci,
+                        &ctx.org_id(),
+                        &document,
+                        &version,
+                        &identity_sci,
+                        &meta_active,
+                        &sig_active,
+                    ],
+                )
+                .await?;
+                // Truy vấn identifier NGUYÊN VĂN (như multi_org_denial dán
+                // marker): trước fix, normalize_fts_query space-join làm PG lex
+                // token hex đứng-một-mình thành float `6571e715` & `cb974…`
+                // (khác token trong tsv) → 0 hit vĩnh viễn. Leg fold giữ
+                // separator phải giải quyết ca này. (Giới hạn còn lại có chủ
+                // đích: người dùng tự gõ token RỜI của một identifier hex thì
+                // lexer standalone-vs-compound của PG vẫn có thể lệch.)
+                let raw_identifier_query =
+                    "phase1c-marker-alpha-6571e715cb974ca2a8c26cdf50bbf797";
+                let hits = search::fts_search(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    raw_identifier_query,
+                    &VersionVisibility::Current,
+                    10,
+                )
+                .await?;
+                assert!(
+                    hits.iter().any(|hit| hit.chunk_id == chunk_sci),
+                    "scientific-notation-shaped identifier must stay findable \
+                     via its raw form; hits = {}",
+                    hits.len()
+                );
+                // Cùng identifier qua đường VersionIds (nhánh SQL thứ hai).
+                let historical_hits = search::fts_search(
+                    txn,
+                    &ctx,
+                    &[collection],
+                    raw_identifier_query,
+                    &VersionVisibility::VersionIds(BTreeSet::from([version])),
+                    10,
+                )
+                .await?;
+                assert!(
+                    historical_hits
+                        .iter()
+                        .any(|hit| hit.chunk_id == chunk_sci),
+                    "identifier must stay findable via the version-scoped leg"
+                );
+
                 let hydrated = search::hydrate_chunks_by_identity(
                     txn,
                     &ctx,
