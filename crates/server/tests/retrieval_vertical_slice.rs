@@ -447,6 +447,12 @@ async fn live_upload_convert_index_citation_vertical_slice() {
                 error_text.contains("OCR"),
                 "{ext} last_error phải nêu thiếu cấu hình OCR: {convert_last_error:?}"
             );
+            // Job fail-closed quay lại pending (retry/backoff). Cancel để nó
+            // không được worker của các format sau claim lại (CI chậm hơn local
+            // đủ để backoff hết hạn giữa hai case → flake job_id mismatch).
+            jobs::cancel(&pool, &worker_ctx, convert_job_id)
+                .await
+                .unwrap_or_else(|error| panic!("{ext} cancel failed OCR job: {error:?}"));
             observed_formats.push(ext.to_string());
             continue;
         }
