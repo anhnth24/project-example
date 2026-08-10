@@ -132,6 +132,15 @@ là nơi quyết định trang nào cần OCR — trang text layer tin cậy kh�
   retry/backoff → dead-letter. Tracing ghi số trang + thời lượng (không nội dung).
 - Compose POC: worker-convert nối thêm network `ocr-egress` (sandbox không thấy
   — CLONE_NEWNET); đã verify sandbox thật render + export artifact (live test).
+- **Live e2e toàn chuỗi PASS (2026-08-10, ~36s):**
+  `crates/server/tests/live_openrouter_e2e.rs` chạy trên stack thật
+  (Postgres/MinIO/Qdrant dev compose) với key OpenRouter thật: HTTP upload PNG
+  scan → ConvertWorker (sandbox deferred OCR → OpenRouter Qwen3.7 Flash) →
+  IndexWorker chunk → EmbeddingWorker (`qwen/qwen3-embedding-8b`, 1024-d MRL,
+  normalize client) → Qdrant → hybrid `/api/v1/search` (top hit đúng document,
+  `embeddingMode=provider-cloud`, có `vectorScore`) → `/api/v1/ask` trả
+  extractive answer chứa nội dung OCR + citation trỏ đúng tài liệu. Test gated
+  bằng `MARKHAND_TEST_OPENROUTER_API_KEY` (soft-skip trong CI không có key).
 
 **Đo hậu kiểm chất lượng (khuyến nghị):** `fileconv accuracy` (CER/WER) trên
 corpus scan vi so với baseline Tesseract cũ trong `bench/REPORT_ACCURACY.md`,
