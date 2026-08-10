@@ -119,16 +119,19 @@ là nơi quyết định trang nào cần OCR — trang text layer tin cậy kh�
   trang convert 2.6s không gọi OCR, fixture `needs_ocr` OCR qua Qwen ra đúng
   page contract.
 
-**Server (`fileconv-server`) — phần còn lại (DKP-05):**
+**Server (`fileconv-server`) — ĐÃ IMPLEMENT (DKP-05, 2026-08-10):**
 
-- Sandbox giữ no-network và **không bao giờ** nhận OCR API key (đã thêm assert
-  vào `poc-isolation-smoke.sh`); convert ảnh/scan trong sandbox hiện fail-closed
-  với lỗi cấu hình OCR (vertical slice đã cập nhật assert hành vi này).
-- Job stage mới `vision_ocr` chạy ở worker tin cậy (ngoài sandbox): sandbox xuất
-  artifact PNG các trang `needs_ocr`, worker gọi OpenRouter rồi ghép block trang.
-  Egress allowlist `openrouter.ai`; `provider.data_collection: deny`.
-- Observability (§56–57): job ghi `ocr_engine`, số trang OCR, duration, token
-  usage/cost, `requires_review`; không log nội dung trang.
+- **Deferred OCR:** sandbox giữ no-network và không bao giờ nhận OCR API key
+  (assert trong `poc-isolation-smoke.sh`); converter chạy
+  `fileconv one {input} --ocr-defer-dir .` — trang `needs_ocr`/ảnh được render
+  JPEG vào workspace kèm placeholder `markhand:ocr-pending`; sandbox thu
+  artifact (cap 512 trang / 8MB/file / 256MB tổng, fail-closed khi vượt).
+- Worker stage `resolve_deferred_ocr` (ngoài sandbox, network OK): gọi
+  OpenRouter qua `MARKHAND_OCR_*` cho từng trang (heartbeat giữ lease), thay
+  placeholder; thiếu config → job fail `vision OCR not configured`; lỗi provider
+  retry/backoff → dead-letter. Tracing ghi số trang + thời lượng (không nội dung).
+- Compose POC: worker-convert nối thêm network `ocr-egress` (sandbox không thấy
+  — CLONE_NEWNET); đã verify sandbox thật render + export artifact (live test).
 
 **Đo hậu kiểm chất lượng (khuyến nghị):** `fileconv accuracy` (CER/WER) trên
 corpus scan vi so với baseline Tesseract cũ trong `bench/REPORT_ACCURACY.md`,
@@ -248,9 +251,9 @@ mini-phase riêng nếu muốn giao sớm hơn. Sau khi owner chốt vị trí, 
 | DKP-02 | Benchmark `qwen/qwen3-embedding-8b` (4096 vs 1024 MRL) trên golden corpus, gate ≥ 0.85 | OpenRouter key (đã có) |
 | DKP-03 | Đo hậu kiểm OCR CER/WER (Qwen3.7 Flash vs baseline Tesseract cũ vs 1 VLM đối chứng) | OpenRouter key (đã có) |
 | DKP-04 | Core: vision OCR thay thế hoàn toàn Tesseract, canonical page contract | **Done 2026-08-10** (PR này) |
-| DKP-05 | Server: stage `vision_ocr` ngoài sandbox + artifact trang render + observability job (engine/token/cost) | DKP-04 done |
-| DKP-06 | Server: OpenRouter embedding runtime (preset, normalize-client, policy prod) | DKP-02 |
-| DKP-07 | Index generation migration: backfill → shadow verify → cutover (gộp chunking mới nếu Đợt 2 sẵn sàng) | DKP-06 |
+| DKP-05 | Server: deferred OCR (sandbox render artifact) + worker stage vision OCR | **Done 2026-08-10** (token/cost per-job observability còn lại) |
+| DKP-06 | Server: OpenRouter embedding runtime (policy egress flag, normalize-client, MRL dimensions) | **Done 2026-08-10** — cutover mặc định chờ DKP-02 |
+| DKP-07 | Index generation migration: backfill → shadow verify → cutover (gộp chunking mới nếu Đợt 2 sẵn sàng) | DKP-02 |
 
 **Đợt 2 — knowledge model (thứ tự spec §79):**
 

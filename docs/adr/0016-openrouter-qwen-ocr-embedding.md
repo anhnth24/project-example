@@ -51,15 +51,24 @@ model, thay cho stack local hiện tại. Hiện trạng và ràng buộc:
    `FILECONV_OCR_BASE_URL` (mặc định OpenRouter; endpoint local vLLM/Ollama
    vision là phương án offline), `FILECONV_OCR_MODEL` (mặc định
    `qwen/qwen3.7-flash`), `FILECONV_OCR_TIMEOUT_SECS`.
-   **Server:** converter sandbox giữ nguyên no-network và không bao giờ nhận
-   API key — convert ảnh/scan trong sandbox fail-closed; OCR server-side là
-   worker stage riêng ngoài sandbox (DKP-05, chưa implement); egress allowlist
-   `openrouter.ai`; request nên đặt `provider.data_collection: deny`.
-2. **Embedding (gated):** Markhand Web dùng `qwen/qwen3-embedding-8b` qua
-   OpenRouter (`runtime_path=provider-cloud`) cho index build và query. Server
-   bỏ hạn chế dev-only cho `provider-cloud` **chỉ khi** deployment bật flag cho
-   phép cloud embeddings và khai báo data classification tương thích; profile
-   air-gapped giữ `local-neural` (AITeamVN) như một generation riêng.
+   **Server (đã implement — deferred OCR):** converter sandbox giữ nguyên
+   no-network và không bao giờ nhận API key; sandbox chỉ render JPEG trang
+   `needs_ocr` vào workspace (`fileconv one --ocr-defer-dir .`) kèm placeholder
+   `markhand:ocr-pending`; worker tin cậy thu artifact (cap 512 trang / 8MB /
+   256MB), gọi provider qua `MARKHAND_OCR_*` rồi thay placeholder. Thiếu config
+   → job fail với `vision OCR not configured`, retry/backoff → dead-letter.
+   Compose POC: worker-convert thêm network `ocr-egress` riêng (sandbox không
+   thấy được — CLONE_NEWNET).
+2. **Embedding (đã implement, chờ benchmark để cutover mặc định):** Markhand
+   Web hỗ trợ `qwen/qwen3-embedding-8b` qua OpenRouter
+   (`runtime_path=provider-cloud`). Policy: `provider-cloud` được phép ở mọi
+   profile **chỉ khi** deployment bật cờ egress tường minh
+   `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`; thêm
+   `MARKHAND_EMBEDDING_NORMALIZE=client` (normalize server-side rồi verify) và
+   `MARKHAND_EMBEDDING_SEND_DIMENSIONS=true` (MRL 4096→1024). Đã probe thực tế
+   2026-08-10: OpenRouter trả 4096-d mặc định, `dimensions:1024` hoạt động,
+   vector đã L2-normalized. Profile air-gapped giữ `local-neural` (AITeamVN)
+   như một generation riêng.
 3. **Model pin:** model slug + revision/snapshot + dimension override được qua
    deployment config (env); mọi giá trị pin vào index signature (embedding) và
    ghi vào observability job (OCR).
