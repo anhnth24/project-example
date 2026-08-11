@@ -37,7 +37,8 @@ UI:
 - SSRF/egress allowlist.
 - Parser sandbox escape review.
 - Audit tamper evidence, retention và export.
-- Privacy/data-classification review cho GLM cloud.
+- Privacy/data-classification review cho các provider cloud (OpenRouter Qwen —
+  chat/OCR/embedding, ADR 0016).
 
 Không go-live nếu còn high/critical finding chưa được giải quyết. Risk được chấp
 nhận chính thức phải có approver, compensating controls, expiry và retest date mới
@@ -56,7 +57,7 @@ Theo SLA/ADR đã chốt:
   query hạ xuống lexical FTS;
 - vision OCR provider outage (OpenRouter): convert job retry/backoff, không mất
   dữ liệu;
-- GLM outage fallback (extractive);
+- chat provider outage fallback (extractive);
 - query vẫn phục vụ khi ingest tạm pause.
 
 Mỗi dependency có readiness và circuit breaker phù hợp. Không trả stale unauthorized
@@ -109,7 +110,7 @@ Diễn tập thêm:
 - Qdrant index versioned, shadow query, alias switch và giữ bản trước để rollback.
 - Worker khai báo schema/job payload compatibility.
 - API và worker canary độc lập.
-- Feature flag cho format, cloud GLM, intelligence và index signature.
+- Feature flag cho format, cloud LLM provider, intelligence và index signature.
 
 Rollout:
 
@@ -138,7 +139,7 @@ Runbook bắt buộc:
 
 - stuck jobs/dead letters;
 - parser outbreak;
-- PG/Qdrant/MinIO/OpenRouter/GLM outage;
+- PG/Qdrant/MinIO/OpenRouter (chat/OCR/embedding) outage;
 - rebuild/rollback model;
 - quota discrepancy;
 - credential rotation;

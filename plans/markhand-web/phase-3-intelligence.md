@@ -90,7 +90,9 @@ Invariant:
 - Original immutable.
 - UI buộc review trước publish/export.
 
-Không gửi tài liệu có classification cấm ra GLM cloud.
+Không gửi tài liệu có classification cấm ra bất kỳ LLM/embedding provider ngoài
+nào (hiện tại OpenRouter Qwen — ADR 0016; kể cả đường cloud embedding gửi toàn
+bộ chunk text khi build index).
 
 ## P3.7 — Schema, tables và versions
 

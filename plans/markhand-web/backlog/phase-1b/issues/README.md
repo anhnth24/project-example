@@ -23,7 +23,7 @@ ghi trong issue đã `Done`.
 |---|---|
 | G0-ARCH | ADR document/artifact, tenancy/RLS, partition, Qdrant, auth, migration, recovery |
 | G0-RET | Model/dimension/normalize/chunk/signature/hybrid thresholds |
-| G0-SEC | Upload allowlist/limits/quarantine/sandbox/GLM policy |
+| G0-SEC | Upload allowlist/limits/quarantine/sandbox/LLM-provider policy (thời 1B là GLM; nay OpenRouter Qwen — ADR 0016) |
 | G0-CAP | Worker/queue/concurrency/timeout/headroom |
 | G0-SLO | Latency/throughput/RPO/RTO/soak numeric gates |
 | G0-LIC | Model/native license inventory |
