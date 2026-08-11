@@ -49,7 +49,6 @@ ASSISTANT = chào hỏi, cảm ơn, hỏi về trợ lý, trò chuyện chung, h
 
 pub fn parse_router_label(raw: &str) -> Option<AskRoute> {
     let token = raw
-        .trim()
         .split_whitespace()
         .next()
         .unwrap_or("")
@@ -161,7 +160,7 @@ fn is_clear_assistant(normalized: &str) -> bool {
         "ban khoe khong",
         "how are you",
     ];
-    if EXACT.iter().any(|phrase| normalized == *phrase) {
+    if EXACT.contains(&normalized) {
         return true;
     }
 
