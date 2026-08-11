@@ -33,10 +33,12 @@ import { UserMenu } from './UserMenu';
 const RAIL_EXPANDED_KEY = 'markhand.rail.expanded';
 
 function readExpandedPref(): boolean {
+  // Expanded by default: labelled destinations beat icon-only mystery meat
+  // (see the shell redesign notes). Only an explicit collapse ('0') persists.
   try {
-    return window.localStorage.getItem(RAIL_EXPANDED_KEY) === '1';
+    return window.localStorage.getItem(RAIL_EXPANDED_KEY) !== '0';
   } catch {
-    return false;
+    return true;
   }
 }
 

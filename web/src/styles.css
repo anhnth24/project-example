@@ -1,85 +1,118 @@
 /*
- * Organic design system — token layer + component layer, adopted from
- * /organic-styles.css (design-system source of truth) and re-pointed onto
- * this SPA's existing structural classes (app-shell/topbar/brand/welcome/
- * page/etc., defined further down). See organic-readme.md for the written
- * rules this file follows.
+ * Folyvo web design system — "Slate & Ember".
  *
- * Contrast deviations from the literal spec (see PR report for the numbers):
- * a few of Organic's own example values fall under WCAG AA (4.5:1) at body/
- * caption text size — the spec's own `.text-muted` (55% text-on-ground) and
- * a handful of places that put `--color-accent` text directly on the ground
- * (links, `.btn-ghost`, `.tag-outline`, `.card-kicker`, cream-on-accent
- * button labels). Those are bumped to a deeper ramp step below, each marked
- * "contrast:" at the point of change.
+ * Token layer + component layer for the SPA's existing structural classes
+ * (app-shell/rail/page/card/table/dialog/…). The palette pairs a cool
+ * slate neutral scale (white surfaces on a light slate ground, charcoal
+ * rail matching the brand icon) with the brand's ember-orange accent.
+ *
+ * Contrast convention (kept from the previous sheet): every deliberate
+ * deviation for WCAG AA is marked "contrast:" at the point of change.
+ * Accent text/fills on light grounds always use the 700 step (#c2410c,
+ * 4.66:1 on white) or deeper — the 500/600 steps fail 4.5:1 for body-size
+ * text and are only used for large glyphs/decorative fills.
  */
-/* Self-hosted fonts (@fontsource, bundled by Vite — no CDN request, so
- * rendering is identical online/offline and CSP stays 'self'). Both families
- * ship a real `vietnamese` unicode-range subset; the previous Google-hosted
- * Caprasimo/Figtree pair had none (latin/latin-ext only, missing
- * U+1EA0–U+1EF1), so every diacritic-carrying glyph fell back to whatever
- * system font the machine had — mixed-face headings that differed per OS. */
-@import '@fontsource/baloo-2/700.css';
+/* Self-hosted font (@fontsource, bundled by Vite — no CDN request, so
+ * rendering is identical online/offline and CSP stays 'self'). Be Vietnam Pro
+ * ships a real `vietnamese` unicode-range subset, so diacritics render in the
+ * same face as everything else. One family for headings and body: heading
+ * hierarchy comes from weight (600/700) + size, not from a second display
+ * face. */
 @import '@fontsource/be-vietnam-pro/400.css';
+@import '@fontsource/be-vietnam-pro/500.css';
 @import '@fontsource/be-vietnam-pro/600.css';
 @import '@fontsource/be-vietnam-pro/700.css';
 
 :root {
-  --color-bg: #f5ead8;
-  --color-surface: #ebddc5;
-  --color-text: #201e1d;
-  --color-accent: #c67139;
-  --color-accent-2: #7a8a5e;
-  --color-divider: color-mix(in srgb, #201e1d 16%, transparent);
+  /* — ground & ink — */
+  --color-bg: #f4f5f9;
+  --color-surface: #ffffff;
+  --color-text: #101828;
+  --color-divider: #e4e7ee;
 
-  --color-neutral-100: #f9f4ed;
-  --color-neutral-200: #eee7db;
-  --color-neutral-300: #dcd3c4;
-  --color-neutral-400: #c0b6a5;
-  --color-neutral-500: #a19786;
-  --color-neutral-600: #82796a;
-  --color-neutral-700: #645c50;
-  --color-neutral-800: #474238;
-  --color-neutral-900: #2e2b25;
+  /* — brand accent (ember orange, from the Folyvo app icon) — */
+  --color-accent: #ea580c;
+  --color-accent-100: #ffedd5;
+  --color-accent-200: #fed7aa;
+  --color-accent-300: #fdba74;
+  --color-accent-400: #fb923c;
+  --color-accent-500: #f97316;
+  --color-accent-600: #ea580c;
+  --color-accent-700: #c2410c;
+  --color-accent-800: #9a3412;
+  --color-accent-900: #7c2d12;
 
-  --color-accent-100: #fff2eb;
-  --color-accent-200: #ffe1d0;
-  --color-accent-300: #ffc6a5;
-  --color-accent-400: #f6a06b;
-  --color-accent-500: #d67f48;
-  --color-accent-600: #b2622d;
-  --color-accent-700: #8c491a;
-  --color-accent-800: #643312;
-  --color-accent-900: #402310;
+  /* — second accent (emerald; success/“went well”) — */
+  --color-accent-2: #059669;
+  --color-accent-2-100: #d1fae5;
+  --color-accent-2-200: #a7f3d0;
+  --color-accent-2-300: #6ee7b7;
+  --color-accent-2-400: #34d399;
+  --color-accent-2-500: #10b981;
+  --color-accent-2-600: #059669;
+  --color-accent-2-700: #047857;
+  --color-accent-2-800: #065f46;
+  --color-accent-2-900: #064e3b;
 
-  --color-accent-2-100: #f0fae1;
-  --color-accent-2-200: #e1eecc;
-  --color-accent-2-300: #ccdbb2;
-  --color-accent-2-400: #aebf92;
-  --color-accent-2-500: #8fa073;
-  --color-accent-2-600: #728157;
-  --color-accent-2-700: #56633f;
-  --color-accent-2-800: #3d472b;
-  --color-accent-2-900: #272e1b;
+  /* — neutral (slate) — */
+  --color-neutral-100: #f1f3f7;
+  --color-neutral-200: #e4e7ee;
+  --color-neutral-300: #cbd2dd;
+  --color-neutral-400: #94a0b8;
+  --color-neutral-500: #64748b;
+  --color-neutral-600: #475569;
+  --color-neutral-700: #334155;
+  --color-neutral-800: #1e293b;
+  --color-neutral-900: #0f172a;
 
-  --font-heading: 'Baloo 2', system-ui, sans-serif;
+  /* — semantic status — */
+  --color-danger: #b91c1c;
+  --color-danger-bg: #fef2f2;
+  --color-danger-border: #fecaca;
+  --color-warning: #b45309;
+  --color-warning-bg: #fffbeb;
+  --color-warning-border: #fde68a;
+  --color-success: #047857;
+  --color-success-bg: #ecfdf5;
+  --color-success-border: #a7f3d0;
+  --color-info: #0369a1;
+  --color-info-bg: #f0f9ff;
+  --color-info-border: #bae6fd;
+
+  /* — muted ink (contrast: 4.5:1+ on both --color-bg and --color-surface) — */
+  --color-muted: #55627a;
+
+  /* — the charcoal rail, sampled from the brand icon's gradient — */
+  --rail-bg: #171b26;
+  --rail-bg-2: #1f2431;
+  --rail-ink: rgba(235, 238, 245, 0.78);
+  --rail-ink-strong: #f5f7fb;
+  --rail-hover: rgba(255, 255, 255, 0.08);
+  --rail-active: rgba(255, 255, 255, 0.1);
+  --rail-divider: rgba(255, 255, 255, 0.12);
+
+  --font-heading: 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-heading-weight: 700;
-  --font-body: 'Be Vietnam Pro', system-ui, sans-serif;
+  --font-body: 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
 
-  --space-1: 4.4px;
-  --space-2: 8.8px;
-  --space-3: 13.2px;
-  --space-4: 17.6px;
-  --space-6: 26.4px;
-  --space-8: 35.2px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
 
-  --radius-sm: 8px;
-  --radius-md: 16px;
-  --radius-lg: 28px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-md:
+    0 2px 4px rgba(16, 24, 40, 0.06),
+    0 4px 12px rgba(16, 24, 40, 0.08);
+  --shadow-lg:
+    0 4px 8px rgba(16, 24, 40, 0.08),
+    0 16px 40px rgba(16, 24, 40, 0.16);
 
   color: var(--color-text);
   background: var(--color-bg);
@@ -91,12 +124,13 @@ body {
   min-width: 320px;
   min-height: 100vh;
   margin: 0;
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 14.5px;
+  line-height: 1.6;
   font-weight: 400;
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
 }
 
 *,
@@ -113,8 +147,8 @@ h5,
 h6 {
   font-family: var(--font-heading);
   font-weight: var(--font-heading-weight);
-  line-height: 1.12;
-  letter-spacing: -0.015em;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
   margin: 0 0 var(--space-2);
 }
 
@@ -128,9 +162,8 @@ p {
 }
 
 a {
-  /* contrast: spec's plain `a { color: var(--color-accent) }` is 3.03:1 on
-     --color-bg — under 4.5:1 for body-size link text — so links use the
-     deep ramp step (5.72:1) instead. */
+  /* contrast: accent-700 measures 4.66:1 on white / 4.4:1 on --color-bg —
+     the 600 step fails for body-size link text. */
   color: var(--color-accent-700);
   text-underline-offset: 3px;
 }
@@ -147,18 +180,13 @@ figure {
 figcaption {
   font-size: 11px;
   margin-top: var(--space-1);
-  /* contrast: same 68% substitute as .text-muted below, not the spec's 55%. */
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
 }
 
 .text-muted {
-  /* contrast: the spec ships this at color-mix 55%, which measures 3.57:1
-     on --color-bg / 3.45:1 on --color-surface — below WCAG AA (4.5:1) for
-     body-size text. Bumped to 68%, which clears 4.5:1 on both grounds
-     (5.31:1 / 5.01:1) while staying visibly "muted". Every other muted-text
-     rule below reuses this same 68% formula instead of the spec's varying
-     50/55/60% figures, so there's one contrast-checked value site-wide. */
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  /* contrast: --color-muted (#55627a) is 5.5:1 on white and 5.0:1 on
+     --color-bg — clears WCAG AA for body-size text on both grounds. */
+  color: var(--color-muted);
 }
 
 :focus {
@@ -166,12 +194,12 @@ figcaption {
 }
 
 :focus-visible {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-accent-600);
   outline-offset: 2px;
 }
 
 ::selection {
-  background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--color-accent-400) 40%, transparent);
 }
 
 .washed {
@@ -185,17 +213,18 @@ figcaption {
   background: var(--color-divider);
 }
 
+/* Global <button> baseline for the few unclassed buttons (welcome card).
+   Everything real goes through `.btn` below. */
 button {
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--color-accent-700);
-  color: var(--color-bg);
+  color: #fff;
   cursor: pointer;
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
   font: inherit;
-  min-height: 2.75rem;
-  padding: var(--space-2) calc(var(--space-3) * 1.2);
+  font-weight: 600;
+  min-height: 2.5rem;
+  padding: var(--space-2) var(--space-4);
 }
 
 button:hover {
@@ -204,15 +233,14 @@ button:hover {
 
 button:disabled {
   cursor: wait;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .skip-link {
-  background: var(--color-accent-700);
+  background: var(--color-neutral-900);
   border-radius: 0 0 var(--radius-sm) 0;
-  color: var(--color-bg);
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
+  color: #fff;
+  font-weight: 600;
   left: 0;
   padding: var(--space-3) var(--space-4);
   position: absolute;
@@ -231,22 +259,23 @@ button:disabled {
   min-height: 100vh;
 }
 
+/* Legacy topbar classes (App.tsx no longer renders them; kept for the
+   component vocabulary). */
 .topbar {
   align-items: center;
   border-bottom: 1px solid var(--color-divider);
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  min-height: 4.5rem;
+  min-height: 4rem;
   padding: 0 5vw;
 }
 
 .brand {
   align-items: center;
   display: inline-flex;
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 1.1rem;
+  font-weight: 700;
+  font-size: 1.05rem;
   gap: var(--space-2);
   margin-right: auto;
   text-decoration: none;
@@ -254,13 +283,12 @@ button:disabled {
 
 .brand-mark {
   align-items: center;
-  background: var(--color-accent-700);
+  background: var(--color-neutral-900);
   border-radius: var(--radius-sm);
-  color: var(--color-bg);
+  color: #fff;
   display: inline-flex;
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 1.1rem;
+  font-weight: 700;
+  font-size: 1.05rem;
   height: 2rem;
   justify-content: center;
   width: 2rem;
@@ -276,8 +304,7 @@ button:disabled {
 
 .primary-nav a {
   border-radius: var(--radius-sm);
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
-  font-family: var(--font-body);
+  color: var(--color-muted);
   font-size: 0.85rem;
   font-weight: 600;
   padding: 0.35rem 0.5rem;
@@ -289,71 +316,57 @@ button:disabled {
 }
 
 .primary-nav a[aria-current='page'] {
-  /* contrast: deep ramp step, not the base accent — see .text-muted note. */
   color: var(--color-accent-700);
 }
 
+/* Server-connection status: quiet chrome above the page content. */
 .connection-dot {
-  /* "checking" state: base accent reads as an in-progress amber; passes the
-     3:1 non-text UI contrast floor against --color-bg (3.03:1). */
-  background: var(--color-accent);
+  /* "checking": amber in-progress. 3:1+ non-text contrast on both grounds. */
+  background: #d97706;
   border-radius: 50%;
   flex: 0 0 auto;
-  height: 0.55rem;
-  width: 0.55rem;
+  height: 0.5rem;
+  width: 0.5rem;
 }
 
 .connection-dot.ready {
-  /* Organic has no dedicated "success" hue; the sage second accent stands
-     in. Its 500-step only measures 2.37:1 on --color-bg (fails the 3:1
-     floor for a graphical indicator), so this uses the 600 step (3.53:1). */
   background: var(--color-accent-2-600);
 }
 
 .connection-dot.unavailable {
-  /* No dedicated "danger" hue either. Rather than invent an off-palette
-     red, this reuses the accent ramp's deepest step so severity reads via
-     depth: checking (500) -> ready (sage 600) -> unavailable (accent 800,
-     8.72:1) is a clear escalation using only tokens already in the sheet. */
-  background: var(--color-accent-800);
+  background: var(--color-danger);
 }
 
 .connection-label {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
-  font-size: 0.875rem;
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 500;
 }
 
-/* Home hero content wrapper (App.tsx's `home` branch only). Left-aligned so
-   it hugs the content's left edge with whitespace on the right — the Organic
-   layout rule — rather than sitting as a centered column stranded in the
-   middle of the wide main area. Horizontal padding lives on `.app-main`
-   (shared by every route); this only sets the hero's reading measure and a
-   little top breathing room, not the old 8rem marketing gap. */
+/* Home hero content wrapper (App.tsx's `home` branch only). */
 .welcome {
   box-sizing: border-box;
   max-width: 52rem;
   padding-top: clamp(1rem, 5vh, 3rem);
 }
 
+.welcome h1 {
+  font-size: clamp(1.7rem, 3.5vw, 2.3rem);
+  max-width: 24ch;
+}
+
 /* The single content container for every route's <main> (App.tsx). Owns the
-   page's horizontal gutters and its overall reading width. Left-aligned (no
-   `margin: auto`): after the rail, content hugs the left edge and the
-   whitespace falls on the right, so a data table gets the full width it needs
-   instead of being stranded in a narrow centered column. The max-width still
-   caps it on ultra-wide displays so lines never run edge-to-edge. */
+   page's horizontal gutters and reading width. Left-aligned after the rail;
+   max-width caps ultra-wide displays. */
 .app-main {
   box-sizing: border-box;
   flex: 1 1 auto;
-  max-width: 84rem;
-  padding: var(--space-4) clamp(1.25rem, 5vw, 4rem) var(--space-8);
+  max-width: 90rem;
+  padding: var(--space-4) clamp(1.25rem, 3.5vw, 3rem) var(--space-8);
   width: 100%;
 }
 
-/* Login (App.tsx renders <main> with this on the `/login` route, and omits
-   the rail + status line). A full-bleed, two-column auth screen: a branded
-   charcoal panel beside the form, instead of a lone pale card stranded on an
-   empty page. Overrides `.app-main`'s padding/width; declared after it so it
-   wins. */
+/* Login route: full-bleed, no rail (App.tsx renders <main> with this). */
 .app-main-auth {
   max-width: none;
   min-height: 100vh;
@@ -368,13 +381,14 @@ button:disabled {
   min-height: 100dvh;
 }
 
-/* Left brand panel — Folyvo charcoal (app-icon gradient) with a warm orange
+/* Left brand panel — Folyvo charcoal (app-icon gradient) with a warm ember
    glow, carrying the white logo mark, wordmark, and a one-line pitch. */
 .auth-brand {
   align-items: center;
   background:
-    radial-gradient(115% 80% at 12% 0%, rgba(255, 122, 26, 0.24), transparent 55%),
-    linear-gradient(155deg, #3a4150 0%, #171b26 72%);
+    radial-gradient(115% 80% at 12% 0%, rgba(255, 122, 26, 0.22), transparent 55%),
+    radial-gradient(90% 60% at 100% 100%, rgba(255, 122, 26, 0.08), transparent 60%),
+    linear-gradient(155deg, #313848 0%, #14181f 72%);
   color: #fff;
   display: flex;
   overflow: hidden;
@@ -389,14 +403,16 @@ button:disabled {
 }
 
 .auth-brand-logo {
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   height: 3.5rem;
   width: 3.5rem;
 }
 
 .auth-brand-word {
   color: #fff;
-  font-family: var(--font-heading);
-  font-size: clamp(2.5rem, 5vw, 3.5rem);
+  font-size: clamp(2.3rem, 5vw, 3.2rem);
+  font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1;
   margin: 0;
@@ -408,16 +424,16 @@ button:disabled {
 }
 
 .auth-brand-tagline {
-  color: rgba(255, 255, 255, 0.74);
-  font-size: 1.1rem;
-  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 1.05rem;
+  line-height: 1.65;
   margin: 0;
 }
 
-/* Right form panel — cream ground, form centered at a comfortable measure. */
+/* Right form panel. */
 .auth-panel {
   align-items: center;
-  background: var(--color-bg);
+  background: var(--color-surface);
   display: flex;
   justify-content: center;
   padding: clamp(1.75rem, 5vw, 4rem);
@@ -432,13 +448,13 @@ button:disabled {
 }
 
 .auth-card h1 {
-  font-size: clamp(1.9rem, 4vw, 2.35rem);
+  font-size: clamp(1.5rem, 3vw, 1.85rem);
   margin-bottom: 0.25rem;
   max-width: none;
 }
 
 .auth-card .lede {
-  font-size: 1rem;
+  font-size: 0.95rem;
 }
 
 .auth-card .auth-form {
@@ -446,7 +462,6 @@ button:disabled {
   max-width: none;
 }
 
-/* Narrow viewports: drop the brand panel, form takes the full width. */
 @media (max-width: 820px) {
   .auth-layout {
     grid-template-columns: 1fr;
@@ -455,16 +470,20 @@ button:disabled {
   .auth-brand {
     display: none;
   }
+
+  .auth-panel {
+    align-items: flex-start;
+    padding-top: clamp(2.5rem, 12vh, 6rem);
+  }
 }
 
 .eyebrow,
 .card-label {
-  /* contrast: deep ramp step, see .text-muted note above. */
   color: var(--color-accent-700);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
   font-weight: 700;
-  letter-spacing: 0.09em;
-  margin: 0 0 1rem;
+  letter-spacing: 0.1em;
+  margin: 0 0 var(--space-2);
   text-transform: uppercase;
 }
 
@@ -475,26 +494,25 @@ p {
 }
 
 h1 {
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: clamp(2.5rem, 7vw, 4.5rem);
+  font-size: clamp(1.6rem, 3vw, 2rem);
   letter-spacing: -0.015em;
-  line-height: 0.98;
-  margin-bottom: 1.5rem;
-  max-width: 20ch;
+  line-height: 1.2;
+  margin-bottom: 0.5rem;
+  max-width: 32ch;
 }
 
 h2 {
-  font-size: 1.25rem;
-  letter-spacing: -0.015em;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
   margin-bottom: 0.5rem;
 }
 
 .lede {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
-  font-size: 1.12rem;
-  line-height: 1.65;
-  max-width: 43rem;
+  color: var(--color-muted);
+  font-size: 0.95rem;
+  line-height: 1.6;
+  margin-bottom: var(--space-2);
+  max-width: 46rem;
 }
 
 .connection-card {
@@ -505,7 +523,7 @@ h2 {
   display: grid;
   gap: 1.25rem;
   grid-template-columns: 1fr auto;
-  margin-top: 3.5rem;
+  margin-top: 2.5rem;
   padding: clamp(1.25rem, 4vw, 2rem);
 }
 
@@ -514,7 +532,7 @@ h2 {
 }
 
 .card-copy {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   line-height: 1.55;
   margin-bottom: 0;
   max-width: 34rem;
@@ -522,7 +540,7 @@ h2 {
 
 .request-id {
   border-top: 1px solid var(--color-divider);
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   font-size: 0.8rem;
   grid-column: 1 / -1;
   margin: 0;
@@ -536,33 +554,42 @@ code {
 
 .next-steps {
   border-top: 1px solid var(--color-divider);
-  margin-top: 4rem;
+  margin-top: 3rem;
   padding-top: 1.5rem;
 }
 
 .next-steps ul {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   line-height: 1.7;
   margin: 0;
   padding-left: 1.25rem;
 }
 
-/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet. The
-   measure is generous enough for prose plus a comfortable form/card column;
-   table-heavy pages (admin members) opt out to the full `.app-main` width. */
+/* Route pages (pages/*.tsx). Table-heavy pages opt out to the full
+   `.app-main` width via inline `maxWidth: 'none'`. */
 .page {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  max-width: 62rem;
+  gap: var(--space-4);
+  max-width: 64rem;
 }
 
 .page h1 {
-  font-size: clamp(2rem, 5vw, 3rem);
+  font-size: clamp(1.4rem, 2.5vw, 1.7rem);
+  margin-bottom: 0.25rem;
   max-width: none;
 }
 
-/* Auth shell: session/org visibility (App.tsx) and the login form (LoginPage.tsx). */
+.page > .lede {
+  margin-bottom: var(--space-1);
+  margin-top: -0.25rem;
+}
+
+.page > .eyebrow {
+  margin-bottom: 0;
+}
+
+/* Auth shell: session/org visibility (legacy) and the login form. */
 .session-status {
   align-items: center;
   display: flex;
@@ -571,16 +598,16 @@ code {
 }
 
 .session-identity {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   font-size: 0.85rem;
 }
 
 .session-org {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
 }
 
 .auth-loading {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
 }
 
 .auth-form {
@@ -597,28 +624,28 @@ code {
 }
 
 .auth-form input {
-  /* Mirrors the `.input` component below — this is a bare <input> (no
-     class) in LoginPage.tsx, which this stylesheet owns but the markup
-     does not, so the same look is applied by tag selector instead. */
+  /* Mirrors `.input` below — a bare <input> in LoginPage.tsx. */
   width: 100%;
-  min-height: 36px;
-  padding: 6px 14px;
+  min-height: 42px;
+  padding: 8px 14px;
   font: inherit;
-  font-size: 14px;
+  font-size: 14.5px;
   color: var(--color-text);
-  caret-color: var(--color-accent);
+  caret-color: var(--color-accent-600);
   background: var(--color-surface);
-  border: 1px solid var(--color-divider);
-  border-radius: 999px;
+  border: 1px solid var(--color-neutral-300);
+  border-radius: var(--radius-sm);
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
 }
 
 .auth-form input:hover {
-  border-color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  border-color: var(--color-neutral-400);
 }
 
 .auth-form input:focus-visible {
-  border-color: var(--color-accent);
-  outline-offset: 0;
+  border-color: var(--color-accent-600);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent-500) 20%, transparent);
+  outline: none;
 }
 
 @media (max-width: 600px) {
@@ -654,10 +681,8 @@ code {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Organic component layer, brought in from organic-styles.css. Named
-   classes (.btn*, .tag*, .field/.input/.radio/.seg, .card*, .elev-*,
-   .nav*, .table, .dialog*) match the design system's own selectors so a
-   future page can copy markup straight from its component pages.
+   Component layer: .btn*, .tag*, .field/.input/.radio/.seg, .card*,
+   .elev-*, .nav*, .table, .dialog*.
    ══════════════════════════════════════════════════════════════════════ */
 
 .btn {
@@ -667,15 +692,21 @@ code {
   gap: 6px;
   cursor: pointer;
   text-decoration: none;
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 14px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13.5px;
   line-height: 1.2;
   color: var(--color-text);
   background: transparent;
   border: 1px solid transparent;
-  padding: var(--space-2) calc(var(--space-3) * 1.2);
-  border-radius: var(--radius-md);
+  min-height: 36px;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  transition:
+    background 140ms ease-out,
+    border-color 140ms ease-out,
+    color 140ms ease-out,
+    box-shadow 140ms ease-out;
 }
 
 .btn svg {
@@ -683,22 +714,19 @@ code {
 }
 
 .btn:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .btn-primary {
-  /* contrast: the spec's resting `.btn-primary` (cream text on the base
-     accent-500 fill) measures 3.03:1 — under 4.5:1 for the 14px button
-     label. Moved the whole primary scale one step deeper so the label
-     clears AA at rest: 700 resting (5.72:1), 800 hover (8.72:1), 900
-     active (12.04:1). Still reads as a solid terracotta fill, just the
-     deeper end of the same ramp. */
+  /* contrast: white on accent-700 is 4.66:1 — AA for the 13.5px label
+     (600/500 fills fail). Hover deepens to 800. */
   background: var(--color-accent-700);
-  color: var(--color-bg);
+  box-shadow: var(--shadow-sm);
+  color: #fff;
 }
 
-.btn-primary:hover {
+.btn-primary:hover:not(:disabled) {
   background: var(--color-accent-800);
 }
 
@@ -707,64 +735,58 @@ code {
 }
 
 .btn-secondary {
-  border-color: var(--color-divider);
+  background: var(--color-surface);
+  border-color: var(--color-neutral-300);
+  box-shadow: var(--shadow-sm);
 }
 
-.btn-secondary:hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+.btn-secondary:hover:not(:disabled) {
+  background: var(--color-neutral-100);
+  border-color: var(--color-neutral-400);
 }
 
 .btn-secondary:active {
-  background: color-mix(in srgb, var(--color-text) 14%, transparent);
+  background: var(--color-neutral-200);
 }
 
 .btn-ghost {
-  /* contrast: base accent text here is 3.03:1 on --color-bg; bumped to the
-     700 step (5.72:1) for the same reason as .btn-primary above. */
   color: var(--color-accent-700);
-  padding-inline: var(--space-1);
+  padding-inline: var(--space-2);
 }
 
-.btn-ghost:hover {
-  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+.btn-ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent-500) 10%, transparent);
 }
 
 .btn-ghost:active {
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--color-accent-500) 18%, transparent);
 }
 
 .btn-danger {
-  /* Not part of the Organic spec — it only names primary/secondary/ghost
-     variants — but this app's Button keeps a `danger` variant in its
-     public props, so one had to exist. No off-palette red is introduced:
-     it reuses the accent ramp's deepest step (same fill as
-     .connection-dot.unavailable) so a destructive action still reads as
-     "the most serious accent", at 8.72:1 for its cream label. */
-  background: var(--color-accent-800);
-  color: var(--color-bg);
+  background: var(--color-danger);
+  box-shadow: var(--shadow-sm);
+  color: #fff;
 }
 
-.btn-danger:hover {
-  background: var(--color-accent-900);
+.btn-danger:hover:not(:disabled) {
+  background: #991b1b;
 }
 
 .btn-danger:active {
-  background: var(--color-accent-900);
+  background: #7f1d1d;
 }
 
 .btn-icon {
-  width: 36px;
-  height: 36px;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
   padding: 0;
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
 }
 
 .btn-icon:hover:not(:disabled),
 .btn-icon.active {
-  /* Also not spec'd — `.btn-icon` alone has no hover/pressed treatment in
-     organic-styles.css, but IconButton needs one for its plain (non-variant)
-     use and its toggled `active` state. */
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  background: var(--color-neutral-100);
   color: var(--color-text);
 }
 
@@ -774,42 +796,47 @@ code {
 }
 
 .btn-sm {
-  /* Also not in the spec (Organic shows one button size). Kept for the one
-     caller (App.tsx's logout button) that already asks for a smaller
-     Button via the `size="sm"` prop, built from the same space scale. */
-  font-size: 12px;
-  padding: var(--space-1) var(--space-2);
+  font-size: 12.5px;
+  min-height: 30px;
+  padding: 4px 10px;
 }
 
 /* — forms — */
 .field > label,
 .field-label {
+  color: var(--color-neutral-700);
   display: block;
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
   margin-bottom: 5px;
-  color: color-mix(in srgb, var(--color-text) 70%, transparent);
 }
 
 .input {
   width: 100%;
   min-height: 36px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font: inherit;
   font-size: 14px;
   color: var(--color-text);
-  caret-color: var(--color-accent);
+  caret-color: var(--color-accent-600);
   background: var(--color-surface);
-  border: 1px solid var(--color-divider);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-neutral-300);
+  border-radius: var(--radius-sm);
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
+}
+
+.input::placeholder {
+  color: var(--color-neutral-400);
 }
 
 .input:hover {
-  border-color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  border-color: var(--color-neutral-400);
 }
 
 .input:focus-visible {
-  border-color: var(--color-accent);
-  outline-offset: 0;
+  border-color: var(--color-accent-600);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent-500) 20%, transparent);
+  outline: none;
 }
 
 textarea.input {
@@ -839,100 +866,108 @@ textarea.input {
   height: 16px;
   flex: none;
   border-radius: 50%;
-  border: 1.5px solid var(--color-divider);
+  border: 1.5px solid var(--color-neutral-300);
 }
 
 .radio:hover .dot {
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-600);
 }
 
 .radio input:checked + .dot {
-  border-color: var(--color-accent);
-  background: var(--color-accent);
-  box-shadow: inset 0 0 0 4px var(--color-bg);
+  border-color: var(--color-accent-700);
+  background: var(--color-accent-700);
+  box-shadow: inset 0 0 0 3.5px var(--color-surface);
 }
 
 .radio input:focus-visible + .dot {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-accent-600);
   outline-offset: 2px;
 }
 
 .seg {
+  background: var(--color-neutral-100);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
   display: inline-flex;
   overflow: hidden;
-  border: 1px solid var(--color-divider);
-  border-radius: var(--radius-md);
+  padding: 3px;
 }
 
 .seg-opt {
-  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
-  font-size: 13px;
+  border-radius: calc(var(--radius-sm) - 2px);
   cursor: pointer;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 6px;
+  padding: 5px 12px;
+  transition: background 140ms ease-out, color 140ms ease-out;
 }
 
 .seg-opt + .seg-opt {
-  border-left: 1px solid var(--color-divider);
+  border-left: 0;
 }
 
 .seg-opt:has(input:checked) {
-  /* contrast: same fix as .btn-primary — cream text on the base accent
-     fill is 3.03:1, so the checked segment uses the 700 step (5.72:1). */
-  background: var(--color-accent-700);
-  color: var(--color-bg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-accent-700);
+}
+
+.seg-opt:not(:has(input:checked)) {
+  color: var(--color-muted);
 }
 
 .seg-opt:not(:has(input:checked)):hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  color: var(--color-text);
 }
 
 .seg-opt:has(input:focus-visible) {
-  outline: 2px solid var(--color-accent);
+  outline: 2px solid var(--color-accent-600);
   outline-offset: -2px;
 }
 
 /* — cards — */
 .card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-  padding: var(--space-3);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+  padding: var(--space-4);
 }
 
 .card-kicker {
-  /* contrast: deep ramp step, see .text-muted note above. */
-  font-size: 10px;
+  color: var(--color-accent-700);
+  font-size: 10.5px;
+  font-weight: 700;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--color-accent-700);
 }
 
 .card-title {
   font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 17px;
-  line-height: 1.2;
+  font-weight: 650;
+  font-size: 15.5px;
+  line-height: 1.3;
 }
 
 .card-body {
-  margin: 0;
-  font-size: 13px;
-  opacity: 0.8;
+  color: var(--color-neutral-700);
   flex: 1;
+  font-size: 13.5px;
+  margin: 0;
 }
 
 .card-meta {
-  /* contrast: the spec's 50% text-on-ground is 2.99:1 on --color-surface;
-     uses the same 68% formula as .text-muted (5.01:1 on --color-surface). */
-  display: flex;
   align-items: center;
+  color: var(--color-muted);
+  display: flex;
+  font-size: 12px;
   gap: 6px;
-  font-size: 11px;
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
 }
 
 .elev-sm {
@@ -949,47 +984,44 @@ textarea.input {
 
 /* — tags — */
 .tag {
+  border: 1px solid transparent;
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
+  gap: 5px;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;
   line-height: 1.35;
-  /* A status/role label is a single token — never let a narrow table cell
-     wrap it into a two-line sliver. The cell scrolls/widens instead. */
+  /* A status/role label is a single token — never wrap it in a narrow cell. */
   white-space: nowrap;
-  padding: 4px 11px;
-  border-radius: calc(var(--radius-md) * 0.75);
+  padding: 3px 10px;
 }
 
 .tag-accent {
   background: var(--color-accent-100);
+  border-color: var(--color-accent-200);
   color: var(--color-accent-800);
 }
 
 .tag-accent-2 {
-  background: var(--color-accent-2-100);
+  background: var(--color-success-bg);
+  border-color: var(--color-success-border);
   color: var(--color-accent-2-800);
 }
 
 .tag-neutral {
   background: var(--color-neutral-100);
-  color: var(--color-neutral-800);
+  border-color: var(--color-neutral-200);
+  color: var(--color-neutral-700);
 }
 
 .tag-outline {
-  /* contrast: base accent border+text is 3.03:1; bumped both to the 700
-     step (5.72:1) for the text, same reasoning as .btn-ghost above. */
-  border: 1px solid var(--color-accent-700);
+  border: 1px solid var(--color-accent-300);
   color: var(--color-accent-700);
 }
 
-/* — navigation —
-   This app's own header keeps its existing `.topbar`/`.brand`/
-   `.primary-nav` structure (see above — those are the "structural/layout
-   classes" this pass keeps in place). `.nav`/`.nav-brand` are still added
-   here, verbatim from the spec, so the component vocabulary is complete
-   for any page that wants to build a header the spec's way. */
+/* — navigation (legacy vocabulary) — */
 .nav {
   display: flex;
   align-items: center;
@@ -999,9 +1031,8 @@ textarea.input {
 }
 
 .nav-brand {
-  font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 18px;
+  font-weight: 700;
+  font-size: 17px;
   margin-right: auto;
 }
 
@@ -1013,43 +1044,43 @@ textarea.input {
 
 .nav a:hover,
 .nav a[aria-current='page'] {
-  /* contrast: deep ramp step, see .text-muted note above. */
   color: var(--color-accent-700);
 }
 
 /* — tables — */
 .table {
-  width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 13.5px;
+  width: 100%;
 }
 
 .table th {
-  /* contrast: the spec's 60% text-on-ground is 3.99:1 on --color-surface;
-     uses the 68% formula (5.01:1) like the other muted-text rules here. */
-  text-align: left;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
-  padding: var(--space-2);
   border-bottom: 1px solid var(--color-divider);
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .table td {
-  padding: var(--space-2);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+  border-bottom: 1px solid var(--color-neutral-100);
+  padding: var(--space-3);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 .table tbody tr:hover {
-  background: color-mix(in srgb, var(--color-text) 4%, transparent);
+  background: var(--color-neutral-100);
 }
 
-/* Member identity cell (components/admin/MembersTable.tsx): a round monogram
-   avatar (derived from displayName, never the user id) plus the member's
-   name (bold) and email (muted) stacked underneath, with a "Bạn" tag next to
-   the name when the row is the signed-in caller. Replaces the old bare
-   UUID display — the membership API now joins `users` for name/email. */
+/* Member identity cell (components/admin/MembersTable.tsx). */
 .member-identity {
   align-items: center;
   display: flex;
@@ -1059,13 +1090,13 @@ textarea.input {
 
 .member-avatar {
   align-items: center;
-  background: var(--color-accent-200);
+  background: var(--color-accent-100);
   border-radius: 50%;
   color: var(--color-accent-800);
   display: inline-flex;
   flex: 0 0 auto;
-  font-family: var(--font-heading);
-  font-size: 13px;
+  font-size: 12.5px;
+  font-weight: 700;
   height: 2.1rem;
   justify-content: center;
   text-transform: uppercase;
@@ -1088,6 +1119,7 @@ textarea.input {
 }
 
 .member-identity-email {
+  color: var(--color-muted);
   font-size: 12.5px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1101,16 +1133,16 @@ textarea.input {
   display: grid;
   place-items: center;
   padding: var(--space-4);
-  background: color-mix(in srgb, var(--color-neutral-900) 50%, transparent);
+  background: rgba(15, 23, 42, 0.55);
   z-index: 80;
 }
 
 .dialog {
-  width: min(440px, 100%);
+  width: min(460px, 100%);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
-  padding: var(--space-4);
+  padding: var(--space-6);
   border-radius: var(--radius-lg);
   background: var(--color-surface);
   box-shadow: var(--shadow-lg);
@@ -1121,14 +1153,14 @@ textarea.input {
 
 .dialog-title {
   font-family: var(--font-heading);
-  font-weight: var(--font-heading-weight);
-  font-size: 20px;
+  font-weight: 700;
+  font-size: 18px;
   margin: 0;
 }
 
 .dialog-body {
+  color: var(--color-neutral-700);
   font-size: 14px;
-  opacity: 0.85;
   margin: 0.3rem 0 0;
 }
 
@@ -1139,11 +1171,6 @@ textarea.input {
   margin-top: var(--space-2);
 }
 
-/* Supplementary to the spec's dialog-title/-body/-actions: this app's
-   Modal has a header row (title + optional description, with a close
-   icon-button alongside) and a separately scrollable content region for
-   arbitrary children, neither of which the spec's simple dialog example
-   names a class for. Built from the same tokens as the rest of .dialog. */
 .dialog-header {
   align-items: flex-start;
   display: flex;
@@ -1159,37 +1186,16 @@ textarea.input {
   flex: 1;
 }
 
-/* — rounded frame: everything softens, small controls go pill — */
-.card,
-.dialog {
-  border-radius: calc(var(--radius-lg) * 1.15);
-}
-
-.btn,
-.tag,
-.seg,
-.input {
-  border-radius: 999px;
-}
-
-.input {
-  padding-inline: 14px;
-}
-
 /* ══════════════════════════════════════════════════════════════════════
-   Bespoke primitives with no Organic equivalent (dropdown menu, toggle
-   switch, inline notice) — the spec doesn't define these, so they keep
-   their existing project-specific classes, restyled from the same tokens
-   as everything above. Focus is the one universal treatment from
-   :focus-visible above throughout; none of these add a custom ring.
+   Bespoke primitives (dropdown menu, toggle switch, inline notice).
    ══════════════════════════════════════════════════════════════════════ */
 
 .icon-badge {
   align-items: center;
-  background: var(--color-accent-700);
-  border: 2px solid var(--color-bg);
+  background: var(--color-accent-600);
+  border: 2px solid var(--color-surface);
   border-radius: 999px;
-  color: var(--color-bg);
+  color: #fff;
   display: inline-flex;
   font-size: 0.6rem;
   font-weight: 700;
@@ -1212,8 +1218,8 @@ textarea.input {
 .ui-select-trigger {
   align-items: center;
   background: var(--color-surface);
-  border: 1px solid var(--color-divider);
-  border-radius: 999px;
+  border: 1px solid var(--color-neutral-300);
+  border-radius: var(--radius-sm);
   color: var(--color-text);
   cursor: pointer;
   display: flex;
@@ -1223,9 +1229,9 @@ textarea.input {
   justify-content: space-between;
   min-height: 36px;
   min-width: 0;
-  padding: 6px 10px 6px 14px;
+  padding: 6px 10px 6px 12px;
   text-align: left;
-  transition: border-color 160ms ease-out;
+  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
 }
 
 .ui-select-trigger > span {
@@ -1236,24 +1242,25 @@ textarea.input {
 }
 
 .ui-select-trigger > span.placeholder {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-neutral-400);
 }
 
 .ui-select-trigger:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--color-text) 45%, transparent);
+  border-color: var(--color-neutral-400);
 }
 
 .ui-select-trigger[aria-expanded='true'] {
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-600);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent-500) 18%, transparent);
 }
 
 .ui-select-trigger:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .ui-select-chevron {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-neutral-400);
   flex: 0 0 auto;
   transition:
     color 160ms ease-out,
@@ -1269,10 +1276,9 @@ textarea.input {
 .ui-select-menu {
   animation: select-pop 150ms ease-out;
   background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  box-shadow:
-    inset 0 0 0 1px var(--color-divider),
-    var(--shadow-lg);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
   overflow-x: hidden;
   overflow-y: auto;
   padding: var(--space-1);
@@ -1285,14 +1291,14 @@ textarea.input {
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-neutral-700);
   cursor: pointer;
   display: flex;
-  font-size: 13px;
+  font-size: 13.5px;
   gap: var(--space-2);
   justify-content: space-between;
-  min-height: 2.1rem;
-  padding: 0 0.55rem;
+  min-height: 2.2rem;
+  padding: 0 0.6rem;
   text-align: left;
   transition:
     color 130ms ease-out,
@@ -1309,7 +1315,7 @@ textarea.input {
 
 .ui-select-option:hover,
 .ui-select-option.active {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  background: var(--color-neutral-100);
   color: var(--color-text);
 }
 
@@ -1321,13 +1327,13 @@ textarea.input {
 
 .ui-select-option:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: 0.5;
 }
 
 .ui-select-compact .ui-select-trigger {
   background: transparent;
   border-color: transparent;
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   font-size: 12px;
   font-weight: 600;
   min-height: 1.4rem;
@@ -1342,6 +1348,7 @@ textarea.input {
 
 .ui-select-compact .ui-select-trigger[aria-expanded='true'] {
   border-color: transparent;
+  box-shadow: none;
   color: var(--color-text);
 }
 
@@ -1354,11 +1361,12 @@ textarea.input {
   background: transparent;
   border: 0;
   border-radius: var(--radius-sm);
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-neutral-400);
   cursor: pointer;
   display: inline-flex;
   height: 2rem;
   justify-content: center;
+  min-height: 0;
   padding: 0;
   position: absolute;
   right: 0.15rem;
@@ -1367,7 +1375,7 @@ textarea.input {
 }
 
 .ui-combobox-toggle:hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  background: var(--color-neutral-100);
   color: var(--color-text);
 }
 
@@ -1403,8 +1411,8 @@ textarea.input {
 }
 
 .toggle-copy small {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
-  font-size: 11px;
+  color: var(--color-muted);
+  font-size: 11.5px;
   font-weight: 400;
 }
 
@@ -1416,7 +1424,7 @@ textarea.input {
 }
 
 .toggle-track {
-  background: var(--color-neutral-400);
+  background: var(--color-neutral-300);
   border-radius: 999px;
   flex: 0 0 2.25rem;
   height: 1.4rem;
@@ -1426,8 +1434,9 @@ textarea.input {
 }
 
 .toggle-track span {
-  background: var(--color-bg);
+  background: #fff;
   border-radius: 50%;
+  box-shadow: var(--shadow-sm);
   height: 1rem;
   left: 0.2rem;
   position: absolute;
@@ -1437,16 +1446,23 @@ textarea.input {
 }
 
 .toggle-row input:checked + .toggle-track {
-  background: var(--color-accent);
+  background: var(--color-accent-600);
 }
 
 .toggle-row input:checked + .toggle-track span {
   transform: translateX(0.85rem);
 }
 
+.toggle-row input:focus-visible + .toggle-track {
+  outline: 2px solid var(--color-accent-600);
+  outline-offset: 2px;
+}
+
+/* — notices: semantic tinted strips with a readable border — */
 .notice {
   align-items: center;
-  background: var(--color-neutral-200);
+  background: var(--color-neutral-100);
+  border: 1px solid var(--color-neutral-200);
   border-radius: var(--radius-md);
   color: var(--color-text);
   display: flex;
@@ -1458,20 +1474,24 @@ textarea.input {
 }
 
 .notice-warning {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-600) 45%, transparent);
+  background: var(--color-warning-bg);
+  border-color: var(--color-warning-border);
+  color: #78350f;
 }
 
 .notice-error {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-accent-800) 45%, transparent);
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: #7f1d1d;
 }
 
-/* — upload panel (components/upload/**) —
-   The upload agent wrote the markup against these class names but did not
-   pick colors, on the grounds that Organic ships no success/danger hue. It
-   was right to stop there; the escalation used here is the same one
-   `.connection-dot` above already established — sage 600 for "went well",
-   accent 800 for "went wrong" — so the panel reads consistently with the
-   rest of the app instead of introducing a second severity vocabulary. */
+.notice-info {
+  background: var(--color-info-bg);
+  border-color: var(--color-info-border);
+  color: #0c4a6e;
+}
+
+/* — upload panel (components/upload/**) — */
 .upload-panel {
   display: flex;
   flex-direction: column;
@@ -1480,8 +1500,8 @@ textarea.input {
 
 .upload-dropzone {
   align-items: center;
-  background: var(--color-neutral-100);
-  border: 2px dashed color-mix(in srgb, var(--color-text) 22%, transparent);
+  background: var(--color-surface);
+  border: 1.5px dashed var(--color-neutral-300);
   border-radius: var(--radius-lg);
   cursor: pointer;
   display: flex;
@@ -1496,13 +1516,11 @@ textarea.input {
 
 .upload-dropzone:hover,
 .upload-dropzone--dragging {
-  background: var(--color-accent-100);
-  border-color: var(--color-accent-600);
+  background: color-mix(in srgb, var(--color-accent-100) 45%, var(--color-surface));
+  border-color: var(--color-accent-500);
 }
 
-/* Visually hidden, but still focusable and still the label's control — so
-   keyboard users get the dropzone's `:focus-within` ring below rather than
-   a ring around a 0×0 box. */
+/* Visually hidden, but still focusable and still the label's control. */
 .upload-dropzone-input {
   height: 1px;
   opacity: 0;
@@ -1512,15 +1530,15 @@ textarea.input {
 }
 
 .upload-dropzone:focus-within {
-  outline: 2px solid var(--color-accent-700);
+  outline: 2px solid var(--color-accent-600);
   outline-offset: 2px;
 }
 
 .upload-dropzone-icon {
   align-items: center;
-  background: var(--color-accent-200);
+  background: var(--color-accent-100);
   border-radius: 999px;
-  color: var(--color-accent-800);
+  color: var(--color-accent-700);
   display: inline-flex;
   height: 2.6rem;
   justify-content: center;
@@ -1528,7 +1546,7 @@ textarea.input {
 }
 
 .upload-dropzone span:last-of-type {
-  color: color-mix(in srgb, var(--color-text) 62%, transparent);
+  color: var(--color-muted);
   font-size: 13px;
 }
 
@@ -1544,6 +1562,7 @@ textarea.input {
 .upload-item {
   align-items: flex-start;
   background: var(--color-surface);
+  border: 1px solid var(--color-divider);
   border-radius: var(--radius-md);
   display: flex;
   gap: var(--space-3);
@@ -1569,19 +1588,12 @@ textarea.input {
 }
 
 .upload-item-name {
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .upload-item-meta {
-  /* contrast: this shipped at 55% (copy-pasted from the same spec value
-     .text-muted already measured and rejected far above) — 3.45:1 on
-     --color-surface (this row's background), under WCAG AA's 4.5:1 for
-     12px text. Switched to the same 68% formula as every other muted-text
-     rule in this file (5.01:1 on --color-surface). Found by grepping this
-     file for `color-mix(in srgb, var(--color-text)` and diffing every
-     percentage against the documented-safe 68%, not by assuming this rule
-     matched its neighbors. */
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   font-size: 12px;
 }
 
@@ -1593,16 +1605,9 @@ textarea.input {
   margin-top: var(--space-1);
 }
 
-/* Severity, mirroring `.connection-dot`'s escalation-by-depth: the row's
-   icon deepens to accent 800 when the row is reporting a failure. Selected
-   via `:has([role='alert'])` — the upload agent already distinguishes an
-   upload failure (`role="alert"`) from every other state (`role="status"`),
-   so the markup needs no tone class it deliberately didn't invent. A
-   *conversion* failure is `role="status"` by that same deliberate choice
-   and so is not covered here; it reads as failure from its copy and its
-   AlertTriangle glyph, not from color. */
+/* Upload failure rows (`role="alert"`) escalate the icon to the danger hue. */
 .upload-item:has([role='alert']) .upload-item-icon {
-  color: var(--color-accent-800);
+  color: var(--color-danger);
 }
 
 .upload-item-actions {
@@ -1610,7 +1615,7 @@ textarea.input {
 }
 
 .upload-progress-track {
-  background: color-mix(in srgb, var(--color-text) 12%, transparent);
+  background: var(--color-neutral-200);
   border-radius: 999px;
   display: block;
   flex: 1;
@@ -1620,7 +1625,7 @@ textarea.input {
 }
 
 .upload-progress-value {
-  background: var(--color-accent-700);
+  background: var(--color-accent-600);
   border-radius: 999px;
   display: block;
   height: 100%;
@@ -1670,22 +1675,15 @@ textarea.input {
 }
 
 /* ══════════════════════════════════════════════════════════════════════
-   Application shell rail (components/shell/**) — vertical left icon rail
-   replacing the old topbar/primary-nav for authenticated routes. `.topbar`/
-   `.primary-nav`/`.session-status` above are left in place per the
-   append-only rule even though App.tsx no longer renders them.
+   Application shell rail (components/shell/**) — charcoal sidebar matching
+   the brand icon, light content beside it.
 
-   Layout note (the bottom cluster fix): the rail is a column flex
+   Layout note (the bottom cluster contract): the rail is a column flex
    container at full viewport height. `.rail-nav`/`.rail-nav-list` is the
    *only* flexible, scrollable member (`flex: 1 1 auto; min-height: 0;
-   overflow-y: auto`); `.rail-bottom` is `flex: 0 0 auto` — a normal,
-   non-overlaid flow item that always renders at its own intrinsic height
-   after the nav list. Nothing in the bottom cluster is positioned
-   `fixed`/`absolute` against the viewport, so it can never sit on top of or
-   get clipped by another element the way an overlay pinned to the bottom
-   edge without reserved space would: at a short viewport the nav list runs
-   out of room and scrolls internally; the bottom cluster's own height is
-   never touched.
+   overflow-y: auto`); `.rail-bottom` is `flex: 0 0 auto` — a normal flow
+   item that always renders at its own intrinsic height after the nav list,
+   never clipped or overlaid.
    ══════════════════════════════════════════════════════════════════════ */
 .app-shell.shell-with-rail {
   display: flex;
@@ -1702,27 +1700,29 @@ textarea.input {
 
 .shell-statusline {
   align-items: center;
+  border-bottom: 1px solid var(--color-divider);
+  background: var(--color-surface);
   display: flex;
   gap: var(--space-2);
-  /* Same left gutter as `.app-main` so the status dot lines up with the page
-     heading below it rather than sitting on a different margin. */
-  padding: var(--space-3) clamp(1.25rem, 5vw, 4rem) 0;
+  justify-content: flex-end;
+  min-height: 2.4rem;
+  padding: var(--space-1) clamp(1.25rem, 3.5vw, 3rem);
 }
 
 .rail {
-  background: var(--color-surface);
-  border-right: 1px solid var(--color-divider);
+  background: linear-gradient(180deg, var(--rail-bg-2) 0%, var(--rail-bg) 30%);
   box-sizing: border-box;
+  color: var(--rail-ink);
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
   gap: var(--space-3);
   height: 100vh;
   height: 100dvh;
-  padding: var(--space-3) var(--space-2) var(--space-4);
+  padding: var(--space-4) var(--space-2);
   position: sticky;
   top: 0;
-  width: 76px;
+  width: 72px;
 }
 
 .rail-item {
@@ -1733,10 +1733,10 @@ textarea.input {
 }
 
 .rail-tooltip {
-  background: var(--color-text);
+  background: var(--color-neutral-900);
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-md);
-  color: var(--color-bg);
+  color: #fff;
   font-size: 12px;
   font-weight: 600;
   left: calc(100% + var(--space-2));
@@ -1773,53 +1773,50 @@ textarea.input {
 
 .rail-brand {
   align-items: center;
-  color: var(--color-text);
+  color: var(--rail-ink-strong);
   display: flex;
   flex: 0 0 auto;
   gap: var(--space-2);
   text-decoration: none;
 }
 
-/* The Folyvo logo badge (an <img>, see BrandMark.tsx) — a fixed square so it
-   looks identical whether the rail is collapsed (badge only) or expanded
-   (badge + wordmark). The SVG carries its own rounded corners and dark fill. */
+/* The Folyvo logo badge (an <img>, see BrandMark.tsx). */
 .rail-brand-mark {
-  border-radius: 11px;
+  border-radius: 10px;
   display: block;
   flex: 0 0 auto;
-  height: 44px;
+  height: 40px;
   object-fit: contain;
-  width: 44px;
+  width: 40px;
 }
 
 /* Wordmark shown only when the rail is expanded. */
 .rail-brand-word {
   display: none;
-  font-family: var(--font-heading);
-  font-size: 1.15rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
-/* Collapse/expand toggle. Overrides the global <button> reset (accent fill,
-   2.75rem min-height) to read as a quiet icon control that matches the rail
-   links. */
+/* Collapse/expand toggle — quiet icon control on the dark ground. */
 .rail-toggle {
   align-items: center;
   align-self: center;
   background: transparent;
-  border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--rail-ink);
   display: inline-flex;
   flex: 0 0 auto;
-  height: 36px;
+  height: 34px;
   justify-content: center;
   min-height: 0;
   padding: 0;
-  width: 44px;
+  width: 40px;
 }
 
 .rail-toggle:hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
-  color: var(--color-text);
+  background: var(--rail-hover);
+  color: var(--rail-ink-strong);
 }
 
 .rail-link-label {
@@ -1836,7 +1833,7 @@ textarea.input {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-1);
   list-style: none;
   margin: 0;
   min-height: 0;
@@ -1850,15 +1847,12 @@ textarea.input {
   justify-content: center;
 }
 
-/* "QUẢN TRỊ" group divider (P2-18 Rail update): a plain rule in the
-   collapsed rail (no room for a label next to 44px icons); the label itself
-   only appears once `.rail-expanded` gives it room, same collapsed/expanded
-   split `.rail-link-label` already uses. */
+/* "QUẢN TRỊ" group divider. */
 .rail-nav-divider {
-  border-top: 1px solid var(--color-divider);
+  border-top: 1px solid var(--rail-divider);
   flex: 0 0 auto;
   justify-content: flex-start !important;
-  margin-block: var(--space-1);
+  margin-block: var(--space-2) var(--space-1);
   padding-top: var(--space-2);
   width: 100%;
 }
@@ -1871,35 +1865,50 @@ textarea.input {
 .rail-link {
   align-items: center;
   display: inline-flex;
-  height: 44px;
+  height: 40px;
   justify-content: center;
-  width: 44px;
+  width: 40px;
+}
+
+/* OrgSwitch trigger reuses .btn.btn-icon on the dark rail. */
+.rail .btn-icon {
+  color: var(--rail-ink);
+}
+
+.rail .btn-icon:hover:not(:disabled),
+.rail .btn-icon.active {
+  background: var(--rail-hover);
+  color: var(--rail-ink-strong);
 }
 
 .rail-link {
-  border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--rail-ink);
   text-decoration: none;
+  transition: background 130ms ease-out, color 130ms ease-out;
 }
 
 .rail-link:hover {
-  background: color-mix(in srgb, var(--color-text) 7%, transparent);
-  color: var(--color-text);
+  background: var(--rail-hover);
+  color: var(--rail-ink-strong);
 }
 
 .rail-link[aria-current='page'] {
-  /* contrast: same deep ramp step used throughout for accent-on-ground
-     text (see .text-muted note far above). */
-  background: var(--color-accent-100);
-  color: var(--color-accent-800);
+  background: var(--rail-active);
+  box-shadow: inset 2.5px 0 0 var(--color-accent-500);
+  color: #ffb27a;
 }
 
 .rail-link[aria-current='page']:hover {
-  background: var(--color-accent-200);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.rail :focus-visible {
+  outline-color: var(--color-accent-400);
 }
 
 .rail-bottom {
-  border-top: 1px solid var(--color-divider);
+  border-top: 1px solid var(--rail-divider);
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
@@ -1910,24 +1919,26 @@ textarea.input {
 
 .rail-avatar {
   align-items: center;
-  background: var(--color-text);
+  background: var(--color-accent-600);
   border: 0;
   border-radius: 50%;
-  color: var(--color-bg);
+  color: #fff;
   cursor: pointer;
   display: flex;
-  font-family: var(--font-heading);
   font-size: 12px;
   font-weight: 700;
-  height: 40px;
+  height: 38px;
   justify-content: center;
-  width: 40px;
+  min-height: 0;
+  padding: 0;
+  width: 38px;
 }
 
 .rail-avatar:hover {
-  background: var(--color-accent-800);
+  background: var(--color-accent-500);
 }
 
+/* Account/org popovers are portaled to <body> — light surfaces. */
 .rail-menu {
   display: flex;
   flex-direction: column;
@@ -1936,7 +1947,7 @@ textarea.input {
 }
 
 .rail-menu-kicker {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -1952,7 +1963,7 @@ textarea.input {
 }
 
 .rail-menu-note {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   font-size: 12px;
   line-height: 1.5;
   margin: 0;
@@ -1990,14 +2001,14 @@ textarea.input {
 }
 
 .rail-menu-org-role {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--color-muted);
   flex-shrink: 0;
   font-size: 11px;
   font-weight: 500;
 }
 
 .rail-menu-org-pending {
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: var(--color-muted);
   font-size: 11px;
 }
 
@@ -2007,14 +2018,14 @@ textarea.input {
 
 @media (max-width: 600px) {
   .rail:not(.rail-expanded) {
-    width: 64px;
+    width: 60px;
   }
 
   .rail-brand-mark,
   .rail:not(.rail-expanded) .rail-btn,
   .rail:not(.rail-expanded) .rail-link {
-    height: 40px;
-    width: 40px;
+    height: 38px;
+    width: 38px;
   }
 }
 
@@ -2025,8 +2036,8 @@ textarea.input {
    `height: 100dvh`, sticky positioning, and the bottom-cluster flow contract
    the shell tests assert on — is left untouched. */
 .rail-expanded {
-  width: 232px;
   padding-inline: var(--space-3);
+  width: 240px;
 }
 
 .rail-expanded .rail-item {
@@ -2059,33 +2070,30 @@ textarea.input {
 
 .rail-expanded .rail-link-label {
   display: inline;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .rail-expanded .rail-nav-group-label {
-  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  color: rgba(235, 238, 245, 0.45);
   display: block;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   padding-block: var(--space-1) var(--space-2);
   padding-inline: var(--space-3);
   text-transform: uppercase;
 }
 
-/* Labels already name every destination, so the hover/focus tooltips would be
-   redundant (and would overlap the widened rail). */
+/* Labels already name every destination — hide the redundant tooltips. */
 .rail-expanded .rail-tooltip {
   display: none;
 }
 
-/* P2-17 Document Graph MVP ------------------------------------------------ */
+/* P2-17 Document Graph ---------------------------------------------------- */
 
-/* Standard visually-hidden-but-announced utility (WCAG technique), used for
-   the graph page's `aria-live` filter/toggle summary — visible on screen
-   would be redundant with the sidebar/toolbar state it restates. */
+/* Standard visually-hidden-but-announced utility (WCAG technique). */
 .visually-hidden {
   position: absolute;
   width: 1px;
@@ -2108,7 +2116,7 @@ textarea.input {
 
 .graph-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 260px;
+  grid-template-columns: minmax(0, 1fr) 280px;
   gap: var(--space-4);
   align-items: start;
 }
@@ -2132,30 +2140,31 @@ textarea.input {
   aspect-ratio: 4 / 3;
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 
 .graph-edge {
-  stroke: var(--color-neutral-500);
+  stroke: var(--color-neutral-400);
   stroke-opacity: 0.6;
 }
 
 .graph-edge-conflict {
-  stroke: var(--color-accent-700);
+  stroke: var(--color-accent-600);
 }
 
 .graph-edge-co_citation {
-  stroke: var(--color-accent-2-700);
+  stroke: var(--color-accent-2-600);
 }
 
 .graph-edge-similarity {
-  stroke: var(--color-neutral-600);
+  stroke: var(--color-neutral-500);
   stroke-dasharray: 4 3;
 }
 
 .graph-node-dot {
   cursor: pointer;
-  stroke: var(--color-bg);
+  stroke: var(--color-surface);
   stroke-width: 1.5;
 }
 
@@ -2183,10 +2192,8 @@ textarea.input {
   text-align: left;
   padding: var(--space-2);
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  /* The global `button` rule paints cream-on-accent; on this transparent
-     list row that inherited cream text is invisible on the cream ground. */
   color: var(--color-text);
   font-family: var(--font-body);
   font-weight: 400;
@@ -2197,7 +2204,7 @@ textarea.input {
 .graph-node-button:hover,
 .graph-node-button:focus-visible {
   border-color: var(--color-divider);
-  background: var(--color-surface);
+  background: var(--color-neutral-100);
 }
 
 .graph-node-swatch {
@@ -2208,9 +2215,11 @@ textarea.input {
 }
 
 .graph-sidebar {
+  background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: 12px;
-  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  padding: var(--space-4);
 }
 
 .graph-sidebar-header {
@@ -2247,7 +2256,7 @@ textarea.input {
 }
 
 .graph-community-count {
-  color: color-mix(in srgb, var(--color-text) 68%, transparent);
+  color: var(--color-muted);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2274,8 +2283,32 @@ textarea.input {
   background: none;
   border: none;
   padding: 0;
+  min-height: 0;
   color: var(--color-accent-700);
   text-decoration: underline;
+  text-underline-offset: 3px;
   cursor: pointer;
   font: inherit;
+}
+
+.link-button:hover {
+  background: none;
+  color: var(--color-accent-800);
+}
+
+/* — QA chat turns (components/qa/ChatTurnBubble.tsx) — */
+.chat-turn {
+  border-bottom: 1px solid var(--color-neutral-100);
+  padding-bottom: var(--space-3);
+}
+
+.chat-turn:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+/* Truncated markdown preview fade (library preview). */
+.markdown-truncated {
+  -webkit-mask-image: linear-gradient(180deg, #000 82%, transparent);
+  mask-image: linear-gradient(180deg, #000 82%, transparent);
 }
