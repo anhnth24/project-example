@@ -33,12 +33,21 @@ import { UserMenu } from './UserMenu';
 const RAIL_EXPANDED_KEY = 'markhand.rail.expanded';
 
 function readExpandedPref(): boolean {
-  // Expanded by default: labelled destinations beat icon-only mystery meat
-  // (see the shell redesign notes). Only an explicit collapse ('0') persists.
+  // Expanded by default on wide viewports: labelled destinations beat
+  // icon-only mystery meat. Phones default to the compact icon rail (an
+  // in-flow 240px column would eat most of a 375px screen); either way an
+  // explicit user choice ('0'/'1') always wins and persists.
   try {
-    return window.localStorage.getItem(RAIL_EXPANDED_KEY) !== '0';
+    const stored = window.localStorage.getItem(RAIL_EXPANDED_KEY);
+    if (stored === '0') return false;
+    if (stored === '1') return true;
   } catch {
-    return true;
+    // Storage unavailable — fall through to the viewport default.
+  }
+  try {
+    return window.matchMedia('(min-width: 900px)').matches;
+  } catch {
+    return false;
   }
 }
 

@@ -9,7 +9,7 @@ import type { DocumentState } from './types';
 export interface DocumentStateMeta {
   label: string;
   /** One of styles.css's existing `.tag-*` classes — never a new class. */
-  tagClass: 'tag-neutral' | 'tag-accent' | 'tag-accent-2' | 'tag-outline';
+  tagClass: 'tag-neutral' | 'tag-accent' | 'tag-accent-2' | 'tag-outline' | 'tag-danger';
   /** Whether the badge shows the existing `.spin`-animated SpinnerIcon. */
   spinning: boolean;
 }
@@ -26,11 +26,11 @@ export interface DocumentStateMeta {
  */
 export const DOCUMENT_STATE_META: Record<DocumentState, DocumentStateMeta> = {
   uploaded: { label: 'Đã tải lên', tagClass: 'tag-neutral', spinning: false },
-  converting: { label: 'Đang chuyển đổi', tagClass: 'tag-accent-2', spinning: true },
-  converted: { label: 'Đã chuyển đổi', tagClass: 'tag-accent-2', spinning: false },
+  converting: { label: 'Đang chuyển đổi', tagClass: 'tag-accent', spinning: true },
+  converted: { label: 'Đã chuyển đổi', tagClass: 'tag-accent', spinning: false },
   indexing: { label: 'Đang lập chỉ mục', tagClass: 'tag-outline', spinning: true },
-  indexed: { label: 'Đã lập chỉ mục', tagClass: 'tag-accent', spinning: false },
-  failed: { label: 'Lỗi chuyển đổi', tagClass: 'tag-outline', spinning: false },
+  indexed: { label: 'Đã lập chỉ mục', tagClass: 'tag-accent-2', spinning: false },
+  failed: { label: 'Lỗi chuyển đổi', tagClass: 'tag-danger', spinning: false },
   tombstoned: { label: 'Đã xoá', tagClass: 'tag-neutral', spinning: false },
   purged: { label: 'Đã xoá vĩnh viễn', tagClass: 'tag-neutral', spinning: false },
 };

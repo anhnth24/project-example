@@ -107,12 +107,8 @@
   --radius-lg: 14px;
 
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
-  --shadow-md:
-    0 2px 4px rgba(16, 24, 40, 0.06),
-    0 4px 12px rgba(16, 24, 40, 0.08);
-  --shadow-lg:
-    0 4px 8px rgba(16, 24, 40, 0.08),
-    0 16px 40px rgba(16, 24, 40, 0.16);
+  --shadow-md: 0 2px 4px rgba(16, 24, 40, 0.06), 0 4px 12px rgba(16, 24, 40, 0.08);
+  --shadow-lg: 0 4px 8px rgba(16, 24, 40, 0.08), 0 16px 40px rgba(16, 24, 40, 0.16);
 
   color: var(--color-text);
   background: var(--color-bg);
@@ -635,7 +631,9 @@ code {
   background: var(--color-surface);
   border: 1px solid var(--color-neutral-300);
   border-radius: var(--radius-sm);
-  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
+  transition:
+    border-color 140ms ease-out,
+    box-shadow 140ms ease-out;
 }
 
 .auth-form input:hover {
@@ -822,7 +820,9 @@ code {
   background: var(--color-surface);
   border: 1px solid var(--color-neutral-300);
   border-radius: var(--radius-sm);
-  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
+  transition:
+    border-color 140ms ease-out,
+    box-shadow 140ms ease-out;
 }
 
 .input::placeholder {
@@ -902,7 +902,9 @@ textarea.input {
   font-weight: 600;
   gap: 6px;
   padding: 5px 12px;
-  transition: background 140ms ease-out, color 140ms ease-out;
+  transition:
+    background 140ms ease-out,
+    color 140ms ease-out;
 }
 
 .seg-opt + .seg-opt {
@@ -1019,6 +1021,12 @@ textarea.input {
 .tag-outline {
   border: 1px solid var(--color-accent-300);
   color: var(--color-accent-700);
+}
+
+.tag-danger {
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
+  color: var(--color-danger);
 }
 
 /* — navigation (legacy vocabulary) — */
@@ -1231,7 +1239,9 @@ textarea.input {
   min-width: 0;
   padding: 6px 10px 6px 12px;
   text-align: left;
-  transition: border-color 140ms ease-out, box-shadow 140ms ease-out;
+  transition:
+    border-color 140ms ease-out,
+    box-shadow 140ms ease-out;
 }
 
 .ui-select-trigger > span {
@@ -1885,7 +1895,9 @@ textarea.input {
   border-radius: var(--radius-sm);
   color: var(--rail-ink);
   text-decoration: none;
-  transition: background 130ms ease-out, color 130ms ease-out;
+  transition:
+    background 130ms ease-out,
+    color 130ms ease-out;
 }
 
 .rail-link:hover {
@@ -2026,6 +2038,12 @@ textarea.input {
   .rail:not(.rail-expanded) .rail-link {
     height: 38px;
     width: 38px;
+  }
+
+  /* A user-expanded rail on a phone stays usable: narrower column so the
+     content beside it keeps a readable measure. */
+  .rail-expanded {
+    width: 200px;
   }
 }
 

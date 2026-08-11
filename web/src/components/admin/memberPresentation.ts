@@ -17,7 +17,7 @@ import type {
 
 export interface TagMeta {
   label: string;
-  tagClass: 'tag-neutral' | 'tag-accent' | 'tag-accent-2' | 'tag-outline';
+  tagClass: 'tag-neutral' | 'tag-accent' | 'tag-accent-2' | 'tag-outline' | 'tag-danger';
 }
 
 /** Privilege order from the canonical builtin-role-catalog fixture (most privileged first) — the order the role `<select>` presents them in. */
@@ -36,10 +36,10 @@ export const STATE_META: Record<MembershipState, TagMeta> = {
 };
 
 export const INVITE_STATUS_META: Record<InviteStatus, TagMeta> = {
-  pending: { label: 'Đang chờ', tagClass: 'tag-accent-2' },
-  accepted: { label: 'Đã chấp nhận', tagClass: 'tag-accent' },
+  pending: { label: 'Đang chờ', tagClass: 'tag-accent' },
+  accepted: { label: 'Đã chấp nhận', tagClass: 'tag-accent-2' },
   revoked: { label: 'Đã thu hồi', tagClass: 'tag-neutral' },
-  expired: { label: 'Đã hết hạn', tagClass: 'tag-outline' },
+  expired: { label: 'Đã hết hạn', tagClass: 'tag-danger' },
 };
 
 export const USAGE_RESOURCE_LABEL: Record<UsageResource, string> = {
