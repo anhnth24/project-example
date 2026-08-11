@@ -536,10 +536,9 @@ def validate(path: Path) -> list[str]:
         str(native.get("pdfium", {}).get("sha256", ""))
     ):
         errors.append("metadata PDFium fingerprint is incomplete")
-    if native.get("tesseract", {}).get("present") is not True or not native.get(
-        "tesseract", {}
-    ).get("languageModelSha256", {}).get("vie"):
-        errors.append("metadata Tesseract Vietnamese fingerprint is incomplete")
+    # Tesseract fingerprints are no longer required (ADR 0016): image/scan OCR
+    # runs through a vision LLM, so old baselines may carry a `tesseract` block
+    # while new ones record `visionOcr` instead. Neither is validated here.
 
     for evidence in path.rglob("*"):
         if evidence.is_file():

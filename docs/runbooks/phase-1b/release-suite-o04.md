@@ -62,7 +62,9 @@ the vertical suite.
 - Existing foreign resource ids for cross-tenant denial:
   `MARKHAND_O04_FOREIGN_COLLECTION_ID` and `MARKHAND_O04_FOREIGN_DOCUMENT_ID`
 - `cargo build -p fileconv-cli --no-default-features` → `target/debug/fileconv`
-- Tesseract + `vie+eng` for PNG OCR (missing OCR ⇒ live fail, not skip)
+- Vision OCR config for PNG OCR: worker `MARKHAND_OCR_API_KEY` (OpenRouter
+  default) or a self-hosted vision endpoint via `MARKHAND_OCR_BASE_URL`
+  (ADR 0016 — Tesseract removed; missing OCR config ⇒ live fail, not skip)
 - Clean git tree. Dirty release runs fail closed with `git_dirty`.
 
 ## Run
