@@ -75,7 +75,7 @@ Tám subcommand đăng ký ở `registered_commands()` (`crates/cli/src/main.rs`
 | `audio` | (feature `audio`) WER/RTF/load mỗi model GGML |
 | `handoff` | đóng gói handoff (BRD/PRD) từ nhiều file nguồn → ZIP |
 | `pptx-preview` | JSON preview meta/slides/shapes qua `fileconv_core::pptx_preview::preview_meta`/`preview_slide` |
-| `info` | danh sách định dạng hỗ trợ + trạng thái PDFium/tessdata/model whisper |
+| `info` | danh sách định dạng hỗ trợ + trạng thái PDFium/model whisper |
 
 ## `crates/mcp/` — binary `fileconv-mcp`
 
@@ -159,10 +159,12 @@ schema/table, version, watch rules), nhóm knowledge RAG (`rebuild_knowledge_ind
   `REPORT_AUDIO.md`, `REPORT_PHOWHISPER.md`, `REPORT_EDGE.md`, `REPORT_SAMPLE10*.md`, `REPORT_XL.md`,
   `RESEARCH_COMPETITORS.md`.
 - **Shell**: `download_corpus*.sh`, `download_models.sh`, `download_pdfium.sh`,
-  `download_tessdata.sh`, `make_sample10.sh`, `make_vn_images.sh`, `make_xl_images.sh`.
-- **Python**: `make_vn_corpus.py`, `make_vn_audio.py`, `ocr_experiment.py`, `paddle_test.py`.
+  `make_sample10.sh`, `make_vn_images.sh`, `make_xl_images.sh`
+  (`download_tessdata.sh` chỉ còn giá trị lịch sử — Tesseract đã loại bỏ, ADR 0016).
+- **Python**: `make_vn_corpus.py`, `make_vn_audio.py` (`ocr_experiment.py`,
+  `paddle_test.py` là tư liệu thí nghiệm stack OCR cũ).
 
-> Các thư mục `pdfium/`, `tessdata_best/`, `models/`, `bench/corpus*`, `bench/edge` đều **gitignore**
+> Các thư mục `pdfium/`, `models/`, `bench/corpus*`, `bench/edge` đều **gitignore**
 > — phải chạy script `bench/*.sh` để tái tạo.
 
 ## Khi cần sửa — tìm đâu

@@ -146,7 +146,7 @@ Tám subcommand đăng ký ở `registered_commands()`:
 | `audio` | `<models.csv> <manifest.tsv> [report.md]` | (feature `audio`) WER/RTF/load mỗi model GGML |
 | `handoff` | `<product> <output.zip> <sources...>` | đóng gói handoff pack (BRD/PRD) từ nhiều file nguồn |
 | `pptx-preview` | `<file.pptx>` | JSON preview meta/slides/shapes qua `fileconv_core::pptx_preview::preview_meta`/`preview_slide` |
-| `info` | (không đối số) | danh sách định dạng hỗ trợ + trạng thái PDFium/tessdata/model whisper |
+| `info` | (không đối số) | danh sách định dạng hỗ trợ + trạng thái PDFium/model whisper |
 
 Panic hook in `file:line`. Manifest: mỗi dòng `<file>\t<ground_truth.txt>\t<nhãn>`, `#` = comment.
 
@@ -168,7 +168,7 @@ Chín tool — năm deterministic (không cần API key) và bốn LLM (`FILECON
 | `summarize` | LLM (`FILECONV_LLM_*`) | tóm tắt (cap 40 000 ký tự) |
 | `extract_json` | LLM | trích JSON theo hướng dẫn ngôn ngữ tự nhiên |
 | `translate` | LLM | dịch sang ngôn ngữ đích |
-| `ocr_hard` | LLM (vision) | OCR ảnh khó (đa cột, IN HOA, viết tay, con dấu) — chất lượng hơn Tesseract |
+| `ocr_hard` | LLM (vision) | OCR ảnh khó (đa cột, IN HOA, viết tay, con dấu) với provider/model tuỳ chọn (`FILECONV_LLM_*`) |
 
 `ocr_hard` (`llm.rs::vision_ocr`): base64 ảnh → POST vision endpoint của provider (OpenAI/Anthropic/Gemini),
 system prompt yêu cầu phiên âm Markdown tiếng Việt trung thực, timeout 180s.

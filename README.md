@@ -44,13 +44,15 @@ vendor/         # markitdown-rs — CHỈ tham khảo (MIT, đã exclude khỏi 
 
 ## Định dạng hỗ trợ
 
-pdf, docx, pptx, xlsx/xls/xlsb/ods, csv, html + **ảnh OCR tiếng Việt** (Tesseract `vie+eng`) +
-**audio tiếng Việt** (whisper-rs + symphonia). PDF quét → render 300 DPI + OCR.
+pdf, docx, pptx, xlsx/xls/xlsb/ods, csv, html + **ảnh OCR tiếng Việt** (vision-LLM
+qua OpenRouter mặc định — `FILECONV_OCR_*`; Tesseract/Paddle local đã loại bỏ, ADR 0016) +
+**audio tiếng Việt** (whisper-rs + symphonia). PDF quét → render 300 DPI + OCR vision.
 
 ## Kết quả tóm tắt (Intel Xeon 2.8GHz, release)
 
 - **Tốc độ** (60-file corpus): pptx/csv/xlsx/docx < 1ms/file; pdf **~5.7ms/trang**; html ~15ms/file. 100% convert.
-- **Độ chính xác VN**: docx/csv 100%, html 99.2%, xlsx 98.5%, pptx 98.0%; ảnh in OCR ~99% (sau tiền xử lý); low-res 81→99%.
+- **Độ chính xác VN**: docx/csv 100%, html 99.2%, xlsx 98.5%, pptx 98.0%; ảnh in OCR ~99%
+  (số liệu lịch sử đo trên stack Tesseract cũ — OCR hiện qua vision-LLM, ADR 0016).
 - **Audio vi** (gTTS): tiny 86.8% / base 94.5% / small 97.0% (RTF 0.15 / 0.30 / 0.99).
 - **PhoWhisper** (clip vi thật): **90.8%** vs whisper-small 77.3% (**+13.5 điểm**, cùng cỡ model).
 
@@ -58,8 +60,11 @@ Chi tiết: [`bench/REPORT.md`](bench/REPORT.md) + [`docs/system-architecture.md
 
 ## Chạy thử
 
-Yêu cầu: Rust, `tesseract-ocr` + `tesseract-ocr-vie`, `poppler-utils`, `imagemagick`, `python3`.
+Yêu cầu: Rust, `poppler-utils`, `imagemagick` (bench), `python3`.
 Build whisper-rs cần cmake + C/C++ + clang.
+OCR ảnh/PDF scan cần key vision-LLM: `export FILECONV_OCR_API_KEY=...`
+(mặc định OpenRouter; endpoint self-host vLLM/Ollama vision dùng
+`FILECONV_OCR_BASE_URL` khi có GPU).
 
 ```bash
 # 1) Build
@@ -67,9 +72,6 @@ cargo build --release
 
 # 1b) PDFium (thiếu → tự fallback pdf-extract)
 bash bench/download_pdfium.sh
-
-# 1c) tessdata_best (khuyến nghị cho tài liệu thật / IN HOA)
-bash bench/download_tessdata.sh
 
 # 2) Convert 1 file → stdout
 ./target/release/fileconv one duong-dan/file.docx

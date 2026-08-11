@@ -154,7 +154,7 @@ pub(crate) fn resolve_llm_answer(
                 .into(),
             );
             // UAT-only: surface the discarded draft so operators can inspect
-            // what GLM said without promoting it to the primary answer.
+            // what the model said without promoting it to the primary answer.
             if allow_unverified_llm() {
                 warnings.push(discarded_llm_draft_warning(&llm_answer));
             }
@@ -172,7 +172,7 @@ pub(crate) fn resolve_llm_answer(
 // The only real token consumer on the ask path is the configured chat
 // provider (`ChatProvider::complete` / `stream_tokens`); when no provider is
 // configured (extractive-only MVP deployment) nothing is reserved. Neither
-// the OpenAI-compatible non-streaming response nor GLM streaming chunks are
+// the OpenAI-compatible non-streaming response nor provider streaming chunks are
 // guaranteed to carry a `usage` block, so both admission and settlement use
 // the same character heuristic (~4 chars/token) — reserve an upper bound
 // (prompt + MAX_ANSWER_CHARS allowance), settle measured characters.
@@ -373,7 +373,7 @@ pub(crate) fn hits_to_hybrid(hits: &[RetrievalHit]) -> Vec<HybridSearchHit> {
         .collect()
 }
 
-/// Grounded ask: retrieve → optional GLM → citation validate → extractive fallback.
+/// Grounded ask: retrieve → optional chat LLM → citation validate → extractive fallback.
 pub async fn ask(
     pool: &Pool,
     qdrant: &QdrantClient,
@@ -481,7 +481,7 @@ pub async fn ask(
     let extractive = extractive_answer(&request.question, &hybrid);
     let valid_ids = valid_citation_ids(hybrid.len());
 
-    // Provider may be attempted for outage/timeout observability, but GLM answers are
+    // Provider may be attempted for outage/timeout observability, but LLM answers are
     // never claimed grounded unless structured entailment is available AND validation passes.
     let (answer, mode) = match provider {
         Some(chat) if !hybrid.is_empty() => {
@@ -767,7 +767,7 @@ mod tests {
     /// End-to-end through the real `ChatProvider::complete` call (not just the
     /// pure policy function), same wiring `ask()` uses — a hermetic stand-in
     /// for an HTTP-mocked `OpenAiCompatibleChat` run, since `ChatProvider::Static`
-    /// exercises the identical call path without a live GLM endpoint.
+    /// exercises the identical call path without a live provider endpoint.
     /// Plain `#[test]` + `block_on` (not `#[tokio::test]`) so the env-var mutex
     /// guard is never held across an actual `.await` suspension point.
     #[test]

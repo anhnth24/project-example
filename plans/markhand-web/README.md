@@ -133,7 +133,7 @@ Bảng này là nguồn dữ liệu cho tab **Tech stack** trong
 | Vector retrieval | Qdrant | Vector candidates; kết quả luôn được hydrate và kiểm ACL lại | Phase 1B |
 | Object storage | MinIO | File gốc, quarantine, Markdown và derived artifacts | Phase 1B |
 | Embeddings | AITeamVN local / OpenRouter `qwen3-embedding-8b` | POC/1B baseline: AITeamVN on-prem CPU (`local-neural`, Compose `:8088`, Recall@5 0.9261). ADR 0016 thay target vLLM GPU bằng OpenRouter `provider-cloud` (egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS`); thành pin mặc định sau benchmark golden corpus (DKP-02); đổi runtime = rebuild index generation | Phase 0 → 1B (local); OpenRouter option delivered 2026-08-10 |
-| Chat and extraction | GLM via LLM client | Grounded Q&A, summarize và structured extraction theo policy (**không** dùng cho embedding/index) | Phase 1B → 3 |
+| Chat and extraction | OpenRouter Qwen via OpenAI-compatible client (`MARKHAND_CHAT_*`) | Grounded Q&A, summarize và structured extraction theo policy (**không** dùng cho embedding/index); self-host local model khi có GPU — cùng contract; alias legacy `MARKHAND_GLM_*` deprecated | Phase 1B → 3 |
 | Identity | JWT + rotating refresh + OIDC | Session cho POC; SSO/OIDC và key rotation cho production | Phase 1B → 4 |
 | Observability | OpenTelemetry + structured logs | Trace, metrics, audit correlation và redacted diagnostics | Phase F → 4 |
 | Runtime | Docker Compose → production orchestrator | Local/POC reproducible; Kubernetes hoặc nền tảng on-prem tương đương được chốt ở Phase 4 | Phase F → 4 |
@@ -167,7 +167,8 @@ Bảng này là nguồn dữ liệu cho tab **Tech stack** trong
 Đã chốt 2026-08-10 (ADR 0016) và loại khỏi danh sách: GPU/VRAM/throughput vLLM
 cutover (bỏ — thay bằng OpenRouter, gate `G0-RET-VLLM-CUTOVER` retired); chính
 sách cloud embedding (được phép sau egress opt-in tường minh
-`MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`; GLM vẫn chỉ Q&A).
+`MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`). Q&A chuyển hướng sang Qwen qua
+OpenRouter (2026-08-11), thay GLM interim; self-host local model khi có GPU.
 
 Còn mở:
 

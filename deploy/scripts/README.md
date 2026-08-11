@@ -50,7 +50,7 @@ deploy/scripts/download-aiteamvn-embedding.sh
 
 | Profile | Service | Use |
 |---|---|---|
-| **`aiteamvn`** (default) | `embedding-cpu` | AITeamVN @ `:8088` — **dev + on-prem CPU prod path** |
+| **`aiteamvn`** (default) | `embedding-cpu` | AITeamVN @ `:8088` — **dev mặc định (không cần key) + air-gapped**; deployment hiện tại dùng OpenRouter `qwen3-embedding-8b` (ADR 0016), self-host lại khi có GPU |
 | `mock` | `mock-embedding` | 8-dim stub — **CI** (`COMPOSE_PROFILES=mock`) |
 | `gpu` | `vllm` | Optional GPU inference |
 

@@ -1,5 +1,5 @@
 // Shared post-answer chrome for live + historical chat turns: mode badge,
-// Vietnamese warning summary, optional discarded GLM draft, technical details.
+// Vietnamese warning summary, optional discarded LLM draft, technical details.
 import { Notice } from '../ui';
 import { describeAnswerMode } from './answerMode';
 import { presentWarnings } from './warningPresentation';

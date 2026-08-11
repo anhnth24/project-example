@@ -145,9 +145,11 @@ tests:
   - name: MarkhandProviderErrors fire then resolve
     interval: 1m
     input_series:
-      - series: 'markhand_provider_duration_seconds_count{provider="glm",outcome="error"}'
+      # Label matches what the server records for the chat path
+      # (`services/qa/provider.rs` uses provider="chat"/"chat_stream").
+      - series: 'markhand_provider_duration_seconds_count{provider="chat",outcome="error"}'
         values: "0+20x12 240+0x10"
-      - series: 'markhand_provider_duration_seconds_count{provider="glm",outcome="ok"}'
+      - series: 'markhand_provider_duration_seconds_count{provider="chat",outcome="ok"}'
         values: "0+2x12 24+20x10"
     alert_rule_test:
       - eval_time: 10m
@@ -155,10 +157,10 @@ tests:
         exp_alerts:
           - exp_labels:
               severity: warning
-              provider: glm
+              provider: chat
             exp_annotations:
-              summary: Chat/GLM provider error rate above 50%
-              runbook: docs/runbooks/phase-1b/glm-fallback.md
+              summary: Chat provider error rate above 50%
+              runbook: docs/runbooks/phase-1b/chat-provider-fallback.md
       - eval_time: 21m
         alertname: MarkhandProviderErrors
         exp_alerts: []

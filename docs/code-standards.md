@@ -40,24 +40,24 @@ PDF và whisper **đắt** → phải giữ pattern cache. Đừng "dọn" thàn
   (`audio_threads`, `audio_no_speech_threshold`) stay on `AudioEngine` and are **not** part of the
   cache key. Resample to 16 kHz uses `rubato` FFT with partial/flush + `output_delay` trim;
   returns `Result` (never invents silence on failure). Trả `Unsupported` nếu chưa có model.
-- **Tesseract**: spawn mỗi lần qua `crate::proc::background_command()` (không cache process). Temp PNG ghi qua
-  `tempfile::NamedTempFile` (exclusive `O_EXCL`/tên random) — tránh path đoán được trong `/tmp`.
+- **Temp file**: file tạm (ảnh render, artifact) ghi qua `tempfile::NamedTempFile`
+  (exclusive `O_EXCL`/tên random) — tránh path đoán được trong `/tmp`.
 
 ## Subprocess spawning — MUST dùng `crate::proc::background_command`
 
-GUI app (Tauri) không nên hiển thị console window khi spawn CLI subprocess (tesseract, python, LLM CLI).
+GUI app (Tauri) không nên hiển thị console window khi spawn CLI subprocess (python, LLM CLI…).
 Luôn dùng `crate::proc::background_command()` thay vì `Command::new()` trực tiếp:
 
 ```rust
 // ✅ Đúng
-let output = crate::proc::background_command("tesseract")
-    .arg(&image_path)
+let output = crate::proc::background_command("some-cli")
+    .arg(&input_path)
     .arg(out_path)
     .output()?;
 
 // ❌ Sai
-let output = std::process::Command::new("tesseract")
-    .arg(&image_path)
+let output = std::process::Command::new("some-cli")
+    .arg(&input_path)
     .arg(out_path)
     .output()?;
 ```
@@ -115,11 +115,11 @@ Không đo lại = không claims "nhanh/đúng hơn". Quy tắc Fail loud: báo 
 
 - Build whisper-rs cần **cmake + C/C++ + clang** (bindgen). Lần đầu compile whisper.cpp ~1–2 phút.
 - PDFium: `bash bench/download_pdfium.sh` → `./pdfium/lib`. Thiếu → PDF tự fallback pdf-extract.
-- tessdata_best (khuyến nghị, tài liệu thật/IN HOA): `bash bench/download_tessdata.sh` → `./tessdata_best`.
 - Whisper model: `bash bench/download_models.sh` → `./models/ggml-{tiny,base,small}.bin` + **PhoWhisper-small**.
-- Tesseract: cài `tesseract-ocr` + `tesseract-ocr-vie` (CLI).
+- OCR ảnh/scan: vision-LLM (`FILECONV_OCR_API_KEY`, mặc định OpenRouter; ADR 0016 —
+  Tesseract/Paddle local đã loại bỏ; self-host vision endpoint qua `FILECONV_OCR_BASE_URL`).
 
-Override đường dẫn qua env: `FILECONV_PDFIUM_LIB`, `FILECONV_TESSDATA`, `FILECONV_WHISPER_MODEL`.
+Override đường dẫn qua env: `FILECONV_PDFIUM_LIB`, `FILECONV_WHISPER_MODEL`.
 
 ## Cạm bẫy đã biết (tránh lặp)
 

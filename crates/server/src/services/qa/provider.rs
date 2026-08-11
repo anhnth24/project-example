@@ -1,4 +1,5 @@
-//! Optional OpenAI-compatible chat provider for grounded Q&A (GLM / local).
+//! Optional OpenAI-compatible chat provider for grounded Q&A (OpenRouter /
+//! self-hosted local endpoint).
 //!
 //! Supports non-streaming `complete` and incremental `stream_tokens` with
 //! cooperative cancel (P1B-R05). Extractive fallback may chunk locally; the
@@ -17,6 +18,12 @@ use tokio::sync::mpsc;
 
 use crate::services::qa::prompt::GroundedMessages;
 use crate::services::qa::stream::tokenize_answer;
+
+/// Current product direction (ADR 0016 / owner 2026-08-11): Qwen via
+/// OpenRouter for grounded Q&A; a self-hosted local model becomes the target
+/// once GPU capacity exists (same OpenAI-compatible contract, only the base
+/// URL/model change).
+const DEFAULT_CHAT_MODEL: &str = "qwen/qwen3.7-flash";
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -197,16 +204,19 @@ impl std::fmt::Debug for OpenAiCompatibleChat {
 }
 
 impl OpenAiCompatibleChat {
+    /// Reads `MARKHAND_CHAT_*` (canonical). `MARKHAND_GLM_*` is a deprecated
+    /// legacy alias from the interim GLM deployment (ADR 0004 era) kept only
+    /// so existing deployments keep working; new configs must use `CHAT_*`.
     pub fn from_env() -> Result<Self, ProviderError> {
-        let base = env::var("MARKHAND_GLM_BASE_URL")
-            .or_else(|_| env::var("MARKHAND_CHAT_BASE_URL"))
+        let base = env::var("MARKHAND_CHAT_BASE_URL")
+            .or_else(|_| env::var("MARKHAND_GLM_BASE_URL"))
             .map_err(|_| ProviderError::NotConfigured)?;
-        let api_key = env::var("MARKHAND_GLM_API_KEY")
-            .or_else(|_| env::var("MARKHAND_CHAT_API_KEY"))
+        let api_key = env::var("MARKHAND_CHAT_API_KEY")
+            .or_else(|_| env::var("MARKHAND_GLM_API_KEY"))
             .unwrap_or_default();
-        let model = env::var("MARKHAND_GLM_MODEL")
-            .or_else(|_| env::var("MARKHAND_CHAT_MODEL"))
-            .unwrap_or_else(|_| "glm-4-flash".into());
+        let model = env::var("MARKHAND_CHAT_MODEL")
+            .or_else(|_| env::var("MARKHAND_GLM_MODEL"))
+            .unwrap_or_else(|_| DEFAULT_CHAT_MODEL.into());
         let mode = if base.contains("127.0.0.1") || base.contains("localhost") {
             AnswerMode::LocalLlm
         } else {
@@ -641,7 +651,7 @@ mod tests {
         let provider = OpenAiCompatibleChat::new(
             "https://example.invalid/v1".into(),
             "super-secret-key".into(),
-            "glm-4-flash".into(),
+            "test-chat-model".into(),
             AnswerMode::CloudLlm,
         )
         .unwrap();

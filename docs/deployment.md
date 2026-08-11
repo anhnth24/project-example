@@ -3,9 +3,12 @@
 ## Platform
 
 Self-hosted Linux/amd64 Docker Compose. The UAT image serves the React SPA and
-Rust API from one origin; five workers use PostgreSQL, Qdrant, MinIO, and the
-local AITeamVN CPU embedding service. Grounded chat uses a server-side GLM
-OpenAI-compatible endpoint.
+Rust API from one origin; five workers use PostgreSQL, Qdrant, MinIO, and —
+per ADR 0016 — OpenRouter Qwen for vision OCR (`qwen/qwen3.7-flash`), cloud
+embedding (`qwen/qwen3-embedding-8b`, explicit egress opt-in), and grounded
+chat (OpenAI-compatible `MARKHAND_CHAT_*`). The local AITeamVN CPU embedding
+service remains the air-gapped profile and the future self-host path once GPU
+capacity exists.
 
 This is a `dev`-profile, private-network test deployment. Direct HTTP is allowed
 only for sanitized UAT documents and test identities. Add a reviewed TLS edge
@@ -27,18 +30,25 @@ Create `deploy/.env` from `deploy/.env.example`, keep it mode `0600`, and set:
 
 - `MARKHAND_COMPOSE_PROJECT=markhand-test`
 - `MARKHAND_PROFILE=dev`
-- `COMPOSE_PROFILES=aiteamvn`
 - `MARKHAND_API_BIND_HOST=<private-interface-ip>`
 - matching `MARKHAND_AUTH_ISSUER`
 - unique PostgreSQL, MinIO, JWT, and embedding credentials
-- the pinned AITeamVN URL/model/revision/dimensions/signature block
-- `MARKHAND_CHAT_BASE_URL` (full `/chat/completions` URL),
-  `MARKHAND_CHAT_API_KEY`, and `MARKHAND_CHAT_MODEL` for GLM
-- `MARKHAND_CHAT_HOST_IPV4` when `api.z.ai` (or the chosen chat host) resolves
-  to unreachable AAAA records from the Docker bridge; pin the A record so the
-  API container can reach GLM over IPv4
+- the OpenRouter cloud-embedding block (`qwen/qwen3-embedding-8b`,
+  `MARKHAND_EMBEDDING_RUNTIME_PATH=provider-cloud`,
+  `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`, `MARKHAND_EMBEDDING_NORMALIZE=client`,
+  `MARKHAND_EMBEDDING_SEND_DIMENSIONS=true`, pinned revision/dimensions and the
+  matching `MARKHAND_INDEX_SIGNATURE`) — air-gapped deployments use
+  `COMPOSE_PROFILES=aiteamvn` with the pinned AITeamVN block instead
+- `MARKHAND_OCR_API_KEY` (vision OCR worker stage; base URL/model default to
+  OpenRouter `qwen/qwen3.7-flash`)
+- `MARKHAND_CHAT_BASE_URL`, `MARKHAND_CHAT_API_KEY`, and `MARKHAND_CHAT_MODEL`
+  for grounded chat (currently Qwen via OpenRouter; a self-hosted
+  OpenAI-compatible endpoint slots in unchanged once GPU capacity exists;
+  legacy `MARKHAND_GLM_*` aliases are still read but deprecated)
+- `MARKHAND_CHAT_PIN_HOSTNAME`/`MARKHAND_CHAT_HOST_IPV4` only when the chosen
+  chat host resolves to unreachable AAAA records from the Docker bridge
 - optionally `MARKHAND_QA_ALLOW_UNVERIFIED_LLM=1` only while UAT explicitly
-  evaluates GLM output; responses remain labelled `llm_unverified` with a
+  evaluates provider output; responses remain labelled `llm_unverified` with a
   warning because structured entailment is unavailable
 - `MARKHAND_POC_MAX_STORAGE_BYTES=32212254720`
 - `MARKHAND_QDRANT_MEM_LIMIT=6g`
@@ -46,9 +56,9 @@ Create `deploy/.env` from `deploy/.env.example`, keep it mode `0600`, and set:
 Never commit the environment file, model weights, credentials, customer
 documents, or secret-bearing logs.
 
-Keep AITeamVN at batch size 16 initially. During a measured backlog ingest,
-`MARKHAND_EMBEDDING_CPUS` may be raised as high as `8.0` on the 24-CPU test
-host, then returned to the normal limit after the queue drains.
+Air-gapped only: keep AITeamVN at batch size 16 initially. During a measured
+backlog ingest, `MARKHAND_EMBEDDING_CPUS` may be raised as high as `8.0` on the
+24-CPU test host, then returned to the normal limit after the queue drains.
 
 ## Deploy
 
@@ -64,8 +74,8 @@ deploy/scripts/poc-health.sh
 
 `poc-up.sh` builds the API/SPA and worker images, runs migrations, applies the
 optional seeded-org quota override, starts dependencies and workers, and checks
-readiness. The first AITeamVN boot downloads the pinned model into the persistent
-embedding cache volume.
+readiness. (Air-gapped profile: the first AITeamVN boot downloads the pinned
+model into the persistent embedding cache volume.)
 
 Migration 0011 creates `admin@poc.example` without a password. Generate a random
 test password on a trusted workstation, store it in the team password manager,
