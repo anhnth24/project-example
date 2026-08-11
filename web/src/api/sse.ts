@@ -411,7 +411,16 @@ export class SseConnection implements AsyncIterable<SseMessage> {
     private readonly options: SseConnectionOptions,
   ) {
     this.cursor = createCursor(options.initialLastEventId);
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // Bind the default to globalThis: assigning the *native* `fetch` to a
+    // property and calling it as `this.fetchImpl(...)` re-targets `this` to
+    // the SseConnection instance, which real browsers reject with
+    // "TypeError: Illegal invocation" on every connect — silently classified
+    // below as a transient network failure and retried into a bogus
+    // "network lost" close. Mock mode never caught this because the test
+    // fetch shim is a plain function that ignores `this`; a real deployment
+    // (production build against fileconv-server) hit it on the first
+    // `/ask/stream` connect.
+    this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
     this.backoff = options.backoff ?? defaultBackoff;
     this.maxTransientAttempts = options.maxTransientAttempts ?? 6;
     if (options.signal) {

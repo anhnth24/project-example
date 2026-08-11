@@ -19,17 +19,24 @@ pub struct StreamEvent {
 }
 
 /// Splits an answer into bounded token-like chunks for SSE.
+///
+/// Lossless: concatenating the chunks reproduces the answer byte-for-byte.
+/// The previous `split_whitespace` + re-join dropped the whitespace *between*
+/// chunks (clients rendered "…Trợ" + "cấp…" as "Trợcấp") and collapsed the
+/// Markdown newlines the extractive answer relies on ("## heading", lists).
+/// Chunks now split at whitespace boundaries with each run of whitespace kept
+/// attached to the preceding chunk.
 pub fn tokenize_answer(answer: &str) -> Vec<String> {
+    const TARGET_CHUNK_LEN: usize = 48;
     let mut tokens = Vec::new();
     let mut current = String::new();
-    for word in answer.split_whitespace() {
-        if current.len() + word.len() + 1 > 48 && !current.is_empty() {
+    // `split_inclusive` keeps each word's trailing whitespace, so no
+    // separator is ever lost at a chunk boundary.
+    for piece in answer.split_inclusive(char::is_whitespace) {
+        if !current.is_empty() && current.len() + piece.trim_end().len() > TARGET_CHUNK_LEN {
             tokens.push(std::mem::take(&mut current));
         }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
+        current.push_str(piece);
     }
     if !current.is_empty() {
         tokens.push(current);
@@ -186,8 +193,21 @@ mod tests {
     #[test]
     fn tokenize_keeps_answer_coverage() {
         let tokens = tokenize_answer("Một hai ba bốn năm sáu bảy tám chín mười");
-        let joined = tokens.join(" ");
+        let joined = tokens.concat();
         assert!(joined.contains("Một"));
         assert!(joined.contains("mười"));
+    }
+
+    #[test]
+    fn tokenize_is_lossless_including_markdown_whitespace() {
+        // Regression: chunk boundaries used to eat the separating space
+        // ("Trợ" + "cấp" → "Trợcấp") and every newline, destroying the
+        // extractive answer's Markdown headings/lists on the wire.
+        let answer = "## Trả lời trích xuất\n\nCâu hỏi: **Trợ cấp thiết bị cho nhân viên làm việc \
+                      từ xa là bao nhiêu?**\n\n1. Nhân viên được hỗ trợ 1.200.000 đồng mỗi quý \
+                      [CITE-0001]\n";
+        let tokens = tokenize_answer(answer);
+        assert!(tokens.len() > 1, "long answer should stream in chunks");
+        assert_eq!(tokens.concat(), answer);
     }
 }

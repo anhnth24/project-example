@@ -206,6 +206,17 @@ export function ChatPanel({
     wasBusyRef.current = busy;
   }, [busy]);
 
+  // Keep the newest turn visible: the log region scrolls internally
+  // (`maxHeight: 60vh`), so without this a second question lands below the
+  // fold and looks like it never happened. Plain `scrollTop` assignment —
+  // no smooth scrolling to respect prefers-reduced-motion, and a no-op
+  // under jsdom.
+  const logRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const log = logRef.current;
+    if (log) log.scrollTop = log.scrollHeight;
+  }, [turns.length, historicalTurns.length]);
+
   const needsDocument = mode === 'compare' || mode === 'history';
   // Scope-wide as-of (backend `VersionMode::AsOf`) only needs a timestamp —
   // never a document picker. Submission stays blocked until both the question
@@ -268,6 +279,7 @@ export function ChatPanel({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
       <div
+        ref={logRef}
         role="log"
         aria-label="Lịch sử hỏi đáp"
         style={{

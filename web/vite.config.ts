@@ -5,7 +5,11 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
     plugins: [react()],
-    build: { target: 'es2021' },
+    // assetsInlineLimit 0: never inline assets as `data:` URLs. The served
+    // SPA runs under fileconv-server's strict CSP (`img-src 'self'`, see
+    // crates/server/src/spa.rs) which rejects data: URIs — Vite's default
+    // 4KB inlining silently blanked the brand SVG in real deployments.
+    build: { target: 'es2021', assetsInlineLimit: 0 },
     server: {
       proxy: {
         '/api': {
