@@ -1,5 +1,10 @@
 # Tesseract runtime license evidence
 
+> **Historical (ADR 0016):** Tesseract was removed from the OCR pipeline on
+> 2026-08-10 — image/scan OCR now runs through a vision LLM. This evidence is
+> retained for past releases that shipped the Tesseract runtime; do not treat
+> it as a current runtime prerequisite.
+
 - Inventory id: `tesseract-ocr-system`
 - Kind: native-library
 - Source: Ubuntu package `tesseract-ocr`

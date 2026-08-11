@@ -1,12 +1,15 @@
 # fileconv-mcp
 
-MCP server (stdio) để AI/agent chuyển file → Markdown **offline, không cần API key**.
-Tái dùng `fileconv-core`. Giúp agent đọc file không-phải-md (pdf/docx/pptx/xlsx/csv/html/ảnh/audio)
-mà **đỡ tốn token**: trích xuất ngoài context + chỉ lấy phần cần.
+MCP server (stdio) để AI/agent chuyển file → Markdown, chạy local và **đỡ tốn
+token**: trích xuất ngoài context + chỉ lấy phần cần. Tái dùng `fileconv-core`.
+Văn bản số (pdf text-layer/docx/pptx/xlsx/csv/html) convert tất định không cần
+API key; riêng **ảnh và PDF scan cần OCR đi qua vision-LLM** (`FILECONV_OCR_*`,
+ADR 0016 — Tesseract local đã bị loại bỏ), thiếu key sẽ báo `DependencyMissing`
+rõ ràng.
 
 ## Tool
 
-**Không cần API key (tất định, offline):**
+**Không cần API key (tất định — trừ ảnh/PDF scan cần `FILECONV_OCR_*`):**
 
 | Tool | Mô tả |
 |---|---|
@@ -47,8 +50,10 @@ claude mcp add fileconv -- /đường/dẫn/target/release/fileconv-mcp
 ```
 
 Tài nguyên native (tuỳ chọn) trỏ qua env khi đăng ký:
-`FILECONV_PDFIUM_LIB` (PDF), `FILECONV_TESSDATA` (OCR chất lượng cao), `FILECONV_WHISPER_MODEL` (audio).
-Thiếu thì tự fallback / báo lỗi rõ.
+`FILECONV_PDFIUM_LIB` (PDF render), `FILECONV_WHISPER_MODEL` (audio).
+OCR ảnh/scan cấu hình qua `FILECONV_OCR_API_KEY`/`FILECONV_OCR_BASE_URL`/
+`FILECONV_OCR_MODEL` (mặc định OpenRouter `qwen/qwen3.7-flash`; endpoint vision
+self-host dùng được khi có GPU). Thiếu thì tự fallback / báo lỗi rõ.
 
 ## Ví dụ luồng agent (tiết kiệm token)
 

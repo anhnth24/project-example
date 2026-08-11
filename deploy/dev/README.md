@@ -1,7 +1,8 @@
 # Local development stack
 
-PostgreSQL, Qdrant, MinIO, telemetry and **AITeamVN CPU embedding** (same runtime as
-on-prem CPU production).
+PostgreSQL, Qdrant, MinIO, telemetry and **AITeamVN CPU embedding** (dev default
+— không cần key/egress; deployment hiện tại dùng OpenRouter `qwen3-embedding-8b`
+theo ADR 0016, AITeamVN giữ cho air-gapped / self-host tương lai khi có GPU).
 
 **Runbook:** [`../../docs/runbooks/local-development.md`](../../docs/runbooks/local-development.md)
 
@@ -26,14 +27,16 @@ Compose: [`compose.yml`](compose.yml) · Dockerfile: [`Dockerfile.embedding-cpu`
 ## Bật LLM cho dev (grounded ask, opt-in)
 
 Mặc định `/api/v1/ask` là extractive-only (fail-closed vì chưa có structured
-entailment verifier — xem `services/qa/mod.rs`). Để thử một provider GLM/
-OpenAI-compatible thật trong dev:
+entailment verifier — xem `services/qa/mod.rs`). Để thử một provider
+OpenAI-compatible thật trong dev (hiện tại: Qwen qua OpenRouter; local
+self-host vLLM/Ollama dùng cùng contract):
 
 ```bash
 # .env (không commit key thật):
-MARKHAND_GLM_BASE_URL=http://127.0.0.1:8089/v1   # hoặc MARKHAND_CHAT_BASE_URL
-MARKHAND_GLM_API_KEY=...                          # hoặc MARKHAND_CHAT_API_KEY; để trống nếu local không cần key
-MARKHAND_GLM_MODEL=glm-4-flash                    # hoặc MARKHAND_CHAT_MODEL
+MARKHAND_CHAT_BASE_URL=https://openrouter.ai/api/v1   # hoặc endpoint local :8089/v1
+MARKHAND_CHAT_API_KEY=...                              # để trống nếu local không cần key
+MARKHAND_CHAT_MODEL=qwen/qwen3.7-flash
+# (alias legacy MARKHAND_GLM_* vẫn được đọc — deprecated)
 
 # Dev-gate riêng — mặc định TẮT. Bật để answer LLM (sau khi qua citation/claim
 # validation) được trả về thay vì luôn rớt extractive:

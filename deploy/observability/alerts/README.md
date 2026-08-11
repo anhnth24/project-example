@@ -22,7 +22,7 @@ Dashboard: [`../dashboards/markhand-phase1b.json`](../dashboards/markhand-phase1
 | `MarkhandQueueAgeHigh` | `markhand_job_queue_age_seconds` | stuck-jobs |
 | `MarkhandDiskLow` | `node_filesystem_*` (instance/device/mountpoint) | disk-exhaustion |
 | `MarkhandDependencyDown` | `up{job=markhand-api}` or `probe_success{job=~markhand-(postgres\|qdrant\|minio\|embedding)}` | dependency-outage |
-| `MarkhandProviderErrors` | `markhand_provider_duration_seconds` | glm-fallback |
+| `MarkhandProviderErrors` | `markhand_provider_duration_seconds` | chat-provider-fallback |
 | `MarkhandEmbeddingErrors` | `markhand_embedding_batch_duration_seconds` | dependency-outage |
 | `MarkhandConversionFailures` | `markhand_conversion_duration_seconds` | converter-outbreak |
 | `MarkhandReconcileDrift` | `markhand_reconcile_drift_total` | reconcile-drift |

@@ -36,7 +36,15 @@ Defaults:
 - API on `http://127.0.0.1:8788` (`/api/v1/health/ready`)
 - Host ports are loopback-only and offset from `deploy/dev` to avoid clashes
 
-AITeamVN CPU embedding (not GLM):
+OpenRouter cloud embedding (`qwen/qwen3-embedding-8b`, ADR 0016 — hướng hiện tại):
+
+```bash
+# edit deploy/.env: bật block "OpenRouter cloud embedding" (provider-cloud,
+# MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true) + signature từ print-index-signature.py
+deploy/scripts/poc-up.sh
+```
+
+AITeamVN CPU embedding (air-gapped / self-host tương lai khi có GPU):
 
 ```bash
 # edit deploy/.env: COMPOSE_PROFILES=aiteamvn + AITeamVN signature/URL block

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Tải model OCR chất lượng cao tessdata_best (vie + eng) để tăng độ chính xác
-# tiếng Việt với tài liệu thật (đặc biệt chữ IN HOA). Đặt ở ./tessdata_best —
-# backend tự dùng nếu có (hoặc trỏ FILECONV_TESSDATA). Thiếu thì dùng model nhẹ hệ thống.
+# [LỊCH SỬ — ADR 0016] Tesseract đã bị loại bỏ khỏi pipeline OCR (2026-08-10);
+# backend không còn đọc tessdata/FILECONV_TESSDATA. Script này chỉ giữ để tái
+# tạo thí nghiệm OCR cũ (bench/REPORT_ACCURACY.md, ocr_experiment.py).
+# Tải model tessdata_best (vie + eng) vào ./tessdata_best.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DST="$ROOT/tessdata_best"

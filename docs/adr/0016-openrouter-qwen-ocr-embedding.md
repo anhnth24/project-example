@@ -1,12 +1,13 @@
 # ADR 0016: OpenRouter Qwen cho OCR và embedding của Markhand Web
 
 - Status: Accepted (phần OCR — quyết định trực tiếp của product owner
-  2026-08-10, đã implement); phần embedding cutover vẫn gated theo điều kiện
-  bên dưới
+  2026-08-10, đã implement); phần embedding: benchmark DKP-02 **PASS**
+  (2026-08-10), cutover còn chờ chốt dimension + security review theo điều
+  kiện bên dưới
 - Date: 2026-08-10
 - Owners: retrieval-owner, worker-owner
-- Approver: product-owner (OCR: approved 2026-08-10; embedding: pending
-  benchmark evidence)
+- Approver: product-owner (OCR: approved 2026-08-10; embedding: benchmark PASS,
+  pending dimension decision + security review)
 - Supersedes: [ADR 0005](0005-vietnamese-embedding-model-quality.md) (embedding
   runtime selection cho Markhand Web — khi phần embedding được kích hoạt)
 - Related issues/PRs: draft DKP-01…DKP-07 trong

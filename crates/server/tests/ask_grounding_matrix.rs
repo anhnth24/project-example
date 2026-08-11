@@ -36,7 +36,7 @@ use common::{
 fn production_ask_path_is_extractive_while_entailment_unavailable() {
     assert!(
         !structured_entailment_available(),
-        "must not claim GLM grounded answers without verified entailment"
+        "must not claim LLM grounded answers without verified entailment"
     );
 }
 
@@ -274,7 +274,7 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
     assert!(!response
         .answer
         .to_ascii_lowercase()
-        .contains("glm grounded"));
+        .contains("llm grounded"));
 
     // P2-10 gap close: `CitationPin` (`services::citation`) must carry the
     // exact seeded document/version/collection identity end-to-end through
@@ -402,7 +402,7 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
     );
 
     // HTTP ask route also stays extractive-only.
-    // Document is tombstoned; ask may return empty extractive but must not 500 claiming grounded GLM.
+    // Document is tombstoned; ask may return empty extractive but must not 500 claiming LLM grounding.
     let response = router
         .oneshot(
             Request::builder()
@@ -422,7 +422,7 @@ async fn live_ask_is_extractive_and_delete_during_stream_closes() {
         )
         .await
         .unwrap();
-    // May be 200 with empty hits or an auth/not-found style response; never claim grounded GLM.
+    // May be 200 with empty hits or an auth/not-found style response; never claim LLM grounding.
     let status = response.status();
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8_lossy(&body);

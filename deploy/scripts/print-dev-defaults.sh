@@ -45,7 +45,7 @@ POC UUIDs (migration 0011)
   Admin user      22222222-2222-2222-2222-222222222201
   Collection      55555555-5555-5555-5555-555555555501  (slug: poc-library)
 
-Embedding (AITeamVN CPU — chậm lần đầu, cùng runtime on-prem CPU)
+Embedding (AITeamVN CPU — chậm lần đầu; dev/air-gapped — prod hiện dùng OpenRouter, ADR 0016)
   MARKHAND_EMBEDDING_BASE_URL=${MARKHAND_EMBEDDING_BASE_URL:-http://127.0.0.1:8088/v1}
   MARKHAND_EMBEDDING_MODEL=${MARKHAND_EMBEDDING_MODEL:-AITeamVN/Vietnamese_Embedding}
   MARKHAND_EMBEDDING_DIMENSIONS=${MARKHAND_EMBEDDING_DIMENSIONS:-1024}

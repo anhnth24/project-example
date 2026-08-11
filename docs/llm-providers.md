@@ -133,36 +133,44 @@ export FILECONV_LLM_API_KEY=...
 Baseline luôn là FTS5 + local feature hashing 256D. Người dùng có thể bật neural
 embeddings riêng với chat provider:
 
-- **Markhand Web server (POC/1B):** on-prem `AITeamVN/Vietnamese_Embedding`
-  (`local-neural`, Compose `embedding-cpu` @ `:8088`) — ADR 0005.
+- **Markhand Web server (hướng hiện tại — ADR 0016):** OpenRouter
+  `qwen/qwen3-embedding-8b` (`provider-cloud`, cần `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`).
+- **Markhand Web air-gapped / self-host tương lai (khi có GPU):** on-prem
+  `AITeamVN/Vietnamese_Embedding` (`local-neural`, Compose `embedding-cpu` @ `:8088`)
+  — ADR 0005 (superseded bởi 0016 cho deployment cloud-allowed; giữ như generation riêng).
 - Local desktop/server presets: Ollama (`nomic-embed-text`, `mxbai-embed-large`,
   `bge-m3`), LM Studio, vLLM.
-- Cloud (desktop optional only; **not** Markhand Web server default): GLM/Zhipu
-  (`embedding-3`, `embedding-2`), OpenAI (`text-embedding-3-*`), Gemini
-  (`gemini-embedding-001`) — xem ADR 0004 (superseded for web server).
+- Cloud khác (desktop optional only): GLM/Zhipu (`embedding-3`, `embedding-2`),
+  OpenAI (`text-embedding-3-*`), Gemini (`gemini-embedding-001`) — xem ADR 0004
+  (superseded for web server).
 
 ### Markhand Web — OCR, embedding vs Q&A
 
 | Path | Runtime | Egress |
 |---|---|---|
 | OCR ảnh/trang scan | Vision LLM qua worker stage (OpenRouter mặc định, `MARKHAND_OCR_*`); sandbox chỉ render JPEG (deferred), không network/key | Ảnh trang scan → provider |
-| Index / hybrid search | AITeamVN local (`local-neural`) **hoặc** OpenRouter `qwen/qwen3-embedding-8b` (`provider-cloud`, cần `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`) | Local: không; cloud: toàn bộ chunk text |
-| Grounded Q&A | GLM cloud (hoặc local LLM) | Chỉ top-K citation |
+| Index / hybrid search | OpenRouter `qwen/qwen3-embedding-8b` (`provider-cloud`, cần `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`) — hướng hiện tại; AITeamVN local (`local-neural`) cho air-gapped / self-host khi có GPU | Local: không; cloud: toàn bộ chunk text |
+| Grounded Q&A | Qwen qua OpenRouter (`MARKHAND_CHAT_*`; alias legacy `MARKHAND_GLM_*` deprecated) hoặc local LLM self-host | Chỉ top-K citation |
 
 ```bash
-# Server embedding local (dev/POC) — see deploy/dev/.env.example
-MARKHAND_EMBEDDING_BASE_URL=http://127.0.0.1:8088/v1
-MARKHAND_EMBEDDING_MODEL=AITeamVN/Vietnamese_Embedding
-
-# Server embedding OpenRouter (ADR 0016) — xem deploy/dev/worker.env.example:
+# Server embedding OpenRouter (ADR 0016 — hướng hiện tại), xem deploy/dev/worker.env.example:
 # BASE_URL=https://openrouter.ai/api/v1, MODEL=qwen/qwen3-embedding-8b,
 # RUNTIME_PATH=provider-cloud, ALLOW_CLOUD_EMBEDDINGS=true, NORMALIZE=client,
 # SEND_DIMENSIONS=true (MRL 4096→1024). Đổi config = index generation mới.
 
+# Server embedding local (dev mặc định / air-gapped / self-host tương lai khi có GPU)
+MARKHAND_EMBEDDING_BASE_URL=http://127.0.0.1:8088/v1
+MARKHAND_EMBEDDING_MODEL=AITeamVN/Vietnamese_Embedding
+
 # Server vision OCR (worker stage, bắt buộc cho ảnh/PDF scan)
 MARKHAND_OCR_API_KEY=...
 
-# Q&A only (cloud)
+# Server grounded Q&A (hiện tại: Qwen qua OpenRouter; self-host cùng contract)
+MARKHAND_CHAT_BASE_URL=https://openrouter.ai/api/v1
+MARKHAND_CHAT_API_KEY=...
+MARKHAND_CHAT_MODEL=qwen/qwen3.7-flash
+
+# Desktop Q&A (cloud)
 export FILECONV_LLM_API_KEY=...
 ```
 

@@ -47,7 +47,7 @@ docker compose -f deploy/compose.poc.yml --env-file deploy/.env exec -T postgres
 
 1. Restore the failed dependency; wait healthy.
 2. Qdrant-only loss → rebuild from PG chunks (ADR 0012) via [vector-rebuild](vector-rebuild.md).
-3. Embedding/provider errors → restore mock/vLLM/GLM; leave extractive ask online.
+3. Embedding/provider errors → restore mock/OpenRouter/self-hosted endpoint; leave extractive ask online.
 
 ## Verify
 
