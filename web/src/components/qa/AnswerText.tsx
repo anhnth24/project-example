@@ -1,15 +1,70 @@
 // Renders a turn's answer text with inline `[n]` footnote markers instead of
-// the raw `[CITE-xxxx]` token the server embeds — see `citationFootnotes.ts`
+// the raw `[CITE-xxxx]` token the server embeds — see `citationFootnoteModel.ts`
 // for the pure mapping this is a thin view over. Each marker links (`href`,
 // real in-page anchor, not just a visual number) to its matching item in the
 // `CitationFootnotes` block this turn also renders, so a screen reader user
 // gets the same "jump to source" affordance a sighted user gets by clicking
 // the superscript number.
+//
+// Text segments are split on blank lines into paragraphs so extractive dumps
+// read as a list of passages instead of one wall of `pre-wrap` text. Footnote
+// markers stay inside the paragraph they belong to.
+import type { ReactNode } from 'react';
 import type { CitationPin } from './CitationCard';
-import { splitAnswerIntoFootnoteSegments } from './citationFootnotes';
+import { splitAnswerIntoFootnoteSegments, type AnswerTextSegment } from './citationFootnoteModel';
 
 export function footnoteAnchorId(scopeId: string, n: number): string {
   return `${scopeId}-cite-${n}`;
+}
+
+function renderSegments(
+  segments: readonly AnswerTextSegment[],
+  scopeId: string,
+  keyPrefix: string,
+): ReactNode[] {
+  return segments.map((segment, i) =>
+    segment.kind === 'footnote' ? (
+      <sup key={`${keyPrefix}-f-${i}`}>
+        <a href={`#${footnoteAnchorId(scopeId, segment.footnoteNumber!)}`}>
+          [{segment.footnoteNumber}]
+        </a>
+      </sup>
+    ) : (
+      <span key={`${keyPrefix}-t-${i}`}>{segment.text}</span>
+    ),
+  );
+}
+
+/** Split a flat segment list into paragraph groups at blank-line boundaries in text segments. */
+function groupIntoParagraphs(segments: readonly AnswerTextSegment[]): AnswerTextSegment[][] {
+  const paragraphs: AnswerTextSegment[][] = [];
+  let current: AnswerTextSegment[] = [];
+
+  const flush = () => {
+    if (current.length > 0) {
+      paragraphs.push(current);
+      current = [];
+    }
+  };
+
+  for (const segment of segments) {
+    if (segment.kind === 'footnote') {
+      current.push(segment);
+      continue;
+    }
+    const text = segment.text ?? '';
+    const parts = text.split(/\n{2,}/);
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) flush();
+      const part = parts[i];
+      if (part.length > 0) {
+        // Preserve single newlines inside a paragraph as line breaks via CSS white-space.
+        current.push({ kind: 'text', text: part });
+      }
+    }
+  }
+  flush();
+  return paragraphs.length > 0 ? paragraphs : [segments.slice()];
 }
 
 export function AnswerText({
@@ -23,19 +78,21 @@ export function AnswerText({
   scopeId: string;
 }) {
   const segments = splitAnswerIntoFootnoteSegments(text, citations);
+  const paragraphs = groupIntoParagraphs(segments);
   return (
-    <p data-testid="qa-answer" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>
-      {segments.map((segment, i) =>
-        segment.kind === 'footnote' ? (
-          <sup key={i}>
-            <a href={`#${footnoteAnchorId(scopeId, segment.footnoteNumber!)}`}>
-              [{segment.footnoteNumber}]
-            </a>
-          </sup>
-        ) : (
-          <span key={i}>{segment.text}</span>
-        ),
-      )}
-    </p>
+    <div data-testid="qa-answer" style={{ display: 'grid', gap: 'var(--space-2)' }}>
+      {paragraphs.map((paragraph, i) => (
+        <p
+          key={i}
+          style={{
+            margin: 0,
+            whiteSpace: 'pre-wrap',
+            lineHeight: 1.55,
+          }}
+        >
+          {renderSegments(paragraph, scopeId, `p${i}`)}
+        </p>
+      ))}
+    </div>
   );
 }

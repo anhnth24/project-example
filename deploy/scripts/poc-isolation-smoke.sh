@@ -9,6 +9,8 @@ COMPOSE_FILE="$ROOT/deploy/compose.poc.yml"
 ENV_EXAMPLE="$ROOT/deploy/.env.example"
 DOCKERFILE_SERVER="$ROOT/deploy/Dockerfile.server"
 DOCKERFILE_WORKER="$ROOT/deploy/Dockerfile.worker"
+EMBEDDING_REQUIREMENTS="$ROOT/deploy/dev/requirements-embedding-server.txt"
+EMBEDDING_SERVER="$ROOT/deploy/scripts/aiteamvn-embedding-server.py"
 IMAGES_LOCK="$ROOT/deploy/poc/images.lock.json"
 WORKER_SECCOMP="$ROOT/deploy/poc/worker-sandbox-seccomp.json"
 FAIL=0
@@ -84,6 +86,8 @@ require_file "$ROOT/deploy/poc/minio-app-policy.json.tmpl"
 require_file "$ROOT/deploy/poc/postgres-init.sh"
 require_file "$IMAGES_LOCK"
 require_file "$ROOT/deploy/poc/Dockerfile.embedding-cpu"
+require_file "$EMBEDDING_REQUIREMENTS"
+require_file "$EMBEDDING_SERVER"
 require_file "$ROOT/deploy/README.md"
 
 # Separate API / worker images
@@ -172,8 +176,11 @@ forbid_regex "$DOCKERFILE_WORKER" 'releases/latest' "worker Dockerfile must not 
 require_regex "$DOCKERFILE_WORKER" "$PDFIUM_SHA" "worker Dockerfile pins PDFium sha256"
 require_regex "$DOCKERFILE_WORKER" 'chromium%2F7906|chromium/7906' "worker Dockerfile pins PDFium tag"
 require_regex "$IMAGES_LOCK" "$PDFIUM_SHA" "images.lock records PDFium sha256"
+require_regex "$DOCKERFILE_SERVER" 'node:22-bookworm-slim@sha256:' \
+  "server web builder base digest pinned"
 require_regex "$DOCKERFILE_SERVER" 'rust:1\.88\.0-bookworm@sha256:' "server builder base digest pinned"
 require_regex "$DOCKERFILE_SERVER" 'debian:bookworm-slim@sha256:' "server runtime base digest pinned"
+require_regex "$DOCKERFILE_SERVER" 'MARKHAND_WEB_DIST_DIR' "server image enables bundled SPA"
 require_regex "$DOCKERFILE_WORKER" 'rust:1\.88\.0-bookworm@sha256:' "worker builder base digest pinned"
 require_regex "$DOCKERFILE_WORKER" 'debian:bookworm-slim@sha256:' "worker runtime base digest pinned"
 forbid_regex "$DOCKERFILE_WORKER" 'tesseract-ocr' \
@@ -181,15 +188,41 @@ forbid_regex "$DOCKERFILE_WORKER" 'tesseract-ocr' \
 require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" \
   'python:3\.12\.12-slim-bookworm@sha256:' \
   "embedding-cpu base digest pinned"
+require_regex "$EMBEDDING_REQUIREMENTS" \
+  '^--extra-index-url https://download\.pytorch\.org/whl/cpu[[:space:]]*$' \
+  "embedding-cpu uses the official PyTorch CPU wheel index"
+require_regex "$EMBEDDING_REQUIREMENTS" '^torch==2\.13\.0\+cpu[[:space:]]*$' \
+  "embedding-cpu pins the CPU-only torch build"
+require_regex "$ROOT/deploy/poc/Dockerfile.embedding-cpu" 'torch\.version\.cuda is None' \
+  "embedding-cpu build rejects CUDA-enabled torch"
+require_regex "$EMBEDDING_SERVER" 'torch\.set_num_threads\(TORCH_THREADS\)' \
+  "embedding-cpu caps PyTorch threads to its CPU budget"
 require_regex "$IMAGES_LOCK" 'rust-bookworm' "images.lock records rust base"
+require_regex "$IMAGES_LOCK" 'node-bookworm-slim' "images.lock records node base"
 require_regex "$IMAGES_LOCK" 'debian-bookworm-slim' "images.lock records debian base"
 require_regex "$IMAGES_LOCK" 'python-slim-bookworm' "images.lock records python base"
 # Index signatures (source of truth: print-index-signature.py)
 require_regex "$ENV_EXAMPLE" "$MOCK_SIG" ".env.example has mock index signature"
 require_regex "$ENV_EXAMPLE" "$AITEAMVN_SIG" ".env.example documents AITeamVN index signature"
 require_regex "$COMPOSE_FILE" "$MOCK_SIG" "compose defaults to mock index signature"
+require_regex "$COMPOSE_FILE" 'MARKHAND_QA_ALLOW_UNVERIFIED_LLM.*:-0' \
+  "compose keeps unverified LLM output opt-in"
+require_regex "$COMPOSE_FILE" 'api\.z\.ai:\$\{MARKHAND_CHAT_HOST_IPV4' \
+  "compose supports optional IPv4 pin for cloud chat egress"
 require_regex "$IMAGES_LOCK" "$MOCK_SIG" "images.lock records mock signature"
 require_regex "$IMAGES_LOCK" "$AITEAMVN_SIG" "images.lock records AITeamVN signature"
+require_regex "$ROOT/deploy/scripts/poc-up.sh" 'poc-set-quota\.sh' \
+  "poc-up applies optional post-migration quota"
+require_regex "$ROOT/deploy/scripts/poc-set-quota.sh" 'org_quotas' \
+  "quota override updates the canonical quota table"
+require_regex "$ROOT/deploy/scripts/poc-set-quota.sh" 'unsigned integer' \
+  "quota override validates bytes before SQL"
+require_regex "$ROOT/deploy/scripts/poc-set-admin-password.sh" 'Argon2id PHC hash' \
+  "admin bootstrap accepts only a pre-hashed password"
+forbid_regex "$ROOT/deploy/scripts/poc-set-admin-password.sh" 'markhand-dev' \
+  "admin bootstrap must not embed the development password"
+require_regex "$ROOT/.dockerignore" 'web/\.env\*' \
+  "server build excludes local Vite environment files"
 
 if command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1; then
   PYTHON_BIN="$(command -v python3 || command -v python)"

@@ -30,6 +30,12 @@ web/dist/
 !CLAUDE.md
 !CONTRIBUTING.md
 pdfium/
+# Linux PDFium for WSL dev (Windows build lives in pdfium/)
+pdfium-linux/
+# Local-only Vite proxy override (WSL eth0 IP)
+/web/.env.local
+# Local dev helper scripts
+/.tmp-*
 /tessdata_best/
 /app/src-tauri/native-runtime/*
 !/app/src-tauri/native-runtime/README.md

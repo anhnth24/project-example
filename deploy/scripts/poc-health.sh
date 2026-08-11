@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Health checks for the Markhand POC stack (host loopback ports + worker state).
+# Health checks for the Markhand POC stack (host-published ports + worker state).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -72,12 +72,16 @@ else
   wait_http "http://127.0.0.1:${EMBED_PORT}/health" mock-embedding 60
 fi
 
+API_HOST="${MARKHAND_API_HEALTH_HOST:-${MARKHAND_API_BIND_HOST:-127.0.0.1}}"
+if [[ "$API_HOST" == "0.0.0.0" ]]; then
+  API_HOST=127.0.0.1
+fi
 wait_http \
-  "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/live" \
+  "http://${API_HOST}:${MARKHAND_API_PORT:-8788}/api/v1/health/live" \
   api-live \
   90
 wait_http \
-  "http://127.0.0.1:${MARKHAND_API_PORT:-8788}/api/v1/health/ready" \
+  "http://${API_HOST}:${MARKHAND_API_PORT:-8788}/api/v1/health/ready" \
   api-ready \
   90
 

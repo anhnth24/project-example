@@ -7,8 +7,31 @@ import os
 import threading
 import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import numpy as np
+
+
+def cpu_thread_limit() -> int:
+    configured = os.environ.get("MARKHAND_EMBEDDING_TORCH_THREADS")
+    if configured is not None:
+        try:
+            threads = int(configured)
+        except ValueError as error:
+            raise ValueError("MARKHAND_EMBEDDING_TORCH_THREADS must be an integer") from error
+        if threads < 1:
+            raise ValueError("MARKHAND_EMBEDDING_TORCH_THREADS must be positive")
+        return min(threads, os.cpu_count() or threads)
+
+    host_cpus = max(1, os.cpu_count() or 1)
+    try:
+        quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+        if quota != "max":
+            return max(1, min(host_cpus, int(quota) // int(period)))
+    except (OSError, ValueError):
+        pass
+    return host_cpus
+
 
 HUB_ID = os.environ.get(
     "MARKHAND_EMBEDDING_HUB_ID", "AITeamVN/Vietnamese_Embedding"
@@ -24,9 +47,11 @@ DEVICE = os.environ.get("MARKHAND_EMBEDDING_DEVICE", "cpu")
 API_KEY = os.environ.get("MARKHAND_EMBEDDING_SERVER_API_KEY", "dev-embedding-key")
 LISTEN_HOST = os.environ.get("MARKHAND_EMBEDDING_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("MARKHAND_EMBEDDING_LISTEN_PORT", "8080"))
+TORCH_THREADS = cpu_thread_limit()
 
 _model = None
 _model_lock = threading.Lock()
+_ready_probe: np.ndarray | None = None
 _ready = False
 _load_error: str | None = None
 
@@ -42,14 +67,17 @@ def prepare_text(text: str) -> str:
 
 
 def load_model() -> None:
-    global _model, _ready, _load_error
+    global _model, _ready_probe, _ready, _load_error
     try:
+        import torch
         from sentence_transformers import SentenceTransformer
 
+        torch.set_num_threads(TORCH_THREADS)
+        torch.set_num_interop_threads(1)
         model = SentenceTransformer(HUB_ID, revision=REVISION, device=DEVICE)
         model.max_seq_length = MAX_SEQ_LENGTH
         probe = model.encode(
-            ["markhand embedding probe"],
+            [prepare_text("markhand-ready")],
             batch_size=1,
             show_progress_bar=False,
             convert_to_numpy=True,
@@ -62,11 +90,13 @@ def load_model() -> None:
             )
         with _model_lock:
             _model = model
+            _ready_probe = probe
             _ready = True
             _load_error = None
     except Exception as error:  # noqa: BLE001 — surface load failure via /health
         with _model_lock:
             _model = None
+            _ready_probe = None
             _ready = False
             _load_error = str(error)
 
@@ -76,7 +106,10 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         if _model is None:
             raise RuntimeError(_load_error or "embedding model is not loaded")
         model = _model
+        ready_probe = _ready_probe
     prepared = [prepare_text(text) for text in texts]
+    if prepared == ["markhand-ready"] and ready_probe is not None:
+        return ready_probe.tolist()
     vectors: list[np.ndarray] = []
     for offset in range(0, len(prepared), BATCH_SIZE):
         batch = prepared[offset : offset + BATCH_SIZE]
@@ -109,6 +142,7 @@ class Handler(BaseHTTPRequestHandler):
                         "revision": REVISION,
                         "dimensions": DIMENSIONS,
                         "device": DEVICE,
+                        "torchThreads": TORCH_THREADS,
                     },
                 )
                 return

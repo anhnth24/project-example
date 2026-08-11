@@ -29,6 +29,7 @@ pub const ALLOWED_ANSWER_MODES: &[&str] = &[
     "cloud_llm",
     "subscription_cli",
     "llm_unverified",
+    "assistant",
 ];
 
 pub const MAX_TITLE_LEN: usize = 200;
@@ -310,6 +311,7 @@ mod tests {
     fn allowed_answer_modes_match_known_set() {
         assert!(ALLOWED_ANSWER_MODES.contains(&"offline_extractive"));
         assert!(ALLOWED_ANSWER_MODES.contains(&"llm_unverified"));
+        assert!(ALLOWED_ANSWER_MODES.contains(&"assistant"));
         assert!(!ALLOWED_ANSWER_MODES.contains(&"bogus_mode"));
     }
 }

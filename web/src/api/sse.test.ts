@@ -260,6 +260,33 @@ describe('classifySseCloseCode', () => {
 // ---------------------------------------------------------------------------
 
 describe('SseConnection', () => {
+  it('invokes fetch with the global receiver required by native Window.fetch', async () => {
+    const body = streamOf([
+      envelopeFrame('1', 'ask.token', { text: 'ok' }),
+      envelopeFrame('2', 'stream.closed', { reason: 'completed' }),
+    ]);
+    let receivedGlobalReceiver = false;
+    const receiverSensitiveFetch = async function (this: unknown): Promise<Response> {
+      receivedGlobalReceiver = this === globalThis;
+      if (!receivedGlobalReceiver) {
+        throw new TypeError('Illegal invocation');
+      }
+      return new Response(body, { status: 200 });
+    };
+    const { provider } = fakeTokenProvider();
+    const connection = new SseConnection(() => ({ url: '/api/v1/ask/stream' }), {
+      tokenProvider: provider,
+      fetchImpl: receiverSensitiveFetch as typeof fetch,
+      backoff: () => 0,
+      maxTransientAttempts: 0,
+    });
+
+    const messages = await collect(connection, 3);
+
+    expect(receivedGlobalReceiver).toBe(true);
+    expect(messages[0]).toMatchObject({ kind: 'event', id: '1' });
+  });
+
   it('delivers events in sequence order and resumes from the last acked id', async () => {
     const first = streamOf([
       envelopeFrame('1', 'ask.token', { text: 'A' }),

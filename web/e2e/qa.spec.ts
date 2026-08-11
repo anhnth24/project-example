@@ -62,8 +62,9 @@ test('ask streams a grounded answer token-by-token, then a numbered footnote sou
   // "Roadmap.xlsx" deep-links straight to its Library preview.
   // This question's tokens ("quý") also match the unrelated compare-doc
   // fixture, so a second footnote/link can render here too — scope to
-  // whichever footnote card links to "Xem trước tài liệu" first.
-  await page.getByRole('link', { name: 'Xem trước tài liệu' }).first().click();
+  // whichever footnote item links to "Xem trước" first (the item already
+  // carries the document title next to the link).
+  await page.getByRole('link', { name: 'Xem trước' }).first().click();
   await expect(page).toHaveURL(/\/library\/[^/]+\?doc=[^/]+$/);
   await expect(page.getByTestId('document-preview-markdown')).toContainText(
     'Mock preview content for version',
@@ -94,7 +95,13 @@ test('provider fallback still answers (extractive), labelled honestly, with a wa
   await page.getByRole('textbox', { name: 'Câu hỏi' }).fill(`${ASK_QUESTION} ${FALLBACK_MARKER}`);
   await page.getByRole('button', { name: 'Hỏi', exact: true }).click();
 
-  await expect(page.getByText('Trả lời trích xuất (không qua LLM)')).toBeVisible();
+  await expect(page.getByText('Dùng đoạn nguồn (câu mô hình không đạt kiểm chứng)')).toBeVisible();
+  // The readable Vietnamese summary is visible up front; the raw provider
+  // warning is preserved verbatim under the collapsible technical details.
+  await expect(
+    page.getByText(/Nhà cung cấp mô hình tạm thời không khả dụng; đang hiện các đoạn nguồn/),
+  ).toBeVisible();
+  await page.getByTestId('qa-warning-details').locator('summary').click();
   await expect(page.getByText(/Nhà cung cấp LLM tạm thời không khả dụng/)).toBeVisible();
   await expect(page.getByTestId('qa-answer').first()).toContainText(
     'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',

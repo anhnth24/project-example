@@ -18,6 +18,7 @@ RUN apt-get update \
 
 COPY deploy/dev/requirements-embedding-server.txt /opt/requirements.txt
 RUN pip install --no-cache-dir -r /opt/requirements.txt \
+    && python -c 'import torch; assert torch.version.cuda is None, f"expected CPU-only torch, got CUDA {torch.version.cuda}"' \
     && chown -R markhand:markhand /opt
 
 COPY deploy/scripts/aiteamvn-embedding-server.py /opt/server.py

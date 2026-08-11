@@ -16,13 +16,87 @@
 // to `collectionId` resolved against `collectionNameById` — a map the caller
 // already has in hand from a single `GET /collections` call made once per
 // page, not once per citation — same graceful-degradation fallback as before.
+//
+// Quotes are collapsed by default so the source list stays scannable; the
+// answer body already carries the relevant passages for extractive turns.
+import { useState } from 'react';
 import { buildLibraryDocPath } from '../../lib/router';
 import { RouteLink } from '../RouteLink';
 import { footnoteAnchorId } from './AnswerText';
 import { hasDeepLink, locationLabel, type CitationPin } from './CitationCard';
-import { buildCitationFootnotes, distinctDocumentCount } from './citationFootnotes';
+import { buildCitationFootnotes, distinctDocumentCount } from './citationFootnoteModel';
 
 const UNKNOWN_COLLECTION_LABEL = 'Bộ sưu tập không xác định';
+
+function FootnoteItem({
+  n,
+  citation,
+  sourceLabel,
+  location,
+  scopeId,
+}: {
+  n: number;
+  citation: CitationPin;
+  sourceLabel: string;
+  location: string | null;
+  scopeId: string;
+}) {
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const deepLinkable = hasDeepLink(citation);
+  return (
+    <li
+      id={footnoteAnchorId(scopeId, n)}
+      style={{
+        padding: 'var(--space-2) 0',
+        borderBottom: '1px solid var(--border-subtle, rgba(0,0,0,0.08))',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          gap: 'var(--space-2)',
+          alignItems: 'baseline',
+          flexWrap: 'wrap',
+        }}
+      >
+        <strong>[{n}]</strong>
+        <span>{sourceLabel}</span>
+        {location && <span className="text-muted">— {location}</span>}
+        {citation.isCurrent === false && (
+          <span className="tag tag-neutral" title="Trích dẫn từ phiên bản không phải bản mới nhất">
+            Không phải bản hiện hành
+          </span>
+        )}
+        {deepLinkable && (
+          <RouteLink
+            className="btn btn-secondary btn-sm"
+            to={buildLibraryDocPath(citation.collectionId, citation.logicalDocumentId)}
+          >
+            Xem trước
+          </RouteLink>
+        )}
+        {citation.quote && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            aria-expanded={quoteOpen}
+            onClick={() => setQuoteOpen((open) => !open)}
+          >
+            {quoteOpen ? 'Ẩn đoạn trích' : 'Hiện đoạn trích'}
+          </button>
+        )}
+      </div>
+      {quoteOpen && citation.quote && (
+        <blockquote
+          style={{ margin: 'var(--space-2) 0 0', fontStyle: 'italic' }}
+          data-testid="qa-footnote-quote"
+        >
+          “{citation.quote}”
+        </blockquote>
+      )}
+    </li>
+  );
+}
 
 export function CitationFootnotes({
   citations,
@@ -54,7 +128,7 @@ export function CitationFootnotes({
           margin: 'var(--space-2) 0 0',
           padding: 0,
           display: 'grid',
-          gap: 'var(--space-2)',
+          gap: 0,
         }}
       >
         {footnotes.map(({ n, citation }) => {
@@ -63,49 +137,15 @@ export function CitationFootnotes({
             : UNKNOWN_COLLECTION_LABEL;
           const sourceLabel = citation.documentTitle ?? collectionName;
           const location = locationLabel(citation);
-          const deepLinkable = hasDeepLink(citation);
           return (
-            <li
+            <FootnoteItem
               key={citation.citeId + n}
-              id={footnoteAnchorId(scopeId, n)}
-              className="card"
-              style={{ padding: 'var(--space-3)' }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 'var(--space-2)',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                }}
-              >
-                <strong>[{n}]</strong>
-                <span>{sourceLabel}</span>
-                {location && <span className="text-muted">— {location}</span>}
-                {citation.isCurrent === false && (
-                  <span
-                    className="tag tag-neutral"
-                    title="Trích dẫn từ phiên bản không phải bản mới nhất"
-                  >
-                    Không phải bản hiện hành
-                  </span>
-                )}
-                {deepLinkable && (
-                  <RouteLink
-                    className="btn btn-secondary btn-sm"
-                    to={buildLibraryDocPath(citation.collectionId, citation.logicalDocumentId)}
-                  >
-                    Xem trước tài liệu
-                  </RouteLink>
-                )}
-              </div>
-              <blockquote
-                style={{ margin: 'var(--space-2) 0 0', fontStyle: 'italic' }}
-                data-testid="qa-footnote-quote"
-              >
-                “{citation.quote}”
-              </blockquote>
-            </li>
+              n={n}
+              citation={citation}
+              sourceLabel={sourceLabel}
+              location={location}
+              scopeId={scopeId}
+            />
           );
         })}
       </ol>

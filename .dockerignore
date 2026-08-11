@@ -1,7 +1,6 @@
-# Keep the Docker build context to what `cargo build --release` actually reads
-# (Cargo manifests, crates/**, toolchain files). Anything else in the context
-# invalidates the image layer cache on unrelated commits and forces a full
-# release rebuild, which costs ~20 minutes per gate run.
+# Keep the Docker build context to what the Rust and web release stages read.
+# Anything else invalidates image layer caches on unrelated commits and forces
+# an expensive release rebuild.
 .git
 .github
 .cursor
@@ -15,7 +14,11 @@ models
 pdfium
 tessdata_best
 vendor
-web
+web/dist
+web/coverage
+web/.env*
+web/playwright-report
+web/test-results
 plans
 docs
 # `app` cannot be excluded wholesale: the root Cargo.toml lists app/src-tauri as
