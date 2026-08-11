@@ -1,4 +1,4 @@
-# GLM / chat provider fallback
+# Chat provider fallback (OpenRouter Qwen / self-hosted local)
 
 ## Detect
 
@@ -23,7 +23,7 @@ clamp_min(sum(rate(markhand_provider_duration_seconds_count[5m])) by (provider),
 
 ```bash
 # Endpoint reachability only — do not print Authorization headers
-curl -sS -o /dev/null -w '%{http_code}\n' "${MARKHAND_GLM_BASE_URL:-http://127.0.0.1:9}/health" || true
+curl -sS -o /dev/null -w '%{http_code}\n' "${MARKHAND_CHAT_BASE_URL:-${MARKHAND_GLM_BASE_URL:-http://127.0.0.1:9}}/health" || true
 docker compose -f deploy/compose.poc.yml --env-file deploy/.env logs --tail=80 api \
   2>&1 | python3 deploy/scripts/redact_secrets.py
 ```
@@ -35,4 +35,4 @@ docker compose -f deploy/compose.poc.yml --env-file deploy/.env logs --tail=80 a
 ## Verify
 
 - Provider error ratio `< 0.5` for ≥5m; alert inactive.
-- Ask returns cited extractive or validated GLM answers; audit has no prompts.
+- Ask returns cited extractive or validated LLM answers; audit has no prompts.

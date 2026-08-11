@@ -73,8 +73,8 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: Chat/GLM provider error rate above 50%
-          runbook: docs/runbooks/phase-1b/glm-fallback.md
+          summary: Chat provider error rate above 50%
+          runbook: docs/runbooks/phase-1b/chat-provider-fallback.md
 
       - alert: MarkhandEmbeddingErrors
         expr: |

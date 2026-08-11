@@ -1,6 +1,10 @@
 # ADR 0005: Vietnamese embedding — AITeamVN local for POC/1B
 
-- Status: Accepted
+- Status: Superseded by [ADR 0016](0016-openrouter-qwen-ocr-embedding.md) for
+  cloud-allowed Markhand Web deployments (OpenRouter `qwen/qwen3-embedding-8b`,
+  benchmark PASS 2026-08-10). AITeamVN local (`local-neural`) remains the
+  supported air-gapped profile and the future self-host path once GPU capacity
+  exists (ADR 0016 exception lifecycle).
 - Date: 2026-07-18
 - Accepted: 2026-07-20
 - Owners: retrieval-owner

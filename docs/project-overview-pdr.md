@@ -43,7 +43,7 @@ tiền xử lý ảnh trước OCR.
 | Nhóm | Yêu cầu | Trạng thái |
 |---|---|---|
 | Văn bản | pdf / docx / pptx / xlsx(xls/xlsb/ods) / csv / html → Markdown | ✅ |
-| Ảnh | OCR tiếng Việt (Tesseract `vie+eng` + tiền xử lý ảnh) | ✅ |
+| Ảnh | OCR tiếng Việt (vision-LLM qua OpenRouter mặc định, `FILECONV_OCR_*` — ADR 0016) | ✅ (cần key vision) |
 | Âm thanh | Phản âm tiếng Việt (whisper-rs + symphonia, ưu tiên PhoWhisper) | ✅ |
 | PDF quét | Render 300 DPI + OCR từng trang `needs_ocr` | ✅ |
 | Cấu trúc | PDF có heading/bảng/đa cột (pdf-inspector) | ✅ |
@@ -54,8 +54,10 @@ tiền xử lý ảnh trước OCR.
 | NFC | Chuẩn hoá mọi output (tài liệu NFD từ macOS/PDF cũ) | ✅ |
 
 ### Yêu cầu phi chức năng
-- **Offline-first (mặc định converter/desktop)**: lõi + CLI + desktop chạy không cần mạng. LLM/vision
-  chỉ là tier tuỳ chọn. Markhand Web nằm ngoài mặc định này — track on-prem multi-org riêng, cần
+- **Offline-first (văn bản số)**: convert pdf text-layer/docx/pptx/xlsx/csv/html + audio chạy
+  không cần mạng. **Ảnh/PDF scan cần OCR là ngoại lệ**: đi qua vision-LLM (ADR 0016 — hiện tại
+  OpenRouter, tương lai có GPU thì self-host endpoint vision local để trở lại không-egress).
+  Markhand Web nằm ngoài mặc định này — track on-prem multi-org riêng, cần
   Postgres/Qdrant/MinIO (xem [`runbooks/local-development.md`](runbooks/local-development.md)).
 - **Hiệu năng**: tài liệu văn bản < 1ms/file; PDF ~5.7ms/trang (xem số liệu ở [`bench/REPORT.md`](../bench/REPORT.md)).
 - **Đóng gói được**: chạy được trên Win/Mac/Linux chỉ với các phụ thuộc native tối thiểu.
@@ -66,7 +68,7 @@ tiền xử lý ảnh trước OCR.
   matrix, nhưng còn cần xác minh artifact trên từng platform và credentials ký/notarization.
   Linux `.deb` đã có build evidence.
 - Nhận dạng giọng nói (ASR) streaming real-time.
-- OCR chữ viết tay độ cao (giới hạn Tesseract; tier vision-LLM mới giải quyết từng phần).
+- OCR chữ viết tay độ cao (vision-LLM giải quyết từng phần; cần đo lại baseline trên corpus scan).
 
 ## Động lực & vị thế thị trường
 

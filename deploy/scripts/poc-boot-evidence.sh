@@ -842,7 +842,7 @@ def stroke(points, radius):
                 if math.hypot(x - (x0 + t * dx), y - (y0 + t * dy)) <= radius:
                     black(x, y)
 
-# Large, conventional sans-serif shapes that Tesseract reads consistently.
+# Large, conventional sans-serif shapes that OCR engines read consistently.
 rectangle(55, 30, 78, 190)
 rectangle(55, 30, 170, 53)
 rectangle(55, 95, 150, 118)

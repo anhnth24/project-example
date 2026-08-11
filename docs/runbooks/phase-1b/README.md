@@ -10,7 +10,7 @@ bodies, prompts, or embeddings into tickets.
 | Stuck / dead-letter / quota | `MarkhandQueueGrowth`, `MarkhandQueueAgeHigh`, `MarkhandQuotaExceeded` | [stuck-jobs.md](stuck-jobs.md) |
 | Converter outbreak | `MarkhandConversionFailures` | [converter-outbreak.md](converter-outbreak.md) |
 | Dependency / embed outage | `MarkhandDependencyDown`, `MarkhandEmbeddingErrors` | [dependency-outage.md](dependency-outage.md) |
-| GLM / chat fallback | `MarkhandProviderErrors` | [glm-fallback.md](glm-fallback.md) |
+| Chat provider fallback | `MarkhandProviderErrors` | [chat-provider-fallback.md](chat-provider-fallback.md) |
 | Disk exhaustion | `MarkhandDiskLow` | [disk-exhaustion.md](disk-exhaustion.md) |
 | Reconcile drift | `MarkhandReconcileDrift` | [reconcile-drift.md](reconcile-drift.md) |
 | Backup / restore | `MarkhandBackupStale` | [backup-restore.md](backup-restore.md) |
