@@ -8,9 +8,6 @@ cd "$ROOT"
 if [[ -z "${FILECONV_PDFIUM_LIB:-}" && -d "$ROOT/pdfium/lib" ]]; then
   export FILECONV_PDFIUM_LIB="$ROOT/pdfium/lib"
 fi
-if [[ -z "${FILECONV_TESSDATA:-}" && -d "$ROOT/tessdata_best" ]]; then
-  export FILECONV_TESSDATA="$ROOT/tessdata_best"
-fi
 if [[ -z "${FILECONV_WHISPER_MODEL:-}" && -f "$ROOT/models/ggml-tiny.bin" ]]; then
   export FILECONV_WHISPER_MODEL="$ROOT/models/ggml-tiny.bin"
 fi

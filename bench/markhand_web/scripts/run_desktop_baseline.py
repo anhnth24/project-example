@@ -138,41 +138,20 @@ def native_fingerprint() -> dict:
         ROOT / "pdfium/lib/libpdfium.dylib",
     ]
     pdfium = next((path for path in pdfium_candidates if path.is_file()), None)
-    tesseract = shutil.which("tesseract")
-    tesseract_version = None
-    languages: dict[str, str] = {}
-    if tesseract:
-        version = subprocess.run(
-            [tesseract, "--version"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        tesseract_version = version.stdout.splitlines()[0] if version.stdout else None
-        data_roots = [
-            ROOT / "tessdata_best",
-            Path("/usr/share/tesseract-ocr/5/tessdata"),
-        ]
-        for language in ("vie", "eng"):
-            model = next(
-                (
-                    root / f"{language}.traineddata"
-                    for root in data_roots
-                    if (root / f"{language}.traineddata").is_file()
-                ),
-                None,
-            )
-            if model:
-                languages[language] = file_sha256(model)
     return {
         "pdfium": {
             "present": pdfium is not None,
             "sha256": file_sha256(pdfium) if pdfium else None,
         },
-        "tesseract": {
-            "present": tesseract is not None,
-            "version": tesseract_version,
-            "languageModelSha256": languages,
+        # OCR ảnh/scan chạy qua vision-LLM (ADR 0016) — chỉ ghi lại cấu hình,
+        # không fingerprint model local như thời Tesseract.
+        "visionOcr": {
+            "configured": bool(
+                os.environ.get("FILECONV_OCR_API_KEY")
+                or os.environ.get("FILECONV_LLM_API_KEY")
+            ),
+            "model": os.environ.get("FILECONV_OCR_MODEL"),
+            "baseUrlOverridden": bool(os.environ.get("FILECONV_OCR_BASE_URL")),
         },
         "whisperModelConfigured": False,
     }
@@ -187,9 +166,6 @@ def conversion_baseline(converter: Path, output: Path, manifest: dict) -> tuple[
     pdfium = ROOT / "pdfium/lib"
     if pdfium.is_dir():
         environment["FILECONV_PDFIUM_LIB"] = str(pdfium)
-    tessdata = ROOT / "tessdata_best"
-    if tessdata.is_dir():
-        environment["FILECONV_TESSDATA"] = str(tessdata)
     for item in manifest["documents"]:
         source = CORPUS / "golden" / item["path"]
         expected = (CORPUS / "golden" / item["markdownPath"]).read_text(encoding="utf-8")

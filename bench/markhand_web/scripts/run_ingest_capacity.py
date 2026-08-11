@@ -204,9 +204,6 @@ def converter_environment() -> dict[str, str]:
     pdfium = ROOT / "pdfium/lib"
     if pdfium.is_dir() and "FILECONV_PDFIUM_LIB" not in environment:
         environment["FILECONV_PDFIUM_LIB"] = str(pdfium)
-    tessdata = ROOT / "tessdata_best"
-    if tessdata.is_dir() and "FILECONV_TESSDATA" not in environment:
-        environment["FILECONV_TESSDATA"] = str(tessdata)
     return environment
 
 
