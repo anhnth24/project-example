@@ -71,7 +71,8 @@ P4-01..12 → P4-13 ────────────────────
 ## P4-07 — HA/degraded modes/distributed limiting
 
 - **Plan/files:** Stateless replicas, worker fairness, PG/MinIO/Qdrant HA;
-  circuit breaker cho provider ngoài (OpenRouter OCR/embedding, GLM) với
+  circuit breaker cho provider ngoài (OpenRouter — OCR/embedding/chat Qwen,
+  ADR 0016; hoặc endpoint self-host cùng contract khi có GPU) với
   retry/backoff và extractive/lexical degraded mode; pause ingest; shared
   global limiter.
 - **Depends:** SLA/deployment ADR. **Acceptance/tests:** Aggregate limits survive
