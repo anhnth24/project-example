@@ -273,8 +273,7 @@ async fn append_turns_assigns_sequential_seq_and_round_trips_citations() {
             "quote": "Kinh phí hiện tại là 15 triệu đồng.",
         }
     ]);
-    let warnings =
-        json!(["Structured entailment unavailable; fail-closed extractive-only grounding."]);
+    let warnings = json!([fileconv_server::services::qa::WARNING_EXTRACTIVE_ONLY]);
 
     let (status, turn1) = send(
         &app,

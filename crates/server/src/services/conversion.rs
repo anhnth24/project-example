@@ -64,6 +64,19 @@ impl ConversionIdentity {
         })
     }
 
+    /// Staged object id for the deferred-OCR partial-results checkpoint
+    /// (`workers/convert.rs::resolve_deferred_ocr`). Deliberately excludes
+    /// `attempts`/`lease_token` — unlike the staged markdown above, this
+    /// object must be *shared across attempts* so a retried job resumes the
+    /// pages already transcribed instead of re-buying them from the vision
+    /// provider. Still job-scoped, so concurrent jobs never collide.
+    pub fn ocr_partial_object_id(&self, job_id: Uuid) -> Uuid {
+        deterministic_uuid("markhand-conversion-ocr-partial-v1", |hasher| {
+            self.hash_material(hasher);
+            hasher.update(job_id.as_bytes());
+        })
+    }
+
     pub fn storage_quota_reservation_key(&self) -> String {
         let mut hasher = Sha256::new();
         hasher.update(b"markhand-conversion-storage-quota-v1");
@@ -176,6 +189,29 @@ mod tests {
         assert_ne!(
             same.step_id(ConversionStep::Downloaded),
             same.step_id(ConversionStep::Promoted)
+        );
+    }
+
+    #[test]
+    fn ocr_partial_object_id_is_stable_across_attempts_but_job_scoped() {
+        let org_id = Uuid::new_v4();
+        let identity = ConversionIdentity::new(org_id, Uuid::new_v4(), Uuid::new_v4(), "convert-a");
+        let job_a = Uuid::new_v4();
+        let job_b = Uuid::new_v4();
+        // Same job across attempts → same object → retry can resume.
+        assert_eq!(
+            identity.ocr_partial_object_id(job_a),
+            identity.ocr_partial_object_id(job_a)
+        );
+        // Different jobs never share a partial.
+        assert_ne!(
+            identity.ocr_partial_object_id(job_a),
+            identity.ocr_partial_object_id(job_b)
+        );
+        // And it never collides with the per-attempt staged markdown id.
+        assert_ne!(
+            identity.ocr_partial_object_id(job_a),
+            identity.staged_markdown_object_id(job_a, 1, "lease")
         );
     }
 }

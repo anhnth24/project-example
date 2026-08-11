@@ -70,7 +70,7 @@ fn frozen_hybrid_pipeline_keeps_score_anchor_and_grounding() {
     let answer = extractive_answer("Đối soát khi nào?", &hits);
     assert_eq!(
         answer,
-        "## Trả lời trích xuất\n\nCâu hỏi: **Đối soát khi nào?**\n\n\
+        "Trích dẫn liên quan nhất từ tài liệu:\n\n\
          1. Đối soát giao theo ngày [CITE-0001]\n\n\
          2. API được bảo vệ bằng xác thực. [CITE-0002]\n\n"
     );

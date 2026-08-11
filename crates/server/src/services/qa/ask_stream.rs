@@ -35,7 +35,8 @@ use crate::services::qa::provider::{ChatProvider, ProviderError, StreamCancel};
 use crate::services::qa::stream::{tokenize_answer, HEARTBEAT_INTERVAL, SSE_ENVELOPE_VERSION};
 use crate::services::qa::{
     allow_unverified_llm_runtime, force_extractive_only_runtime, hits_to_hybrid,
-    reserve_ask_tokens, resolve_llm_answer, settle_ask_tokens, TokenLease,
+    reserve_ask_tokens, resolve_llm_answer, settle_ask_tokens, TokenLease, WARNING_EXTRACTIVE_ONLY,
+    WARNING_PROVIDER_TIMEOUT, WARNING_PROVIDER_UNAVAILABLE,
 };
 use crate::services::quota::QuotaError;
 use crate::services::retrieval::{hybrid_search, RetrievalHit, RetrievalRequest, VersionMode};
@@ -151,7 +152,8 @@ pub async fn start_ask_stream(
                 || (extractive_forced && allow_unverified_llm_runtime())
         });
     let token_lease = if will_call_provider {
-        let messages = build_grounded_messages(&question, &hybrid, &mode);
+        let evidence = crate::services::qa::hits_to_hybrid_evidence(&retrieval.hits);
+        let messages = build_grounded_messages(&question, &evidence, &mode);
         Some(
             reserve_ask_tokens(pool, ctx, &messages)
                 .await
@@ -387,8 +389,8 @@ async fn run_producer(
 
     if use_provider_stream {
         if let Some(chat) = provider.as_ref() {
-            let hybrid = hits_to_hybrid(&hits);
-            let messages = build_grounded_messages(&question, &hybrid, &mode);
+            let evidence = crate::services::qa::hits_to_hybrid_evidence(&hits);
+            let messages = build_grounded_messages(&question, &evidence, &mode);
             match chat.stream_tokens(&messages, cancel.clone()).await {
                 Ok(mut rx) => {
                     answer_mode = chat.answer_mode();
@@ -429,16 +431,12 @@ async fn run_producer(
                                 return;
                             }
                             Err(ProviderError::Timeout) => {
-                                warnings.push(
-                                    "LLM provider timed out; using extractive fallback.".into(),
-                                );
+                                warnings.push(WARNING_PROVIDER_TIMEOUT.into());
                                 answer_mode = AnswerMode::FallbackExtractive;
                                 break;
                             }
                             Err(_) => {
-                                warnings.push(
-                                    "LLM provider unavailable; using extractive fallback.".into(),
-                                );
+                                warnings.push(WARNING_PROVIDER_UNAVAILABLE.into());
                                 answer_mode = AnswerMode::FallbackExtractive;
                                 break;
                             }
@@ -448,24 +446,24 @@ async fn run_producer(
                 Err(ProviderError::Timeout) => {
                     // Request was sent; assume the prompt was billed.
                     provider_usage = Some(0);
-                    warnings.push("LLM provider timed out; using extractive fallback.".into());
+                    warnings.push(WARNING_PROVIDER_TIMEOUT.into());
                     answer_mode = AnswerMode::FallbackExtractive;
                 }
                 Err(_) => {
-                    warnings.push("LLM provider unavailable; using extractive fallback.".into());
+                    warnings.push(WARNING_PROVIDER_UNAVAILABLE.into());
                     answer_mode = AnswerMode::FallbackExtractive;
                 }
             }
         }
     } else if extractive_forced && allow_unverified_llm_runtime() && !hits.is_empty() {
         if let Some(chat) = provider.as_ref() {
-            let hybrid = hits_to_hybrid(&hits);
-            let messages = build_grounded_messages(&question, &hybrid, &mode);
+            let evidence = crate::services::qa::hits_to_hybrid_evidence(&hits);
+            let messages = build_grounded_messages(&question, &evidence, &mode);
             match chat.complete(&messages).await {
                 Ok(llm_answer) => {
                     // Consumed even when validation later discards the answer.
                     provider_usage = Some(llm_answer.chars().count());
-                    let valid_ids = valid_citation_ids(hybrid.len());
+                    let valid_ids = valid_citation_ids(evidence.len());
                     // Same policy helper as the JSON ask() route — identical
                     // fail-closed / dev-gate / validation semantics.
                     let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
@@ -486,12 +484,12 @@ async fn run_producer(
                 }
                 Err(ProviderError::Timeout) => {
                     provider_usage = Some(0);
-                    warnings.push("LLM provider timed out; using extractive fallback.".into());
+                    warnings.push(WARNING_PROVIDER_TIMEOUT.into());
                     answer_mode = AnswerMode::FallbackExtractive;
                     dev_gate_attempted_and_failed = true;
                 }
                 Err(_) => {
-                    warnings.push("LLM provider unavailable; using extractive fallback.".into());
+                    warnings.push(WARNING_PROVIDER_UNAVAILABLE.into());
                     answer_mode = AnswerMode::FallbackExtractive;
                     dev_gate_attempted_and_failed = true;
                 }
@@ -518,9 +516,7 @@ async fn run_producer(
         }
     } else if !streamed_any || matches!(answer_mode, AnswerMode::FallbackExtractive) {
         if extractive_forced && !dev_gate_attempted_and_failed {
-            warnings.push(
-                "Structured entailment unavailable; fail-closed extractive-only grounding.".into(),
-            );
+            warnings.push(WARNING_EXTRACTIVE_ONLY.into());
         }
         answer_mode = if matches!(answer_mode, AnswerMode::FallbackExtractive) {
             AnswerMode::FallbackExtractive

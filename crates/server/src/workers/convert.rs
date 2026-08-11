@@ -869,17 +869,25 @@ impl ConvertWorker {
                 return Err(ConvertWorkerError::ConverterFailed);
             }
         }
-        let markdown = self
+        let (markdown, checkpoint_after_ocr) = self
             .resolve_deferred_ocr(
                 ctx,
                 job,
                 lease_token,
                 attempts,
                 deadline,
+                &identity,
+                checkpoint.as_ref(),
                 sandbox_output.stdout,
                 sandbox_output.ocr_artifacts,
             )
             .await?;
+        if let Some(updated) = checkpoint_after_ocr {
+            // The OCR stage registered its partial-results staging key; later
+            // `checkpoint_with_step` calls must build on this value or the
+            // key would drop out of `staged_object_keys` (and leak).
+            checkpoint = Some(updated);
+        }
         let markdown_sha256 = hex::encode(Sha256::digest(&markdown));
         let markdown_len =
             u64::try_from(markdown.len()).map_err(|_| ConvertWorkerError::InvalidMarkdownLength)?;
@@ -908,6 +916,19 @@ impl ConvertWorker {
     /// Trang được gom theo `runtime.batch_pages()` trang/request (bench product
     /// owner 2026-08-10); batch lỗi parse/truncation/transient được **bisect**
     /// xuống nửa nhỏ hơn rồi tới 1 trang ("chạy bù") trước khi fail job.
+    ///
+    /// Checkpoint/resume: sau mỗi batch thành công, map `sha256(JPEG) → text`
+    /// được ghi (best-effort) vào một staged object `trusted/…` có key **ổn
+    /// định qua các attempt** (`ConversionIdentity::ocr_partial_object_id`) và
+    /// được đăng ký vào `staged_object_keys` của job checkpoint TRƯỚC lần ghi
+    /// đầu — job retry đọc lại map này và chỉ OCR các trang còn thiếu, không
+    /// mua lại trang đã có; object đi theo vòng đời cleanup/compensation/I07
+    /// sẵn có của staged keys (delete idempotent). Token usage per-job được
+    /// tổng hợp và log ở cuối stage.
+    ///
+    /// Trả về `(markdown, checkpoint_mới_nếu_có)` — caller PHẢI dùng
+    /// checkpoint mới cho các bước sau, nếu không staged key sẽ rơi khỏi
+    /// những lần `checkpoint_with_step` kế tiếp.
     #[allow(clippy::too_many_arguments)]
     async fn resolve_deferred_ocr(
         &self,
@@ -916,9 +937,11 @@ impl ConvertWorker {
         lease_token: &str,
         attempts: i32,
         deadline: TokioInstant,
+        identity: &ConversionIdentity,
+        checkpoint: Option<&serde_json::Value>,
         stdout: Vec<u8>,
         artifacts: Vec<OcrArtifact>,
-    ) -> Result<Vec<u8>, ConvertWorkerError> {
+    ) -> Result<(Vec<u8>, Option<serde_json::Value>), ConvertWorkerError> {
         let pending = match std::str::from_utf8(&stdout) {
             Ok(text) => fileconv_core::image_ocr::pending_ocr_artifacts(text),
             // Placeholder do chính chúng ta sinh luôn là UTF-8; stdout non-UTF8
@@ -926,7 +949,7 @@ impl ConvertWorker {
             Err(_) => Vec::new(),
         };
         if pending.is_empty() {
-            return Ok(stdout);
+            return Ok((stdout, None));
         }
         let Some(runtime) = self.config.vision_ocr.clone() else {
             return Err(ConvertWorkerError::VisionOcrNotConfigured);
@@ -952,15 +975,72 @@ impl ConvertWorker {
             }
         }
         let total_pages = ordered.len();
+
+        // ── Checkpoint/resume ────────────────────────────────────────────
+        let ocr_partial_key = crate::storage::keys::trusted_key(
+            ctx.org_id(),
+            identity.promoted_version_id(),
+            identity.ocr_partial_object_id(job.id),
+            None,
+        )
+        .map_err(ConvertWorkerError::Storage)?;
+        let ocr_partial_key_string = ocr_partial_key.as_str();
+        let mut transcribed: HashMap<String, String> = HashMap::new();
+        if staged_keys_from_checkpoint(checkpoint)
+            .iter()
+            .any(|key| key == &ocr_partial_key_string)
+        {
+            // Best-effort: một partial hỏng/mất chỉ có nghĩa là OCR lại từ đầu.
+            if let Ok(bytes) = self
+                .storage
+                .get_object(ctx.org_id(), &ocr_partial_key)
+                .await
+            {
+                transcribed = serde_json::from_slice(&bytes).unwrap_or_default();
+            }
+        }
+        // Đăng ký key vào checkpoint TRƯỚC lần ghi đầu tiên, để object không
+        // bao giờ tồn tại ngoài vòng đời cleanup của staged keys.
+        let claimed = ClaimedJobScope {
+            ctx,
+            job,
+            lease_token,
+            attempts,
+            deadline,
+        };
+        let saved = self
+            .save_checkpoint_payload(
+                &claimed,
+                checkpoint_with_staged_key(checkpoint, identity, &ocr_partial_key_string),
+            )
+            .await?;
+        let updated_checkpoint = saved.checkpoint;
+
+        // Trang đã có trong partial (attempt trước) thay placeholder ngay,
+        // không vào queue.
+        let mut resumed_pages = 0_usize;
+        let mut remaining: Vec<(String, String, Vec<u8>)> = Vec::with_capacity(ordered.len());
+        for (name, bytes) in ordered {
+            let jpeg_sha256 = hex::encode(Sha256::digest(&bytes));
+            if let Some(text) = transcribed.get(&jpeg_sha256) {
+                let placeholder = fileconv_core::image_ocr::ocr_pending_placeholder(&name);
+                markdown = markdown.replace(&placeholder, text.trim());
+                resumed_pages += 1;
+            } else {
+                remaining.push((name, jpeg_sha256, bytes));
+            }
+        }
+
         let batch_size = runtime.batch_pages().max(1);
-        let mut queue: std::collections::VecDeque<Vec<(String, Vec<u8>)>> = ordered
+        let mut queue: std::collections::VecDeque<Vec<(String, String, Vec<u8>)>> = remaining
             .chunks(batch_size)
             .map(|chunk| chunk.to_vec())
             .collect();
         let mut splits = 0_usize;
         let mut requests = 0_usize;
+        let mut usage_total = crate::services::vision_ocr::VisionOcrUsage::default();
         while let Some(group) = queue.pop_front() {
-            let bytes: Vec<&[u8]> = group.iter().map(|(_, jpeg)| jpeg.as_slice()).collect();
+            let bytes: Vec<&[u8]> = group.iter().map(|(_, _, jpeg)| jpeg.as_slice()).collect();
             let runtime_for_call = Arc::clone(&runtime);
             requests += 1;
             let outcome = self
@@ -969,11 +1049,28 @@ impl ConvertWorker {
                 })
                 .await?;
             match outcome {
-                Ok(texts) => {
+                Ok((texts, usage)) => {
                     debug_assert_eq!(texts.len(), group.len());
-                    for ((name, _), text) in group.iter().zip(texts) {
+                    usage_total.accumulate(usage);
+                    for ((name, jpeg_sha256, _), text) in group.iter().zip(texts) {
                         let placeholder = fileconv_core::image_ocr::ocr_pending_placeholder(name);
                         markdown = markdown.replace(&placeholder, text.trim());
+                        transcribed.insert(jpeg_sha256.clone(), text.trim().to_string());
+                    }
+                    // Persist partial sau mỗi batch (best-effort — lỗi ghi
+                    // checkpoint không được phép fail một stage OCR đang
+                    // chạy tốt); bỏ qua khi đây là batch cuối.
+                    if !queue.is_empty() {
+                        if let Err(error) = self
+                            .persist_ocr_partial(ctx, identity, &ocr_partial_key, &transcribed)
+                            .await
+                        {
+                            tracing::warn!(
+                                job_id = %job.id,
+                                code = error.code(),
+                                "OCR partial checkpoint write failed; retry would re-OCR these pages"
+                            );
+                        }
                     }
                 }
                 Err(error) if group.len() > 1 && error.is_batch_splittable() => {
@@ -986,19 +1083,76 @@ impl ConvertWorker {
                     queue.push_front(tail);
                     queue.push_front(group);
                 }
-                Err(error) => return Err(ConvertWorkerError::VisionOcr(error)),
+                Err(error) => {
+                    // Giữ lại tiến độ của các batch đã xong trước khi fail
+                    // attempt — đây chính là điểm resume của attempt sau.
+                    if !transcribed.is_empty() {
+                        if let Err(persist_error) = self
+                            .persist_ocr_partial(ctx, identity, &ocr_partial_key, &transcribed)
+                            .await
+                        {
+                            tracing::warn!(
+                                job_id = %job.id,
+                                code = persist_error.code(),
+                                "OCR partial checkpoint write failed on error path"
+                            );
+                        }
+                    }
+                    return Err(ConvertWorkerError::VisionOcr(error));
+                }
             }
         }
+        // Per-job token/cost observability: bench + billing đối chiếu qua log
+        // có cấu trúc này (không log nội dung trang).
         tracing::info!(
             job_id = %job.id,
             pages = total_pages,
+            resumed_pages,
             requests,
             splits,
             batch_size,
+            prompt_tokens = usage_total.prompt_tokens,
+            completion_tokens = usage_total.completion_tokens,
             elapsed_ms = started.elapsed().as_millis() as u64,
             "vision OCR resolved deferred pages"
         );
-        Ok(markdown.into_bytes())
+        Ok((markdown.into_bytes(), updated_checkpoint))
+    }
+
+    /// Ghi map `sha256(JPEG) → text` đã OCR xong vào staged object của job.
+    /// Overwrite-in-place (key ổn định qua attempt); object bị xoá bởi chính
+    /// vòng đời cleanup staged-keys hiện có sau khi job kết thúc.
+    async fn persist_ocr_partial(
+        &self,
+        ctx: &OrgContext,
+        identity: &ConversionIdentity,
+        key: &crate::storage::ObjectKey,
+        transcribed: &HashMap<String, String>,
+    ) -> Result<(), StorageError> {
+        // A String→String map always serializes.
+        let payload = serde_json::to_vec(transcribed).expect("ocr partial map serializes");
+        let content_sha256 = hex::encode(Sha256::digest(&payload));
+        let content_length = payload.len() as u64;
+        let meta = crate::storage::minio::ObjectIdentityMeta {
+            org_id: ctx.org_id(),
+            collection_id: None,
+            document_id: Some(identity.document_id),
+            version_id: Some(identity.promoted_version_id()),
+            original_filename: None,
+            canonical_format: Some("json".into()),
+            content_sha256: Some(content_sha256),
+            content_length: Some(content_length),
+            disposition: Some("staged".into()),
+        };
+        self.storage
+            .put_object(
+                ctx.org_id(),
+                key,
+                bytes::Bytes::from(payload),
+                &meta,
+                "application/json",
+            )
+            .await
     }
 
     fn verify_quarantine_metadata(

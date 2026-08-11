@@ -506,16 +506,26 @@ fn tokens(text: &str) -> Vec<String> {
 pub fn page_before(markdown: &str, offset: usize) -> Option<u32> {
     let end = clamp_to_char_boundary(markdown, offset.min(markdown.len()));
     let prefix = &markdown[..end];
-    prefix.lines().rev().find_map(|line| {
-        let line = line.trim();
-        line.strip_prefix("<!-- Trang ")
-            .and_then(|rest| rest.strip_suffix(" (OCR) -->"))
-            .or_else(|| {
-                line.strip_prefix("<!-- Page ")
-                    .and_then(|rest| rest.strip_suffix(" -->"))
-            })
-            .and_then(|page| page.parse().ok())
-    })
+    prefix.lines().rev().find_map(parse_page_marker)
+}
+
+/// Trang ĐẦU TIÊN xuất hiện bên trong `markdown` (marker sớm nhất). Bổ trợ cho
+/// `page_before`: chunk đầu tài liệu thường *chứa* marker trang 1 ngay dòng đầu
+/// thay vì đứng sau nó, nên `page_before(.., start)` trả None — caller fallback
+/// sang hàm này trên chính thân chunk.
+pub fn first_page_within(markdown: &str) -> Option<u32> {
+    markdown.lines().find_map(parse_page_marker)
+}
+
+fn parse_page_marker(line: &str) -> Option<u32> {
+    let line = line.trim();
+    line.strip_prefix("<!-- Trang ")
+        .and_then(|rest| rest.strip_suffix(" (OCR) -->"))
+        .or_else(|| {
+            line.strip_prefix("<!-- Page ")
+                .and_then(|rest| rest.strip_suffix(" -->"))
+        })
+        .and_then(|page| page.parse().ok())
 }
 
 pub fn build_corpus(documents: &[CorpusDocument], max_chars: usize) -> Vec<CorpusChunk> {

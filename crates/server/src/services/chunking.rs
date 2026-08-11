@@ -3,7 +3,7 @@
 #[cfg(test)]
 use fileconv_core::chunk::normalize_newlines;
 use fileconv_core::chunk::{chunk_markdown, locate_chunk_span};
-use fileconv_core::intelligence::page_before;
+use fileconv_core::intelligence::{first_page_within, page_before};
 use fileconv_knowledge::citation::infer_source_anchor;
 use fileconv_knowledge::identity::{chunk_identity, BODY_TEXT_VERSION};
 use uuid::Uuid;
@@ -66,7 +66,11 @@ pub fn prepare_chunks(
             let (start, end) = locate_chunk_span(markdown, cursor, &chunk.text);
             cursor = end;
 
-            let page = page_before(markdown, start);
+            // Marker *trước* chunk; nếu không có (chunk đầu tài liệu chứa
+            // marker trang 1 ngay dòng đầu) thì lấy marker sớm nhất bên
+            // trong chính chunk — nếu không thì citation của tài liệu OCR
+            // một-chunk không bao giờ có số trang.
+            let page = page_before(markdown, start).or_else(|| first_page_within(&chunk.text));
             let anchor = infer_source_anchor(document_format, &chunk.heading, page, start, end);
 
             PreparedChunk {
@@ -121,6 +125,17 @@ mod tests {
         assert!(body_chunk.span_end > body_chunk.span_start);
         let quoted = &markdown[body_chunk.span_start as usize..body_chunk.span_end as usize];
         assert!(quoted.contains("thanh toán QR"));
+    }
+
+    #[test]
+    fn prepare_chunks_takes_page_from_marker_inside_first_chunk() {
+        // A small OCR'd document is a single chunk that *starts with* the
+        // page-1 marker (nothing precedes it) — the page must still resolve.
+        let markdown =
+            "<!-- Trang 1 (OCR) -->\n\nQuy chế làm việc từ xa.\n\n<!-- Trang 2 (OCR) -->\n\nĐiều 4.";
+        let chunks = prepare_chunks(Uuid::new_v4(), Uuid::new_v4(), markdown, "pdf");
+        assert!(!chunks.is_empty());
+        assert_eq!(chunks[0].page, Some(1));
     }
 
     #[test]

@@ -854,20 +854,100 @@ pub fn merge_rerank_hydrated(
         .collect()
 }
 
+/// Display snippet for search hits and the extractive answer composer.
+///
+/// Sentence-boundary extraction: the previous char-window version sliced the
+/// body at `match - 40 chars` (and mixed a *normalized-text* byte offset into
+/// a *raw-text* char skip), so extractive answers opened mid-word ("1. dụng
+/// Quy chế…"). Now the body is flattened (Markdown page-marker comments
+/// stripped, whitespace collapsed), split into sentences, and the snippet
+/// starts at the first sentence containing a query token, extending over
+/// whole sentences up to the budget.
 fn extract_snippet(body: &str, query_tokens: &[String]) -> String {
-    const MAX: usize = 240;
-    if body.chars().count() <= MAX {
-        return body.to_string();
+    const MAX_CHARS: usize = 320;
+    let flattened = strip_markdown_comments(body)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if flattened.chars().count() <= MAX_CHARS {
+        return flattened;
     }
-    let lowered = fileconv_core::intelligence::normalize_search_text(body);
-    let mut start = 0usize;
-    for token in query_tokens {
-        if let Some(index) = lowered.find(token.as_str()) {
-            start = index.saturating_sub(40);
+    let sentences = split_sentences(&flattened);
+    let match_index = sentences
+        .iter()
+        .position(|sentence| {
+            let normalized = fileconv_core::intelligence::normalize_search_text(sentence);
+            query_tokens
+                .iter()
+                .any(|token| normalized.contains(token.as_str()))
+        })
+        .unwrap_or(0);
+    let mut snippet = String::new();
+    for sentence in &sentences[match_index..] {
+        let candidate_len = snippet.chars().count() + sentence.chars().count();
+        if !snippet.is_empty() && candidate_len > MAX_CHARS {
+            break;
+        }
+        if !snippet.is_empty() {
+            snippet.push(' ');
+        }
+        snippet.push_str(sentence);
+        if snippet.chars().count() >= MAX_CHARS {
             break;
         }
     }
-    body.chars().skip(start).take(MAX).collect::<String>()
+    // A single over-budget sentence still gets truncated (with an ellipsis)
+    // rather than flooding the answer.
+    if snippet.chars().count() > MAX_CHARS {
+        snippet = snippet.chars().take(MAX_CHARS).collect::<String>();
+        if let Some(last_space) = snippet.rfind(' ') {
+            snippet.truncate(last_space);
+        }
+        snippet.push('…');
+    }
+    snippet
+}
+
+/// Remove `<!-- … -->` comments (page markers like `<!-- Trang 3 (OCR) -->`)
+/// from a chunk body before building a display snippet.
+fn strip_markdown_comments(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        match rest[start..].find("-->") {
+            Some(end) => rest = &rest[start + end + 3..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Split flattened text into sentences at `.`/`!`/`?`/`…` (or `;`) followed by
+/// whitespace. Keeps the terminal punctuation with its sentence.
+fn split_sentences(text: &str) -> Vec<&str> {
+    let mut sentences = Vec::new();
+    let mut start = 0usize;
+    let mut previous_terminal = false;
+    for (index, character) in text.char_indices() {
+        if previous_terminal && character.is_whitespace() {
+            let sentence = text[start..index].trim();
+            if !sentence.is_empty() {
+                sentences.push(sentence);
+            }
+            start = index + character.len_utf8();
+        }
+        previous_terminal = matches!(character, '.' | '!' | '?' | '…' | ';');
+    }
+    let tail = text[start..].trim();
+    if !tail.is_empty() {
+        sentences.push(tail);
+    }
+    sentences
 }
 
 #[cfg(test)]
@@ -886,6 +966,32 @@ mod tests {
             collections,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn snippet_starts_on_a_sentence_boundary_and_strips_page_markers() {
+        let body = "<!-- Trang 1 (OCR) -->\n\nĐiều 1. Phạm vi áp dụng.\nQuy chế này áp dụng cho \
+                    toàn bộ nhân viên chính thức của công ty, trừ bộ phận vận hành trung tâm dữ \
+                    liệu; các trường hợp đặc biệt do Tổng giám đốc quyết định bằng văn bản riêng. \
+                    Điều 2. Số ngày làm việc từ xa. Mỗi nhân viên được đăng ký tối đa 3 ngày làm \
+                    việc từ xa trong một tuần và phải hoàn tất đăng ký trước 17 giờ thứ Sáu của \
+                    tuần liền trước theo hướng dẫn của phòng nhân sự. Điều 3. Trợ cấp thiết bị. \
+                    Nhân viên làm việc từ xa được hỗ trợ 1.200.000 đồng mỗi quý cho chi phí \
+                    internet và điện, chi trả cùng kỳ lương tháng cuối quý.";
+        let snippet = extract_snippet(body, &["tro cap".into()]);
+        // Starts at the matching sentence's own boundary, not mid-word.
+        assert!(
+            snippet.starts_with("Trợ cấp thiết bị."),
+            "snippet must start on the matching sentence: {snippet}"
+        );
+        assert!(snippet.contains("1.200.000"), "evidence kept: {snippet}");
+        assert!(
+            !snippet.contains("<!--"),
+            "page markers stripped: {snippet}"
+        );
+        // Short bodies come back whole (flattened), with markers stripped.
+        let short = extract_snippet("<!-- Trang 2 (OCR) -->\nNội dung ngắn.", &["noi".into()]);
+        assert_eq!(short, "Nội dung ngắn.");
     }
 
     #[test]

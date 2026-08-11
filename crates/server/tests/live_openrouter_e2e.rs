@@ -143,8 +143,12 @@ async fn live_openrouter_batch_ocr_returns_pages_in_order() {
     let jpegs: Vec<Vec<u8>> = markers.iter().map(|marker| fixture_jpeg(marker)).collect();
     let refs: Vec<&[u8]> = jpegs.iter().map(|bytes| bytes.as_slice()).collect();
     let started = std::time::Instant::now();
-    let pages = runtime.ocr_jpeg_batch(&refs).await.expect("batch OCR");
+    let (pages, usage) = runtime.ocr_jpeg_batch(&refs).await.expect("batch OCR");
     assert_eq!(pages.len(), markers.len());
+    eprintln!(
+        "LIVE BATCH OCR USAGE: prompt={} completion={}",
+        usage.prompt_tokens, usage.completion_tokens
+    );
     for (page, marker) in pages.iter().zip(markers) {
         assert!(
             page.to_ascii_uppercase().contains(marker),

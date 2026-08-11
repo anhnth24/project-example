@@ -85,8 +85,21 @@ pub fn allow_unverified_llm_runtime() -> bool {
 /// returned — must always accompany that mode so callers never mistake it for
 /// grounded/verified output.
 pub const UNVERIFIED_LLM_WARNING: &str =
-    "Dev-gate: LLM answer passed citation/claim checks but structured entailment \
-is NOT available — this answer is unverified, not grounded.";
+    "Câu trả lời LLM đã qua kiểm tra trích dẫn nhưng CHƯA được kiểm chứng đối chiếu \
+(structured entailment) — không được coi là đã xác minh.";
+
+/// User-facing warning copy (Vietnamese — these strings render verbatim in the
+/// web chat UI). One constant per policy outcome so JSON ask and the SSE
+/// producer never drift apart.
+pub const WARNING_EXTRACTIVE_ONLY: &str =
+    "Chưa bật trả lời bằng LLM; hiển thị trích dẫn nguyên văn từ tài liệu (fail-closed).";
+pub const WARNING_PROVIDER_TIMEOUT: &str = "LLM hết thời gian chờ; chuyển sang trả lời trích xuất.";
+pub const WARNING_PROVIDER_UNAVAILABLE: &str =
+    "LLM không khả dụng; chuyển sang trả lời trích xuất.";
+pub const WARNING_UNVERIFIABLE_GROUNDING: &str =
+    "Không kiểm chứng được căn cứ trích dẫn của câu trả lời LLM; chuyển sang trả lời trích xuất.";
+pub const WARNING_GROUNDING_FAILED: &str =
+    "Câu trả lời LLM không đạt kiểm tra trích dẫn; chuyển sang trả lời trích xuất.";
 
 /// Decides the final (answer, mode) for a completed LLM response, applying the
 /// fail-closed / dev-gate policy, plus any extra warnings the caller must
@@ -107,9 +120,7 @@ pub(crate) fn resolve_llm_answer(
 ) -> (String, AnswerMode, Vec<String>) {
     let mut warnings = Vec::new();
     if force_extractive_only() && !allow_unverified_llm() {
-        warnings.push(
-            "Structured entailment unavailable; fail-closed extractive-only grounding.".into(),
-        );
+        warnings.push(WARNING_EXTRACTIVE_ONLY.into());
         return (
             extractive.to_string(),
             AnswerMode::OfflineExtractive,
@@ -131,9 +142,9 @@ pub(crate) fn resolve_llm_answer(
             warnings.extend(failure.warnings);
             warnings.push(
                 if failure.unverifiable {
-                    "Unverifiable claim-level grounding; using extractive fallback."
+                    WARNING_UNVERIFIABLE_GROUNDING
                 } else {
-                    "LLM grounding failed validation; using extractive fallback."
+                    WARNING_GROUNDING_FAILED
                 }
                 .into(),
             );
@@ -278,6 +289,24 @@ impl AskError {
     }
 }
 
+/// Evidence-sized variant for the LLM prompt ONLY: `snippet` carries the
+/// (bounded) full chunk body instead of the short display snippet. The
+/// display snippet routinely cuts the very sentence that answers the
+/// question, which made the provider truthfully answer "nguồn không đề cập"
+/// — observed live against OpenRouter with a 2-page OCR document.
+pub(crate) fn hits_to_hybrid_evidence(hits: &[RetrievalHit]) -> Vec<HybridSearchHit> {
+    const MAX_EVIDENCE_CHARS: usize = 4000;
+    let mut hybrid = hits_to_hybrid(hits);
+    for (mapped, source) in hybrid.iter_mut().zip(hits) {
+        mapped.snippet = if source.body.chars().count() <= MAX_EVIDENCE_CHARS {
+            source.body.clone()
+        } else {
+            source.body.chars().take(MAX_EVIDENCE_CHARS).collect()
+        };
+    }
+    hybrid
+}
+
 pub(crate) fn hits_to_hybrid(hits: &[RetrievalHit]) -> Vec<HybridSearchHit> {
     hits.iter()
         .map(|hit| HybridSearchHit {
@@ -350,7 +379,8 @@ pub async fn ask(
     // never claimed grounded unless structured entailment is available AND validation passes.
     let (answer, mode) = match provider {
         Some(chat) if !hybrid.is_empty() => {
-            let messages = build_grounded_messages(&request.question, &hybrid, &request.mode);
+            let evidence = hits_to_hybrid_evidence(&retrieval.hits);
+            let messages = build_grounded_messages(&request.question, &evidence, &request.mode);
             // Token quota (1C-09 a): reserve before the provider call — the
             // only real token consumer on this path — fail-closed on denial.
             let lease = reserve_ask_tokens(pool, ctx, &messages)
@@ -376,13 +406,13 @@ pub async fn ask(
                     // The request reached the provider; the prompt was very
                     // likely billed. Commit prompt tokens, no answer chars.
                     settle_ask_tokens(pool, ctx, lease, Some(0)).await;
-                    warnings.push("LLM provider timed out; using extractive fallback.".into());
+                    warnings.push(WARNING_PROVIDER_TIMEOUT.into());
                     (extractive, AnswerMode::FallbackExtractive)
                 }
                 Err(_) => {
                     // Transport/parse failure before any usable exchange.
                     settle_ask_tokens(pool, ctx, lease, None).await;
-                    warnings.push("LLM provider unavailable; using extractive fallback.".into());
+                    warnings.push(WARNING_PROVIDER_UNAVAILABLE.into());
                     (extractive, AnswerMode::FallbackExtractive)
                 }
             }
@@ -392,10 +422,7 @@ pub async fn ask(
                 warnings.push("No chat provider configured; using extractive answer.".into());
             }
             if force_extractive_only() {
-                warnings.push(
-                    "Structured entailment unavailable; fail-closed extractive-only grounding."
-                        .into(),
-                );
+                warnings.push(WARNING_EXTRACTIVE_ONLY.into());
             }
             (extractive, AnswerMode::OfflineExtractive)
         }
@@ -411,14 +438,15 @@ pub async fn ask(
     })
 }
 
-/// Build grounded prompt messages for streaming callers.
+/// Build grounded prompt messages for streaming callers (evidence-sized
+/// context — see `hits_to_hybrid_evidence`).
 pub fn grounded_messages_for(
     question: &str,
     hits: &[RetrievalHit],
     mode: &VersionMode,
 ) -> GroundedMessages {
-    let hybrid = hits_to_hybrid(hits);
-    build_grounded_messages(question, &hybrid, mode)
+    let evidence = hits_to_hybrid_evidence(hits);
+    build_grounded_messages(question, &evidence, mode)
 }
 
 #[cfg(test)]
@@ -566,12 +594,9 @@ mod tests {
             assert_eq!(mode, AnswerMode::LlmUnverified);
             assert_eq!(mode.as_str(), "llm_unverified");
             assert!(warnings.iter().any(|w| w == UNVERIFIED_LLM_WARNING));
-            assert!(
-                warnings
-                    .iter()
-                    .any(|w| w.to_lowercase().contains("not")
-                        && w.to_lowercase().contains("grounded"))
-            );
+            // The fixed warning must state, in the user's language, that the
+            // answer is NOT verified/grounded.
+            assert!(warnings.iter().any(|w| w.contains("CHƯA được kiểm chứng")));
         });
     }
 

@@ -182,6 +182,12 @@ contract.
   (absolute path recommended for containers). Unset, the server falls back to
   `./web/dist` relative to its CWD, and if neither resolves it simply serves
   the API alone — **serving the SPA is optional, never required to boot**.
+- **Redeploying the SPA requires a server restart.** The dist directory is
+  resolved (and `index.html` effectively pinned) once at router bootstrap; a
+  `pnpm --dir web build` into the same directory while the server is running
+  leaves the old `index.html` pointing at hashed asset files that no longer
+  exist (`/assets/index-<oldhash>.js` → 404 → blank page). Always restart
+  `fileconv-server` after replacing `web/dist`.
 - `deploy/Dockerfile.server` and `compose.poc.yml` do **not** currently build
   or copy `web/dist` into the API image/container — that would add a
   Node/pnpm build stage to a pipeline whose base images and evidence are

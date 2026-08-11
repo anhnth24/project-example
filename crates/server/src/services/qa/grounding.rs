@@ -119,6 +119,40 @@ pub fn validate_answer_citations(
     }
 }
 
+/// Sentence splitter for claim-level checks. Unlike a naive
+/// `split(['.', …])`, a `.` BETWEEN TWO DIGITS is not a sentence boundary:
+/// Vietnamese number formatting uses dots as thousand separators
+/// ("1.200.000 đồng"), and the naive split shredded such answers into
+/// nonsense "claims" ("…hỗ trợ 1" / "200" / "000 đồng…") that could never
+/// carry a citation — every correct answer quoting an amount failed
+/// validation and fell back to extractive.
+fn split_claim_sentences(answer: &str) -> Vec<&str> {
+    let mut sentences = Vec::new();
+    let mut start = 0usize;
+    let mut iter = answer.char_indices().peekable();
+    let mut previous: Option<char> = None;
+    while let Some((index, character)) = iter.next() {
+        let boundary = match character {
+            '!' | '?' | '\n' => true,
+            '.' => {
+                let digit_before = previous.is_some_and(|c| c.is_ascii_digit());
+                let digit_after = iter.peek().is_some_and(|(_, next)| next.is_ascii_digit());
+                !(digit_before && digit_after)
+            }
+            _ => false,
+        };
+        if boundary {
+            sentences.push(&answer[start..index]);
+            start = index + character.len_utf8();
+        }
+        previous = Some(character);
+    }
+    if start < answer.len() {
+        sentences.push(&answer[start..]);
+    }
+    sentences
+}
+
 fn citation_labels(answer: &str) -> HashSet<String> {
     answer
         .split(|character: char| {
@@ -138,7 +172,7 @@ fn claim_level_grounding(
     let pin_by_id: std::collections::HashMap<&str, &CitationPin> =
         pins.iter().map(|pin| (pin.cite_id.as_str(), pin)).collect();
 
-    for sentence in answer.split(['.', '!', '?', '\n']) {
+    for sentence in split_claim_sentences(answer) {
         let sentence = sentence.trim();
         if sentence.is_empty() {
             continue;
@@ -246,14 +280,38 @@ fn passage_supports_sentence(sentence: &str, passage: &str) -> bool {
 }
 
 fn negation_contradicts(sentence: &str, passage: &str) -> bool {
-    let s = sentence.to_lowercase();
-    let p = passage.to_lowercase();
-    let sentence_neg = s.contains(" không ") || s.contains("not ");
-    let passage_neg = p.contains(" không ") || p.contains("not ");
-    sentence_neg != passage_neg
-        && significant_tokens(sentence)
-            .iter()
-            .any(|token| significant_tokens(passage).contains(token))
+    // Compare negation against the single passage SENTENCE with the highest
+    // token overlap, not the whole passage: a multi-page quote almost always
+    // contains "không" somewhere (e.g. "không được lưu tài liệu mật…"), and
+    // the old whole-passage check therefore flagged every affirmative claim
+    // as a contradiction — observed live: correct "1.200.000 đồng mỗi quý"
+    // answers fell back to extractive on this warning alone.
+    let sentence_tokens = significant_tokens(sentence);
+    if sentence_tokens.is_empty() {
+        return false;
+    }
+    let sentence_neg = contains_negation(sentence);
+    let best_overlap_sentence = split_claim_sentences(passage)
+        .into_iter()
+        .map(str::trim)
+        .filter(|candidate| !candidate.is_empty())
+        .map(|candidate| {
+            let overlap = significant_tokens(candidate)
+                .iter()
+                .filter(|token| sentence_tokens.contains(*token))
+                .count();
+            (overlap, candidate)
+        })
+        .max_by_key(|(overlap, _)| *overlap);
+    match best_overlap_sentence {
+        Some((overlap, candidate)) if overlap > 0 => sentence_neg != contains_negation(candidate),
+        _ => false,
+    }
+}
+
+fn contains_negation(text: &str) -> bool {
+    let padded = format!(" {} ", text.to_lowercase());
+    padded.contains(" không ") || padded.contains(" not ")
 }
 
 fn date_or_unit_mismatch(sentence: &str, passage: &str) -> bool {
@@ -470,6 +528,32 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use uuid::Uuid;
+
+    #[test]
+    fn claim_sentences_keep_vietnamese_thousand_separators_intact() {
+        let answer =
+            "Nhân viên được hỗ trợ 1.200.000 đồng mỗi quý [CITE-0001]. Khoản này chi trả cùng \
+             kỳ lương [CITE-0001].";
+        let sentences: Vec<&str> = split_claim_sentences(answer)
+            .into_iter()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(
+            sentences.len(),
+            2,
+            "no split inside 1.200.000: {sentences:?}"
+        );
+        assert!(sentences[0].contains("1.200.000 đồng"));
+        // Regular sentence boundaries still split (empty segments are
+        // filtered by the caller, same as the previous `split`).
+        let plain: Vec<&str> = split_claim_sentences("A! B? C.\nD")
+            .into_iter()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert_eq!(plain, ["A", "B", "C", "D"]);
+    }
 
     fn pin(cite: &str, version: u128, current: bool, quote: &str) -> CitationPin {
         CitationPin {

@@ -260,6 +260,8 @@ impl OpenAiCompatibleChat {
             ],
             temperature: 0.1,
             stream: false,
+            reasoning: ReasoningConfig { enabled: false },
+            max_tokens: 2000,
         };
         let mut request = self.client.post(&self.endpoint).json(&body);
         if !self.api_key.is_empty() {
@@ -315,6 +317,8 @@ impl OpenAiCompatibleChat {
             ],
             temperature: 0.1,
             stream: true,
+            reasoning: ReasoningConfig { enabled: false },
+            max_tokens: 2000,
         };
         let mut request = self.client.post(&self.endpoint).json(&body);
         if !self.api_key.is_empty() {
@@ -592,6 +596,21 @@ struct ChatRequest<'a> {
     messages: Vec<ChatMessage<'a>>,
     temperature: f32,
     stream: bool,
+    /// Grounded Q&A is verbatim-evidence composition, not open-ended
+    /// reasoning; reasoning-first models (Qwen3.7 via OpenRouter) otherwise
+    /// spend the whole `max_tokens` budget thinking and return an EMPTY
+    /// `content` with `finish_reason=length` — observed live, and the empty
+    /// answer then fails citation validation every time. Providers that don't
+    /// know the field ignore it (OpenAI-compatible contract).
+    reasoning: ReasoningConfig,
+    /// Cap the answer body; without it some providers default low enough that
+    /// long grounded answers truncate mid-citation.
+    max_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct ReasoningConfig {
+    enabled: bool,
 }
 
 #[derive(Serialize)]

@@ -163,7 +163,7 @@ impl VisionOcrRuntime {
     /// OCR một ảnh JPEG (artifact từ sandbox). Trả Markdown đã strip fence.
     /// Worker KHÔNG decode ảnh — bytes đi thẳng tới provider.
     pub async fn ocr_jpeg(&self, jpeg: &[u8]) -> Result<String, VisionOcrError> {
-        let pages = self.ocr_jpeg_batch(&[jpeg]).await?;
+        let (pages, _usage) = self.ocr_jpeg_batch(&[jpeg]).await?;
         pages
             .into_iter()
             .next()
@@ -173,9 +173,14 @@ impl VisionOcrRuntime {
     /// OCR một batch trang (cùng tài liệu, theo thứ tự) trong MỘT request.
     /// Batch >1 dùng marker `<!-- markhand:page k -->` để tách kết quả; parse
     /// fail-closed (`BatchParse`) để caller bisect xuống batch nhỏ hơn/1 trang.
-    pub async fn ocr_jpeg_batch(&self, pages: &[&[u8]]) -> Result<Vec<String>, VisionOcrError> {
+    /// Trả kèm token usage của request (0 nếu provider không báo) để caller
+    /// tổng hợp chi phí per-job.
+    pub async fn ocr_jpeg_batch(
+        &self,
+        pages: &[&[u8]],
+    ) -> Result<(Vec<String>, VisionOcrUsage), VisionOcrError> {
         if pages.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), VisionOcrUsage::default()));
         }
         let count = pages.len();
         let mut content = Vec::with_capacity(count + 1);
@@ -226,6 +231,13 @@ impl VisionOcrRuntime {
             .json::<ChatResponse>()
             .await
             .map_err(|_| VisionOcrError::InvalidResponse)?;
+        let usage = parsed
+            .usage
+            .map(|usage| VisionOcrUsage {
+                prompt_tokens: usage.prompt_tokens.unwrap_or(0),
+                completion_tokens: usage.completion_tokens.unwrap_or(0),
+            })
+            .unwrap_or_default();
         let choice = parsed
             .choices
             .into_iter()
@@ -242,9 +254,25 @@ impl VisionOcrRuntime {
             return Err(VisionOcrError::Truncated);
         }
         if count == 1 {
-            return Ok(vec![strip_ocr_wrapping_fence(&text)]);
+            return Ok((vec![strip_ocr_wrapping_fence(&text)], usage));
         }
-        split_batch_response(&strip_ocr_wrapping_fence(&text), count)
+        split_batch_response(&strip_ocr_wrapping_fence(&text), count).map(|pages| (pages, usage))
+    }
+}
+
+/// Token usage của một request vision OCR (0 nếu provider không báo `usage`).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct VisionOcrUsage {
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+}
+
+impl VisionOcrUsage {
+    pub fn accumulate(&mut self, other: VisionOcrUsage) {
+        self.prompt_tokens = self.prompt_tokens.saturating_add(other.prompt_tokens);
+        self.completion_tokens = self
+            .completion_tokens
+            .saturating_add(other.completion_tokens);
     }
 }
 
@@ -282,6 +310,16 @@ fn split_batch_response(text: &str, n: usize) -> Result<Vec<String>, VisionOcrEr
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<ChatChoice>,
+    #[serde(default)]
+    usage: Option<ChatUsage>,
+}
+
+#[derive(Deserialize)]
+struct ChatUsage {
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
+    #[serde(default)]
+    completion_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -465,6 +503,34 @@ mod tests {
         assert!(!VisionOcrError::Status(401).is_retryable());
         assert!(!VisionOcrError::InvalidResponse.is_retryable());
         assert!(!VisionOcrError::InvalidConfiguration("X").is_retryable());
+    }
+
+    #[test]
+    fn usage_parses_and_accumulates() {
+        let parsed: ChatResponse = serde_json::from_str(
+            r#"{"choices":[{"message":{"content":"x"}}],"usage":{"prompt_tokens":120,"completion_tokens":45,"total_tokens":165}}"#,
+        )
+        .expect("parse");
+        let usage = parsed.usage.expect("usage present");
+        assert_eq!(usage.prompt_tokens, Some(120));
+        assert_eq!(usage.completion_tokens, Some(45));
+
+        // Absent usage stays zero (provider not reporting must not fail OCR).
+        let missing: ChatResponse =
+            serde_json::from_str(r#"{"choices":[{"message":{"content":"x"}}]}"#).expect("parse");
+        assert!(missing.usage.is_none());
+
+        let mut total = VisionOcrUsage::default();
+        total.accumulate(VisionOcrUsage {
+            prompt_tokens: 120,
+            completion_tokens: 45,
+        });
+        total.accumulate(VisionOcrUsage {
+            prompt_tokens: u64::MAX,
+            completion_tokens: 1,
+        });
+        assert_eq!(total.prompt_tokens, u64::MAX);
+        assert_eq!(total.completion_tokens, 46);
     }
 
     #[tokio::test]

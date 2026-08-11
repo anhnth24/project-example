@@ -82,8 +82,11 @@ model, thay cho stack local hiện tại. Hiện trạng và ràng buộc:
      1/4 storage Qdrant). Evidence:
      `bench/markhand_web/reports/openrouter-embedding-evaluation.md`,
      `bench/markhand_web/embedding/results/openrouter-adr0016/`.
-     Còn chờ: product owner chốt dimension (4096 chất lượng cao nhất vs
-     1024 tiết kiệm storage — cả hai đều đạt gate);
+     Dimension cho dev/demo stack: **1024-d MRL** (product owner chỉ đạo
+     2026-08-11 "quyết định rồi cắm vào dev stack thật"; 1024 đạt cả hai gate
+     với 1/4 storage — đã chạy live trong dev stack, signature
+     `d1636fb4…` qua `print-index-signature.py`, generation mới đi đúng
+     lifecycle shadow → operator cutover). Pin PRODUCTION mặc định vẫn chờ:
    - security review cho secrets/egress + LLM content policy;
    - index generation migration theo ADR 0011 (expand → shadow → cutover)
      cho corpus hiện hữu.
