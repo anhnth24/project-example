@@ -20,6 +20,7 @@ mod pdfium;
 mod postprocess;
 mod recovery;
 
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::diagnostics::{ConversionWarning, DetailedConvertError, MarkdownOutput};
@@ -28,8 +29,8 @@ use crate::ConvertError;
 
 use fallback::{extract_with_pdf_extract, via_pdfium};
 use inspector::{
-    probe_pages_needing_ocr, via_pdf_inspector, via_pdf_inspector_filtered_fast,
-    via_pdf_inspector_parallel_full, InspectorAttempt,
+    extract_pages_markdown_mem, pages_needing_ocr_from_extract, via_pdf_inspector,
+    via_pdf_inspector_filtered_fast, via_pdf_inspector_parallel_full, InspectorAttempt,
 };
 use pdfium::pdfium_available;
 use recovery::PDF_UNTRUSTED_EXTRACT_SOURCE;
@@ -66,9 +67,6 @@ pub(crate) fn to_markdown_detailed(
 ) -> Result<MarkdownOutput, DetailedConvertError> {
     let bytes = std::fs::read(path).map_err(|e| DetailedConvertError::failed(e.to_string()))?;
 
-    // Probe needs_ocr early so PDFium/pdf-extract fallbacks inherit the flags
-    // even when the structured inspector path is abandoned.
-    let probed_needs_ocr = probe_pages_needing_ocr(&bytes, pages);
     let mut last_ocr_error: Option<OcrAttemptError> = None;
 
     // Page-filtered requests are common in the desktop/MCP token-saving flow.
@@ -92,25 +90,29 @@ pub(crate) fn to_markdown_detailed(
         }
     }
 
-    // 1) pdf-inspector: markdown có cấu trúc + needs_ocr theo trang.
-    let mut inherited_needs_ocr = probed_needs_ocr;
-    match via_pdf_inspector(
-        path,
-        &bytes,
-        ocr_langs,
-        ocr_enabled,
-        ocr_images,
-        pages,
-        ocr_config,
-        &mut last_ocr_error,
-    ) {
-        InspectorAttempt::Success(output) if !output.markdown.trim().is_empty() => {
-            return Ok(output);
+    // 1) pdf-inspector: one extract reused for needs_ocr flags + structured markdown.
+    // Fast paths above skip this entirely (no upfront probe/extract).
+    let mut inherited_needs_ocr = HashSet::new();
+    if let Some(prefetched) = extract_pages_markdown_mem(&bytes, pages) {
+        inherited_needs_ocr = pages_needing_ocr_from_extract(&prefetched);
+        match via_pdf_inspector(
+            path,
+            prefetched,
+            ocr_langs,
+            ocr_enabled,
+            ocr_images,
+            pages,
+            ocr_config,
+            &mut last_ocr_error,
+        ) {
+            InspectorAttempt::Success(output) if !output.markdown.trim().is_empty() => {
+                return Ok(output);
+            }
+            InspectorAttempt::Abandoned { pages_needing_ocr } => {
+                inherited_needs_ocr.extend(pages_needing_ocr);
+            }
+            InspectorAttempt::Success(_) => {}
         }
-        InspectorAttempt::Abandoned { pages_needing_ocr } => {
-            inherited_needs_ocr.extend(pages_needing_ocr);
-        }
-        InspectorAttempt::Success(_) | InspectorAttempt::Unavailable => {}
     }
 
     // 2) Fallback: PDFium — inherits inspector needs_ocr flags.
