@@ -5,8 +5,9 @@ và quality gate xem [`contributor-setup.md`](contributor-setup.md).
 
 F-08 cung cấp stack CPU-only cho development — **không** dùng làm bằng chứng benchmark hay
 production throughput. Stack gồm PostgreSQL, Qdrant, MinIO, OpenTelemetry Collector và
-**embedding-cpu (AITeamVN trên CPU)** — cùng runtime dự kiến cho on-prem CPU production;
-lần đầu chậm vì tải model HuggingFace.
+**embedding-cpu (AITeamVN trên CPU)** — dev mặc định (không cần key/egress); deployment
+hiện tại dùng OpenRouter `qwen3-embedding-8b` (ADR 0016), AITeamVN giữ cho air-gapped và
+là đường self-host khi có GPU; lần đầu chậm vì tải model HuggingFace.
 
 ## Trên `master` hiện chạy được gì?
 
@@ -206,9 +207,11 @@ Volume `embedding_model_cache` giữ weights HuggingFace giữa các lần resta
 
 ### Embedding runtime (index + embedding workers)
 
-**Mặc định — AITeamVN CPU (dev = on-prem CPU prod path):** Compose `embedding-cpu` @
-`:8088`. Pin P0-05 trong `.env.example` (1024-d, revision `dea33aa1…`). Worker và server
-dùng cùng `MARKHAND_EMBEDDING_*`.
+**Mặc định dev — AITeamVN CPU (air-gapped / self-host tương lai):** Compose
+`embedding-cpu` @ `:8088`. Pin P0-05 trong `.env.example` (1024-d, revision `dea33aa1…`).
+Worker và server dùng cùng `MARKHAND_EMBEDDING_*`. Deployment cloud-allowed hiện dùng
+OpenRouter `qwen/qwen3-embedding-8b` (`provider-cloud` + `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`,
+ADR 0016 — xem `deploy/dev/worker.env.example`).
 
 **Profile `mock`:** stub 8-dim cho CI — set `COMPOSE_PROFILES=mock` và uncomment block mock
 trong `.env.example`.
@@ -335,8 +338,9 @@ embedding.
 5. Verify khả năng tìm kiếm sau khi index/embedding xong: `POST /api/v1/search` (mục Verify).
 6. Verify hỏi-đáp: `POST /api/v1/ask` (mục Verify) — mặc định trả lời extractive
    (`offline_extractive`/`fallback_extractive`), không cần provider LLM nào. Chỉ cần cấu hình
-   provider (`MARKHAND_CHAT_BASE_URL`/`MARKHAND_CHAT_API_KEY`/`MARKHAND_CHAT_MODEL`, hoặc
-   `MARKHAND_GLM_*` tương ứng) khi muốn bật sinh câu trả lời bằng LLM thay cho extractive.
+   provider (`MARKHAND_CHAT_BASE_URL`/`MARKHAND_CHAT_API_KEY`/`MARKHAND_CHAT_MODEL` —
+   hiện tại Qwen qua OpenRouter; alias legacy `MARKHAND_GLM_*` deprecated) khi muốn bật
+   sinh câu trả lời bằng LLM thay cho extractive.
 
 **Lưu ý:** quarantined/rejected upload **không** theo path convert accepted ở trên — upload
 quarantined vẫn đăng ký document/version nhưng job `convert` chỉ được tạo khi có
@@ -459,8 +463,8 @@ curl -sS -X POST http://127.0.0.1:8787/api/v1/ask \
 
 `ask` mặc định trả lời extractive (`mode: offline_extractive`/`fallback_extractive`) khi chưa
 cấu hình chat provider; cấu hình provider (`MARKHAND_CHAT_BASE_URL`/`MARKHAND_CHAT_API_KEY`/
-`MARKHAND_CHAT_MODEL`, hoặc `MARKHAND_GLM_*` tương ứng) chỉ cần khi muốn bật sinh câu trả lời
-bằng LLM.
+`MARKHAND_CHAT_MODEL` — hiện tại Qwen qua OpenRouter; alias legacy `MARKHAND_GLM_*`
+deprecated) chỉ cần khi muốn bật sinh câu trả lời bằng LLM.
 
 ## Failure and reset
 

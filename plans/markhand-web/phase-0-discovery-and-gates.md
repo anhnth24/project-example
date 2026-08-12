@@ -58,8 +58,11 @@ Hai tầng runtime (ADR 0005; ADR 0004 superseded):
    `G0-RET-VLLM-CUTOVER` đã gỡ khỏi registry. Pin mặc định đổi sau khi model
    mới qua gate Recall@5/nDCG trên golden corpus (DKP-02).
 
-**GLM cloud** is **not** the Markhand Web server embedding runtime. GLM remains
-approved for grounded Q&A / summarize (top-K citation handoff only).
+~~**GLM cloud** is **not** the Markhand Web server embedding runtime. GLM remains
+approved for grounded Q&A / summarize (top-K citation handoff only).~~ —
+**superseded 2026-08:** theo ADR 0016 + chuyển hướng Q&A, chat/OCR/embedding đều
+dùng Qwen qua OpenRouter (`MARKHAND_CHAT_*`/`MARKHAND_OCR_*`/`provider-cloud`);
+GLM chỉ còn alias legacy deprecated.
 
 Đo trên golden corpus:
 
@@ -82,9 +85,12 @@ Kết quả chốt:
 - index signature canonical (không trộn generation giữa hai runtime);
 - hybrid weights/rerank baseline.
 
-Không chọn model chỉ theo latency. Chất lượng tiếng Việt là ưu tiên. Markhand Web
+Không chọn model chỉ theo latency. Chất lượng tiếng Việt là ưu tiên. ~~Markhand Web
 server không gửi corpus chunk lên cloud cho embedding; GLM chỉ nhận top-K citation
-cho Q&A.
+cho Q&A.~~ — **superseded 2026-08-10 (ADR 0016):** cloud embedding
+(`provider-cloud` + `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true`) gửi toàn bộ chunk
+text tới OpenRouter khi build index; profile air-gapped giữ `local-neural`
+không egress.
 
 ## P0.4 — Qdrant/PG scale spike
 
@@ -139,7 +145,8 @@ Chốt:
 - quarantine lifecycle;
 - sandbox profile: unprivileged UID, read-only root, no egress mặc định, giới hạn
   CPU/RAM/file/process/wall-clock, process-group kill;
-- policy GLM cloud theo phân loại dữ liệu.
+- policy LLM-provider cloud theo phân loại dữ liệu (thời Phase 0 là GLM; nay
+  OpenRouter Qwen — ADR 0016).
 
 Lập inventory model/native dependency gồm nguồn, version, checksum, license và
 redistribution constraints. Model chưa rõ license, gồm PhoWhisper, không được bundle

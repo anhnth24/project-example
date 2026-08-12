@@ -85,7 +85,11 @@ P3-03..13 → P3-14
   derived version/export, full audit.
 - **Depends:** P3-02/03 + RBAC. **Acceptance/tests:** Original hash unchanged; findings
   authorized; precision/recall/completeness/overlap/Unicode/permission tests.
-- **Security:** No PII logs; prohibited data no GLM. **Out:** legal completeness guarantee.
+- **Security:** No PII logs; prohibited-classification data never leaves for any
+  external LLM/embedding provider (hiện tại OpenRouter Qwen — chat/OCR/embedding,
+  ADR 0016; tương lai self-host local model khi có GPU). Cover cả đường cloud
+  embedding: index build gửi toàn bộ chunk text, không chỉ Q&A top-K.
+  **Out:** legal completeness guarantee.
 
 ## P3-09 — Schema/table edit và safe CSV
 

@@ -70,7 +70,7 @@ test('two questions, "Cuộc trò chuyện mới", one more question, then reope
     'Không tìm thấy nội dung liên quan trong tài liệu đã lập chỉ mục để trả lời câu hỏi này.',
   );
 
-  await page.getByRole('link', { name: 'Xem trước tài liệu' }).first().click();
+  await page.getByRole('link', { name: 'Xem trước' }).first().click();
   await expect(page).toHaveURL(/\/library\/[^/]+\?doc=[^/]+$/);
   await expect(page.getByTestId('document-preview-markdown')).toContainText(
     'Mock preview content for version',

@@ -55,10 +55,11 @@ export MARKHAND_EMBEDDING_RUNTIME_PATH=vllm-local
 export MARKHAND_INDEX_SIGNATURE=<64-lowercase-hex>
 ```
 
-Production and test profiles accept only local runtime paths (`vllm-local` or
-`local-neural`). A cloud runtime is permitted solely for development when
-`MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true` is set explicitly; production rejects it
-even if that flag is present.
+Local runtime paths (`vllm-local`, `local-neural`) are always accepted. A cloud
+runtime (`provider-cloud`, e.g. OpenRouter `qwen/qwen3-embedding-8b`) is
+permitted on **any** profile, but only when the deployment sets the explicit
+egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true` (ADR 0016 — index builds
+send full chunk text to the provider). Without the flag it is rejected.
 
 ### CI test strategy
 

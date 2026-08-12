@@ -22,7 +22,7 @@ native, security/egress và migration strategy.
 | [0002](0002-version-aware-citations.md) | Accepted | Version-aware retrieval and citations |
 | [0003](0003-cross-document-conflict-lifecycle.md) | Proposed | Cross-document claim/conflict lifecycle |
 | [0004](0004-interim-glm-cloud-embedding.md) | Superseded by 0005 | GLM cloud embedding interim (historical; superseded 2026-07-20) |
-| [0005](0005-vietnamese-embedding-model-quality.md) | Accepted | AITeamVN local embedding for POC/1B; GLM chat-only |
+| [0005](0005-vietnamese-embedding-model-quality.md) | Superseded by 0016 (cloud-allowed); giữ cho air-gapped | AITeamVN local embedding for POC/1B (nay là profile air-gapped / self-host tương lai) |
 | [0006](0006-index-signature.md) | Accepted | Canonical index signature and chunk identity (P0-06) |
 | [0007](0007-tenant-isolation-rls.md) | Accepted | Tenant isolation and RLS boundary |
 | [0008](0008-pg-partition-strategy.md) | Accepted | PG partition strategy for Phase 1B POC and Profile B revalidation |
@@ -33,7 +33,8 @@ native, security/egress và migration strategy.
 | [0013](0013-intelligence-durable-ids.md) | Accepted | Durable intelligence IDs (`sha256-v1`) and desktop rebuild |
 | [0014](0014-vietnamese-word-segmentation-fts.md) | Proposed | Vietnamese word segmentation for FTS lexical retrieval (P1B-R01) |
 | [0015](0015-purge-content-retention-semantics.md) | Proposed | Immutable-content retention semantics for document purge (P1B-I07) |
-| [0016](0016-openrouter-qwen-ocr-embedding.md) | Accepted (OCR) / gated (embedding) | Vision OCR OpenRouter thay thế hoàn toàn Tesseract; `qwen3-embedding-8b` cutover chờ benchmark (supersedes 0005 khi kích hoạt) |
+| [0016](0016-openrouter-qwen-ocr-embedding.md) | Accepted (OCR) / benchmark PASS, chờ chốt dimension + security review (embedding) | Vision OCR OpenRouter thay thế hoàn toàn Tesseract; `qwen3-embedding-8b` supersedes 0005 cho deployment cloud-allowed |
+| [0017](0017-spa-api-image-delivery.md) | Proposed | Bundle the matching web SPA in the API image |
 
 Phase 0 numeric/benchmark decisions use the machine-readable
 [`bench/markhand_web/gates.yaml`](../../bench/markhand_web/gates.yaml) registry.

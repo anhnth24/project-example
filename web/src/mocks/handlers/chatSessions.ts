@@ -55,6 +55,7 @@ const ALLOWED_ANSWER_MODES = new Set([
   'cloud_llm',
   'subscription_cli',
   'llm_unverified',
+  'assistant',
 ]);
 
 function validationFailed(message: string) {

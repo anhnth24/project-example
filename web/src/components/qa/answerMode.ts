@@ -8,21 +8,41 @@
 // regeneration here — display copy must degrade gracefully, never fail the
 // type-check, when the enum grows.
 // An unrecognized mode (including today's default `offline_extractive`)
-// gets no badge at all, same as the pre-chat `AskPanel` only ever showing
-// one for `fallback_extractive`.
+// gets a neutral "đoạn nguồn" badge when the answer came from extractive
+// paths that previously showed nothing.
 export interface AnswerModeInfo {
   readonly label: string;
   readonly tone: 'neutral' | 'warning';
 }
 
 const ANSWER_MODE_LABELS: Record<string, AnswerModeInfo> = {
+  offline_extractive: {
+    label: 'Đoạn nguồn liên quan',
+    tone: 'neutral',
+  },
   fallback_extractive: {
-    label: 'Trả lời trích xuất (không qua LLM)',
+    label: 'Dùng đoạn nguồn (câu mô hình không đạt kiểm chứng)',
     tone: 'neutral',
   },
   llm_unverified: {
-    label: 'Trả lời từ LLM (chưa kiểm chứng đối chiếu)',
+    label: 'Trả lời từ mô hình (chưa kiểm chứng đối chiếu)',
     tone: 'warning',
+  },
+  assistant: {
+    label: 'Trợ lý',
+    tone: 'neutral',
+  },
+  local_llm: {
+    label: 'Trả lời từ mô hình cục bộ',
+    tone: 'neutral',
+  },
+  cloud_llm: {
+    label: 'Trả lời từ mô hình đám mây',
+    tone: 'neutral',
+  },
+  subscription_cli: {
+    label: 'Trả lời từ CLI đăng ký',
+    tone: 'neutral',
   },
 };
 

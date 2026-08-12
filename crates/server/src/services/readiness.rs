@@ -7,6 +7,7 @@
 //! timeout reports the probe that was in progress (not a hard-coded database).
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use deadpool_postgres::Pool;
@@ -23,6 +24,27 @@ use crate::storage::qdrant::QdrantClient;
 
 pub const OUTER_DEADLINE: Duration = Duration::from_secs(4);
 pub const PER_PROBE_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Per-probe deadline, optionally widened via `MARKHAND_READY_PROBE_TIMEOUT_SECS`
+/// (bounded 1..=30s). Cloud embedding probes (ADR 0016) issue a real provider
+/// request; on high-latency egress the 2s default flaps on cold TLS connects.
+fn per_probe_deadline() -> Duration {
+    static DEADLINE: OnceLock<Duration> = OnceLock::new();
+    *DEADLINE.get_or_init(|| {
+        std::env::var("MARKHAND_READY_PROBE_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|secs| (1..=30).contains(secs))
+            .map(Duration::from_secs)
+            .unwrap_or(PER_PROBE_DEADLINE)
+    })
+}
+
+/// Outer deadline keeps the same +2s headroom over the per-probe bound that
+/// the 4s/2s defaults encode.
+fn outer_deadline() -> Duration {
+    per_probe_deadline() + (OUTER_DEADLINE - PER_PROBE_DEADLINE)
+}
 
 #[derive(Debug, Error, PartialEq, Eq, Clone, Copy)]
 pub enum ReadinessProbeError {
@@ -150,7 +172,7 @@ impl ProbeTracker {
 /// Full fail-closed readiness. Any probe error fails the check.
 pub async fn check_ready(deps: ReadinessDeps<'_>) -> Result<(), ReadinessProbeError> {
     let tracker = ProbeTracker::new();
-    match timeout(OUTER_DEADLINE, check_ready_inner(deps, &tracker)).await {
+    match timeout(outer_deadline(), check_ready_inner(deps, &tracker)).await {
         Ok(result) => result,
         Err(_) => Err(tracker.get()),
     }
@@ -160,14 +182,12 @@ async fn check_ready_inner(
     deps: ReadinessDeps<'_>,
     tracker: &ProbeTracker,
 ) -> Result<(), ReadinessProbeError> {
+    let per_probe = per_probe_deadline();
     tracker.set(ReadinessProbeError::Database);
-    timeout(
-        PER_PROBE_DEADLINE,
-        database::check_connection(deps.database_url),
-    )
-    .await
-    .map_err(|_| ReadinessProbeError::Database)?
-    .map_err(|_| ReadinessProbeError::Database)?;
+    timeout(per_probe, database::check_connection(deps.database_url))
+        .await
+        .map_err(|_| ReadinessProbeError::Database)?
+        .map_err(|_| ReadinessProbeError::Database)?;
 
     if deps.vector_client.is_none() {
         tracker.set(ReadinessProbeError::VectorStoreCredentials);
@@ -180,9 +200,9 @@ async fn check_ready_inner(
             "{}/healthz",
             deps.vector_base_url.trim_end_matches('/')
         ))
-        .timeout(PER_PROBE_DEADLINE)
+        .timeout(per_probe)
         .send();
-    let vector = timeout(PER_PROBE_DEADLINE, vector)
+    let vector = timeout(per_probe, vector)
         .await
         .map_err(|_| ReadinessProbeError::VectorStore)?
         .map_err(|_| ReadinessProbeError::VectorStore)?;
@@ -190,7 +210,7 @@ async fn check_ready_inner(
         return Err(ReadinessProbeError::VectorStore);
     }
     timeout(
-        PER_PROBE_DEADLINE,
+        per_probe,
         deps.vector_client
             .expect("checked above")
             .collections_probe(),
@@ -210,16 +230,16 @@ async fn check_ready_inner(
     let object_health = deps
         .http
         .get(deps.object_health_url)
-        .timeout(PER_PROBE_DEADLINE)
+        .timeout(per_probe)
         .send();
-    let object_health = timeout(PER_PROBE_DEADLINE, object_health)
+    let object_health = timeout(per_probe, object_health)
         .await
         .map_err(|_| ReadinessProbeError::ObjectStore)?
         .map_err(|_| ReadinessProbeError::ObjectStore)?;
     if !object_health.status().is_success() {
         return Err(ReadinessProbeError::ObjectStore);
     }
-    timeout(PER_PROBE_DEADLINE, object.bucket_probe())
+    timeout(per_probe, object.bucket_probe())
         .await
         .map_err(|_| ReadinessProbeError::ObjectStore)?
         .map_err(|_| ReadinessProbeError::ObjectStore)?;
@@ -231,7 +251,7 @@ async fn check_ready_inner(
                 .map_err(|_| ReadinessProbeError::IndexSignature)?;
             tracker.set(ReadinessProbeError::ActiveGeneration);
             if !timeout(
-                PER_PROBE_DEADLINE,
+                per_probe,
                 active_generation_consistent(deps.pool, signature),
             )
             .await
@@ -240,7 +260,7 @@ async fn check_ready_inner(
                 return Err(ReadinessProbeError::ActiveGeneration);
             }
             timeout(
-                PER_PROBE_DEADLINE,
+                per_probe,
                 deps.vector_client
                     .expect("checked above")
                     .collection_probe_for_digest(signature),
@@ -256,7 +276,7 @@ async fn check_ready_inner(
                 }
             };
             tracker.set(ReadinessProbeError::Embedding);
-            timeout(PER_PROBE_DEADLINE, embedder.health_probe())
+            timeout(per_probe, embedder.health_probe())
                 .await
                 .map_err(|_| ReadinessProbeError::Embedding)?
                 .map_err(|_| ReadinessProbeError::Embedding)?;
@@ -268,7 +288,7 @@ async fn check_ready_inner(
         None => {
             if let Some(embedder) = deps.embedder {
                 tracker.set(ReadinessProbeError::Embedding);
-                timeout(PER_PROBE_DEADLINE, embedder.health_probe())
+                timeout(per_probe, embedder.health_probe())
                     .await
                     .map_err(|_| ReadinessProbeError::Embedding)?
                     .map_err(|_| ReadinessProbeError::Embedding)?;
@@ -277,7 +297,7 @@ async fn check_ready_inner(
     }
 
     tracker.set(ReadinessProbeError::ReconcileFence);
-    let fence = timeout(PER_PROBE_DEADLINE, async {
+    let fence = timeout(per_probe, async {
         Ok::<_, ReadinessProbeError>(
             ops_fence::any_blocking_fence_active(deps.pool)
                 .await

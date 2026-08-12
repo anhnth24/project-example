@@ -417,10 +417,20 @@ services:
       MARKHAND_CHAT_BASE_URL: ${MARKHAND_CHAT_BASE_URL:-http://mock-embedding:8080/v1}
       MARKHAND_CHAT_API_KEY: ${MARKHAND_CHAT_API_KEY:-poc-chat-key}
       MARKHAND_CHAT_MODEL: ${MARKHAND_CHAT_MODEL:-markhand-mock-chat}
+      MARKHAND_QA_ALLOW_UNVERIFIED_LLM: ${MARKHAND_QA_ALLOW_UNVERIFIED_LLM:-0}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
+      # Cloud embedding probes can exceed the 2s default on cold TLS connects
+      # and flap /health/ready 503 (see deploy/.env.example).
+      MARKHAND_READY_PROBE_TIMEOUT_SECS: ${MARKHAND_READY_PROBE_TIMEOUT_SECS:-}
     ports:
-      - "127.0.0.1:${MARKHAND_API_PORT:-8788}:8787"
+      - "${MARKHAND_API_BIND_HOST:-127.0.0.1}:${MARKHAND_API_PORT:-8788}:8787"
+    # Optional IPv4 pin for cloud chat hosts whose AAAA records are unreachable
+    # from the bridge (common on IPv4-only Docker hosts). Hostname is
+    # configurable (legacy default api.z.ai from the interim GLM deployment);
+    # OpenRouter normally needs no pin. Mock profile ignores it.
+    extra_hosts:
+      - "${MARKHAND_CHAT_PIN_HOSTNAME:-api.z.ai}:${MARKHAND_CHAT_HOST_IPV4:-127.0.0.1}"
     networks: [edge, private]
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=256m
@@ -476,6 +486,7 @@ services:
       MARKHAND_CHAT_BASE_URL: ${MARKHAND_CHAT_BASE_URL:-http://mock-embedding:8080/v1}
       MARKHAND_CHAT_API_KEY: ${MARKHAND_CHAT_API_KEY:-poc-chat-key}
       MARKHAND_CHAT_MODEL: ${MARKHAND_CHAT_MODEL:-markhand-mock-chat}
+      MARKHAND_QA_ALLOW_UNVERIFIED_LLM: ${MARKHAND_QA_ALLOW_UNVERIFIED_LLM:-0}
       MARKHAND_MAX_UPLOAD_BYTES: ${MARKHAND_MAX_UPLOAD_BYTES:-209715200}
       MARKHAND_JOB_LEASE_SECONDS: ${MARKHAND_JOB_LEASE_SECONDS:-60}
     ports:
@@ -545,6 +556,9 @@ services:
       MARKHAND_WORKER_KIND: convert
       MARKHAND_WORKER_ID: poc-convert-1
       MARKHAND_CONVERTER_TIMEOUT_SECS: ${MARKHAND_CONVERTER_TIMEOUT_SECS:-120}
+      # RLIMIT_CPU (CPU-seconds). Default 60 kills long OCR PDFs with SIGXCPU,
+      # which surfaces as the opaque "converter exited unsuccessfully".
+      MARKHAND_CONVERTER_CPU_SECONDS: ${MARKHAND_CONVERTER_CPU_SECONDS:-3600}
       # RLIMIT_AS needs virtual headroom for PDFium; the container
       # cgroup below still caps resident memory at MARKHAND_WORKER_MEM_LIMIT.
       # The converter's rayon pool sizes itself from the host CPU count, so the
@@ -662,6 +676,8 @@ services:
       MARKHAND_WORKER_USER_ID: ${MARKHAND_WORKER_USER_ID:-22222222-2222-2222-2222-222222222201}
       MARKHAND_WORKER_KIND: embedding
       MARKHAND_WORKER_ID: poc-embedding-1
+      # AITeamVN CPU embedding of multi-chunk OCR docs can exceed the 300s default.
+      MARKHAND_WORKER_MAX_JOB_SECS: ${MARKHAND_WORKER_MAX_JOB_SECS:-1800}
       MARKHAND_EMBEDDING_BASE_URL: ${MARKHAND_EMBEDDING_BASE_URL:-http://mock-embedding:8080/v1}
       MARKHAND_EMBEDDING_API_KEY: ${MARKHAND_EMBEDDING_API_KEY:-poc-embedding-key}
       MARKHAND_EMBEDDING_PROVIDER: ${MARKHAND_EMBEDDING_PROVIDER:-openai-compatible}

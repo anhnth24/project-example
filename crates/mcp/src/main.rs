@@ -1,12 +1,14 @@
 //! fileconv-mcp — MCP server (stdio) cho fileconv-core.
 //!
-//! Cho AI/agent chuyển file → Markdown NGOÀI context (đỡ tốn token). Tất định, offline,
-//! không cần API key. Tool:
+//! Cho AI/agent chuyển file → Markdown NGOÀI context (đỡ tốn token). Tất định,
+//! chạy local — riêng ảnh/PDF scan cần OCR đi qua vision-LLM (`FILECONV_OCR_*`,
+//! ADR 0016; thiếu key → lỗi `DependencyMissing` rõ ràng). Tool:
 //!   - `detect_format(path)`       — xem loại/kích thước/số trang/sheet (không convert).
 //!   - `convert_to_markdown(path)` — convert; hỗ trợ chọn trang (pages), sheet, max_chars.
 //!   - `convert_to_markdown_detailed(path)` — cùng convert + outcome/warnings (JSON).
 //!
-//! Đường dẫn tài nguyên qua env: FILECONV_PDFIUM_LIB, FILECONV_TESSDATA, FILECONV_WHISPER_MODEL.
+//! Đường dẫn tài nguyên qua env: FILECONV_PDFIUM_LIB, FILECONV_WHISPER_MODEL;
+//! OCR qua FILECONV_OCR_* (fallback FILECONV_LLM_API_KEY).
 
 use std::path::PathBuf;
 
@@ -123,7 +125,7 @@ impl Fileconv {
     }
 
     #[tool(
-        description = "Chuyển file sang Markdown (pdf/docx/pptx/xlsx/csv/html + ảnh OCR + audio). Chạy offline. Dùng `pages` (PDF, 1-indexed), `sheet` (Excel) hoặc `max_chars` để chỉ lấy phần cần — tiết kiệm token."
+        description = "Chuyển file sang Markdown (pdf/docx/pptx/xlsx/csv/html + ảnh OCR + audio). Chạy local; riêng ảnh/PDF scan cần OCR vision-LLM (FILECONV_OCR_*). Dùng `pages` (PDF, 1-indexed), `sheet` (Excel) hoặc `max_chars` để chỉ lấy phần cần — tiết kiệm token."
     )]
     async fn convert_to_markdown(
         &self,
@@ -329,7 +331,8 @@ impl ServerHandler for Fileconv {
                 ..Default::default()
             },
             instructions: Some(
-                "Chuyển file sang Markdown offline (pdf/docx/pptx/xlsx/csv/html/ảnh OCR/audio). \
+                "Chuyển file sang Markdown local (pdf/docx/pptx/xlsx/csv/html/ảnh OCR/audio; \
+                 ảnh/PDF scan cần OCR vision-LLM qua FILECONV_OCR_*). \
                  Gọi detect_format để xem trước (số trang/sheet), rồi convert_to_markdown; \
                  truyền pages/sheet/max_chars để chỉ lấy phần cần, tiết kiệm token."
                     .into(),

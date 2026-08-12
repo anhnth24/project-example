@@ -70,8 +70,8 @@ Issue catalog: [`../plans/markhand-web/backlog/`](../plans/markhand-web/backlog/
 ## Backlog
 
 ### Độ chính xác tiếng Việt
-- [ ] **Phục hồi dấu IN HOA đầy đủ**: đã thêm retry PSM 6 khi output sparse/lỗi/
-      dính chuỗi IN HOA và chọn output theo quality score; phục hồi bằng VLM vẫn cần corpus thật.
+- [ ] **Phục hồi dấu IN HOA đầy đủ**: cơ chế retry PSM 6 thời Tesseract đã retired
+      cùng engine (ADR 0016); cần đo lại IN HOA trên vision OCR với corpus thật.
 - [x] **Tách cột trước OCR** bằng vertical projection, OCR từng cột và score fallback.
 - [x] **Decode VNI / VPS** đầy đủ từ bảng tham chiếu VietUnicode.
 - [x] **Lọc ảo giác whisper** bằng `no_speech_probability` + marker nhạc/im lặng.

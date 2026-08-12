@@ -37,8 +37,9 @@ CI runs these same Make targets in parallel and adds Linux bundle validation.
 - `whisper-rs` native build stale: verify C/C++/cmake, then
   `cargo clean -p whisper-rs-sys`.
 - pnpm mismatch/nested lock: install pnpm 10.33.3; use only root lock.
-- scan PDF runtime missing: run `bench/download_pdfium.sh`; install Tesseract `vie+eng`
-  or use bundled desktop runtime.
+- scan PDF runtime missing: run `bench/download_pdfium.sh` (render); OCR needs a
+  vision-LLM key — `export FILECONV_OCR_API_KEY=...` (OpenRouter default) or a
+  self-hosted vision endpoint via `FILECONV_OCR_BASE_URL` (ADR 0016 — Tesseract removed).
 - Compose health fail: inspect `docker compose -f deploy/dev/compose.yml ps` and logs;
   scripts already retry stable PostgreSQL/Qdrant startup.
 - generated roadmap/API drift: run `python3 scripts/build-roadmap.py` or

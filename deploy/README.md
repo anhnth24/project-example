@@ -36,7 +36,15 @@ Defaults:
 - API on `http://127.0.0.1:8788` (`/api/v1/health/ready`)
 - Host ports are loopback-only and offset from `deploy/dev` to avoid clashes
 
-AITeamVN CPU embedding (not GLM):
+OpenRouter cloud embedding (`qwen/qwen3-embedding-8b`, ADR 0016 — hướng hiện tại):
+
+```bash
+# edit deploy/.env: bật block "OpenRouter cloud embedding" (provider-cloud,
+# MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true) + signature từ print-index-signature.py
+deploy/scripts/poc-up.sh
+```
+
+AITeamVN CPU embedding (air-gapped / self-host tương lai khi có GPU):
 
 ```bash
 # edit deploy/.env: COMPOSE_PROFILES=aiteamvn + AITeamVN signature/URL block
@@ -177,19 +185,13 @@ strict security headers on both. See `crates/server/src/spa.rs` for the
 implementation and its own module docs for the exact CSP/cache-control
 contract.
 
-- Build the SPA first: `pnpm --dir web build` → `web/dist`.
-- Point the server at it with `MARKHAND_WEB_DIST_DIR=/path/to/web/dist`
-  (absolute path recommended for containers). Unset, the server falls back to
-  `./web/dist` relative to its CWD, and if neither resolves it simply serves
-  the API alone — **serving the SPA is optional, never required to boot**.
-- `deploy/Dockerfile.server` and `compose.poc.yml` do **not** currently build
-  or copy `web/dist` into the API image/container — that would add a
-  Node/pnpm build stage to a pipeline whose base images and evidence are
-  digest-pinned (`poc/images.lock.json`) for the F02 gate, which is a
-  separate decision this change deliberately did not make unasked. Until
-  that ADR lands, ship the SPA either behind a separate static host/CDN
-  pointed at the same API origin, or bind-mount a locally built `web/dist`
-  into the API container and set `MARKHAND_WEB_DIST_DIR` accordingly.
+- `deploy/Dockerfile.server` builds the SPA with the digest-pinned Node image
+  recorded in `poc/images.lock.json`, copies `web/dist` into
+  `/opt/markhand/web`, and sets `MARKHAND_WEB_DIST_DIR` for same-origin
+  SPA/API delivery. See ADR 0017 for the cache, image, and rollback trade-offs.
+- A non-container server can still run `pnpm --dir web build` and point
+  `MARKHAND_WEB_DIST_DIR` at the resulting absolute `web/dist` path. If no
+  directory resolves, the process deliberately starts API-only.
 - HSTS is intentionally **not** set by the application — it is a
   reverse-proxy/TLS-terminator concern in production (the app has no
   certificate and cannot know if the edge actually terminates HTTPS).

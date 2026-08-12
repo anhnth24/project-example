@@ -140,8 +140,7 @@ jobs:
       - name: Install base build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang cmake pkg-config \
-            tesseract-ocr tesseract-ocr-vie
+          sudo apt-get install -y build-essential clang cmake pkg-config
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.88.0
@@ -370,7 +369,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake pkg-config \
-            tesseract-ocr tesseract-ocr-vie shellcheck apparmor
+            shellcheck apparmor
       # The convert worker runs under this profile (docker-default plus `mount,`)
       # because its nested sandbox remounts / as MS_REC|MS_PRIVATE. The runner
       # has AppArmor enabled, so Docker rejects the container until the profile
@@ -433,7 +432,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake pkg-config \
-            tesseract-ocr tesseract-ocr-vie shellcheck apparmor
+            shellcheck apparmor
       - name: Load the convert sandbox AppArmor profile
         run: sudo apparmor_parser -r -W deploy/poc/apparmor-markhand-convert
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
@@ -551,7 +550,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake pkg-config \
-            tesseract-ocr tesseract-ocr-vie shellcheck apparmor
+            shellcheck apparmor
       # See phase1b-o04-release-gate's own comment: the convert worker's nested
       # sandbox needs the same AppArmor profile loaded to boot.
       - name: Load the convert sandbox AppArmor profile
@@ -705,7 +704,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake pkg-config \
-            tesseract-ocr tesseract-ocr-vie shellcheck apparmor
+            shellcheck apparmor
       # See phase1b-o04-release-gate's own comment: the convert worker's
       # nested sandbox needs the same AppArmor profile loaded to boot.
       - name: Load the convert sandbox AppArmor profile
@@ -868,7 +867,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang cmake pkg-config \
             libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf file tesseract-ocr
+            librsvg2-dev patchelf file
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c # master
         with:
           toolchain: 1.88.0

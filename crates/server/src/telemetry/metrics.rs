@@ -2,7 +2,7 @@
 
 use super::validate_metric;
 
-/// Canonical metric names used across API → jobs → convert/embed/retrieval/GLM.
+/// Canonical metric names used across API → jobs → convert/embed/retrieval/chat provider.
 pub const METRIC_REQUEST_LATENCY: &str = "markhand_http_request_duration_seconds";
 pub const METRIC_QUEUE_DEPTH: &str = "markhand_job_queue_depth";
 pub const METRIC_QUEUE_AGE: &str = "markhand_job_queue_age_seconds";
