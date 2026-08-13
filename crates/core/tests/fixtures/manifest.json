@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "fixtures": [
+    {
+      "id": "core.docx.heading-hierarchy.v1",
+      "path": "heading-hierarchy.docx",
+      "sha256": "806a293e688a70880f3a62a727fc84085d76cf8862c861dcf259a1819c3aaf25",
+      "kind": "docx",
+      "owner": "markhand-core",
+      "source": "synthetic",
+      "license": "CC0-1.0",
+      "sensitive": false
+    }
+  ]
+}
