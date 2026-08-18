@@ -371,4 +371,101 @@ Nội dung mục 2.
         assert_eq!(clamp_to_char_boundary(text, 1), 0);
         assert_eq!(clamp_to_char_boundary(text, 3), 3);
     }
+
+    #[test]
+    fn inter_v2_04_chunk_rag_trace_demo() {
+        let para = "Điều khoản áp dụng cho mọi bên liên quan. ".repeat(40);
+        let md = format!(
+            "# Phần I\n\nGiới thiệu.\n\n## Mục 1\n\nNội dung mục 1.\n\n### Tiểu mục 1.1\n\nChi tiết.\n\n## Mục 2\n\n{para}\n\n{para}\n\n{para}\n"
+        );
+        let chunks = chunk_markdown(&md, 320);
+
+        assert!(chunks.len() >= 5, "got {}", chunks.len());
+        assert_eq!(chunks[0].heading, "Phần I");
+        assert_eq!(chunks[1].heading, "Phần I > Mục 1");
+        assert_eq!(chunks[2].heading, "Phần I > Mục 1 > Tiểu mục 1.1");
+        assert!(chunks.windows(2).all(|w| w[0].index + 1 == w[1].index));
+        assert!(
+            chunks
+                .iter()
+                .filter(|c| c.heading == "Phần I > Mục 2")
+                .count()
+                >= 2
+        );
+        for c in &chunks {
+            assert!(c.text.is_char_boundary(c.text.len()));
+        }
+    }
+
+    #[test]
+    fn inter_v2_04_empty_heading_body_only() {
+        let md = "Không có heading — chỉ body.\n\nĐoạn hai.";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "");
+        assert!(chunks[0].text.contains("Không có heading"));
+    }
+
+    #[test]
+    fn inter_v2_04_crlf_embedding_body_is_lf() {
+        let md = "# Tiêu đề\r\n\r\nNội dung dòng một.\r\nDòng hai.\r\n";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "Tiêu đề");
+        assert_eq!(chunks[0].text, "Nội dung dòng một.\nDòng hai.");
+        let (s, e) = locate_chunk_text(md, 0, &chunks[0].text).unwrap();
+        assert!(md[s..e].contains("\r\n"));
+    }
+
+    #[test]
+    fn inter_v2_04_adversarial_hash_without_space_is_not_heading() {
+        let md = "#KhôngSpace\n\nBody thật.";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "");
+        assert!(chunks[0].text.contains("#KhôngSpace"));
+    }
+
+    #[test]
+    fn inter_v2_04_adversarial_vietnamese_hard_cut_is_utf8_safe() {
+        let glyph = "ệ";
+        let md = format!("# A\n\n{}", glyph.repeat(250));
+        // max_chars=100 bị sàn lên 200 — vẫn phải cắt và UTF-8-safe.
+        let chunks = chunk_markdown(&md, 100);
+        assert!(chunks.len() >= 2);
+        for c in &chunks {
+            assert!(c.chars <= 200);
+            assert!(!c.text.is_empty());
+        }
+    }
+
+    #[test]
+    fn inter_v2_04_adversarial_empty_and_whitespace_only() {
+        assert!(chunk_markdown("", 2000).is_empty());
+        assert!(chunk_markdown(" \n\t \r\n", 2000).is_empty());
+    }
+
+    #[test]
+    fn inter_v2_04_adversarial_duplicate_bodies_anchor_in_order() {
+        let md = "# A\n\nx\n\n# B\n\nx\n";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].text, "x");
+        assert_eq!(chunks[1].text, "x");
+        let mut cursor = 0usize;
+        let (s0, e0) = locate_chunk_span(md, cursor, &chunks[0].text);
+        cursor = e0;
+        let (s1, e1) = locate_chunk_span(md, cursor, &chunks[1].text);
+        assert!(s1 >= e0, "second anchor must start after first");
+        assert_eq!(&md[s0..e0], "x");
+        assert_eq!(&md[s1..e1], "x");
+    }
+
+    #[test]
+    fn inter_v2_04_adversarial_max_chars_below_floor_uses_200() {
+        let md = "# A\n\n".to_string() + &"y".repeat(250);
+        let chunks = chunk_markdown(&md, 50);
+        assert!(chunks.len() >= 2);
+        assert!(chunks.iter().all(|c| c.chars <= 200));
+    }
 }
