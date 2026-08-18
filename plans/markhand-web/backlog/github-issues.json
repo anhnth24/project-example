@@ -49,6 +49,14 @@
       "issue_count": 23
     },
     {
+      "code": "2Q",
+      "title": "Phase 2Q — QA Quality",
+      "description": "Markhand Web phase `2Q`.\n\n**Outcome:** Nâng cấp chất lượng Q&A: embedding input, grounding, version intelligence, chunking, vận hành\n**Issues:** 9\n**Phase plan:** `phase-2q-qa-quality.md`\n**Issue catalog:** `backlog/phase-2q/issues/README.md`",
+      "plan": "phase-2q-qa-quality.md",
+      "catalog": "backlog/phase-2q/issues/README.md",
+      "issue_count": 9
+    },
+    {
       "code": "3",
       "title": "Phase 3 — Document Intelligence",
       "description": "Markhand Web phase `3`.\n\n**Outcome:** Port intelligence: BRD/PRD, quality, PII, bảng, version, export\n**Issues:** 14\n**Phase plan:** `phase-3-intelligence.md`\n**Issue catalog:** `backlog/phase-3/issues/README.md`",
@@ -1360,6 +1368,141 @@
       "catalog": "backlog/phase-2/issues/README.md"
     },
     {
+      "phase": "2Q",
+      "id": "P2Q-01",
+      "title": "P2Q-01 — Title tài liệu vào embedding input (index generation mới)",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-01\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nkhông; sau reindex phải re-baseline cả hai eval trước khi đánh\ngiá PR kế tiếp. **Acceptance/tests:** eval format tăng nhóm cross-doc/XLSX,\neval version không giảm >1 điểm median (≥2 run); test worker từ chối job khi\nsignature lệch.\n\n## Security and migration notes\n\nđổi index signature/reindex — review bắt buộc; không\nđổi schema PostgreSQL. **Out:** đổi embedding provider/model/dimension.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-02",
+      "title": "P2Q-02 — Tầng cảnh báo xung đột số liệu (warning-only)",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-02\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nP0.2 (đã giao).\n300%↔30%, 4.8↔5 + case số Việt; không prune câu nào vòng này; nâng thành\ngate chỉ ở PR sau khi đo FP = 0 trên 2 bộ eval.\n\n## Required tests / evidence\n\nunit case groundguard\n\n## Security and migration notes\n\ngrounding policy — review bắt buộc.\nvòng này; so số trần không phân kiểu.\n\n## Out of scope\n\nprune/gate ngay\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-03",
+      "title": "P2Q-03 — Completeness check sau OCR trước khi index",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-03\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nkhông.\n`quyet-dinh-thanh-lap-to-ai.png` (OCR trả 112 ký tự tiêu đề, mất Điều 1–3,\ntái lập ổn định) bị bắt; 4 ảnh đủ chữ của corpus đợt 2 không false-positive;\nflag/warning hiển thị được ở web.\n\n## Required tests / evidence\n\ncase thật\n\n## Security and migration notes\n\nkhông log nội dung tài liệu; đụng OCR/LLM path — review bắt\nbuộc. **Out:** đổi model/provider OCR; auto re-OCR không giới hạn.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-04",
+      "title": "P2Q-04 — Bench gate + structured entailment NLI local",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-04\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\ngate bench pass mới triển khai; fail thì đóng issue với evidence\nbench. **Acceptance/tests:** báo cáo bench precision/latency; khi bật: đường\nwarning \"structured entailment is NOT available\" được gỡ; không có model →\nhành vi hiện tại nguyên vẹn.\n\n## Security and migration notes\n\nmodel binary không commit, identifier không vào code\n(CLAUDE.md); grounding/LLM policy + native binary — review bắt buộc.\n**Out:** gọi API ngoài để entailment; cross-encoder rerank.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-05",
+      "title": "P2Q-05 — Tự nhận diện intent version từ câu hỏi (rule-based)",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-05\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nhạ tầng version modes hiện có (P1B/P2-10).\nma trận rule unit test; câu version-sensitive gõ ở mode current được route;\nkhông nhận diện được → giữ `current`; UI test revert.\n\n## Security and migration notes\n\nN/A — không đổi persisted contract; rủi ro đọc nhầm version cũ\nđược chặn bằng UI revert bắt buộc. **Out:** LLM intent classifier.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-06",
+      "title": "P2Q-06 — Bộ câu hỏi implicit-change cho eval version",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-06\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nP2Q-05 (route intent để chạy đúng mode).\nbộ câu + số baseline nằm trong report; là tiêu chí nghiệm thu của P2Q-07.\n\n## Security and migration notes\n\ncorpus tự sinh, không dữ liệu khách hàng.\nindex (P2Q-07).\n\n## Out of scope\n\nchange\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-07",
+      "title": "P2Q-07 — Bảng `version_changes` và retrieval theo intent change",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-07\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nP2Q-05, P2Q-06.\nmode current không ô nhiễm (`version_changes` không nằm trong retrieval\nthường); diff không thấy thay đổi → fail-closed, không citation ảo.\n\n## Required tests / evidence\n\nđiểm bộ P2Q-06 tăng;\n\n## Security and migration notes\n\nSQL/RLS/migration — review bắt buộc; RLS org-scope\nnhư các bảng khác. **Out:** embed diff text vào vector (cân nhắc PR sau);\nGraphRAG.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-08",
+      "title": "P2Q-08 — Chunking theo loại tài liệu (fileconv-core, đa consumer)",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-08\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nlàm sau khi P2Q-01 re-baseline (tránh nhiễu chồng).\n**Acceptance/tests:** `fileconv accuracy`/`speed` không thoái hóa\n(quy tắc CLAUDE.md); eval server tăng nhóm bảng/pháp quy; desktop CI xanh.\n\n## Security and migration notes\n\nchunking version nằm trong index signature pin\n(invariant 7) ⇒ áp lên server cần generation mới + re-baseline như P2Q-01;\nreview bắt buộc. **Out:** đổi API `chunk.rs` public contract ngoài mức cần;\nsửa chunk tay.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
+      "phase": "2Q",
+      "id": "P2Q-09",
+      "title": "P2Q-09 — UI xem chunk đã parse (read-only)",
+      "status": "backlog",
+      "milestone": "Phase 2Q — QA Quality",
+      "labels": [
+        "markhand-web",
+        "docs",
+        "web-p2q",
+        "backlog"
+      ],
+      "body": "## Metadata\n\n- Milestone: Phase 2Q — QA Quality\n- Phase code: 2Q\n- Issue ID: P2Q-09\n- Status: `backlog`\n- Catalog: `backlog/phase-2q/issues/README.md`\n- Phase plan: `phase-2q-qa-quality.md`\n\n## Dependencies / blocks\n\nkhông bắt buộc; flag từ P2Q-03 làm giàu hiển thị.\n**Acceptance/tests:** xem đúng chunk theo version; denial test cross-org/\ncross-user theo khuôn ACL hiện có; không lộ chunk ngoài quyền.\n\n## Security and migration notes\n\nsurface đọc mới trên chunks — ACL/RLS review bắt buộc;\nread-only. **Out:** sửa chunk tại chỗ (re-publish version — thiết kế riêng\ngiai đoạn sau).\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "catalog": "backlog/phase-2q/issues/README.md"
+    },
+    {
       "phase": "3",
       "id": "P3-01",
       "title": "P3-01 — Reusable intelligence service boundary",
@@ -1476,7 +1619,7 @@
         "web-p3",
         "backlog"
       ],
-      "body": "## Metadata\n\n- Milestone: Phase 3 — Document Intelligence\n- Phase code: 3\n- Issue ID: P3-08\n- Status: `backlog`\n- Catalog: `backlog/phase-3/issues/README.md`\n- Phase plan: `phase-3-intelligence.md`\n\n## Dependencies / blocks\n\nP3-02/03 + RBAC.\nauthorized; precision/recall/completeness/overlap/Unicode/permission tests.\n\n## Required tests / evidence\n\nOriginal hash unchanged; findings\n\n## Security and migration notes\n\nNo PII logs; prohibited data no GLM.\n\n## Out of scope\n\nlegal completeness guarantee.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
+      "body": "## Metadata\n\n- Milestone: Phase 3 — Document Intelligence\n- Phase code: 3\n- Issue ID: P3-08\n- Status: `backlog`\n- Catalog: `backlog/phase-3/issues/README.md`\n- Phase plan: `phase-3-intelligence.md`\n\n## Dependencies / blocks\n\nP3-02/03 + RBAC.\nauthorized; precision/recall/completeness/overlap/Unicode/permission tests.\n\n## Required tests / evidence\n\nOriginal hash unchanged; findings\n\n## Security and migration notes\n\nNo PII logs; prohibited-classification data never leaves for any\nexternal LLM/embedding provider (hiện tại OpenRouter Qwen — chat/OCR/embedding,\nADR 0016; tương lai self-host local model khi có GPU). Cover cả đường cloud\nembedding: index build gửi toàn bộ chunk text, không chỉ Q&A top-K.\n**Out:** legal completeness guarantee.\n\n## Source\n\nGenerated from Markhand Web backlog catalog. Update the catalog first, then re-run `python3 scripts/sync-github-issues.py --update` if specs change.\n",
       "catalog": "backlog/phase-3/issues/README.md"
     },
     {

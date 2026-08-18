@@ -14,7 +14,7 @@ Kế hoạch này biến report kiến trúc thành các gói việc có depende
 test và gate đo được. Không dùng thời gian lịch làm tiêu chí; chỉ chuyển phase khi
 gate kỹ thuật của phase trước đã đạt.
 
-Issue-level backlog (120 issues):
+Issue-level backlog (129 issues):
 [`backlog/README.md`](backlog/README.md).
 
 Roadmap dashboard tương tác:
@@ -46,13 +46,14 @@ không bị local override cũ che mất.
 | 1B | POC single-org hoàn chỉnh: upload → convert → index → Q&A citation | [Phase plan](phase-1b-single-org-poc.md) | [24 issues](backlog/phase-1b/issues/README.md) |
 | 1C | Multi-org, RBAC/ACL, quota atomic và denial test | [Phase plan](phase-1c-multi-org-security.md) | [13 issues](backlog/phase-1c/issues/README.md) |
 | 2 | Web SPA MVP: login, library, Q&A, admin tối thiểu | [Phase plan](phase-2-web-spa.md) | [23 issues](backlog/phase-2/issues/README.md) |
+| 2Q | Nâng cấp chất lượng Q&A: embedding input, grounding, version intelligence, chunking, vận hành | [Phase plan](phase-2q-qa-quality.md) | [9 issues](backlog/phase-2q/issues/README.md) |
 | 3 | Port intelligence: BRD/PRD, quality, PII, bảng, version, export | [Phase plan](phase-3-intelligence.md) | [14 issues](backlog/phase-3/issues/README.md) |
 | 4 | OIDC/SSO, hardening production, DR và onboarding/help | [Phase plan](phase-4-production-hardening.md) | [14 issues](backlog/phase-4/issues/README.md) |
 
 ## Tiến độ milestone (2026-08-06)
 
-Tổng **120 issue** trong catalog: **81 Done**, **5 In progress**, **1 Review**,
-**0 Ready**, **4 Blocked**, **29 Backlog**.
+Tổng **129 issue** trong catalog: **81 Done**, **5 In progress**, **1 Review**,
+**0 Ready**, **4 Blocked**, **38 Backlog**.
 Nguồn sự thật là `**Status:**` trong từng issue catalog; bảng dưới tóm tắt theo phase.
 GitHub milestone progress được đồng bộ bởi workflow
 [`Sync Markhand Web issues`](../../.github/workflows/sync-markhand-issues.yml) khi
@@ -66,6 +67,7 @@ GitHub milestone progress được đồng bộ bởi workflow
 | 1B | 24/24 | 0 | 0 | 0 | 0 | **Gate đạt** — R06 hanging soak pass 2026-07-31 |
 | 1C | 10/13 | 2 | 0 | 0 | 1 | 1C-04/07/09/10/11 Done (CI `6833f57`, run 30678318560); 1C-08 CI half / deployed → PR 5; exit gate 1C-12/1C-13 còn mở |
 | 2 | 15/23 | 4 | 0 | 4 | 0 | P2-15 umbrella blocked; P2-20 `Review` (PR #395); exit gate chờ full-stack evidence + 1C + blocking real/DAST matrix |
+| 2Q | 0/9 | 0 | 0 | 0 | 9 | Workstream chất lượng Q&A (plan nguồn [`260817-qa-quality-upgrade.md`](../260817-qa-quality-upgrade.md)); chạy song song đuôi Phase 2, không chờ Phase 2 gate |
 | 3 | 0/14 | 0 | 0 | 0 | 14 | Chưa activate — chờ Phase 2 complete |
 | 4 | 0/14 | 0 | 0 | 0 | 14 | Chưa activate — chờ Phase 3 |
 
@@ -78,6 +80,13 @@ Issue Phase 2 gần đây: **P2-10/P2-17 → Done** sau independent review; P2-2
 landed trên [#395](https://github.com/anhnth24/project-example/pull/395) với whole-branch
 review APPROVE; P2-18 Project grouping và P2-19 Chat history vẫn In progress. P2-21…23
 blocked theo dependency/security gate.
+
+**Workstream chất lượng Q&A (2026-08-17/18):** plan nguồn
+[`../260817-qa-quality-upgrade.md`](../260817-qa-quality-upgrade.md) đã giao
+P0.0/P0.0b/P0.2 (eval đa định dạng 85.7 → 92.9, version giữ baseline) cùng
+convert worker Windows same-host, `ocr_normalize`, vòng UX web và chitchat
+routing — các phần đã giao này không tạo issue hồi tố. Chín hạng mục còn lại
+được track thành **Phase 2Q** ([catalog](backlog/phase-2q/issues/README.md)).
 
 ## Dependency và đường găng
 
