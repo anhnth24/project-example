@@ -373,7 +373,7 @@ Nội dung mục 2.
     }
 
     #[test]
-    fn inter_v2_04_chunk_rag_trace_demo() {
+    fn chunk_rag_trace_demo_heading_hierarchy_and_split() {
         let para = "Điều khoản áp dụng cho mọi bên liên quan. ".repeat(40);
         let md = format!(
             "# Phần I\n\nGiới thiệu.\n\n## Mục 1\n\nNội dung mục 1.\n\n### Tiểu mục 1.1\n\nChi tiết.\n\n## Mục 2\n\n{para}\n\n{para}\n\n{para}\n"
@@ -398,7 +398,7 @@ Nội dung mục 2.
     }
 
     #[test]
-    fn inter_v2_04_empty_heading_body_only() {
+    fn chunk_markdown_empty_heading_body_only() {
         let md = "Không có heading — chỉ body.\n\nĐoạn hai.";
         let chunks = chunk_markdown(md, 2000);
         assert_eq!(chunks.len(), 1);
@@ -407,7 +407,7 @@ Nội dung mục 2.
     }
 
     #[test]
-    fn inter_v2_04_crlf_embedding_body_is_lf() {
+    fn crlf_body_is_lf_for_embedding() {
         let md = "# Tiêu đề\r\n\r\nNội dung dòng một.\r\nDòng hai.\r\n";
         let chunks = chunk_markdown(md, 2000);
         assert_eq!(chunks.len(), 1);
@@ -418,7 +418,7 @@ Nội dung mục 2.
     }
 
     #[test]
-    fn inter_v2_04_adversarial_hash_without_space_is_not_heading() {
+    fn hash_without_space_is_not_heading() {
         let md = "#KhôngSpace\n\nBody thật.";
         let chunks = chunk_markdown(md, 2000);
         assert_eq!(chunks.len(), 1);
@@ -427,7 +427,7 @@ Nội dung mục 2.
     }
 
     #[test]
-    fn inter_v2_04_adversarial_vietnamese_hard_cut_is_utf8_safe() {
+    fn vietnamese_hard_cut_is_utf8_safe() {
         let glyph = "ệ";
         let md = format!("# A\n\n{}", glyph.repeat(250));
         // max_chars=100 bị sàn lên 200 — vẫn phải cắt và UTF-8-safe.
@@ -440,13 +440,13 @@ Nội dung mục 2.
     }
 
     #[test]
-    fn inter_v2_04_adversarial_empty_and_whitespace_only() {
+    fn empty_and_whitespace_only_returns_no_chunks() {
         assert!(chunk_markdown("", 2000).is_empty());
         assert!(chunk_markdown(" \n\t \r\n", 2000).is_empty());
     }
 
     #[test]
-    fn inter_v2_04_adversarial_duplicate_bodies_anchor_in_order() {
+    fn duplicate_bodies_anchor_in_order() {
         let md = "# A\n\nx\n\n# B\n\nx\n";
         let chunks = chunk_markdown(md, 2000);
         assert_eq!(chunks.len(), 2);
@@ -462,7 +462,7 @@ Nội dung mục 2.
     }
 
     #[test]
-    fn inter_v2_04_adversarial_max_chars_below_floor_uses_200() {
+    fn max_chars_below_floor_uses_200() {
         let md = "# A\n\n".to_string() + &"y".repeat(250);
         let chunks = chunk_markdown(&md, 50);
         assert!(chunks.len() >= 2);
