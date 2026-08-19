@@ -444,18 +444,24 @@ Nội dung mục 2.
         );
         assert!(chunks.iter().all(|c| c.chars <= 200));
         let mut cursor = 0usize;
+        let mut rejoined = String::new();
         for c in &chunks {
             assert!(!c.text.is_empty());
+            // ệ dài 3 byte: cắt giữa glyph sẽ làm lệch tỉ lệ byte/char.
+            assert!(
+                c.text.chars().all(|ch| ch == 'ệ'),
+                "piece {} lẫn ký tự lạ: {:?}",
+                c.index,
+                c.text
+            );
+            assert_eq!(c.text.len(), c.chars * glyph.len(), "piece {}", c.index);
             let (start, end) = locate_chunk_text(&md, cursor, &c.text).expect("span");
-            assert!(md.is_char_boundary(start));
-            assert!(md.is_char_boundary(end));
             assert_eq!(&md[start..end], c.text.as_str());
-            // ệ is 3 bytes — a mid-glyph offset must not be treated as a cut point.
-            if start + 1 < md.len() && md.as_bytes()[start] == b'\xe1' {
-                assert!(!md.is_char_boundary(start + 1));
-            }
+            rejoined.push_str(&md[start..end]);
             cursor = end;
         }
+        // Ghép lại đúng đoạn nguồn: không glyph nào bị mất hay nhân đôi khi cắt.
+        assert_eq!(rejoined, glyph.repeat(250));
     }
 
     #[test]
