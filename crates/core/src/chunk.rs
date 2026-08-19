@@ -392,8 +392,13 @@ Nội dung mục 2.
                 .count()
                 >= 2
         );
+        let mut cursor = 0usize;
         for c in &chunks {
-            assert!(c.text.is_char_boundary(c.text.len()));
+            let (start, end) = locate_chunk_text(&md, cursor, &c.text).expect("span");
+            assert!(md.is_char_boundary(start));
+            assert!(md.is_char_boundary(end));
+            assert_eq!(&md[start..end], c.text.as_str());
+            cursor = end;
         }
     }
 
@@ -433,9 +438,23 @@ Nội dung mục 2.
         // max_chars=100 bị sàn lên 200 — vẫn phải cắt và UTF-8-safe.
         let chunks = chunk_markdown(&md, 100);
         assert!(chunks.len() >= 2);
+        assert_eq!(
+            chunks[0].chars, 200,
+            "first hard-cut piece must be the 200 floor"
+        );
+        assert!(chunks.iter().all(|c| c.chars <= 200));
+        let mut cursor = 0usize;
         for c in &chunks {
-            assert!(c.chars <= 200);
             assert!(!c.text.is_empty());
+            let (start, end) = locate_chunk_text(&md, cursor, &c.text).expect("span");
+            assert!(md.is_char_boundary(start));
+            assert!(md.is_char_boundary(end));
+            assert_eq!(&md[start..end], c.text.as_str());
+            // ệ is 3 bytes — a mid-glyph offset must not be treated as a cut point.
+            if start + 1 < md.len() && md.as_bytes()[start] == b'\xe1' {
+                assert!(!md.is_char_boundary(start + 1));
+            }
+            cursor = end;
         }
     }
 
@@ -466,6 +485,10 @@ Nội dung mục 2.
         let md = "# A\n\n".to_string() + &"y".repeat(250);
         let chunks = chunk_markdown(&md, 50);
         assert!(chunks.len() >= 2);
+        assert_eq!(
+            chunks[0].chars, 200,
+            "first hard-cut piece must be the 200 floor"
+        );
         assert!(chunks.iter().all(|c| c.chars <= 200));
     }
 }
