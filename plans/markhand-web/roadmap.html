@@ -919,7 +919,7 @@
     };
 
     /* ROADMAP_DATA_START */
-    const ROADMAP_SOURCE_HASH = "7befe4f674d7e497";
+    const ROADMAP_SOURCE_HASH = "2ad77335daa87fe1";
     const phases = [
       {
         "id": "phase-f",
@@ -1438,6 +1438,61 @@
             "P2-23",
             "Blocking real-E2E/OWASP qualification gate",
             "blocked"
+          ]
+        ]
+      },
+      {
+        "id": "phase-2q",
+        "code": "2Q",
+        "name": "Nâng cấp chất lượng Q&A",
+        "description": "Nâng cấp chất lượng Q&A: embedding input, grounding, version intelligence, chunking, vận hành",
+        "plan": "phase-2q-qa-quality.md",
+        "catalog": "backlog/phase-2q/issues/README.md",
+        "issues": [
+          [
+            "P2Q-01",
+            "Title tài liệu vào embedding input (index generation mới)",
+            "backlog"
+          ],
+          [
+            "P2Q-02",
+            "Tầng cảnh báo xung đột số liệu (warning-only)",
+            "backlog"
+          ],
+          [
+            "P2Q-03",
+            "Completeness check sau OCR trước khi index",
+            "backlog"
+          ],
+          [
+            "P2Q-04",
+            "Bench gate + structured entailment NLI local",
+            "backlog"
+          ],
+          [
+            "P2Q-05",
+            "Tự nhận diện intent version từ câu hỏi (rule-based)",
+            "backlog"
+          ],
+          [
+            "P2Q-06",
+            "Bộ câu hỏi implicit-change cho eval version",
+            "backlog"
+          ],
+          [
+            "P2Q-07",
+            "Bảng `version_changes` và retrieval theo intent change",
+            "backlog"
+          ],
+          [
+            "P2Q-08",
+            "Chunking theo loại tài liệu (fileconv-core, đa consumer)",
+            "backlog"
+          ],
+          [
+            "P2Q-09",
+            "UI xem chunk đã parse (read-only)",
+            "backlog"
           ]
         ]
       },

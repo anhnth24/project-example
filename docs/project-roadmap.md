@@ -1,6 +1,6 @@
 # Lộ trình dự án
 
-> Trạng thái tính đến 2026-08-01. Backlog desktop rút từ
+> Trạng thái tính đến 2026-08-18. Backlog desktop rút từ
 > [`../bench/RESEARCH_COMPETITORS.md`](../bench/RESEARCH_COMPETITORS.md) và điểm yếu đã biết
 > trong các `REPORT*.md`. Tiến độ Markhand Web: [`../plans/markhand-web/README.md`](../plans/markhand-web/README.md).
 
@@ -63,6 +63,18 @@ không claim retention. Exit gate denial/security còn mở. Phase 2 **13/19 Don
 trên mock/CI (#311–#318, #327, #332); còn P2-10, P2-15, P2-16 và ba issue mở rộng
 P2-17…19. Phase 3–4 chưa activate (Backlog). Catalog aggregate: **79 Done**,
 **8 In progress**, **0 Review**, **29 Backlog**.
+
+**Workstream ngoài catalog — nâng cấp chất lượng Q&A (2026-08-17/18,
+[`../plans/260817-qa-quality-upgrade.md`](../plans/260817-qa-quality-upgrade.md)):**
+đã xong P0.0 (retry embedding transient), P0.0b (migration 0037 split file-token
+FTS — "công văn 1502" match được `1502/CV-CNTT`), P0.2 (auto-attach citation
+propose-then-validate); eval đa định dạng v2 85.7 → **92.9**, eval version giữ
+89.1. Cùng đợt (chưa có issue): convert worker Windows same-host qua subprocess
+(`workers/converter_subprocess.rs`), chuẩn hoá Markdown sau OCR
+(`services/ocr_normalize.rs`), vòng UX web (full-screen, scroll lịch sử chat,
+dịch warning tiếng Việt) và chitchat routing (đã trên master). Chín hạng mục còn
+lại của plan được track thành **Phase 2Q** trong catalog
+([`../plans/markhand-web/backlog/phase-2q/issues/README.md`](../plans/markhand-web/backlog/phase-2q/issues/README.md)).
 
 Dashboard: [`../plans/markhand-web/roadmap.html`](../plans/markhand-web/roadmap.html) ·
 Issue catalog: [`../plans/markhand-web/backlog/`](../plans/markhand-web/backlog/)
