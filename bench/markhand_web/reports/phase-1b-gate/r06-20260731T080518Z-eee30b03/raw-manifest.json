@@ -1,0 +1,25 @@
+{
+  "files": [
+    {
+      "bytes": 12894,
+      "path": "database-samples.json",
+      "sha256": "1e03210813f68132d719dc4b3b28e1f50ea3e4c7862aa1e2825d4e27be701441"
+    },
+    {
+      "bytes": 12822,
+      "path": "embedding-samples.json",
+      "sha256": "02e5f4948a8aebdf611d987ebfcbcfaebda4d8a2c199aa3da3fad3dcedd0152a"
+    },
+    {
+      "bytes": 12969,
+      "path": "object_store-samples.json",
+      "sha256": "e9efa33bf4e3beb4f2c3d7962ae099d175420c7a43f1895c8c51aadca1deb87f"
+    },
+    {
+      "bytes": 12968,
+      "path": "vector_store-samples.json",
+      "sha256": "97200b0d72cf28aff70e42e5cf6e03ca791e9c15a55f04f3567b029fa93af6e8"
+    }
+  ],
+  "ok": true
+}

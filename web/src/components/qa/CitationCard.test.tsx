@@ -5,7 +5,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RouterProvider } from '../../state/RouterProvider';
-import { CitationCard, type CitationPin } from './CitationCard';
+import { CitationCard, locationLabel, formatPageRanges, type CitationPin } from './CitationCard';
 
 function basePin(overrides: Partial<CitationPin> = {}): CitationPin {
   return {
@@ -63,5 +63,16 @@ describe('CitationCard', () => {
     expect(
       screen.getByText('“Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.”'),
     ).toBeVisible();
+  });
+
+  it('omits a missing or null page instead of rendering "Trang null"', () => {
+    expect(locationLabel(basePin())).toBeNull();
+    expect(locationLabel(basePin({ page: null as unknown as number }))).toBeNull();
+    expect(locationLabel(basePin({ page: 7 }))).toBe('Trang 7');
+  });
+
+  it('compacts consecutive pages into ranges', () => {
+    expect(formatPageRanges([7, 1, 2, 3, 1])).toBe('1–3, 7');
+    expect(formatPageRanges([])).toBe('');
   });
 });

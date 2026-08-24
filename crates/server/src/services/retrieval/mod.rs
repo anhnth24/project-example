@@ -52,7 +52,7 @@ pub const PERMISSION_QA_HISTORY: &str = "qa.history";
 /// Maximum candidates pulled per retrieval leg before merge/rerank (desktop uses 250/500).
 pub const RETRIEVAL_LEG_CANDIDATE_LIMIT: usize = 250;
 /// Bound embedding so a hung provider cannot stall retrieval forever.
-pub const EMBED_TIMEOUT: Duration = Duration::from_secs(5);
+pub const EMBED_TIMEOUT: Duration = Duration::from_secs(20);
 /// Bound each retrieval leg (FTS / Qdrant) independently.
 pub const LEG_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -278,45 +278,8 @@ pub async fn hybrid_search(
     let prepared = PreparedQuery::new(&request.query);
     let mut warnings = Vec::new();
     let runtime_plan = embedder.map(ApprovedEmbeddingRuntime::plan);
-    let embed_started = std::time::Instant::now();
     let query_vector = match embedder {
-        Some(runtime) => {
-            match with_timeout(EMBED_TIMEOUT, runtime.embed(&[request.query.clone()])).await {
-                Ok(Ok(mut vectors)) => {
-                    let elapsed = embed_started.elapsed();
-                    crate::telemetry::record_retrieval_leg("embedding", "ok", elapsed);
-                    if let Some(corr) = crate::telemetry::CorrelationContext::current() {
-                        crate::telemetry::emit_span(
-                            "retrieval.embedding",
-                            &corr.request_id,
-                            &corr.trace_id,
-                            "client",
-                            "ok",
-                            elapsed,
-                        );
-                    }
-                    vectors.pop().filter(|vector| !vector.is_empty())
-                }
-                Ok(Err(_)) => {
-                    crate::telemetry::record_retrieval_leg(
-                        "embedding",
-                        "error",
-                        embed_started.elapsed(),
-                    );
-                    warnings.push("Embedding provider error; using FTS-only retrieval.".into());
-                    None
-                }
-                Err(_) => {
-                    crate::telemetry::record_retrieval_leg(
-                        "embedding",
-                        "error",
-                        embed_started.elapsed(),
-                    );
-                    warnings.push("Embedding timed out; using FTS-only retrieval.".into());
-                    None
-                }
-            }
-        }
+        Some(runtime) => embed_query_with_retry(runtime, &request.query, &mut warnings).await,
         None => {
             warnings.push("No embedding runtime configured; using FTS-only retrieval.".into());
             None
@@ -613,6 +576,68 @@ struct VectorLegSearch<'a> {
     warnings: &'a mut Vec<String>,
 }
 
+/// Backoff ngắn giữa 2 lần embed câu hỏi (P0.0, plans/260817-qa-quality-upgrade.md).
+const EMBED_RETRY_BACKOFF: Duration = Duration::from_millis(400);
+
+/// Warning khi lần retry cứu được embedding (đếm được trong eval log).
+pub(crate) const EMBED_RETRY_RECOVERED_WARNING: &str =
+    "Embedding recovered after one retry (transient provider error).";
+
+/// Embed câu hỏi với đúng MỘT lần retry cho lỗi transient (timeout hoặc
+/// transport `EmbeddingError::Http`). Lỗi cấu hình/validation không retry —
+/// thử lại vô nghĩa. Vì sao: eval 2026-08-17 mất ~10 điểm Image chỉ vì một
+/// timeout thoáng qua kéo cả câu hỏi xuống FTS-only (P0.0).
+async fn embed_query_with_retry(
+    runtime: &ApprovedEmbeddingRuntime,
+    query: &str,
+    warnings: &mut Vec<String>,
+) -> Option<Vec<f32>> {
+    for attempt in 0..2u8 {
+        let started = std::time::Instant::now();
+        let outcome = with_timeout(EMBED_TIMEOUT, runtime.embed(&[query.to_string()])).await;
+        match outcome {
+            Ok(Ok(mut vectors)) => {
+                let elapsed = started.elapsed();
+                crate::telemetry::record_retrieval_leg("embedding", "ok", elapsed);
+                if let Some(corr) = crate::telemetry::CorrelationContext::current() {
+                    crate::telemetry::emit_span(
+                        "retrieval.embedding",
+                        &corr.request_id,
+                        &corr.trace_id,
+                        "client",
+                        "ok",
+                        elapsed,
+                    );
+                }
+                if attempt > 0 {
+                    warnings.push(EMBED_RETRY_RECOVERED_WARNING.into());
+                }
+                return vectors.pop().filter(|vector| !vector.is_empty());
+            }
+            Ok(Err(error)) => {
+                crate::telemetry::record_retrieval_leg("embedding", "error", started.elapsed());
+                let transient = matches!(error, crate::services::embedding::EmbeddingError::Http);
+                if transient && attempt == 0 {
+                    tokio::time::sleep(EMBED_RETRY_BACKOFF).await;
+                    continue;
+                }
+                warnings.push("Embedding provider error; using FTS-only retrieval.".into());
+                return None;
+            }
+            Err(()) => {
+                crate::telemetry::record_retrieval_leg("embedding", "error", started.elapsed());
+                if attempt == 0 {
+                    tokio::time::sleep(EMBED_RETRY_BACKOFF).await;
+                    continue;
+                }
+                warnings.push("Embedding timed out; using FTS-only retrieval.".into());
+                return None;
+            }
+        }
+    }
+    None
+}
+
 /// Bound a retrieval dependency so hung legs degrade instead of stalling.
 pub async fn with_timeout<T, E>(
     timeout: Duration,
@@ -819,6 +844,12 @@ pub fn merge_rerank_hydrated(
     }
 
     sort_hybrid_hits(&mut hybrid_hits);
+    diversify_by_document(
+        &mut hybrid_hits,
+        limit.clamp(1, 100),
+        query_tokens,
+        |identity| hydrated.get(identity).map(|chunk| chunk.body.as_str()),
+    );
     hybrid_hits.truncate(limit.clamp(1, 100));
 
     hybrid_hits
@@ -852,6 +883,87 @@ pub fn merge_rerank_hydrated(
             })
         })
         .collect()
+}
+
+/// Số slot cuối trong top-`limit` được nhường cho tài liệu khác khi một tài
+/// liệu độc chiếm toàn bộ kết quả.
+const DIVERSITY_SLOTS: usize = 2;
+
+/// Chống một tài liệu độc chiếm top-`limit`: câu hỏi cross-document ("thông tư
+/// X ảnh hưởng tài liệu nào?") cần thấy CẢ tài liệu dẫn chiếu lẫn tài liệu bị
+/// ảnh hưởng, nhưng văn bản gốc lặp số hiệu dày đặc nên chiếm mọi slot (eval
+/// 2026-08-16: 8/8 hit cùng một PDF → LLM từ chối oan). Chỉ can thiệp khi
+/// top-`limit` toàn một tài liệu và candidate còn tài liệu khác: nhường tối đa
+/// `DIVERSITY_SLOTS` slot cuối cho hit của tài liệu khác. Ưu tiên hit chứa ĐỦ
+/// các anchor token có chữ số của query ("36", "2025" của "36/2025/TT-BCT") —
+/// đó chính là cross-reference; từ chung ("tài liệu", "dự án") khớp nhầm tài
+/// liệu ăn theo. Thứ hạng nội bộ và score giữ nguyên.
+fn diversify_by_document<'a>(
+    hits: &mut Vec<HybridSearchHit>,
+    limit: usize,
+    query_tokens: &[String],
+    body_of: impl Fn(&str) -> Option<&'a str>,
+) {
+    if limit < 4 || hits.len() <= limit {
+        return;
+    }
+    let top_doc = match hits.first() {
+        Some(first) => first.source_rel.clone(),
+        None => return,
+    };
+    if hits[..limit].iter().any(|hit| hit.source_rel != top_doc) {
+        return;
+    }
+    let foreign: Vec<usize> = (limit..hits.len())
+        .filter(|&index| hits[index].source_rel != top_doc)
+        .collect();
+    if foreign.is_empty() {
+        return;
+    }
+    let anchors: Vec<&str> = query_tokens
+        .iter()
+        .map(String::as_str)
+        .filter(|token| token.chars().any(|c| c.is_ascii_digit()))
+        .collect();
+    let matches_all_anchors = |index: usize| -> bool {
+        if anchors.is_empty() {
+            return false;
+        }
+        let hit = &hits[index];
+        let text = body_of(&hit.chunk_id).unwrap_or(hit.snippet.as_str());
+        let normalized =
+            fileconv_core::intelligence::normalize_search_text(&format!("{} {text}", hit.heading));
+        let tokens: HashSet<&str> = normalized
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .collect();
+        anchors.iter().all(|anchor| tokens.contains(anchor))
+    };
+    let mut chosen: Vec<usize> = foreign
+        .iter()
+        .copied()
+        .filter(|&index| matches_all_anchors(index))
+        .take(DIVERSITY_SLOTS)
+        .collect();
+    for &index in &foreign {
+        if chosen.len() >= DIVERSITY_SLOTS {
+            break;
+        }
+        if !chosen.contains(&index) {
+            chosen.push(index);
+        }
+    }
+    chosen.sort_unstable();
+    // Rút các hit được chọn lên thay thế đuôi của top-`limit`.
+    let mut promoted = Vec::with_capacity(chosen.len());
+    for &index in chosen.iter().rev() {
+        promoted.push(hits.remove(index));
+    }
+    promoted.reverse();
+    let keep = limit - promoted.len();
+    for (offset, hit) in promoted.into_iter().enumerate() {
+        hits.insert(keep + offset, hit);
+    }
 }
 
 fn extract_snippet(body: &str, query_tokens: &[String]) -> String {
@@ -1146,6 +1258,14 @@ mod tests {
     }
 
     #[test]
+    fn embed_timeout_allows_cloud_provider_latency() {
+        assert!(
+            EMBED_TIMEOUT >= Duration::from_secs(15),
+            "OpenRouter embeddings routinely exceed 5s; FTS-only then ranks cover pages"
+        );
+    }
+
+    #[test]
     fn uses_frozen_knowledge_vector_weight() {
         assert!((VECTOR_WEIGHT - 0.55).abs() < f32::EPSILON);
         let tokens = vec!["doi".into(), "soat".into(), "giao".into(), "dich".into()];
@@ -1336,6 +1456,89 @@ mod tests {
         assert_eq!(folded, "doi soat");
         let prepared = PreparedQuery::new("Đối soát GIAO DỊCH");
         assert_eq!(prepared.tokens, ["doi", "soat", "giao", "dich"]);
+    }
+
+    fn diversity_hit(chunk: &str, doc: &str, score: f32) -> HybridSearchHit {
+        HybridSearchHit {
+            chunk_id: chunk.into(),
+            source_rel: doc.into(),
+            md_rel: "ver".into(),
+            heading: String::new(),
+            snippet: String::new(),
+            lexical_score: score,
+            vector_score: score,
+            rerank_score: score,
+            anchor: SourceAnchor {
+                page: None,
+                slide: None,
+                sheet: None,
+                start: 0,
+                end: 1,
+            },
+        }
+    }
+
+    #[test]
+    fn monopolized_top_yields_tail_slots_to_other_documents() {
+        let mut hits: Vec<HybridSearchHit> = (0..6)
+            .map(|i| diversity_hit(&format!("a{i}"), "doc-a", 10.0 - i as f32))
+            .collect();
+        hits.push(diversity_hit("b0", "doc-b", 1.0));
+        hits.push(diversity_hit("c0", "doc-c", 0.5));
+        diversify_by_document(&mut hits, 4, &[], |_| None);
+        let top: Vec<&str> = hits[..4].iter().map(|h| h.chunk_id.as_str()).collect();
+        assert_eq!(top, ["a0", "a1", "b0", "c0"]);
+        // Các hit bị nhường chỗ vẫn còn phía sau, đúng thứ hạng.
+        assert_eq!(hits[4].chunk_id, "a2");
+    }
+
+    #[test]
+    fn anchor_matching_foreign_hits_win_diversity_slots() {
+        let mut hits: Vec<HybridSearchHit> = (0..6)
+            .map(|i| diversity_hit(&format!("a{i}"), "doc-a", 10.0 - i as f32))
+            .collect();
+        // Tài liệu ăn theo từ chung, KHÔNG chứa số hiệu.
+        hits.push(diversity_hit("b0", "doc-b", 2.0));
+        hits.push(diversity_hit("b1", "doc-b", 1.9));
+        // Tài liệu cross-reference thực sự, rank thấp hơn nhưng chứa số hiệu.
+        hits.push(diversity_hit("c0", "doc-c", 0.5));
+        let tokens = vec![
+            "thong".to_string(),
+            "tu".to_string(),
+            "36".to_string(),
+            "2025".to_string(),
+        ];
+        diversify_by_document(&mut hits, 4, &tokens, |chunk| {
+            (chunk == "c0").then_some("Cập nhật theo Thông tư số 36/2025/TT-BCT")
+        });
+        let top: Vec<&str> = hits[..4].iter().map(|h| h.chunk_id.as_str()).collect();
+        // c0 khớp đủ anchor nên được chọn dù rank thấp hơn b1; thứ tự trong
+        // đuôi giữ theo rank gốc (b0 trước c0).
+        assert_eq!(top, ["a0", "a1", "b0", "c0"]);
+    }
+
+    #[test]
+    fn mixed_top_documents_are_left_untouched() {
+        let mut hits = vec![
+            diversity_hit("a0", "doc-a", 10.0),
+            diversity_hit("b0", "doc-b", 9.0),
+            diversity_hit("a1", "doc-a", 8.0),
+            diversity_hit("a2", "doc-a", 7.0),
+            diversity_hit("c0", "doc-c", 1.0),
+        ];
+        let before: Vec<String> = hits.iter().map(|h| h.chunk_id.clone()).collect();
+        diversify_by_document(&mut hits, 4, &[], |_| None);
+        let after: Vec<String> = hits.iter().map(|h| h.chunk_id.clone()).collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn single_document_candidates_stay_unchanged() {
+        let mut hits: Vec<HybridSearchHit> = (0..8)
+            .map(|i| diversity_hit(&format!("a{i}"), "doc-a", 10.0 - i as f32))
+            .collect();
+        diversify_by_document(&mut hits, 4, &[], |_| None);
+        assert_eq!(hits[3].chunk_id, "a3");
     }
 
     #[test]

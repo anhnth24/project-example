@@ -90,11 +90,12 @@ export function InviteForm({
           alignItems: 'flex-end',
           gap: 'var(--space-3)',
           maxWidth: 'none',
+          minWidth: 0,
         }}
         onSubmit={handleSubmit}
         noValidate
       >
-        <div className="field" style={{ flex: '1 1 220px' }}>
+        <div className="field" style={{ flex: '1 1 16rem', minWidth: 0, maxWidth: '100%' }}>
           <label htmlFor={emailId}>Email người được mời</label>
           <input
             id={emailId}
@@ -107,7 +108,7 @@ export function InviteForm({
           />
         </div>
 
-        <div className="field" style={{ minWidth: 180 }}>
+        <div className="field" style={{ flex: '1 1 12rem', minWidth: 0, maxWidth: '100%' }}>
           <span className="text-muted">Vai trò</span>
           <SelectControl
             value={role}
@@ -118,7 +119,7 @@ export function InviteForm({
           />
         </div>
 
-        <div className="field" style={{ minWidth: 180 }}>
+        <div className="field" style={{ flex: '1 1 12rem', minWidth: 0, maxWidth: '100%' }}>
           <span className="text-muted">Thời hạn lời mời</span>
           <SelectControl
             value={ttlChoice}

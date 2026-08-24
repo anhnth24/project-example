@@ -114,7 +114,7 @@ thể). Desktop-only adapter nằm sau feature riêng:
 | services | `src/services/*.rs` + `src/services/{upload,qa,retrieval}/` | logic domain: upload saga/sniff/limits, conversion, indexing/chunking, embedding, citation, access/ACL, quota, deletion, graph |
 | repositories | `src/db/*.rs` | truy vấn PostgreSQL theo bảng/nghiệp vụ (jobs, documents, collections, chunks, orgs, members, audit, acl_sql, ...) |
 | storage adapters | `src/storage/*.rs` | `minio.rs` (object store), `qdrant.rs` (vector index), `keys.rs`/`url_safety.rs` |
-| workers | `src/workers/*.rs` | `convert.rs`, `index.rs`, `embedding.rs`, `delete.rs`, `reconcile.rs`, `sandbox.rs`, `fairness.rs`, `limits.rs` — chạy qua `src/bin/worker.rs`, tách khỏi tiến trình API |
+| workers | `src/workers/*.rs` | job runner theo loại (convert/index/embedding/delete/reconcile) + sandbox/subprocess converter, fairness, limits — danh mục module ở `src/workers/mod.rs`, chạy qua `src/bin/worker.rs`, tách khỏi tiến trình API |
 
 ## `app/` — desktop "Markhand" (Tauri 2)
 

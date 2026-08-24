@@ -27,6 +27,67 @@ const DEFAULT_CHAT_MODEL: &str = "qwen/qwen3.7-flash";
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 const BODY_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Tổng thời gian chờ một lượt gọi chat provider. Mặc định 30s nhưng model
+/// reasoning qua OpenRouter lúc cao điểm có thể vượt (2026-08-17: qwen trả
+/// probe nhỏ 1.8s nhưng prompt 8 passage >30s → "provider unavailable" oan dù
+/// endpoint sống). Override bằng `MARKHAND_CHAT_TIMEOUT_SECS` (kẹp 5..=300);
+/// đọc một lần lúc gọi đầu tiên.
+fn chat_timeout() -> Duration {
+    static TIMEOUT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        env::var("MARKHAND_CHAT_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(|secs| Duration::from_secs(secs.clamp(5, 300)))
+            .unwrap_or(DEFAULT_TIMEOUT)
+    })
+}
+/// Điều khiển reasoning của model hybrid-thinking (Qwen 3.x qua OpenRouter):
+/// không gửi gì thì model tự "suy nghĩ" 20–60s trước khi viết câu trả lời
+/// 3–6 câu — chiếm phần lớn độ trễ Q&A. `MARKHAND_CHAT_REASONING`:
+/// `off|false|0|none` → gửi `reasoning.enabled=false`; `low|medium|high` →
+/// gửi `reasoning.effort`; unset/giá trị lạ → không gửi (giữ nguyên hành vi
+/// cũ, an toàn với endpoint không hiểu tham số). Đọc một lần.
+fn chat_reasoning() -> Option<ReasoningConfig> {
+    static VALUE: std::sync::OnceLock<Option<ReasoningConfig>> = std::sync::OnceLock::new();
+    *VALUE.get_or_init(|| parse_reasoning(env::var("MARKHAND_CHAT_REASONING").ok()?.as_str()))
+}
+
+fn parse_reasoning(raw: &str) -> Option<ReasoningConfig> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "off" | "false" | "0" | "none" => Some(ReasoningConfig {
+            enabled: Some(false),
+            effort: None,
+        }),
+        "low" | "medium" | "high" => Some(ReasoningConfig {
+            enabled: None,
+            effort: Some(match raw.trim().to_ascii_lowercase().as_str() {
+                "low" => "low",
+                "medium" => "medium",
+                _ => "high",
+            }),
+        }),
+        _ => None,
+    }
+}
+
+/// Cap số token output mỗi lượt trả lời (`MARKHAND_CHAT_MAX_TOKENS`, kẹp
+/// 64..=8192). Prompt đã yêu cầu 3–6 câu nên cap chỉ cắt đuôi trễ khi model
+/// viết lan man; unset → không gửi. Đọc một lần.
+fn chat_max_tokens() -> Option<u32> {
+    static VALUE: std::sync::OnceLock<Option<u32>> = std::sync::OnceLock::new();
+    *VALUE.get_or_init(|| {
+        env::var("MARKHAND_CHAT_MAX_TOKENS")
+            .ok()
+            .and_then(|value| parse_max_tokens(&value))
+    })
+}
+
+fn parse_max_tokens(raw: &str) -> Option<u32> {
+    raw.trim().parse::<u32>().ok().map(|n| n.clamp(64, 8192))
+}
+
 /// Hard cap on provider answer length; also the output allowance used by the
 /// token-quota reservation estimate (1C-09 a) — keep the two in sync.
 pub const MAX_ANSWER_CHARS: usize = 16_384;
@@ -243,7 +304,7 @@ impl OpenAiCompatibleChat {
             format!("{base}/v1/chat/completions")
         };
         let client = reqwest::Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
+            .timeout(chat_timeout())
             .build()
             .map_err(|_| ProviderError::Transport)?;
         Ok(Self {
@@ -270,12 +331,14 @@ impl OpenAiCompatibleChat {
             ],
             temperature: 0.1,
             stream: false,
+            max_tokens: chat_max_tokens(),
+            reasoning: chat_reasoning(),
         };
         let mut request = self.client.post(&self.endpoint).json(&body);
         if !self.api_key.is_empty() {
             request = request.bearer_auth(&self.api_key);
         }
-        let response = match tokio::time::timeout(DEFAULT_TIMEOUT, request.send()).await {
+        let response = match tokio::time::timeout(chat_timeout(), request.send()).await {
             Ok(Ok(response)) => response,
             Ok(Err(_)) => return Err(ProviderError::Transport),
             Err(_) => return Err(ProviderError::Timeout),
@@ -325,12 +388,14 @@ impl OpenAiCompatibleChat {
             ],
             temperature: 0.1,
             stream: true,
+            max_tokens: chat_max_tokens(),
+            reasoning: chat_reasoning(),
         };
         let mut request = self.client.post(&self.endpoint).json(&body);
         if !self.api_key.is_empty() {
             request = request.bearer_auth(&self.api_key);
         }
-        let response = match tokio::time::timeout(DEFAULT_TIMEOUT, request.send()).await {
+        let response = match tokio::time::timeout(chat_timeout(), request.send()).await {
             Ok(Ok(response)) => response,
             Ok(Err(_)) => return Err(ProviderError::Transport),
             Err(_) => return Err(ProviderError::Timeout),
@@ -343,7 +408,7 @@ impl OpenAiCompatibleChat {
             let mut byte_stream = response.bytes_stream();
             let mut framing = SseByteBuffer::new(MAX_STREAM_BYTES);
             let mut total_chars = 0usize;
-            let overall = tokio::time::sleep(DEFAULT_TIMEOUT);
+            let overall = tokio::time::sleep(chat_timeout());
             tokio::pin!(overall);
             loop {
                 if cancel.is_cancelled() {
@@ -602,6 +667,20 @@ struct ChatRequest<'a> {
     messages: Vec<ChatMessage<'a>>,
     temperature: f32,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningConfig>,
+}
+
+/// OpenRouter unified reasoning control — serialized as
+/// `{"enabled": false}` hoặc `{"effort": "low"}`.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+struct ReasoningConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -645,6 +724,72 @@ struct StreamDelta {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_reasoning_maps_off_effort_and_unknown() {
+        assert_eq!(
+            parse_reasoning("off"),
+            Some(ReasoningConfig {
+                enabled: Some(false),
+                effort: None
+            })
+        );
+        assert_eq!(
+            parse_reasoning(" FALSE "),
+            Some(ReasoningConfig {
+                enabled: Some(false),
+                effort: None
+            })
+        );
+        assert_eq!(
+            parse_reasoning("low"),
+            Some(ReasoningConfig {
+                enabled: None,
+                effort: Some("low")
+            })
+        );
+        assert_eq!(
+            parse_reasoning("High"),
+            Some(ReasoningConfig {
+                enabled: None,
+                effort: Some("high")
+            })
+        );
+        assert_eq!(parse_reasoning("banana"), None);
+        assert_eq!(parse_reasoning(""), None);
+    }
+
+    #[test]
+    fn parse_max_tokens_clamps_and_rejects_garbage() {
+        assert_eq!(parse_max_tokens("700"), Some(700));
+        assert_eq!(parse_max_tokens(" 10 "), Some(64));
+        assert_eq!(parse_max_tokens("999999"), Some(8192));
+        assert_eq!(parse_max_tokens("abc"), None);
+    }
+
+    #[test]
+    fn chat_request_serializes_optional_knobs_only_when_set() {
+        let base = ChatRequest {
+            model: "m",
+            messages: vec![],
+            temperature: 0.1,
+            stream: false,
+            max_tokens: None,
+            reasoning: None,
+        };
+        let json = serde_json::to_string(&base).unwrap();
+        assert!(!json.contains("max_tokens"));
+        assert!(!json.contains("reasoning"));
+
+        let tuned = ChatRequest {
+            max_tokens: Some(700),
+            reasoning: parse_reasoning("off"),
+            ..base
+        };
+        let json = serde_json::to_string(&tuned).unwrap();
+        assert!(json.contains(r#""max_tokens":700"#));
+        assert!(json.contains(r#""reasoning":{"enabled":false}"#));
+    }
 
     #[test]
     fn debug_redacts_endpoint_and_key() {

@@ -1,0 +1,578 @@
+{
+  "dependencyLabel": "embedding",
+  "expectedProbeCode": "ready_embedding",
+  "service": "mock-embedding",
+  "pauseConfirmed": true,
+  "baseline": {
+    "ready": {
+      "httpStatus": 200,
+      "elapsedSeconds": 0.003,
+      "probeCode": null,
+      "error": null
+    },
+    "live": {
+      "httpStatus": 200,
+      "elapsedSeconds": 0.002,
+      "probeCode": null,
+      "error": null
+    },
+    "openapi": {
+      "httpStatus": 200,
+      "elapsedSeconds": 0.002,
+      "probeCode": null,
+      "error": null
+    }
+  },
+  "postPauseWarmup": {
+    "hangObserved": true,
+    "ready": [
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.029,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.058,
+        "probeCode": "ready_embedding",
+        "error": null
+      }
+    ]
+  },
+  "samples": {
+    "ready": [
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 0.003,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.039,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.034,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.041,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.055,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 1.977,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.036,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.041,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.076,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.044,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.032,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.05,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.037,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.041,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.057,
+        "probeCode": "ready_embedding",
+        "error": null
+      },
+      {
+        "httpStatus": 503,
+        "elapsedSeconds": 2.066,
+        "probeCode": "ready_embedding",
+        "error": null
+      }
+    ],
+    "live": [
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      }
+    ],
+    "openapi": [
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.033,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.05,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.002,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.003,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.006,
+        "probeCode": null,
+        "error": null
+      },
+      {
+        "httpStatus": 200,
+        "elapsedSeconds": 0.004,
+        "probeCode": null,
+        "error": null
+      }
+    ]
+  },
+  "concurrencyBatches": [
+    {
+      "n": 8,
+      "spanSeconds": 0.02,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.008,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.008,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.008,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.004,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.009,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.009,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.006,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.002,
+          "probeCode": "ready_embedding",
+          "error": null
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "spanSeconds": 0.022,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.008,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.009,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.012,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.009,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.005,
+          "probeCode": "ready_embedding",
+          "error": null
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "spanSeconds": 0.017,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.012,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.007,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.011,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.006,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.007,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.008,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.007,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.004,
+          "probeCode": "ready_embedding",
+          "error": null
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "spanSeconds": 0.029,
+      "results": [
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.007,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.01,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.015,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.011,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.018,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.012,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.01,
+          "probeCode": "ready_embedding",
+          "error": null
+        },
+        {
+          "httpStatus": 503,
+          "elapsedSeconds": 0.006,
+          "probeCode": "ready_embedding",
+          "error": null
+        }
+      ]
+    }
+  ],
+  "restore": {
+    "restoreSkipped": false,
+    "unpauseExitCode": 0,
+    "running": true,
+    "paused": false,
+    "restoredConfirmed": true
+  },
+  "recovery": null,
+  "blockers": []
+}

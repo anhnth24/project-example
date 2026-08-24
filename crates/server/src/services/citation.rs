@@ -134,6 +134,21 @@ pub fn pins_from_hits(org_id: Uuid, hits: &[RetrievalHit]) -> Vec<CitationPin> {
         .collect()
 }
 
+/// Displayed pins must match `[CITE-…]` tokens in the answer. Retrieval may
+/// return extra documents (e.g. an E2E canary) that the extractive/LLM body
+/// never cited — those must not appear as footnotes. Answers that never use
+/// the CITE vocabulary (assistant turns, hermetic stream doubles) keep the
+/// original pin list so session ACL snapshots stay intact.
+pub fn pins_cited_in_answer(answer: &str, pins: Vec<CitationPin>) -> Vec<CitationPin> {
+    let used = fileconv_knowledge::ask::citation_ids_in_answer(answer);
+    if used.is_empty() {
+        return pins;
+    }
+    pins.into_iter()
+        .filter(|pin| used.contains(&pin.cite_id))
+        .collect()
+}
+
 pub fn pin_from_hit(org_id: Uuid, cite_id: &str, hit: &RetrievalHit) -> CitationPin {
     // Default pin cites the full chunk body as quote-local; source span is the
     // absolute markdown span carried on the hydrated hit.
@@ -593,6 +608,18 @@ mod tests {
         assert!(pins[0].anchor.starts_with("mhcite1."));
         assert_eq!(pins[0].quote_local_start, 0);
         assert_eq!(pins[0].quote_local_end, pins[0].quote.len());
+    }
+
+    #[test]
+    fn pins_cited_in_answer_drops_uncited_retrieval_hits() {
+        let org = Uuid::from_u128(9);
+        let pins = pins_from_hits(org, &[sample_hit(true), sample_hit(false)]);
+        assert_eq!(pins.len(), 2);
+        let kept = pins_cited_in_answer("Nội dung [CITE-0001].", pins.clone());
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].cite_id, "CITE-0001");
+        let untouched = pins_cited_in_answer("assistant hello", pins);
+        assert_eq!(untouched.len(), 2);
     }
 
     #[test]

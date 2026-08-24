@@ -111,7 +111,7 @@ describe('QaPage', () => {
       expect(await screen.findByText('Nguồn trích dẫn')).toBeVisible();
       // Quotes stay collapsed by default; expanding one confirms the footnote
       // still carries the passage text for deep inspection.
-      const expandButtons = screen.getAllByRole('button', { name: 'Hiện đoạn trích' });
+      const expandButtons = screen.getAllByRole('button', { name: /Hiện .*đoạn trích/ });
       expect(expandButtons.length).toBeGreaterThan(0);
       fireEvent.click(expandButtons[0]);
       expect(screen.getAllByTestId('qa-footnote-quote').length).toBeGreaterThan(0);
@@ -209,10 +209,17 @@ describe('QaPage', () => {
           'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
         );
       });
+      expect(within(chatLog()).getAllByText(question)).toHaveLength(1);
+      expect(within(chatLog()).getAllByTestId('qa-answer')).toHaveLength(1);
 
       await waitFor(() => {
         expect(within(sidebar()).getByRole('button', { name: question })).toBeVisible();
       });
+
+      // Re-clicking the session that was just created must not duplicate the turn.
+      fireEvent.click(within(sidebar()).getByRole('button', { name: question }));
+      expect(within(chatLog()).getAllByText(question)).toHaveLength(1);
+      expect(within(chatLog()).getAllByTestId('qa-answer')).toHaveLength(1);
 
       // Start a brand-new conversation, ask a second (unrelated) question —
       // it must NOT be appended to the just-created session above.

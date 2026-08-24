@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::auth::context::OrgContext;
 use crate::db::models::ResourceKind;
-use crate::services::citation::{pins_from_hits, CitationPin};
+use crate::services::citation::{pins_cited_in_answer, pins_from_hits, CitationPin};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
 use crate::services::qa::grounding::{
     conflict_resolution_notes_for_history, conflict_warnings_for_current,
@@ -132,6 +132,22 @@ pub(crate) fn resolve_llm_answer(
             warnings,
         );
     }
+    // Câu từ chối đúng theo prompt ("Nếu nguồn thiếu, chỉ trả lời: …") không
+    // chứa claim nào — trung thực hơn là đổ extractive không liên quan.
+    let trimmed_answer = llm_answer.trim();
+    if trimmed_answer.starts_with("Không đủ dữ liệu trong nguồn")
+        && trimmed_answer.chars().count() <= 80
+    {
+        if force_extractive_only() {
+            warnings.push(UNVERIFIED_LLM_WARNING.into());
+            return (
+                trimmed_answer.to_string(),
+                AnswerMode::LlmUnverified,
+                warnings,
+            );
+        }
+        return (trimmed_answer.to_string(), real_mode, warnings);
+    }
     match validate_answer_citations(&llm_answer, valid_ids, citations, mode) {
         Ok(()) => {
             if force_extractive_only() {
@@ -144,6 +160,32 @@ pub(crate) fn resolve_llm_answer(
             }
         }
         Err(failure) => {
+            // Dev-gate + Current: model thường viết 3–4 câu đúng và MỘT câu
+            // cite nhầm nguồn — vứt cả draft vì một câu là mất toàn bộ giá trị
+            // (eval 2026-08-16: BERT/ResNet). Cắt riêng các dòng không kiểm
+            // chứng được; phần còn lại phải tự pass lại validator toàn văn.
+            if allow_unverified_llm() && matches!(mode, VersionMode::Current) {
+                // P0.2: thử cứu câu thiếu citation bằng auto-attach TRƯỚC khi
+                // prune — toàn văn đã gắn phải pass lại validator, nếu không
+                // rơi xuống nhánh prune như cũ.
+                if let Some(saved) =
+                    attach_citations_to_uncited_lines(&llm_answer, valid_ids, citations, mode)
+                {
+                    warnings.push(citation_auto_attach_warning(saved.attached));
+                    warnings.push(UNVERIFIED_LLM_WARNING.into());
+                    return (saved.answer, AnswerMode::LlmUnverified, warnings);
+                }
+                if let Some(pruned) =
+                    prune_unverifiable_lines(&llm_answer, valid_ids, citations, mode)
+                {
+                    warnings.push(format!(
+                        "Removed {} unverifiable sentence(s) from LLM draft; remainder passed claim checks.",
+                        pruned.removed
+                    ));
+                    warnings.push(UNVERIFIED_LLM_WARNING.into());
+                    return (pruned.answer, AnswerMode::LlmUnverified, warnings);
+                }
+            }
             warnings.extend(failure.warnings);
             warnings.push(
                 if failure.unverifiable {
@@ -165,6 +207,161 @@ pub(crate) fn resolve_llm_answer(
             )
         }
     }
+}
+
+struct PrunedDraft {
+    answer: String,
+    removed: usize,
+}
+
+pub(crate) struct AttachedDraft {
+    pub(crate) answer: String,
+    pub(crate) attached: usize,
+}
+
+/// Warning khi P0.2 auto-attach cứu được câu thiếu citation (đếm được trong
+/// eval; web dịch theo regex — giữ nguyên khuôn "Auto-attached citations to N
+/// sentence(s)").
+pub(crate) fn citation_auto_attach_warning(attached: usize) -> String {
+    format!("Auto-attached citations to {attached} sentence(s); full draft passed claim checks.")
+}
+
+/// P0.2 — đề xuất trước, validate sau: với mỗi dòng CÓ nội dung nhưng THIẾU
+/// `[CITE-]`, tìm pin ứng viên theo token-overlap (trên pins/hybrid hits sẵn
+/// có — không gọi embed lại) và gắn thử marker. Sau đó chạy **nguyên bộ**
+/// `validate_answer_citations` (claim-check + negation + date/unit) trên toàn
+/// văn đã gắn; fail → trả `None` để caller prune/fallback như cũ. Fail-closed
+/// nguyên vẹn: không câu nào được giữ mà chưa qua validator.
+pub(crate) fn attach_citations_to_uncited_lines(
+    answer: &str,
+    valid_ids: &HashSet<String>,
+    pins: &[CitationPin],
+    mode: &VersionMode,
+) -> Option<AttachedDraft> {
+    if pins.is_empty() {
+        return None;
+    }
+    let lines: Vec<&str> = answer
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    let mut attached = 0usize;
+    let mut rewritten: Vec<String> = Vec::with_capacity(lines.len());
+    for line in &lines {
+        if line.contains("[CITE-") || !line_has_prose(line) {
+            rewritten.push((*line).to_string());
+            continue;
+        }
+        match crate::services::qa::grounding::propose_citation_for_sentence(line, pins) {
+            Some(cite_id) => {
+                // Prompt yêu cầu marker ngay TRƯỚC dấu chấm cuối câu.
+                let base = line.trim_end();
+                let (body, dot) = match base.strip_suffix('.') {
+                    Some(without_dot) => (without_dot.trim_end(), "."),
+                    None => (base, ""),
+                };
+                rewritten.push(format!("{body} [{cite_id}]{dot}"));
+                attached += 1;
+            }
+            None => rewritten.push((*line).to_string()),
+        }
+    }
+    if attached == 0 {
+        return None;
+    }
+    let joined = rewritten.join("\n");
+    validate_answer_citations(&joined, valid_ids, pins, mode).ok()?;
+    Some(AttachedDraft {
+        answer: joined,
+        attached,
+    })
+}
+
+/// Warning gắn kèm khi phải nhắc model bổ sung citation (đếm được trong eval).
+pub(crate) const CITATION_RETRY_WARNING: &str =
+    "LLM draft lacked citations; retried once with a citation reminder.";
+
+/// Draft không có bất kỳ `[CITE-` nào thì chắc chắn rớt validation toàn văn →
+/// rơi thẳng về extractive dù nội dung thường ĐÚNG (model nhanh/reasoning-off
+/// hay quên định dạng; eval 2026-08-17: 3/22 câu mất điểm kiểu này). Câu từ
+/// chối hợp lệ thì không cần retry.
+pub(crate) fn draft_needs_citation_retry(draft: &str) -> bool {
+    let trimmed = draft.trim();
+    !trimmed.contains("[CITE-") && !trimmed.starts_with("Không đủ dữ liệu trong nguồn")
+}
+
+/// Lượt nhắc lại DUY NHẤT: giữ nguyên system + context, nối thêm chỉ thị sửa
+/// bản nháp. Không lặp vô hạn — call site chỉ gọi một lần và chỉ nhận kết quả
+/// mới nếu nó thực sự có `[CITE-`.
+pub(crate) fn citation_retry_messages(
+    original: &GroundedMessages,
+    draft: &str,
+) -> GroundedMessages {
+    GroundedMessages {
+        system: original.system.clone(),
+        user: format!(
+            "{}\n\nBản nháp dưới đây KHÔNG có [CITE-xxxx] nên bị loại. Viết lại \
+             câu trả lời với đúng nội dung đó, MỌI câu kết thúc bằng [CITE-xxxx] \
+             đúng id nguồn ngay trước dấu chấm.\n\nBản nháp:\n{draft}",
+            original.user
+        ),
+    }
+}
+
+/// Cắt các dòng không tự kiểm chứng được khỏi draft (prompt yêu cầu mỗi câu
+/// một dòng). Trả `None` nếu không cắt được gì, không còn dòng nào có
+/// citation, hoặc phần còn lại vẫn không pass validator toàn văn.
+fn prune_unverifiable_lines(
+    answer: &str,
+    valid_ids: &HashSet<String>,
+    pins: &[CitationPin],
+    mode: &VersionMode,
+) -> Option<PrunedDraft> {
+    let lines: Vec<&str> = answer
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if lines.len() < 2 {
+        return None;
+    }
+    let kept: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| validate_answer_citations(line, valid_ids, pins, mode).is_ok())
+        // Dòng chỉ chứa marker ("[CITE-0001] [CITE-0006]") pass validation
+        // nhưng không phải câu trả lời — giữ lại làm đáp án cuối chỉ tạo nhiễu
+        // (eval 2026-08-17: 2 câu trả về đúng một marker trơ trọi).
+        .filter(|line| line_has_prose(line))
+        .collect();
+    if kept.is_empty() || kept.len() == lines.len() {
+        return None;
+    }
+    if !kept.iter().any(|line| line.contains("[CITE-")) {
+        return None;
+    }
+    let joined = kept.join("\n");
+    validate_answer_citations(&joined, valid_ids, pins, mode).ok()?;
+    Some(PrunedDraft {
+        answer: joined,
+        removed: lines.len() - kept.len(),
+    })
+}
+
+/// Còn nội dung chữ/số sau khi gỡ hết marker `[CITE-xxxx]`?
+fn line_has_prose(line: &str) -> bool {
+    let mut rest = line.to_string();
+    while let Some(start) = rest.find("[CITE-") {
+        let Some(offset) = rest[start..].find(']') else {
+            break;
+        };
+        rest.replace_range(start..=start + offset, "");
+    }
+    rest.chars().any(char::is_alphanumeric)
 }
 
 // --- Token-quota lifecycle around the chat-provider call (1C-09 a) ---
@@ -358,7 +555,14 @@ pub(crate) fn hits_to_hybrid(hits: &[RetrievalHit]) -> Vec<HybridSearchHit> {
             source_rel: hit.document_id.to_string(),
             md_rel: hit.version_id.to_string(),
             heading: hit.heading.clone(),
-            snippet: hit.snippet.clone(),
+            // Ask/extractive must see the ranked chunk, not the 240-char
+            // preview window (`snippet` starts at the first query token —
+            // often the circular title). Citation pins already use `body`.
+            snippet: if hit.body.trim().is_empty() {
+                hit.snippet.clone()
+            } else {
+                hit.body.clone()
+            },
             lexical_score: hit.lexical_score,
             vector_score: hit.vector_score,
             rerank_score: hit.rerank_score,
@@ -492,10 +696,33 @@ pub async fn ask(
                 .await
                 .map_err(AskError::Quota)?;
             match chat.complete(&messages).await {
-                Ok(llm_answer) => {
+                Ok(mut llm_answer) => {
+                    let mut consumed = llm_answer.chars().count();
+                    if draft_needs_citation_retry(&llm_answer) {
+                        // P0.2: auto-attach trước — cứu được toàn văn thì khỏi
+                        // tốn lượt gọi LLM nhắc citation.
+                        if let Some(saved) = attach_citations_to_uncited_lines(
+                            &llm_answer,
+                            &valid_ids,
+                            &citations,
+                            &request.mode,
+                        ) {
+                            warnings.push(citation_auto_attach_warning(saved.attached));
+                            llm_answer = saved.answer;
+                        } else {
+                            warnings.push(CITATION_RETRY_WARNING.into());
+                            let retry = citation_retry_messages(&messages, &llm_answer);
+                            if let Ok(second) = chat.complete(&retry).await {
+                                consumed += second.chars().count();
+                                if second.contains("[CITE-") {
+                                    llm_answer = second;
+                                }
+                            }
+                        }
+                    }
                     // The provider consumed prompt + answer tokens even when
                     // fail-closed grounding discards the answer below.
-                    settle_ask_tokens(pool, ctx, lease, Some(llm_answer.chars().count())).await;
+                    settle_ask_tokens(pool, ctx, lease, Some(consumed)).await;
                     let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
                         llm_answer,
                         &extractive,
@@ -535,6 +762,8 @@ pub async fn ask(
             (extractive, AnswerMode::OfflineExtractive)
         }
     };
+
+    let citations = pins_cited_in_answer(&answer, citations);
 
     Ok(AskResponse {
         answer,
@@ -595,12 +824,76 @@ mod tests {
         let mapped = hits_to_hybrid(&[hit(true, 2)]);
         assert_eq!(mapped[0].anchor.page, Some(1));
         assert_eq!(mapped[0].heading, "Kinh phí");
+        assert_eq!(mapped[0].snippet, "Version 2 budget value.");
+    }
+
+    #[test]
+    fn hybrid_mapping_prefers_ranked_body_over_preview_snippet() {
+        let mut long = hit(true, 2);
+        long.snippet = "sửa đổi, bổ sung một số điều của Thông tư".into();
+        long.body = "Điều 1. Sửa đổi khoản 2 Điều 3 như sau: Sản lượng điện năng bao tiêu.".into();
+        let mapped = hits_to_hybrid(&[long]);
+        assert_eq!(
+            mapped[0].snippet,
+            "Điều 1. Sửa đổi khoản 2 Điều 3 như sau: Sản lượng điện năng bao tiêu."
+        );
     }
 
     #[test]
     fn force_extractive_only_is_enabled_by_default() {
         // Fail-closed until a trusted structured entailment verifier ships.
         assert!(force_extractive_only());
+    }
+
+    #[test]
+    fn citation_retry_triggers_only_on_uncited_non_refusal_drafts() {
+        assert!(draft_needs_citation_retry("Kinh phí là 10 triệu đồng."));
+        assert!(!draft_needs_citation_retry(
+            "Kinh phí là 10 triệu [CITE-0001]."
+        ));
+        assert!(!draft_needs_citation_retry(
+            "Không đủ dữ liệu trong nguồn đã cung cấp."
+        ));
+    }
+
+    #[test]
+    fn citation_retry_messages_carry_original_context_and_draft() {
+        let original = GroundedMessages {
+            system: "system-prompt".into(),
+            user: "câu hỏi + context".into(),
+        };
+        let retry = citation_retry_messages(&original, "bản nháp không cite");
+        assert_eq!(retry.system, original.system);
+        assert!(retry.user.starts_with("câu hỏi + context"));
+        assert!(retry.user.contains("bản nháp không cite"));
+        assert!(retry.user.contains("[CITE-xxxx]"));
+    }
+
+    #[test]
+    fn line_has_prose_rejects_citation_marker_only_lines() {
+        assert!(!line_has_prose("[CITE-0001]"));
+        assert!(!line_has_prose("[CITE-0001] [CITE-0006]."));
+        assert!(line_has_prose("Lưu 35 ngày [CITE-0001]."));
+    }
+
+    #[test]
+    fn prune_never_returns_citation_marker_only_answer() {
+        with_dev_gate(true, || {
+            let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+            let valid = HashSet::from(["CITE-0001".to_string()]);
+            // Câu prose sai số liệu rớt validation; dòng sống sót duy nhất chỉ
+            // là marker → prune phải chịu thua thay vì trả "[CITE-0001]" trơ.
+            let (answer, mode, _warnings) = resolve_llm_answer(
+                "Kinh phí là 99 triệu [CITE-0001].\n[CITE-0001]".into(),
+                "extractive fallback text",
+                &valid,
+                &pins,
+                &VersionMode::Current,
+                AnswerMode::CloudLlm,
+            );
+            assert_eq!(answer, "extractive fallback text");
+            assert_eq!(mode, AnswerMode::FallbackExtractive);
+        });
     }
 
     // --- Dev-gate (MARKHAND_QA_ALLOW_UNVERIFIED_LLM) ---
@@ -734,6 +1027,115 @@ mod tests {
                 .any(|w| w.starts_with(DISCARDED_LLM_DRAFT_WARNING_PREFIX)));
             assert!(warnings.iter().any(|w| w.contains("CITE-9999")));
         });
+    }
+
+    #[test]
+    fn dev_gate_prunes_single_bad_sentence_and_keeps_rest() {
+        with_dev_gate(true, || {
+            let pins = vec![
+                test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng"),
+                test_pin("CITE-0002", 2, "Thời hạn nộp báo cáo là ngày 15 hằng tháng"),
+            ];
+            let valid = HashSet::from(["CITE-0001".to_string(), "CITE-0002".to_string()]);
+            // Câu 2 cite CITE-0002 nhưng mượn con số của CITE-0001 → chỉ câu đó hỏng.
+            let (answer, mode, warnings) = resolve_llm_answer(
+                "Kinh phí là 10 triệu đồng [CITE-0001].\nKinh phí là 99 triệu [CITE-0002].".into(),
+                "extractive fallback text",
+                &valid,
+                &pins,
+                &VersionMode::Current,
+                AnswerMode::CloudLlm,
+            );
+            assert_eq!(answer, "Kinh phí là 10 triệu đồng [CITE-0001].");
+            assert_eq!(mode, AnswerMode::LlmUnverified);
+            assert!(warnings
+                .iter()
+                .any(|w| w.contains("Removed 1 unverifiable")));
+            assert!(warnings.iter().any(|w| w == UNVERIFIED_LLM_WARNING));
+        });
+    }
+
+    #[test]
+    fn dev_gate_auto_attaches_citation_then_validates_before_prune() {
+        with_dev_gate(true, || {
+            let pins = vec![
+                test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng"),
+                test_pin("CITE-0002", 2, "Thời hạn nộp báo cáo là ngày 15 hằng tháng"),
+            ];
+            let valid = HashSet::from(["CITE-0001".to_string(), "CITE-0002".to_string()]);
+            // Câu 2 đúng nội dung passage CITE-0002 nhưng model quên marker.
+            let (answer, mode, warnings) = resolve_llm_answer(
+                "Kinh phí là 10 triệu đồng [CITE-0001].\nThời hạn nộp báo cáo là ngày 15 hằng tháng."
+                    .into(),
+                "extractive fallback text",
+                &valid,
+                &pins,
+                &VersionMode::Current,
+                AnswerMode::CloudLlm,
+            );
+            assert_eq!(mode, AnswerMode::LlmUnverified);
+            assert!(
+                answer.contains("Thời hạn nộp báo cáo là ngày 15 hằng tháng [CITE-0002]"),
+                "expected auto-attached marker, got: {answer}"
+            );
+            assert!(warnings
+                .iter()
+                .any(|w| w.contains("Auto-attached citations to 1 sentence(s)")));
+            assert!(warnings.iter().any(|w| w == UNVERIFIED_LLM_WARNING));
+        });
+    }
+
+    #[test]
+    fn auto_attach_rejects_low_overlap_sentence_and_falls_back_to_prune() {
+        with_dev_gate(true, || {
+            let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+            let valid = HashSet::from(["CITE-0001".to_string()]);
+            // Câu 2 không liên quan passage nào → không đề xuất được pin;
+            // prune giữ câu 1, loại câu 2 (fail-closed nguyên vẹn).
+            let (answer, mode, warnings) = resolve_llm_answer(
+                "Kinh phí là 10 triệu đồng [CITE-0001].\nGiá vàng thế giới tăng 25% tuần qua."
+                    .into(),
+                "extractive fallback text",
+                &valid,
+                &pins,
+                &VersionMode::Current,
+                AnswerMode::CloudLlm,
+            );
+            assert_eq!(answer, "Kinh phí là 10 triệu đồng [CITE-0001].");
+            assert_eq!(mode, AnswerMode::LlmUnverified);
+            assert!(!warnings.iter().any(|w| w.contains("Auto-attached")));
+            assert!(warnings
+                .iter()
+                .any(|w| w.contains("Removed 1 unverifiable")));
+        });
+    }
+
+    #[test]
+    fn auto_attach_returns_none_when_every_line_already_cited() {
+        let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+        let valid = HashSet::from(["CITE-0001".to_string()]);
+        assert!(attach_citations_to_uncited_lines(
+            "Kinh phí là 10 triệu đồng [CITE-0001].",
+            &valid,
+            &pins,
+            &VersionMode::Current,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn auto_attach_result_must_pass_full_validation_or_none() {
+        // Đề xuất được pin (overlap chủ đề cao) nhưng giá trị số lệch passage
+        // → validation từ chối → None (không được giữ câu sai).
+        let pins = vec![test_pin("CITE-0001", 1, "Kinh phí là 10 triệu đồng")];
+        let valid = HashSet::from(["CITE-0001".to_string()]);
+        assert!(attach_citations_to_uncited_lines(
+            "Kinh phí là 99 triệu đồng.",
+            &valid,
+            &pins,
+            &VersionMode::Current,
+        )
+        .is_none());
     }
 
     #[test]

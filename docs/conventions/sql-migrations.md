@@ -61,7 +61,10 @@ NNNN_<expand|backfill|cutover|contract>_<subject>.sql
 ## Rollout
 
 1. **Expand:** additive table/column/index nullable, compatibility trước.
-2. **Backfill:** resumable/checkpointed, bounded batch, metrics và retry.
+2. **Backfill:** resumable/checkpointed, bounded batch, metrics và retry. Trên bảng
+   có `FORCE ROW LEVEL SECURITY`, `UPDATE` backfill bị policy chặn **im lặng (0 row)
+   kể cả với owner/migrator** — migration phải `SET LOCAL row_security = off` (owner
+   được phép) và verify số row affected sau backfill (xem migration `0037`).
 3. **Cutover:** application đọc/ghi dual path khi cần; evidence mixed-version.
 4. **Contract:** bỏ old path chỉ sau retention/rollback window.
 

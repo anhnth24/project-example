@@ -13,7 +13,7 @@
 // rendering idiom `ChatPanel.tsx`'s own `chat`/`scope` state already uses —
 // an org switch must never leave the sidebar pointed at a session id (or a
 // page of titles) that belonged to the org just left.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { apiClient, type ApiClient } from '../../api/client';
 import type { components } from '../../api/generated/contract';
 import { useScopeSafeRequest } from '../../hooks/useScopeSafeRequest';
@@ -182,6 +182,7 @@ export function useChatHistory(client: ApiClient = apiClient): UseChatHistoryRes
     setActiveSession({ epoch, id: undefined });
   }
 
+  const [transcriptRefresh, setTranscriptRefresh] = useState(0);
   const historicalResult = useScopeSafeRequest(
     async (signal) => {
       if (!activeSessionId) return null;
@@ -190,20 +191,27 @@ export function useChatHistory(client: ApiClient = apiClient): UseChatHistoryRes
         signal,
       });
     },
-    [client, activeSessionId],
+    [client, activeSessionId, transcriptRefresh],
   );
   const historicalTurns = historicalResult.data?.turns ?? [];
   const historicalStatus: 'idle' | 'loading' | 'success' | 'error' =
     activeSessionId === undefined ? 'idle' : historicalResult.status;
 
   const [sessionSwitchToken, setSessionSwitchToken] = useState(0);
+  const lastRecordedKeyRef = useRef<string | undefined>(undefined);
 
   function startNewConversation() {
+    lastRecordedKeyRef.current = undefined;
     setActiveSession({ epoch, id: undefined });
     setSessionSwitchToken((n) => n + 1);
   }
 
   function selectSession(sessionId: string) {
+    // Re-clicking the already-open session must not bump `sessionSwitchToken`:
+    // that wipe of live turns is what used to reveal a just-persisted
+    // duplicate sitting in `historicalTurns`.
+    if (sessionId === activeSessionId) return;
+    lastRecordedKeyRef.current = undefined;
     setActiveSession({ epoch, id: sessionId });
     setSessionSwitchToken((n) => n + 1);
   }
@@ -251,16 +259,22 @@ export function useChatHistory(client: ApiClient = apiClient): UseChatHistoryRes
 
   // --- Recording a settled live turn ----------------------------------------
   const [appendError, setAppendError] = useState<string | undefined>(undefined);
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
+  const recordChainRef = useRef(Promise.resolve());
 
   function recordTurn(turn: RecordableTurn): void {
-    void (async () => {
+    const recordedKey = `${turn.question}\n${turn.answer}`;
+    recordChainRef.current = recordChainRef.current.then(async () => {
+      if (lastRecordedKeyRef.current === recordedKey) return;
       try {
-        let sessionId = activeSessionId;
+        let sessionId = activeSessionIdRef.current;
         if (!sessionId) {
           const created = await client.request('post', '/chat-sessions', {
             body: { title: titleFromQuestion(turn.question) },
           });
           sessionId = created.id;
+          activeSessionIdRef.current = sessionId;
           setActiveSession({ epoch, id: sessionId });
         }
         await client.request('post', '/chat-sessions/{sessionId}/turns', {
@@ -273,13 +287,15 @@ export function useChatHistory(client: ApiClient = apiClient): UseChatHistoryRes
             warnings: turn.warnings,
           },
         });
+        lastRecordedKeyRef.current = recordedKey;
         refreshSessionsFromScratch();
+        setTranscriptRefresh((n) => n + 1);
       } catch {
         setAppendError(
           'Không thể lưu lượt hỏi đáp này vào lịch sử — cuộc trò chuyện vẫn tiếp tục bình thường.',
         );
       }
-    })();
+    });
   }
 
   function dismissAppendError() {

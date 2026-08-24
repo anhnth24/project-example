@@ -18,24 +18,23 @@ pub struct StreamEvent {
     pub envelope: SseEnvelope,
 }
 
-/// Splits an answer into bounded token-like chunks for SSE.
+/// Splits an answer into bounded token-like chunks for SSE without destroying
+/// newlines. Concatenating the tokens must reproduce `answer` exactly so
+/// extractive paragraph breaks survive the stream.
 pub fn tokenize_answer(answer: &str) -> Vec<String> {
+    if answer.is_empty() {
+        return vec![String::new()];
+    }
     let mut tokens = Vec::new();
     let mut current = String::new();
-    for word in answer.split_whitespace() {
-        if current.len() + word.len() + 1 > 48 && !current.is_empty() {
+    for ch in answer.chars() {
+        current.push(ch);
+        if current.chars().count() >= 48 && ch.is_whitespace() {
             tokens.push(std::mem::take(&mut current));
         }
-        if !current.is_empty() {
-            current.push(' ');
-        }
-        current.push_str(word);
     }
     if !current.is_empty() {
         tokens.push(current);
-    }
-    if tokens.is_empty() {
-        tokens.push(String::new());
     }
     tokens
 }
@@ -186,8 +185,15 @@ mod tests {
     #[test]
     fn tokenize_keeps_answer_coverage() {
         let tokens = tokenize_answer("Một hai ba bốn năm sáu bảy tám chín mười");
-        let joined = tokens.join(" ");
+        let joined: String = tokens.concat();
         assert!(joined.contains("Một"));
         assert!(joined.contains("mười"));
+        assert_eq!(joined, "Một hai ba bốn năm sáu bảy tám chín mười");
+    }
+
+    #[test]
+    fn tokenize_preserves_newlines() {
+        let answer = "Đoạn một.\n[CITE-0001]\n\nĐoạn hai.";
+        assert_eq!(tokenize_answer(answer).concat(), answer);
     }
 }

@@ -346,7 +346,11 @@ export function LibraryPage({
   }
 
   return (
-    <section className="page" style={{ maxWidth: 'none' }} aria-labelledby="library-heading">
+    <section
+      className="page"
+      style={{ maxWidth: 'none', minWidth: 0 }}
+      aria-labelledby="library-heading"
+    >
       <p className="eyebrow">Thư viện</p>
       <h1 id="library-heading">{libraryHeading}</h1>
       <p className="lede">
@@ -377,6 +381,8 @@ export function LibraryPage({
           justifyContent: 'space-between',
           gap: 'var(--space-3)',
           flexWrap: 'wrap',
+          minWidth: 0,
+          maxWidth: '100%',
         }}
       >
         <CollectionNav
@@ -429,11 +435,19 @@ export function LibraryPage({
           Chọn một bộ sưu tập ở trên để xem danh sách tài liệu.
         </Notice>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--space-4)',
+            minWidth: 0,
+            maxWidth: '100%',
+          }}
+        >
           {/* Scoped to the open collection — `POST /uploads` needs a
               collectionId, so there is nothing to render on the "all
               collections" view above. */}
-          <div className="card" data-slot="library-upload">
+          <div data-slot="library-upload">
             <UploadPanel
               collectionId={collectionId}
               onUploaded={refreshDocuments}
@@ -471,9 +485,11 @@ export function LibraryPage({
               gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
               gap: 'var(--space-4)',
               alignItems: 'start',
+              minWidth: 0,
+              width: '100%',
             }}
           >
-            <div className="card">
+            <div className="card" style={{ minWidth: 0, maxWidth: '100%' }}>
               <DocumentList
                 items={visibleItems}
                 totalOnPage={items.length}

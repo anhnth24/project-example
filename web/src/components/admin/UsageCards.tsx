@@ -10,10 +10,7 @@ function UsageCard({ entry }: { entry: UsageEntry }) {
   const fraction = usageFraction(entry.committed, entry.reserved, entry.limit);
   const percentLabel = `${Math.round(fraction * 100)}%`;
   return (
-    <div
-      className="card"
-      style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}
-    >
+    <div className="card" style={{ minWidth: 0 }}>
       <p className="card-kicker">{USAGE_RESOURCE_LABEL[entry.resource]}</p>
       <p className="card-title" style={{ margin: 0 }}>
         {formatUsageValue(entry.resource, entry.committed + entry.reserved)}
@@ -51,8 +48,10 @@ export function UsageCards({ items, loading }: { items: UsageEntry[]; loading: b
     <div
       style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))',
         gap: 'var(--space-4)',
+        minWidth: 0,
+        width: '100%',
       }}
     >
       {items.map((entry) => (

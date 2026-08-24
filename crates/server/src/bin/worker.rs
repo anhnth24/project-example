@@ -38,7 +38,7 @@ async fn main() {
         .any(|argument| argument == "--help" || argument == "-h")
     {
         println!(
-            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nOptions:\n  --check-config                    Validate worker env/config and exit\n  --db-role-probe                   Query pg_roles/current_user via worker DB URL and exit\n  --sandbox-preflight               Probe convert sandbox isolation and exit\n  --sandbox-convert-probe <file>    Convert one file through the production sandbox and exit"
+            "fileconv-worker\n\nRuns Markhand background job handlers. Configure converter argv with MARKHAND_CONVERTER_ARGV_JSON.\n\nOptions:\n  --check-config                    Validate worker env/config and exit\n  --db-role-probe                   Query pg_roles/current_user via worker DB URL and exit\n  --sandbox-preflight               Probe convert runner (direct subprocess on Windows; Linux sandbox unless MARKHAND_CONVERTER_DISABLE_SANDBOX=1)\n  --sandbox-convert-probe <file>    Convert one file through the production sandbox and exit"
         );
         return;
     }

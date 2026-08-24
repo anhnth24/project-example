@@ -24,7 +24,7 @@ use crate::db::ask_streams::{
     DEFAULT_TTL_SECS, TERMINAL_EVENT_TYPE,
 };
 use crate::db::pool::{apply_org_context, with_org_txn};
-use crate::services::citation::{pins_from_hits, CitationPin};
+use crate::services::citation::{pins_cited_in_answer, pins_from_hits, CitationPin};
 use crate::services::embedding::ApprovedEmbeddingRuntime;
 use crate::services::qa::chitchat::{assistant_fallback_reply, AskRoute};
 use crate::services::qa::grounding::{
@@ -35,8 +35,10 @@ use crate::services::qa::prompt::{build_assistant_messages, build_grounded_messa
 use crate::services::qa::provider::{ChatProvider, ProviderError, StreamCancel};
 use crate::services::qa::stream::{tokenize_answer, HEARTBEAT_INTERVAL, SSE_ENVELOPE_VERSION};
 use crate::services::qa::{
-    allow_unverified_llm_runtime, decide_ask_route, force_extractive_only_runtime, hits_to_hybrid,
-    reserve_ask_tokens, resolve_llm_answer, settle_ask_tokens, TokenLease,
+    allow_unverified_llm_runtime, attach_citations_to_uncited_lines, citation_auto_attach_warning,
+    citation_retry_messages, decide_ask_route, draft_needs_citation_retry,
+    force_extractive_only_runtime, hits_to_hybrid, reserve_ask_tokens, resolve_llm_answer,
+    settle_ask_tokens, TokenLease, CITATION_RETRY_WARNING,
 };
 use crate::services::quota::QuotaError;
 use crate::services::retrieval::{hybrid_search, RetrievalHit, RetrievalRequest, VersionMode};
@@ -51,6 +53,23 @@ pub const ASK_STREAM_BATCH: i64 = 1;
 pub const ASK_STREAM_PULL_DEADLINE: Duration = Duration::from_secs(2);
 /// Single-item channel: send never runs while locks are held; no multi-event buffer.
 pub const ASK_STREAM_CHANNEL_CAP: usize = 1;
+
+/// Whether the SSE producer will actually call a chat provider.
+///
+/// Real product LLMs stay fail-closed to extractive while structured
+/// entailment is unavailable. Do **not** buffer `complete()` on this path:
+/// OpenRouter often hits the 30s provider timeout, then citation validation
+/// discards the OCR-heavy draft, so the UI waits ~30s for an extractive
+/// answer that was already ready after retrieval. Hermetic `StreamingStatic`
+/// doubles still incremental-stream so mid-stream ACL tests can observe
+/// `ask.token` before close. JSON `POST /ask` may still try a buffered LLM
+/// under `MARKHAND_QA_ALLOW_UNVERIFIED_LLM`.
+fn uses_incremental_provider_stream(provider: &ChatProvider, extractive_forced: bool) -> bool {
+    match provider {
+        ChatProvider::StreamingStatic(_) => true,
+        other => other.supports_incremental_stream() && !extractive_forced,
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct AskStreamStart {
@@ -191,14 +210,16 @@ pub async fn start_ask_stream(
         let extractive = extractive_answer(&question, &hybrid);
 
         // Token quota (1C-09 a): reserve before creating any durable session state
-        // — a denial is a clean 429 with zero side effects. Only reserved when the
-        // producer will really call the provider (same predicate as run_producer):
-        // incremental streaming, or the buffered dev-gate path.
+        // — a denial is a clean 429 with zero side effects. Same predicate as
+        // `run_producer`: only incremental provider streaming, never a buffered
+        // `complete()` wait that blocks first `ask.token`.
         let extractive_forced = force_extractive_only_runtime();
+        // Dev-gate (`MARKHAND_QA_ALLOW_UNVERIFIED_LLM`): the producer will try a
+        // buffered `complete()` even while fail-closed, so reserve tokens here too.
         let will_call_provider = !retrieval.hits.is_empty()
             && provider.as_ref().is_some_and(|chat| {
-                (chat.supports_incremental_stream() && !extractive_forced)
-                    || (extractive_forced && allow_unverified_llm_runtime())
+                uses_incremental_provider_stream(chat, extractive_forced)
+                    || allow_unverified_llm_runtime()
             });
         let token_lease = if will_call_provider {
             let messages = build_grounded_messages(&question, &hybrid, &mode);
@@ -326,7 +347,7 @@ async fn run_producer(
     claims: AccessClaims,
     session_id: Uuid,
     _request_id: String,
-    citations: Vec<CitationPin>,
+    mut citations: Vec<CitationPin>,
     cited_document_ids: Vec<Uuid>,
     version_context: VersionContext,
     mut warnings: Vec<String>,
@@ -438,13 +459,8 @@ async fn run_producer(
 
     let mut answer_mode = started_mode;
     let mut streamed_any = false;
-    // Dev-gate path (default OFF): buffer the full LLM answer so citation/claim
-    // validation (which needs the whole text) can run before anything is
-    // emitted — unlike true incremental streaming, which cannot be validated
-    // token-by-token. Only entered while entailment is fail-closed; once a
-    // trusted verifier ships, `use_provider_stream` takes over unconditionally.
     let mut unverified_answer: Option<String> = None;
-    let mut dev_gate_attempted_and_failed = false;
+    let mut emitted_answer = String::new();
 
     if assistant_turn {
         if let Some(chat) = provider.as_ref() {
@@ -482,14 +498,9 @@ async fn run_producer(
         }
     } else {
         let extractive_forced = force_extractive_only_runtime();
-        // Real LLM providers stay fail-closed to extractive while structured
-        // entailment is unavailable. Hermetic `StreamingStatic` doubles are not
-        // product LLM backends — they must keep incremental production so
-        // mid-stream ACL revoke tests can observe durable ask.token before close.
-        let use_provider_stream = provider.as_ref().is_some_and(|p| match p {
-            ChatProvider::StreamingStatic(_) => true,
-            other => other.supports_incremental_stream() && !extractive_forced,
-        });
+        let use_provider_stream = provider
+            .as_ref()
+            .is_some_and(|p| uses_incremental_provider_stream(p, extractive_forced));
 
         if use_provider_stream {
             if let Some(chat) = provider.as_ref() {
@@ -510,6 +521,7 @@ async fn run_producer(
                             match item {
                                 Ok(token) => {
                                     streamed_any = true;
+                                    emitted_answer.push_str(&token);
                                     provider_usage = Some(
                                         provider_usage
                                             .unwrap_or(0)
@@ -567,17 +579,80 @@ async fn run_producer(
                     }
                 }
             }
-        } else if extractive_forced && allow_unverified_llm_runtime() && !hits.is_empty() {
+        } else if allow_unverified_llm_runtime() && !hits.is_empty() {
+            // Dev-gate: buffered grounded `complete()` mirroring JSON `POST /ask`
+            // exactly (`resolve_llm_answer` applies byte-identical fail-closed /
+            // unverified policy). Default deployments never enter this branch.
             if let Some(chat) = provider.as_ref() {
                 let hybrid = hits_to_hybrid(&hits);
                 let messages = build_grounded_messages(&question, &hybrid, &mode);
-                match chat.complete(&messages).await {
-                    Ok(llm_answer) => {
-                        // Consumed even when validation later discards the answer.
-                        provider_usage = Some(llm_answer.chars().count());
+                // OpenRouter chập chờn theo đợt (429/5xx); retry backoff 2s rồi 5s
+                // cứu phần lớn request. Timeout retry đúng MỘT lần (lần backoff
+                // đầu): keepalive bên dưới đã giữ live-tail mở nên một chu kỳ
+                // timeout nữa không làm client rớt; eval 2026-08-16 cho thấy
+                // timeout theo đợt ngắn là nguồn fallback_extractive lớn nhất.
+                // Trong lúc chờ `complete()`, persist một `ask.token` rỗng mỗi
+                // 20s: vô hình với client nhưng reset đồng hồ idle của
+                // live-tail (bằng chứng eval v7: chuỗi embed chậm + provider
+                // timeout kéo 92–109s làm tail đóng ở 60s, client nhận rỗng).
+                let complete_with_keepalive =
+                    |request: crate::services::qa::prompt::GroundedMessages| {
+                        let append = &append;
+                        async move {
+                            let call = chat.complete(&request);
+                            tokio::pin!(call);
+                            let mut keepalive = tokio::time::interval(Duration::from_secs(20));
+                            keepalive.tick().await; // tick đầu hoàn thành ngay — bỏ qua
+                            loop {
+                                tokio::select! {
+                                    result = &mut call => break result,
+                                    _ = keepalive.tick() => {
+                                        let _ = append("ask.token", json!({ "text": "" })).await;
+                                    }
+                                }
+                            }
+                        }
+                    };
+                let mut outcome = complete_with_keepalive(messages.clone()).await;
+                for (attempt, backoff_secs) in [2u64, 5].into_iter().enumerate() {
+                    let retryable = matches!(
+                        outcome,
+                        Err(ref error) if !matches!(error, ProviderError::Timeout) || attempt == 0
+                    );
+                    if !retryable || cancel.is_cancelled() {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                    outcome = complete_with_keepalive(messages.clone()).await;
+                }
+                match outcome {
+                    Ok(mut llm_answer) => {
+                        let mut consumed = llm_answer.chars().count();
                         let valid_ids = valid_citation_ids(hybrid.len());
-                        // Same policy helper as the JSON ask() route — identical
-                        // fail-closed / dev-gate / validation semantics.
+                        // Draft không có [CITE- chắc chắn rớt validation → P0.2
+                        // auto-attach trước, chỉ nhắc model đúng MỘT lần khi
+                        // auto-attach không cứu được (giống JSON ask()).
+                        if draft_needs_citation_retry(&llm_answer) && !cancel.is_cancelled() {
+                            if let Some(saved) = attach_citations_to_uncited_lines(
+                                &llm_answer,
+                                &valid_ids,
+                                &citations,
+                                &mode,
+                            ) {
+                                warnings.push(citation_auto_attach_warning(saved.attached));
+                                llm_answer = saved.answer;
+                            } else {
+                                warnings.push(CITATION_RETRY_WARNING.into());
+                                let retry = citation_retry_messages(&messages, &llm_answer);
+                                if let Ok(second) = complete_with_keepalive(retry).await {
+                                    consumed += second.chars().count();
+                                    if second.contains("[CITE-") {
+                                        llm_answer = second;
+                                    }
+                                }
+                            }
+                        }
+                        provider_usage = Some(consumed);
                         let (answer, resolved_mode, extra_warnings) = resolve_llm_answer(
                             llm_answer,
                             &extractive,
@@ -588,23 +663,18 @@ async fn run_producer(
                         );
                         warnings.extend(extra_warnings);
                         answer_mode = resolved_mode;
-                        match resolved_mode {
-                            AnswerMode::LlmUnverified => unverified_answer = Some(answer),
-                            AnswerMode::FallbackExtractive => dev_gate_attempted_and_failed = true,
-                            _ => {}
-                        }
+                        unverified_answer = Some(answer);
                     }
                     Err(ProviderError::Timeout) => {
+                        // Request reached the provider: prompt tokens are spent.
                         provider_usage = Some(0);
                         warnings.push("LLM provider timed out; using extractive fallback.".into());
                         answer_mode = AnswerMode::FallbackExtractive;
-                        dev_gate_attempted_and_failed = true;
                     }
                     Err(_) => {
                         warnings
                             .push("LLM provider unavailable; using extractive fallback.".into());
                         answer_mode = AnswerMode::FallbackExtractive;
-                        dev_gate_attempted_and_failed = true;
                     }
                 }
             }
@@ -627,9 +697,10 @@ async fn run_producer(
                 close(AskStreamStatus::Error, reason).await;
                 return;
             }
+            emitted_answer.push_str(&token);
         }
     } else if !streamed_any || matches!(answer_mode, AnswerMode::FallbackExtractive) {
-        if !assistant_turn && force_extractive_only_runtime() && !dev_gate_attempted_and_failed {
+        if !assistant_turn && force_extractive_only_runtime() {
             warnings.push(
                 "Structured entailment unavailable; fail-closed extractive-only grounding.".into(),
             );
@@ -652,8 +723,11 @@ async fn run_producer(
                 close(AskStreamStatus::Error, reason).await;
                 return;
             }
+            emitted_answer.push_str(&token);
         }
     }
+
+    citations = pins_cited_in_answer(&emitted_answer, citations);
 
     for warning in &warnings {
         if let Err(error) = append("ask.warning", json!({ "message": warning })).await {
@@ -936,7 +1010,9 @@ pub async fn live_tail_ask_session(
                 if session_terminal {
                     return;
                 }
-                if idle_polls >= 150 {
+                // 60s: đủ trùm một chu kỳ provider-timeout 30s + retry + emit
+                // extractive; 30s cũ đóng tail đúng lúc fallback sắp phát.
+                if idle_polls >= 300 {
                     let _ = send_control_closed(&tx, &request_id, "live_tail_timeout").await;
                     return;
                 }

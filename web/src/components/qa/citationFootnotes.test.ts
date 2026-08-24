@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CitationPin } from './CitationCard';
 import {
   buildCitationFootnotes,
+  citationsUsedInAnswer,
   distinctDocumentCount,
   splitAnswerIntoFootnoteSegments,
 } from './citationFootnoteModel';
@@ -59,6 +60,42 @@ describe('splitAnswerIntoFootnoteSegments', () => {
     ]);
   });
 
+  it('maps every pin of the same document to one footnote number', () => {
+    const citations = [
+      pin({ citeId: 'CITE-0001', logicalDocumentId: 'doc-a' }),
+      pin({ citeId: 'CITE-0002', logicalDocumentId: 'doc-a' }),
+      pin({ citeId: 'CITE-0003', logicalDocumentId: 'doc-b' }),
+    ];
+    const segments = splitAnswerIntoFootnoteSegments(
+      'A [CITE-0001] B [CITE-0002] C [CITE-0003]',
+      citations,
+    );
+    expect(segments).toEqual([
+      { kind: 'text', text: 'A ' },
+      { kind: 'footnote', footnoteNumber: 1 },
+      { kind: 'text', text: ' B ' },
+      { kind: 'footnote', footnoteNumber: 1 },
+      { kind: 'text', text: ' C ' },
+      { kind: 'footnote', footnoteNumber: 2 },
+    ]);
+  });
+
+  it('collapses adjacent same-document [CITE] tokens into one marker', () => {
+    const citations = [
+      pin({ citeId: 'CITE-0001', logicalDocumentId: 'doc-a' }),
+      pin({ citeId: 'CITE-0002', logicalDocumentId: 'doc-a' }),
+    ];
+    const segments = splitAnswerIntoFootnoteSegments(
+      'Luật Điện lực [CITE-0001] [CITE-0002] còn lại.',
+      citations,
+    );
+    expect(segments).toEqual([
+      { kind: 'text', text: 'Luật Điện lực ' },
+      { kind: 'footnote', footnoteNumber: 1 },
+      { kind: 'text', text: ' còn lại.' },
+    ]);
+  });
+
   it('returns the whole answer as one text segment when there are no citations at all', () => {
     const segments = splitAnswerIntoFootnoteSegments('Không có trích dẫn nào.', []);
     expect(segments).toEqual([{ kind: 'text', text: 'Không có trích dẫn nào.' }]);
@@ -77,12 +114,18 @@ describe('splitAnswerIntoFootnoteSegments', () => {
 });
 
 describe('buildCitationFootnotes', () => {
-  it('numbers citations 1-based, in their given array order', () => {
-    const citations = [pin({ citeId: 'CITE-0001' }), pin({ citeId: 'CITE-0002' })];
-    expect(buildCitationFootnotes(citations)).toEqual([
-      { n: 1, citation: citations[0] },
-      { n: 2, citation: citations[1] },
-    ]);
+  it('emits one footnote per distinct document, in first-seen order', () => {
+    const citations = [
+      pin({ citeId: 'CITE-0001', logicalDocumentId: 'doc-a', page: 2 }),
+      pin({ citeId: 'CITE-0002', logicalDocumentId: 'doc-a', page: 7 }),
+      pin({ citeId: 'CITE-0003', logicalDocumentId: 'doc-b', page: 1 }),
+    ];
+    const footnotes = buildCitationFootnotes(citations);
+    expect(footnotes).toHaveLength(2);
+    expect(footnotes[0]).toMatchObject({ n: 1, citation: citations[0] });
+    expect(footnotes[0].citations).toEqual([citations[0], citations[1]]);
+    expect(footnotes[1]).toMatchObject({ n: 2, citation: citations[2] });
+    expect(footnotes[1].citations).toEqual([citations[2]]);
   });
 
   it('returns an empty list for no citations', () => {
@@ -113,5 +156,22 @@ describe('distinctDocumentCount', () => {
       pin({ citeId: 'CITE-0002' }),
     ];
     expect(distinctDocumentCount(citations)).toBe(2);
+  });
+});
+
+describe('citationsUsedInAnswer', () => {
+  it('drops pins whose citeId never appears in the answer', () => {
+    const citations = [
+      pin({ citeId: 'CITE-0001', logicalDocumentId: 'thong-tu' }),
+      pin({ citeId: 'CITE-0002', logicalDocumentId: 'thong-tu' }),
+      pin({ citeId: 'CITE-0008', logicalDocumentId: 'e2e-canary' }),
+    ];
+    const kept = citationsUsedInAnswer('Thông tư 36 sửa TT 16 [CITE-0001] [CITE-0002]', citations);
+    expect(kept.map((c) => c.citeId)).toEqual(['CITE-0001', 'CITE-0002']);
+  });
+
+  it('keeps the original list when the answer has no CITE tokens', () => {
+    const citations = [pin({ citeId: 'CITE-0001' }), pin({ citeId: 'CITE-0002' })];
+    expect(citationsUsedInAnswer('Xin chào', citations)).toEqual(citations);
   });
 });

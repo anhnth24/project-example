@@ -19,9 +19,47 @@ export type CitationPin = components['schemas']['CitationPin'];
 
 /** Exported for `CitationFootnotes.tsx` — same "page/slide/sheet, whichever is present" label a footnote item shows, kept in one place rather than duplicated. */
 export function locationLabel(citation: CitationPin): string | null {
-  if (citation.page !== undefined) return `Trang ${citation.page}`;
-  if (citation.slide !== undefined) return `Slide ${citation.slide}`;
-  if (citation.sheet !== undefined) return `Sheet ${citation.sheet}`;
+  return groupedLocationLabel([citation]);
+}
+
+function isFinitePage(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Compact "1, 2, 5–7" from a sorted unique list. */
+export function formatPageRanges(pages: readonly number[]): string {
+  const sorted = [...new Set(pages.filter(isFinitePage))].sort((a, b) => a - b);
+  if (sorted.length === 0) return '';
+  const parts: string[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    let j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === sorted[j] + 1) {
+      j += 1;
+    }
+    parts.push(i === j ? `${sorted[i]}` : `${sorted[i]}–${sorted[j]}`);
+    i = j + 1;
+  }
+  return parts.join(', ');
+}
+
+/** Page/slide/sheet label for one pin or a whole same-document group. `null` page is omitted (never "Trang null"). */
+export function groupedLocationLabel(citations: readonly CitationPin[]): string | null {
+  const pages = citations.map((citation) => citation.page).filter(isFinitePage);
+  if (pages.length > 0) {
+    return `Trang ${formatPageRanges(pages)}`;
+  }
+  const slides = citations.map((citation) => citation.slide).filter(isFinitePage);
+  if (slides.length > 0) {
+    const ranges = formatPageRanges(slides);
+    return `Slide ${ranges}`;
+  }
+  const sheets = citations
+    .map((citation) => citation.sheet)
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (sheets.length > 0) {
+    return `Sheet ${[...new Set(sheets)].join(', ')}`;
+  }
   return null;
 }
 
@@ -36,10 +74,8 @@ export function CitationCard({ citation }: { citation: CitationPin }) {
   const location = locationLabel(citation);
   const deepLinkable = hasDeepLink(citation);
   return (
-    <li className="card" style={{ padding: 'var(--space-3)' }}>
-      <div
-        style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}
-      >
+    <li className="chat-citation-card">
+      <div className="chat-footnote-row">
         <span className="tag tag-outline">{citation.citeId}</span>
         {citation.isCurrent === false && (
           <span className="tag tag-neutral" title="Trích dẫn từ phiên bản không phải bản mới nhất">
@@ -57,9 +93,7 @@ export function CitationCard({ citation }: { citation: CitationPin }) {
           </RouteLink>
         )}
       </div>
-      <blockquote style={{ margin: 'var(--space-2) 0 0', fontStyle: 'italic' }}>
-        “{citation.quote}”
-      </blockquote>
+      <blockquote className="chat-footnote-quote">“{citation.quote}”</blockquote>
     </li>
   );
 }

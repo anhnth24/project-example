@@ -118,9 +118,15 @@ export function MemberRowActions({
   const removeErrorOwnerTier = membership.role === 'owner';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', minWidth: 0 }}>
       <div
-        style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-2)',
+          flexWrap: 'wrap',
+          minWidth: 0,
+        }}
       >
         <SelectControl
           value={membership.role}

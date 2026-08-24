@@ -35,7 +35,11 @@ có giao điểm ở cả hai bên:
   locate_chunk_span, locate_chunk_text}`, `intelligence::normalize_search_text`,
   `embedding_runtime` — không qua HTTP; **riêng job nặng (convert/index/embedding)**
   chạy trong **worker** riêng, worker gọi converter path bằng cách spawn subprocess
-  `fileconv` CLI (mà CLI đó path-dep `fileconv-core` để convert).
+  `fileconv` CLI (mà CLI đó path-dep `fileconv-core` để convert). Convert worker
+  chuẩn hoá Markdown sau OCR (sửa ký tự, nối dòng bẻ giữa câu, thăng cấp heading
+  Điều/Chương) TRƯỚC khi hash/lưu artifact và chunk — xem module doc
+  `crates/server/src/services/ocr_normalize.rs` cho lý do bước này nằm ở server
+  thay vì `fileconv-core`.
   Luồng Markhand Web này **cần Compose** (`deploy/dev/compose.yml`, xem
   [`runbooks/local-development.md`](runbooks/local-development.md)) để
   dựng PostgreSQL/Qdrant/MinIO cho phát triển local; phát triển CLI/desktop

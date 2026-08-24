@@ -18,6 +18,7 @@ import {
 } from '../../state/askStream';
 import { AnswerText } from './AnswerText';
 import { CitationFootnotes } from './CitationFootnotes';
+import { citationsUsedInAnswer } from './citationFootnoteModel';
 import { TurnModeBadge, TurnWarningBlocks } from './TurnAnswerMeta';
 import { useAskStream } from './useAskStream';
 
@@ -60,16 +61,14 @@ export function ChatTurnBubble({
 }) {
   const { state, ask, reset } = useAskStream(client.tokenProvider);
 
-  // Kick off exactly once for this turn's whole lifetime: `request` never
-  // changes after a bubble is created (a new turn always gets a brand-new
-  // `ChatTurnBubble`, keyed by turn id in `ChatPanel`), so this must not
-  // re-fire on re-render — a `useRef` guard rather than a `[request]` dep
-  // array, since re-running `ask()` would restart the same turn's stream.
-  const startedRef = useRef(false);
+  // Kick off on mount and abort on unmount. React Strict Mode remounts in
+  // development; without cleanup the first stream can finish alongside the
+  // remounted one and persist the same question twice.
   useEffect(() => {
-    if (startedRef.current) return;
-    startedRef.current = true;
     ask(request);
+    return () => {
+      reset();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -99,6 +98,7 @@ export function ChatTurnBubble({
   }, []);
 
   const display = cancelled && frozen ? frozen : state;
+  const visibleCitations = citationsUsedInAnswer(display.answer, display.citations);
   const isDone =
     display.status === 'completed' || display.status === 'revoked' || display.status === 'error';
 
@@ -110,60 +110,64 @@ export function ChatTurnBubble({
     onStatusChange?.(reported, {
       answer: display.answer,
       answerMode: display.answerMode,
-      citations: display.citations,
+      citations: visibleCitations,
       warnings: display.warnings,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.status, cancelled]);
 
   return (
-    <div className="chat-turn" style={{ display: 'grid', gap: 'var(--space-3)' }}>
-      <p style={{ margin: 0 }}>
-        <span className="tag tag-outline">Bạn</span>{' '}
-        <span style={{ fontWeight: 600 }}>{question}</span>
-      </p>
-
-      <div aria-live="polite" role="status" style={{ display: 'grid', gap: 'var(--space-2)' }}>
-        <p style={{ margin: 0 }}>
-          <span className="tag tag-outline">Trợ lý</span>
+    <div className="chat-turn">
+      <div className="chat-turn-question">
+        <p className="chat-bubble chat-bubble-user">
+          <span className="visually-hidden">Bạn </span>
+          {question}
         </p>
-        {isDone && !cancelled && <TurnModeBadge answerMode={display.answerMode} />}
-        {!cancelled && display.status === 'streaming' && !display.answer && (
-          <p className="text-muted" style={{ margin: 0 }}>
-            Đang tạo câu trả lời…
-          </p>
-        )}
-        {display.answer && (
-          <AnswerText text={display.answer} citations={display.citations} scopeId={turnId} />
-        )}
-        {cancelled && (
-          <Notice tone="info">
-            Đã hủy câu trả lời này — nội dung phía trên (nếu có) có thể chưa đầy đủ.
-          </Notice>
-        )}
-        {!cancelled && display.status === 'revoked' && (
-          <Notice tone="warning">
-            Trích dẫn đã bị thu hồi giữa chừng — câu trả lời phía trên có thể không đầy đủ.{' '}
-            {describeAskStreamError(display.errorReason)}
-          </Notice>
-        )}
-        {!cancelled && display.status === 'error' && (
-          <Notice tone="error">{describeAskStreamError(display.errorReason)}</Notice>
-        )}
+      </div>
+
+      <div className="chat-turn-answer" aria-live="polite" role="status">
+        <p className="visually-hidden">Trợ lý</p>
+        <div className="chat-bubble chat-bubble-assistant">
+          {isDone && !cancelled && <TurnModeBadge answerMode={display.answerMode} />}
+          {!cancelled &&
+            !display.answer &&
+            (display.status === 'idle' || display.status === 'streaming') && (
+              <p className="text-muted" style={{ margin: 0 }} role="status">
+                Đang tìm kiếm thông tin liên quan…
+              </p>
+            )}
+          {display.answer && (
+            <AnswerText text={display.answer} citations={visibleCitations} scopeId={turnId} />
+          )}
+          {cancelled && (
+            <Notice tone="info">
+              Đã hủy câu trả lời này — nội dung phía trên (nếu có) có thể chưa đầy đủ.
+            </Notice>
+          )}
+          {!cancelled && display.status === 'revoked' && (
+            <Notice tone="warning">
+              Trích dẫn đã bị thu hồi giữa chừng — câu trả lời phía trên có thể không đầy đủ.{' '}
+              {describeAskStreamError(display.errorReason)}
+            </Notice>
+          )}
+          {!cancelled && display.status === 'error' && (
+            <Notice tone="error">{describeAskStreamError(display.errorReason)}</Notice>
+          )}
+        </div>
       </div>
 
       {display.notices.map((notice, i) => (
-        <p key={i} className="text-muted" role="status">
+        <p key={i} className="text-muted chat-turn-extra" role="status">
           {notice}
         </p>
       ))}
 
       {display.versionContext?.changeNote && (
-        <p className="text-muted">{display.versionContext.changeNote}</p>
+        <p className="text-muted chat-turn-extra">{display.versionContext.changeNote}</p>
       )}
 
       <CitationFootnotes
-        citations={display.citations}
+        citations={visibleCitations}
         collectionNameById={collectionNameById}
         scopeId={turnId}
       />

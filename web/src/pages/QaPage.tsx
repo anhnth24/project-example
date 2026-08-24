@@ -118,7 +118,7 @@ export function QaPage({
         ))}
       </div>
 
-      <div style={{ display: 'flex', gap: 'var(--space-4)', alignItems: 'flex-start' }}>
+      <div className="qa-workspace">
         {activeTab === 'chat' && (
           <ChatHistorySidebar
             collapsed={sidebarCollapsed}
@@ -139,7 +139,7 @@ export function QaPage({
           />
         )}
 
-        <div style={{ flex: 1, minWidth: 0, display: 'grid', gap: 'var(--space-3)' }}>
+        <div className="qa-workspace-main">
           {history.appendError && (
             <p className="notice notice-info" role="status">
               {history.appendError}{' '}
