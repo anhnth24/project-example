@@ -4,6 +4,10 @@ import { useAuth } from '../auth/AuthContext';
 import { Button, Notice } from '../components/ui';
 import brandMarkWhite from '../assets/brand/folyvo-mark-white.svg';
 
+const isMockBuild = Boolean(import.meta.env.VITE_MARKHAND_MOCK);
+const MOCK_DEMO_EMAIL = 'demo@markhand.test';
+const MOCK_DEMO_PASSWORD = 'demo-password';
+
 function messageFor(cause: unknown): string {
   if (cause instanceof HttpApiError && cause.status === 401) {
     return 'Email hoặc mật khẩu không đúng.';
@@ -69,6 +73,27 @@ export function LoginPage() {
           </p>
 
           {error && <Notice tone="error">{error}</Notice>}
+
+          {isMockBuild && (
+            <Notice
+              tone="info"
+              action={
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    setEmail(MOCK_DEMO_EMAIL);
+                    setPassword(MOCK_DEMO_PASSWORD);
+                    setError(null);
+                  }}
+                >
+                  Điền demo
+                </Button>
+              }
+            >
+              Chế độ mock — dùng <strong>{MOCK_DEMO_EMAIL}</strong> / <strong>{MOCK_DEMO_PASSWORD}</strong>
+            </Notice>
+          )}
 
           <form className="auth-form" onSubmit={(event) => void handleSubmit(event)} noValidate>
             <div className="field">
