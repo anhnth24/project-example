@@ -29,6 +29,7 @@ web/dist/
 !README.md
 !CLAUDE.md
 !CONTRIBUTING.md
+!REVIEW_ISSUES_34_35.md
 pdfium/
 # Linux PDFium for WSL dev (Windows build lives in pdfium/)
 pdfium-linux/
