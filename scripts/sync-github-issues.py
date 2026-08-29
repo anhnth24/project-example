@@ -36,6 +36,7 @@ PHASE_LABELS = {
     "1B": ("web-p1b", "Phase 1B — Single-org POC"),
     "1C": ("web-p1c", "Phase 1C — Multi-org Security"),
     "2": ("web-p2", "Phase 2 — Web SPA MVP"),
+    "2Q": ("web-p2q", "Phase 2Q — QA Quality"),
     "3": ("web-p3", "Phase 3 — Document Intelligence"),
     "4": ("web-p4", "Phase 4 — Production Hardening"),
 }
