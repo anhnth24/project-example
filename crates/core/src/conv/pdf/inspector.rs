@@ -25,24 +25,41 @@ const PARALLEL_MIN_CPUS: usize = 5;
 pub(super) enum InspectorAttempt {
     Success(MarkdownOutput),
     Abandoned { pages_needing_ocr: HashSet<u32> },
-    Unavailable,
 }
 
-pub(super) fn probe_pages_needing_ocr(bytes: &[u8], pages: Option<&[u32]>) -> HashSet<u32> {
-    let pages0: Option<Vec<u32>> =
-        pages.map(|ps| ps.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect());
-    let Some(res) = catch_unwind(AssertUnwindSafe(|| {
+fn user_pages_to_inspector(pages: Option<&[u32]>) -> Option<Vec<u32>> {
+    pages.map(|ps| ps.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect())
+}
+
+/// Single pdf-inspector extract (panic-safe). Shared by probe and the main path.
+pub(super) fn extract_pages_markdown_mem(
+    bytes: &[u8],
+    pages: Option<&[u32]>,
+) -> Option<pdf_inspector::PagesExtractionResult> {
+    let pages0 = user_pages_to_inspector(pages);
+    catch_unwind(AssertUnwindSafe(|| {
         pdf_inspector::extract_pages_markdown_mem(bytes, pages0.as_deref())
     }))
+    .ok()?
     .ok()
-    .and_then(|r| r.ok()) else {
-        return HashSet::new();
-    };
+}
+
+pub(super) fn pages_needing_ocr_from_extract(
+    res: &pdf_inspector::PagesExtractionResult,
+) -> HashSet<u32> {
     res.pages
-        .into_iter()
+        .iter()
         .filter(|page| page.needs_ocr)
         .map(|page| page.page + 1)
         .collect()
+}
+
+/// Probe which pages need OCR (tests + fallback diagnostics).
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn probe_pages_needing_ocr(bytes: &[u8], pages: Option<&[u32]>) -> HashSet<u32> {
+    extract_pages_markdown_mem(bytes, pages)
+        .map(|res| pages_needing_ocr_from_extract(&res))
+        .unwrap_or_default()
 }
 
 pub(super) fn parse_marked_pages(markdown: &str) -> HashMap<u32, String> {
@@ -312,7 +329,7 @@ pub(super) fn via_pdf_inspector_parallel_full(path: &Path, bytes: &[u8]) -> Opti
 #[allow(clippy::too_many_arguments)] // Explicit conversion controls are safer at this module boundary.
 pub(super) fn via_pdf_inspector(
     path: &Path,
-    bytes: &[u8],
+    prefetched: pdf_inspector::PagesExtractionResult,
     langs: &str,
     ocr_enabled: bool,
     ocr_images: bool,
@@ -320,26 +337,10 @@ pub(super) fn via_pdf_inspector(
     ocr_config: &OcrRunConfig,
     last_ocr_error: &mut Option<OcrAttemptError>,
 ) -> InspectorAttempt {
-    // pages 1-indexed từ người dùng → 0-indexed cho pdf-inspector.
-    let pages0: Option<Vec<u32>> =
-        pages.map(|ps| ps.iter().filter(|&&p| p >= 1).map(|&p| p - 1).collect());
-    // lopdf structure extraction and PDFium native-text extraction are
-    // independent. Run them concurrently so documents that need native table
-    // rescue pay the slower stage, not the sum of both stages.
-    let Some((res, native_pages)) = std::thread::scope(|scope| {
-        let inspector = scope.spawn(|| {
-            catch_unwind(AssertUnwindSafe(|| {
-                pdf_inspector::extract_pages_markdown_mem(bytes, pages0.as_deref())
-            }))
-            .ok()?
-            .ok()
-        });
-        let native_pages = native_text_for_requested_pages(path, pages);
-        let res = inspector.join().ok().flatten()?;
-        Some((res, native_pages))
-    }) else {
-        return InspectorAttempt::Unavailable;
-    };
+    // Native text is independent of the prefetched inspector result; no second
+    // `extract_pages_markdown_mem` call on the slow path.
+    let res = prefetched;
+    let native_pages = native_text_for_requested_pages(path, pages);
 
     let pages_needing_ocr: HashSet<u32> = res
         .pages
