@@ -13,7 +13,7 @@
 // rendering idiom `ChatPanel.tsx`'s own `chat`/`scope` state already uses —
 // an org switch must never leave the sidebar pointed at a session id (or a
 // page of titles) that belonged to the org just left.
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiClient, type ApiClient } from '../../api/client';
 import type { components } from '../../api/generated/contract';
 import { useScopeSafeRequest } from '../../hooks/useScopeSafeRequest';
@@ -260,7 +260,9 @@ export function useChatHistory(client: ApiClient = apiClient): UseChatHistoryRes
   // --- Recording a settled live turn ----------------------------------------
   const [appendError, setAppendError] = useState<string | undefined>(undefined);
   const activeSessionIdRef = useRef(activeSessionId);
-  activeSessionIdRef.current = activeSessionId;
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
   const recordChainRef = useRef(Promise.resolve());
 
   function recordTurn(turn: RecordableTurn): void {
