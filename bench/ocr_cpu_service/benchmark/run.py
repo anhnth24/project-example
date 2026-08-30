@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import select
@@ -83,12 +84,41 @@ class CandidateOutputLimitError(RuntimeError):
     """A candidate exceeded its hard stdout or stderr cap."""
 
 
+class CandidateResourceLimitError(RuntimeError):
+    """A candidate process tree reached its hard RSS cap."""
+
+    error_kind = "resource_limit"
+
+
+class CandidateResourceSamplingError(RuntimeError):
+    """A candidate process tree could not be sampled safely."""
+
+    error_kind = "resource_sampling"
+
+
+class CandidateWorkerProtocolError(RuntimeError):
+    """A candidate worker returned malformed sanitized metadata."""
+
+    error_kind = "worker_protocol"
+
+
+class CandidateWorkerCleanupError(RuntimeError):
+    """A candidate worker required forced cleanup after a close fault."""
+
+    error_kind = "worker_cleanup"
+
+
 class Candidate(Protocol):
     id: str
     label: str
     metadata: dict[str, Any]
 
-    def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
+    def recognize(
+        self,
+        page: BenchmarkPage,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> RecognitionMeasurement:
         """Recognize one page with explicit timing and RSS semantics."""
 
 
@@ -131,17 +161,13 @@ def _fileconv_provenance(fileconv: Path) -> dict[str, Any]:
 
 
 def _process_tree_rss(process: psutil.Process) -> int:
-    processes = [process]
-    try:
-        processes.extend(process.children(recursive=True))
-    except (psutil.Error, ProcessLookupError):
-        pass
-    total = 0
-    for item in processes:
+    total = process.memory_info().rss
+    descendants = process.children(recursive=True)
+    for item in descendants:
         try:
             total += item.memory_info().rss
-        except (psutil.Error, ProcessLookupError):
-            pass
+        except (psutil.NoSuchProcess, psutil.ZombieProcess, ProcessLookupError):
+            continue
     return total
 
 
@@ -179,22 +205,78 @@ def _terminate_process_group(
     process.wait()
 
 
+def _process_group_and_root_gone(process: subprocess.Popen[str]) -> bool:
+    root_gone = process.poll() is not None
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        group_gone = True
+    except (OSError, ValueError):
+        group_gone = False
+    else:
+        group_gone = False
+    return root_gone and group_gone
+
+
+def _kill_process_group_and_verify(
+    process: subprocess.Popen[str],
+    *,
+    wait_seconds: float = 0.5,
+) -> bool:
+    """Independently SIGKILL, reap, and verify a worker session is gone."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except (OSError, ValueError):
+        return False
+
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while True:
+        try:
+            process.wait(timeout=max(0.0, min(0.05, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return False
+        if _process_group_and_root_gone(process):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def _read_event_with_process_tree_rss(
     process: subprocess.Popen[str],
     *,
     timeout_seconds: float,
+    max_rss_bytes: int,
     sample_interval_seconds: float = 0.01,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Read one worker event while sampling the complete descendant tree."""
     if process.stdout is None:
         raise ValueError("worker stdout must be piped")
+    if max_rss_bytes <= 0:
+        raise ValueError("max_rss_bytes must be positive")
     started = time.perf_counter()
-    monitored = psutil.Process(process.pid)
+    try:
+        monitored = psutil.Process(process.pid)
+    except (psutil.Error, ProcessLookupError):
+        _terminate_process_group(process)
+        raise CandidateResourceSamplingError from None
     peak_rss = 0
     sample_count = 0
     while True:
-        peak_rss = max(peak_rss, _process_tree_rss(monitored))
+        try:
+            sampled_rss = _process_tree_rss(monitored)
+        except (psutil.Error, ProcessLookupError):
+            _terminate_process_group(process)
+            raise CandidateResourceSamplingError from None
+        peak_rss = max(peak_rss, sampled_rss)
         sample_count += 1
+        if sampled_rss >= max_rss_bytes:
+            _terminate_process_group(process)
+            raise CandidateResourceLimitError from None
         elapsed = time.perf_counter() - started
         if elapsed > timeout_seconds:
             _terminate_process_group(process)
@@ -226,6 +308,49 @@ def _read_event_with_process_tree_rss(
             raise RuntimeError("candidate worker exited without an event")
 
 
+def _validated_resource_measurement(resource: object) -> dict[str, Any]:
+    if not isinstance(resource, dict):
+        raise CandidateWorkerProtocolError
+    required = {
+        "method",
+        "peak_rss_bytes",
+        "sample_count",
+        "sample_interval_seconds",
+        "wall_seconds",
+    }
+    if set(resource) != required:
+        raise CandidateWorkerProtocolError
+    peak_rss = resource["peak_rss_bytes"]
+    sample_count = resource["sample_count"]
+    sample_interval = resource["sample_interval_seconds"]
+    wall_seconds = resource["wall_seconds"]
+    if (
+        resource["method"] != "sampled_process_tree_rss"
+        or not isinstance(peak_rss, int)
+        or isinstance(peak_rss, bool)
+        or peak_rss < 0
+        or not isinstance(sample_count, int)
+        or isinstance(sample_count, bool)
+        or sample_count <= 0
+        or isinstance(sample_interval, bool)
+        or not isinstance(sample_interval, (int, float))
+        or not math.isfinite(float(sample_interval))
+        or sample_interval <= 0
+        or isinstance(wall_seconds, bool)
+        or not isinstance(wall_seconds, (int, float))
+        or not math.isfinite(float(wall_seconds))
+        or wall_seconds < 0
+    ):
+        raise CandidateWorkerProtocolError
+    return {
+        "method": "sampled_process_tree_rss",
+        "peak_rss_bytes": peak_rss,
+        "sample_count": sample_count,
+        "sample_interval_seconds": float(sample_interval),
+        "wall_seconds": float(wall_seconds),
+    }
+
+
 class IsolatedCandidateWorker:
     """One candidate in a dedicated, consistently monitored process session."""
 
@@ -237,15 +362,19 @@ class IsolatedCandidateWorker:
         command: list[str],
         environment: dict[str, str],
         timeout_seconds: float,
+        max_rss_bytes: int,
         max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
         command_description: str = "isolated candidate worker",
         provenance: dict[str, Any] | None = None,
     ) -> None:
         if max_output_bytes <= 0:
             raise ValueError("max_output_bytes must be positive")
+        if max_rss_bytes <= 0:
+            raise ValueError("max_rss_bytes must be positive")
         self.id = candidate_id
         self.label = label
         self._timeout_seconds = timeout_seconds
+        self._max_rss_bytes = max_rss_bytes
         self._closed = False
         process_invoked = time.perf_counter()
         self._process = subprocess.Popen(
@@ -258,34 +387,76 @@ class IsolatedCandidateWorker:
             env=environment,
             start_new_session=True,
         )
-        event, resource = _read_event_with_process_tree_rss(
-            self._process, timeout_seconds=timeout_seconds
-        )
-        cold_wall_seconds = time.perf_counter() - process_invoked
-        if event.get("event") != "ready":
-            self.close()
-            raise RuntimeError("candidate worker did not become ready")
-        self.metadata = {
-            "worker_command": command_description,
-            "environment_variable_names": sorted(environment),
-            "output_limits": {
-                "stdout_bytes": max_output_bytes,
-                "stderr_bytes": max_output_bytes,
-                "enforcement": "temporary_files_with_inherited_RLIMIT_FSIZE",
-            },
-            "cold_initialization": {
-                "candidate_seconds": event["candidate_seconds"],
-                "wall_seconds": cold_wall_seconds,
-                "timing_scope": "worker_process_invocation_to_ready",
-                "process_startup_included": True,
-                "rss_measurement": resource,
-            },
-            **_json_compatible(provenance or {}),
-        }
+        try:
+            event, resource = _read_event_with_process_tree_rss(
+                self._process,
+                timeout_seconds=timeout_seconds,
+                max_rss_bytes=max_rss_bytes,
+            )
+            cold_wall_seconds = time.perf_counter() - process_invoked
+            if event.get("event") != "ready":
+                raise CandidateWorkerProtocolError
+            candidate_seconds = event.get("candidate_seconds")
+            if (
+                isinstance(candidate_seconds, bool)
+                or not isinstance(candidate_seconds, (int, float))
+                or not math.isfinite(float(candidate_seconds))
+                or candidate_seconds < 0
+            ):
+                raise CandidateWorkerProtocolError
+            resource = _validated_resource_measurement(resource)
+            self.metadata = {
+                "worker_command": command_description,
+                "environment_variable_names": sorted(environment),
+                "output_limits": {
+                    "stdout_bytes": max_output_bytes,
+                    "stderr_bytes": max_output_bytes,
+                    "enforcement": "bounded_pipes_with_process_tree_termination",
+                },
+                "rss_limit": {
+                    "max_rss_bytes": max_rss_bytes,
+                    "enforcement": "hard_sampled_process_tree_termination",
+                },
+                "cold_initialization": {
+                    "candidate_seconds": float(candidate_seconds),
+                    "wall_seconds": cold_wall_seconds,
+                    "timing_scope": "worker_process_invocation_to_ready",
+                    "process_startup_included": True,
+                    "rss_measurement": resource,
+                },
+                **_json_compatible(provenance or {}),
+            }
+        except BaseException:
+            try:
+                _terminate_process_group(self._process)
+            except (OSError, ValueError, subprocess.SubprocessError):
+                _kill_process_group_and_verify(self._process)
+            self._closed = _process_group_and_root_gone(self._process)
+            raise
 
-    def recognize(self, page: BenchmarkPage) -> RecognitionMeasurement:
+    def recognize(
+        self,
+        page: BenchmarkPage,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> RecognitionMeasurement:
         if self._process.stdin is None:
             raise RuntimeError("candidate worker stdin is unavailable")
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or timeout_seconds <= 0
+        ):
+            raise ValueError("timeout_seconds must be finite and positive")
+        effective_timeout = min(
+            self._timeout_seconds,
+            (
+                float(timeout_seconds)
+                if timeout_seconds is not None
+                else self._timeout_seconds
+            ),
+        )
         self._process.stdin.write(
             json.dumps(
                 {
@@ -298,44 +469,108 @@ class IsolatedCandidateWorker:
         )
         self._process.stdin.flush()
         event, resource = _read_event_with_process_tree_rss(
-            self._process, timeout_seconds=self._timeout_seconds
+            self._process,
+            timeout_seconds=effective_timeout,
+            max_rss_bytes=self._max_rss_bytes,
         )
         if event.get("event") == "failure":
             if event.get("error_kind") == "output_limit":
                 raise CandidateOutputLimitError
             raise RuntimeError("candidate worker reported a sanitized failure")
         if event.get("event") != "result":
-            raise RuntimeError("candidate worker returned an invalid event")
+            raise CandidateWorkerProtocolError
+        text = event.get("text")
+        candidate_seconds = event.get("candidate_seconds")
+        if (
+            not isinstance(text, str)
+            or isinstance(candidate_seconds, bool)
+            or not isinstance(candidate_seconds, (int, float))
+            or not math.isfinite(float(candidate_seconds))
+            or candidate_seconds < 0
+        ):
+            raise CandidateWorkerProtocolError
         return RecognitionMeasurement(
-            text=event["text"],
-            candidate_seconds=event["candidate_seconds"],
-            resource=resource,
+            text=text,
+            candidate_seconds=float(candidate_seconds),
+            resource=_validated_resource_measurement(resource),
         )
 
-    def close(self) -> None:
+    def close(self, *, timeout_seconds: float | None = None) -> None:
         if self._closed:
             return
+        if timeout_seconds is not None and (
+            isinstance(timeout_seconds, bool)
+            or not isinstance(timeout_seconds, (int, float))
+            or not math.isfinite(float(timeout_seconds))
+            or timeout_seconds < 0
+        ):
+            raise ValueError("timeout_seconds must be finite and nonnegative")
+        cleanup_deadline = (
+            time.monotonic() + float(timeout_seconds)
+            if timeout_seconds is not None
+            else None
+        )
+        close_fault = False
         try:
             if self._process.poll() is None:
                 if self._process.stdin is not None:
                     try:
                         self._process.stdin.write('{"event":"shutdown"}\n')
                         self._process.stdin.flush()
-                    except BrokenPipeError:
-                        pass
+                    except (BrokenPipeError, OSError, ValueError):
+                        close_fault = True
                 try:
-                    self._process.wait(timeout=5)
+                    graceful_timeout = 5.0
+                    if cleanup_deadline is not None:
+                        graceful_timeout = min(
+                            graceful_timeout,
+                            max(0.0, cleanup_deadline - time.monotonic()),
+                        )
+                    self._process.wait(timeout=graceful_timeout)
                 except subprocess.TimeoutExpired:
                     pass
-            _terminate_process_group(self._process)
+        except (OSError, ValueError):
+            close_fault = True
         finally:
+            try:
+                grace_seconds = 0.5
+                if cleanup_deadline is not None:
+                    grace_seconds = min(
+                        grace_seconds,
+                        max(0.0, cleanup_deadline - time.monotonic()),
+                    )
+                _terminate_process_group(
+                    self._process,
+                    grace_seconds=grace_seconds,
+                )
+            except (OSError, ValueError, subprocess.SubprocessError):
+                close_fault = True
+            finally:
+                self._closed = self._process.poll() is not None
+        if close_fault or not _process_group_and_root_gone(self._process):
+            fallback_succeeded = _kill_process_group_and_verify(self._process)
+            self._closed = fallback_succeeded
+        else:
+            fallback_succeeded = True
+        if not fallback_succeeded:
+            raise CandidateWorkerCleanupError from None
+
+    def force_kill(self) -> None:
+        """Kill and verify this worker without relying on graceful close."""
+        if _process_group_and_root_gone(self._process):
             self._closed = True
+            return
+        if not _kill_process_group_and_verify(self._process):
+            self._closed = False
+            raise CandidateWorkerCleanupError from None
+        self._closed = True
 
 
 def _isolated_worker(
     spec: CommandCandidateSpec,
     *,
     timeout_seconds: float,
+    max_rss_bytes: int,
     max_output_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
 ) -> IsolatedCandidateWorker:
     return IsolatedCandidateWorker(
@@ -352,6 +587,7 @@ def _isolated_worker(
         ],
         environment=dict(spec.environment),
         timeout_seconds=timeout_seconds,
+        max_rss_bytes=max_rss_bytes,
         max_output_bytes=max_output_bytes,
         command_description="python -m benchmark.worker --argv-json <candidate argv>",
         provenance=_json_compatible(spec.provenance),
@@ -370,6 +606,7 @@ def run_candidate(
     candidate = _isolated_worker(
         spec,
         timeout_seconds=timeout_seconds,
+        max_rss_bytes=max_rss_bytes,
         max_output_bytes=max_output_bytes,
     )
     try:
@@ -417,7 +654,7 @@ def _run_candidate(
                 candidate_seconds=measurement.candidate_seconds,
                 peak_rss_bytes=peak_rss,
                 rss_measurement=measurement.resource,
-                resource_limit_violation=peak_rss > max_rss_bytes,
+                resource_limit_violation=peak_rss >= max_rss_bytes,
             )
             if page.reference is not None:
                 counts = error_counts(page.reference, measurement.text)
@@ -447,6 +684,9 @@ def _run_candidate(
             record["error_kind"] = "timeout"
         except CandidateOutputLimitError:
             record["error_kind"] = "output_limit"
+        except (CandidateResourceLimitError, CandidateResourceSamplingError):
+            record["error_kind"] = "resource_limit"
+            record["resource_limit_violation"] = True
         except Exception:
             record["error_kind"] = "candidate_error"
         records.append(record)
@@ -584,16 +824,18 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                         ),
                         "rss": (
                             "10 ms sampled sum of worker and descendant RSS; "
-                            "max_rss_bytes is a measured gate, not an OS limit"
+                            "RSS at or above max_rss_bytes immediately "
+                            "terminates the worker process group"
                         ),
                         "output": (
-                            "stdout and stderr use hard per-stream RLIMIT_FSIZE "
-                            "bounds backed by temporary files"
+                            "stdout and stderr use hard per-stream bounded-pipe "
+                            "collection with process-tree termination"
                         ),
                     },
                 },
             ),
             timeout_seconds=args.timeout_seconds,
+            max_rss_bytes=args.max_rss_bytes,
             max_output_bytes=args.max_output_bytes,
         )
         try:
@@ -624,7 +866,7 @@ def run_benchmark(args: argparse.Namespace) -> dict[str, Any]:
                 "logical_cpus": psutil.cpu_count(logical=True),
                 "memory_bytes": memory.total,
                 "max_rss_bytes": args.max_rss_bytes,
-                "max_rss_enforcement": "measured_gate_only_not_os_enforced",
+                "max_rss_enforcement": "hard_sampled_process_tree_termination",
             },
             "versions": {
                 "cargo": _command_version(["cargo", "--version"]),

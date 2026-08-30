@@ -306,6 +306,7 @@ mod tests {
             },
             OcrRunConfig {
                 tesseract_binary: Some(missing_tesseract_bin()),
+                ..OcrRunConfig::default()
             },
         )
         .convert_path_detailed(&fixture)
@@ -339,6 +340,7 @@ mod tests {
                         },
                         OcrRunConfig {
                             tesseract_binary: Some(missing_tesseract_bin()),
+                            ..OcrRunConfig::default()
                         },
                     )
                     .convert_path_detailed(path.as_path())
@@ -406,6 +408,7 @@ mod tests {
             },
             OcrRunConfig {
                 tesseract_binary: Some(missing_tesseract_bin()),
+                ..OcrRunConfig::default()
             },
         )
         .convert_path_detailed(&path)

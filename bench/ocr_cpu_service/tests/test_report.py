@@ -595,7 +595,10 @@ print(json.dumps({"event": "done"}), flush=True)
     )
 
     event, measurement = _read_event_with_process_tree_rss(
-        process, timeout_seconds=5.0, sample_interval_seconds=0.005
+        process,
+        timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
+        sample_interval_seconds=0.005,
     )
 
     assert event == {"event": "done"}
@@ -651,6 +654,7 @@ for line in sys.stdin:
         command=[sys.executable, str(worker_script)],
         environment=environment,
         timeout_seconds=5.0,
+        max_rss_bytes=1024 * 1024 * 1024,
     )
     page = BenchmarkPage(
         source_id="page",
