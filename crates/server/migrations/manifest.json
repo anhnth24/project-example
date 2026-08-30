@@ -37,6 +37,6 @@
     "0034_expand_qa_chat_history.sql": "383f7347cf1e09145a4dbf38df101949f571981dfb90b5287f5fa3c21c60ffc1",
     "0035_expand_worker_role.sql": "0daa913d8dca0b6c6013f0aa3f854a924eb6b6832ffe93d6908016901a520c5b",
     "0036_expand_acl_groups_invariants.sql": "5b0a3b478712d31da39dbee9677ba349d03f1f05dadc6b4c6f72250a19656b1c",
-    "0037_expand_chunks_split_file_tokens_tsv.sql": "09e2381dc805c2ca1a9e6e3c0792c60614c7cb1a1e2768c13d17270209a1a6eb"
+    "0037_expand_chunks_split_file_tokens_tsv.sql": "3223bb648628f5f2004b7bc0fe1ab2e46bdb1cc12c61bec5c91bc2a6dbc3aa17"
   }
 }
