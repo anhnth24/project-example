@@ -81,14 +81,37 @@ Thư mục tải về (`pdfium/`, `models/`, `bench/corpus*`, `bench/edge`) đ�
   - Desktop RAG: SQLite FTS5 + local/provider vector + persistent HNSW cache; exact fallback.
   - Desktop watch: `notify` recursive/debounce, cấm watch trong DATA để tránh loop.
   - Output cuối `convert_path` luôn **chuẩn hoá NFC** (tài liệu vi NFD từ macOS/PDF cũ).
-- **`crates/cli`** (`fileconv`) — bench harness: timing, đếm page (pdfinfo/python zip),
+- **`crates/cli`** (`fileconv`) — bench harness: timing, đếm page (pdfinfo/native probe),
   CER/WER (`metrics.rs`, Levenshtein; `normalize()` bỏ ký hiệu markdown để đo NỘI DUNG).
+- **`crates/knowledge`** (`fileconv-knowledge`) — knowledge extraction & retrieval contracts,
+  chia sẻ các kiểu dữ liệu và ranh giới embedding giữa Desktop RAG và Markhand Web Server.
+- **`crates/server`** (`fileconv-server`) — backend Web API & background worker (Compose stack:
+  PostgreSQL, Qdrant, MinIO) xử lý chuyển đổi, đánh chỉ mục và tìm kiếm ngữ nghĩa.
+- **`crates/mcp`** (`fileconv-mcp`) — stdio MCP server cung cấp 9 công cụ cho Claude Code
+  (convert, format probe, table extract, chunking, summarize, JSON extract, translation, vision OCR hard).
 - **`bench/`** — script tải corpus thật + sinh dữ liệu ground-truth tiếng Việt + các báo cáo
   (`REPORT*.md`). `ocr_experiment.py`/`paddle_test.py` là tư liệu thí nghiệm chất lượng OCR.
 
+## Hướng dẫn gỡ lỗi & Cạm bẫy thường gặp (Debugging & Common Pitfalls)
+
+1. **Lỗi thiếu PDFium (`DependencyMissing` hoặc fallback chậm)**:
+   - Nếu chạy trên Linux/macOS/Windows mà không tìm thấy lib PDFium, PDF scan sẽ báo lỗi hoặc PDF text fallback về `pdf-extract` chậm hơn và dễ mất cấu trúc.
+   - **Khắc phục**: Chạy `bash bench/download_pdfium.sh` để tải thư viện vào `./pdfium/lib`, hoặc thiết lập biến môi trường `export FILECONV_PDFIUM_LIB=/path/to/pdfium/lib`. Kiểm tra nhanh bằng `./target/release/fileconv info`.
+
+2. **Lỗi Whisper linking / Model không tìm thấy**:
+   - Khi build lần đầu với feature `audio`, `whisper.cpp` yêu cầu CMake + C/C++ compiler + Clang (bindgen). Trên Linux cần GNU toolchain để link đúng `libstdc++`.
+   - Nếu chạy lệnh `audio` bị lỗi thiếu model, hãy chạy `bash bench/download_models.sh` để tải `ggml-base.bin`, `ggml-small.bin`, `ggml-PhoWhisper-small.bin` vào thư mục `models/`. Hoặc chỉ định rõ qua `FILECONV_WHISPER_MODEL`.
+
+3. **Lỗi Vision OCR thiếu API Key (`DependencyMissing`)**:
+   - Tesseract và Paddle OCR local đã được loại bỏ hoàn toàn theo ADR 0016. Khi convert ảnh hoặc PDF scan, hệ thống mặc định gọi vision API qua OpenRouter.
+   - **Khắc phục**: Thiết lập `export FILECONV_OCR_API_KEY=sk-or-...`. Nếu tự host vLLM/Ollama vision, đặt thêm `FILECONV_OCR_BASE_URL` và `FILECONV_OCR_MODEL`.
+
+4. **Lỗi panic / dính chữ trên bảng mã cũ (TCVN3/VNI/VPS)**:
+   - Các font chữ hoa TCVN3 (như `.VnTimeH`) cần opt-in hint `Tcvn3CaseHint::UppercaseFont` từ metadata font, không được tự động đoán hoa/thường từ chuỗi thô TXT/CSV để tránh sai lệch nghĩa tiếng Việt.
+
 ## Lưu ý khi sửa code
 
-- Pin có chủ đích: `pdf-extract =0.8.2` (0.12 panic), `symphonia 0.5` (0.6 đổi API). Đừng nâng bừa.
+- Pin có chủ đích: `pdf-extract =0.8.2` (0.12 panic), `symphonia 0.5` (0.6 đổi API), `sha2 = "=0.11.0"`. Đừng nâng bừa.
 - PDF/whisper resource đắt → giữ pattern cache (thread_local PDFium, process-wide Whisper
   LRU `LoadOnceCache` trong `audio.rs` — không reload model mỗi `Converter`/request; eviction
   không unbounded).
