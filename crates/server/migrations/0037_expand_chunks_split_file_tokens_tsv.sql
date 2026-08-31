@@ -27,8 +27,14 @@ $$;
 
 -- Backfill existing rows so slash-bearing tokens are searchable by sub-token.
 -- chunks có FORCE ROW LEVEL SECURITY nên cả owner (migrator) cũng bị policy
--- org-scope chặn UPDATE backfill (0 row, im lặng). Migrator là owner của bảng
--- nên được phép tắt row_security trong transaction migration này.
-SET LOCAL row_security = off;
+-- org-scope chặn UPDATE backfill. Lưu ý: `SET row_security = off` KHÔNG bypass
+-- RLS — Postgres định nghĩa nó là "báo lỗi thay vì lọc ngầm", nên nó làm
+-- migration fail 42501. Cách đúng (theo hint của Postgres) là owner tạm gỡ
+-- FORCE trong đúng transaction migration này rồi bật lại ngay: migration chạy
+-- trong một transaction (database.rs), nên nếu backfill lỗi thì ALTER cũng
+-- rollback và bảng giữ nguyên FORCE ROW LEVEL SECURITY. Policy vẫn áp dụng
+-- đầy đủ cho mọi role không phải owner trong suốt quá trình.
+ALTER TABLE chunks NO FORCE ROW LEVEL SECURITY;
 UPDATE chunks
 SET body = body;
+ALTER TABLE chunks FORCE ROW LEVEL SECURITY;

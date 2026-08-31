@@ -64,7 +64,7 @@ fn compact_extractive_snippet(snippet: &str, max_chars: usize) -> String {
         return String::new();
     }
     let sentences: Vec<&str> = trimmed
-        .split_inclusive(|c: char| matches!(c, '.' | '!' | '?' | ';'))
+        .split_inclusive(['.', '!', '?', ';'])
         .map(str::trim)
         .filter(|part| !part.is_empty())
         .collect();
@@ -427,7 +427,7 @@ fn sentences_from(text: &str) -> Vec<String> {
             continue;
         }
         let parts: Vec<String> = line
-            .split_inclusive(|c: char| matches!(c, '.' | '!' | '?' | ';'))
+            .split_inclusive(['.', '!', '?', ';'])
             .map(str::trim)
             .filter(|part| !part.is_empty())
             .map(ToOwned::to_owned)
