@@ -43,9 +43,11 @@ MARKHAND_CHAT_MODEL=qwen/qwen3.7-flash
 MARKHAND_QA_ALLOW_UNVERIFIED_LLM=1
 ```
 
-Khi gate bật và provider trả lời hợp lệ, response có `mode: "llm_unverified"`
-kèm warning cố định nói rõ **chưa được xác thực bằng structured entailment —
-không phải câu trả lời grounded**. Nếu câu trả lời fail validation (citation
-bịa, sai delta, mâu thuẫn…) hệ thống vẫn rớt về extractive như cũ. Tắt biến
-`MARKHAND_QA_ALLOW_UNVERIFIED_LLM` (hoặc không set) để quay lại hành vi mặc
-định 100%.
+Khi gate bật và provider trả lời hợp lệ, cả **JSON** `POST /ask` lẫn stream
+`POST /ask/stream` trả `mode: "llm_unverified"` kèm warning cố định nói rõ
+**chưa được xác thực bằng structured entailment — không phải câu trả lời
+grounded** (stream gọi `complete()` buffered và giữ live-tail sống bằng
+keepalive trong lúc chờ provider — xem `services/qa/ask_stream.rs`). Nếu câu
+trả lời fail validation (citation bịa, sai delta, mâu thuẫn…) hệ thống vẫn rớt
+về extractive như cũ. Tắt biến `MARKHAND_QA_ALLOW_UNVERIFIED_LLM` (hoặc không
+set) để quay lại hành vi mặc định 100%.

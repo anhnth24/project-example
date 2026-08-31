@@ -69,7 +69,7 @@ export function ChatHistorySidebar({
 
   if (collapsed) {
     return (
-      <div className="card" style={{ padding: 'var(--space-2)' }}>
+      <div className="chat-history-sidebar-collapsed">
         <button
           type="button"
           className="btn btn-icon"
@@ -101,12 +101,8 @@ export function ChatHistorySidebar({
   }
 
   return (
-    <nav
-      className="card"
-      aria-label="Lịch sử hỏi đáp"
-      style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: '16rem' }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+    <nav className="chat-history-sidebar" aria-label="Lịch sử hỏi đáp">
+      <div className="chat-history-sidebar-header">
         <h2 className="card-title" style={{ margin: 0 }}>
           Lịch sử
         </h2>
@@ -131,9 +127,7 @@ export function ChatHistorySidebar({
         <p className="text-muted">Chưa có cuộc trò chuyện nào được lưu.</p>
       )}
 
-      <ul
-        style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 'var(--space-2)' }}
-      >
+      <ul className="chat-session-list">
         {sessions.map((session) => {
           const isActive = session.id === activeSessionId;
           const isEditing = editingId === session.id;
@@ -174,18 +168,7 @@ export function ChatHistorySidebar({
                   )}
                 </div>
               ) : (
-                <div
-                  className={`card ${isActive ? 'active' : ''}`}
-                  style={{
-                    padding: 'var(--space-2)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 'var(--space-1)',
-                    border: isActive
-                      ? '2px solid var(--color-accent-700, currentColor)'
-                      : undefined,
-                  }}
-                >
+                <div className={`chat-session-item${isActive ? ' is-active' : ''}`}>
                   <button
                     type="button"
                     className="link-button"

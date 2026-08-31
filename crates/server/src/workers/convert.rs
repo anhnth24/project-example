@@ -880,6 +880,14 @@ impl ConvertWorker {
                 sandbox_output.ocr_artifacts,
             )
             .await?;
+        // Chuẩn hoá TRƯỚC sha256/lưu: artifact đã lưu, chunk span và citation
+        // đều nhìn cùng một Markdown (xem services/ocr_normalize.rs).
+        let markdown = match String::from_utf8(markdown) {
+            Ok(text) => {
+                crate::services::ocr_normalize::normalize_converted_markdown(&text).into_bytes()
+            }
+            Err(non_utf8) => non_utf8.into_bytes(),
+        };
         let markdown_sha256 = hex::encode(Sha256::digest(&markdown));
         let markdown_len =
             u64::try_from(markdown.len()).map_err(|_| ConvertWorkerError::InvalidMarkdownLength)?;

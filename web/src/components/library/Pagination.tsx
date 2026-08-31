@@ -16,7 +16,15 @@ export function Pagination({
   onNext: () => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-3)',
+        flexWrap: 'wrap',
+        minWidth: 0,
+      }}
+    >
       <button
         type="button"
         className="btn btn-secondary btn-sm"

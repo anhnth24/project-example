@@ -46,11 +46,19 @@
 // `VersionMode::AsOf`): only the timestamp control is shown, never a
 // document picker.
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+
+/** Stay pinned while streaming unless the user has scrolled more than this far from the bottom. */
+const CHAT_NEAR_BOTTOM_PX = 80;
+
+function isChatLogNearBottom(el: HTMLElement): boolean {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= CHAT_NEAR_BOTTOM_PX;
+}
 import { apiClient, type ApiClient } from '../../api/client';
 import type { components } from '../../api/generated/contract';
 import { useScopeSafeRequest } from '../../hooks/useScopeSafeRequest';
 import { useScope } from '../../state/ScopeProvider';
 import { SelectControl, type SelectOption } from '../ui';
+import { historicalTurnsVisibleWithLive } from './chatLogModel';
 import { ChatTurnBubble, type ChatTurnStatus } from './ChatTurnBubble';
 import { HistoricalTurnBubble } from './HistoricalTurnBubble';
 import { ProjectPicker } from './ProjectPicker';
@@ -192,10 +200,70 @@ export function ChatPanel({
 
   const lastTurn = turns[turns.length - 1];
   const busy = lastTurn !== undefined && !isTurnSettled(statuses[lastTurn.id]);
+  // After persist, `getChatSession` reloads the same turn into `historicalTurns`
+  // while the live bubble is still mounted — show each question only once.
+  // Adjacent persisted copies of one ask (double-append) also collapse.
+  const liveQuestions = new Set(turns.map((turn) => turn.question));
+  const visibleHistoricalTurns = historicalTurnsVisibleWithLive(historicalTurns, liveQuestions);
+  const showSavedSessionNotice =
+    activeSessionId !== undefined && visibleHistoricalTurns.length > 0 && turns.length === 0;
+  const submitLockRef = useRef(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const wasBusyRef = useRef(false);
+  const logRef = useRef<HTMLDivElement>(null);
+  const logContentRef = useRef<HTMLDivElement>(null);
+  // Streaming updates happen inside child bubbles (no parent re-render per
+  // token), so pin state lives in a ref and is driven by observers below.
+  const pinToBottomRef = useRef(true);
+
+  function pinChatLogToBottom() {
+    const el = logRef.current;
+    if (el && pinToBottomRef.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }
+
   useEffect(() => {
+    const el = logRef.current;
+    if (!el) return;
+
+    const onScroll = () => {
+      pinToBottomRef.current = isChatLogNearBottom(el);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+
+    const mutationObserver = new MutationObserver(pinChatLogToBottom);
+    mutationObserver.observe(el, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+
+    // Feature-detect: jsdom (and some test hosts) do not implement ResizeObserver.
+    let resizeObserver: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== 'undefined') {
+      resizeObserver = new ResizeObserver(pinChatLogToBottom);
+      const content = logContentRef.current;
+      if (content) resizeObserver.observe(content);
+    }
+
+    pinChatLogToBottom();
+
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      mutationObserver.disconnect();
+      resizeObserver?.disconnect();
+    };
+  }, []);
+
+  useEffect(() => {
+    pinToBottomRef.current = true;
+    pinChatLogToBottom();
+  }, [sessionSwitchToken]);
+
+  useEffect(() => {
+    if (!busy) submitLockRef.current = false;
     if (wasBusyRef.current && !busy) {
       // A turn just settled and the composer became enabled again — return
       // focus to the input so the next question can be typed immediately,
@@ -239,8 +307,15 @@ export function ChatPanel({
 
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (!canSubmit) return;
-    const request: AskRequest = { question, collectionIds, mode, limit: 10 };
+    const trimmedQuestion = question.trim();
+    if (!canSubmit || submitLockRef.current) return;
+    // Same tick as the click/Enter — `busy` only flips after re-render, so a
+    // double submit would otherwise enqueue two live bubbles for one ask.
+    if (lastTurn?.question === trimmedQuestion) return;
+    submitLockRef.current = true;
+    // limit 12: chunk bảng (sheet tổng hợp XLSX) hay đứng hạng 9-12 sau các
+    // tài liệu giàu chữ; 8-10 passage bỏ sót chúng (eval đa định dạng 2026-08-17).
+    const request: AskRequest = { question: trimmedQuestion, collectionIds, mode, limit: 12 };
     if (projectIds.length > 0) request.projectIds = projectIds;
     if (mode === 'as_of') request.asOf = new Date(asOf).toISOString();
     if (needsDocument && documentId) request.documentId = documentId;
@@ -250,7 +325,12 @@ export function ChatPanel({
     }
     nextTurnSeq.current += 1;
     const id = `turn-${nextTurnSeq.current}`;
-    setChat({ epoch, sessionSwitchToken, turns: [...turns, { id, question, request }] });
+    pinToBottomRef.current = true;
+    setChat({
+      epoch,
+      sessionSwitchToken,
+      turns: [...turns, { id, question: trimmedQuestion, request }],
+    });
     setQuestion('');
     // Kept in the input (rather than moving to the submit button) even
     // though the field disables the instant this turn's status arrives —
@@ -263,88 +343,75 @@ export function ChatPanel({
     if (lastTurn) abortFns.current[lastTurn.id]?.();
   }
 
-  const showSavedSessionNotice = activeSessionId !== undefined && historicalTurns.length > 0;
-
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-      <div
-        role="log"
-        aria-label="Lịch sử hỏi đáp"
-        style={{
-          display: 'grid',
-          gap: 'var(--space-4)',
-          maxHeight: '60vh',
-          minHeight: '16rem',
-          overflowY: 'auto',
-          padding: 'var(--space-3)',
-        }}
-        className="card"
-      >
-        {showSavedSessionNotice && (
-          <p className="text-muted" style={{ margin: 0 }}>
-            Phiên đã lưu — tài liệu có thể đã thay đổi.
-          </p>
-        )}
+    <div className="chat-panel">
+      <div ref={logRef} role="log" aria-label="Lịch sử hỏi đáp" className="chat-log">
+        <div ref={logContentRef} className="chat-log-inner">
+          {showSavedSessionNotice && (
+            <p className="text-muted" style={{ margin: 0 }}>
+              Phiên đã lưu — tài liệu có thể đã thay đổi.
+            </p>
+          )}
 
-        {historicalStatus === 'loading' && (
-          <p className="text-muted">Đang tải lại cuộc trò chuyện…</p>
-        )}
-        {historicalStatus === 'error' && (
-          <p className="text-muted">Không thể tải lại cuộc trò chuyện đã lưu.</p>
-        )}
+          {historicalStatus === 'loading' && (
+            <p className="text-muted">Đang tải lại cuộc trò chuyện…</p>
+          )}
+          {historicalStatus === 'error' && (
+            <p className="text-muted">Không thể tải lại cuộc trò chuyện đã lưu.</p>
+          )}
 
-        {historicalTurns.map((turn) => (
-          <HistoricalTurnBubble key={turn.id} turn={turn} collectionNameById={collectionNameById} />
-        ))}
+          {visibleHistoricalTurns.map((turn) => (
+            <HistoricalTurnBubble
+              key={turn.id}
+              turn={turn}
+              collectionNameById={collectionNameById}
+            />
+          ))}
 
-        {turns.length === 0 && historicalTurns.length === 0 && historicalStatus !== 'loading' && (
-          <p className="text-muted">
-            Chưa có câu hỏi nào trong cuộc trò chuyện này — đặt câu hỏi bên dưới.
-          </p>
-        )}
+          {turns.length === 0 &&
+            visibleHistoricalTurns.length === 0 &&
+            historicalStatus !== 'loading' && (
+              <p className="text-muted">
+                Chưa có câu hỏi nào trong cuộc trò chuyện này — đặt câu hỏi bên dưới.
+              </p>
+            )}
 
-        {turns.map((turn) => (
-          <ChatTurnBubble
-            key={turn.id}
-            turnId={turn.id}
-            question={turn.question}
-            request={turn.request}
-            client={client}
-            collectionNameById={collectionNameById}
-            onStatusChange={(status, snapshot) => {
-              setStatuses((prev) =>
-                prev[turn.id] === status ? prev : { ...prev, [turn.id]: status },
-              );
-              if (
-                (status === 'completed' || status === 'revoked') &&
-                !reportedSettledRef.current.has(turn.id)
-              ) {
-                reportedSettledRef.current.add(turn.id);
-                onTurnSettled?.({
-                  question: turn.question,
-                  answer: snapshot.answer,
-                  answerMode: snapshot.answerMode,
-                  citations: snapshot.citations,
-                  warnings: snapshot.warnings,
-                });
-              }
-            }}
-            onReady={(abort) => {
-              abortFns.current[turn.id] = abort;
-            }}
-          />
-        ))}
+          {turns.map((turn) => (
+            <ChatTurnBubble
+              key={turn.id}
+              turnId={turn.id}
+              question={turn.question}
+              request={turn.request}
+              client={client}
+              collectionNameById={collectionNameById}
+              onStatusChange={(status, snapshot) => {
+                setStatuses((prev) =>
+                  prev[turn.id] === status ? prev : { ...prev, [turn.id]: status },
+                );
+                if (
+                  (status === 'completed' || status === 'revoked') &&
+                  !reportedSettledRef.current.has(turn.id)
+                ) {
+                  reportedSettledRef.current.add(turn.id);
+                  onTurnSettled?.({
+                    question: turn.question,
+                    answer: snapshot.answer,
+                    answerMode: snapshot.answerMode,
+                    citations: snapshot.citations,
+                    warnings: snapshot.warnings,
+                  });
+                }
+              }}
+              onReady={(abort) => {
+                abortFns.current[turn.id] = abort;
+              }}
+            />
+          ))}
+        </div>
       </div>
 
-      <form onSubmit={submit} className="card" style={{ display: 'grid', gap: 'var(--space-3)' }}>
-        <div
-          style={{
-            display: 'flex',
-            gap: 'var(--space-3)',
-            flexWrap: 'wrap',
-            alignItems: 'flex-end',
-          }}
-        >
+      <form onSubmit={submit} className="chat-composer">
+        <div className="chat-composer-advanced">
           <ProjectPicker
             projects={projects}
             selectedProjectIds={projectIds}
@@ -417,29 +484,30 @@ export function ChatPanel({
           )}
         </div>
 
-        <div className="field">
-          <label htmlFor={questionId}>Câu hỏi</label>
-          <input
-            id={questionId}
-            ref={inputRef}
-            className="input"
-            type="text"
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            disabled={busy}
-            placeholder="Ví dụ: Chính sách nghỉ phép hiện tại là gì?"
-          />
-        </div>
-
-        <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-          <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
-            Hỏi
-          </button>
-          {busy && (
-            <button type="button" className="btn btn-secondary" onClick={handleAbort}>
-              Hủy
+        <div className="chat-composer-row">
+          <div className="field chat-composer-field">
+            <label htmlFor={questionId}>Câu hỏi</label>
+            <input
+              id={questionId}
+              ref={inputRef}
+              className="input"
+              type="text"
+              value={question}
+              onChange={(event) => setQuestion(event.target.value)}
+              disabled={busy}
+              placeholder="Ví dụ: Chính sách nghỉ phép hiện tại là gì?"
+            />
+          </div>
+          <div className="chat-composer-actions">
+            <button type="submit" className="btn btn-primary" disabled={!canSubmit}>
+              Hỏi
             </button>
-          )}
+            {busy && (
+              <button type="button" className="btn btn-secondary" onClick={handleAbort}>
+                Hủy
+              </button>
+            )}
+          </div>
         </div>
       </form>
     </div>

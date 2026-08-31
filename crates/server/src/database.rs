@@ -150,6 +150,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "0036_expand_acl_groups_invariants.sql",
         include_str!("../migrations/0036_expand_acl_groups_invariants.sql"),
     ),
+    (
+        "0037_expand_chunks_split_file_tokens_tsv.sql",
+        include_str!("../migrations/0037_expand_chunks_split_file_tokens_tsv.sql"),
+    ),
 ];
 
 /// Embedded migration sources in apply order (name, SQL). Used by integration tests.

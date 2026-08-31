@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Markhand — Luồng xử lý từ Upload tài liệu đến Q&amp;A</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ============ THEME — Blueprint ============ */
+  :root {
+    --font-body: 'DM Sans', system-ui, sans-serif;
+    --font-mono: 'Fira Code', 'SF Mono', Consolas, monospace;
+
+    --bg: #f0f4f8;
+    --surface: #ffffff;
+    --surface2: #e8eef4;
+    --surface-elevated: #f7fafc;
+    --border: rgba(30, 60, 100, 0.10);
+    --border-bright: rgba(30, 60, 100, 0.20);
+    --text: #1a2a3a;
+    --text-dim: #5a7090;
+    --text-bright: #0d1a28;
+    --accent: #1a5fa8;
+    --accent-dim: rgba(26, 95, 168, 0.08);
+
+    --green: #2f7d4f;
+    --green-dim: rgba(47, 125, 79, 0.09);
+    --red: #b0383f;
+    --red-dim: rgba(176, 56, 63, 0.09);
+    --amber: #a8690f;
+    --amber-dim: rgba(168, 105, 15, 0.10);
+    --sage: #5d7d2b;
+    --sage-dim: rgba(93, 125, 43, 0.10);
+    --teal: #0e7490;
+    --teal-dim: rgba(14, 116, 144, 0.09);
+    --plum: #8d3f63;
+    --plum-dim: rgba(141, 63, 99, 0.09);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1421;
+      --surface: #111d2e;
+      --surface2: #16233a;
+      --surface-elevated: #1a2a42;
+      --border: rgba(100, 160, 220, 0.12);
+      --border-bright: rgba(100, 160, 220, 0.24);
+      --text: #c8d8e8;
+      --text-dim: #64809c;
+      --text-bright: #e8f2fa;
+      --accent: #4a90d9;
+      --accent-dim: rgba(74, 144, 217, 0.12);
+
+      --green: #6ecf95;
+      --green-dim: rgba(110, 207, 149, 0.10);
+      --red: #e58b90;
+      --red-dim: rgba(229, 139, 144, 0.10);
+      --amber: #e0b060;
+      --amber-dim: rgba(224, 176, 96, 0.10);
+      --sage: #b3d178;
+      --sage-dim: rgba(179, 209, 120, 0.10);
+      --teal: #67c8de;
+      --teal-dim: rgba(103, 200, 222, 0.10);
+      --plum: #dc93b4;
+      --plum-dim: rgba(220, 147, 180, 0.10);
+    }
+  }
+
+  [data-theme="dark"] {
+    --bg: #0d1421;
+    --surface: #111d2e;
+    --surface2: #16233a;
+    --surface-elevated: #1a2a42;
+    --border: rgba(100, 160, 220, 0.12);
+    --border-bright: rgba(100, 160, 220, 0.24);
+    --text: #c8d8e8;
+    --text-dim: #64809c;
+    --text-bright: #e8f2fa;
+    --accent: #4a90d9;
+    --accent-dim: rgba(74, 144, 217, 0.12);
+
+    --green: #6ecf95;
+    --green-dim: rgba(110, 207, 149, 0.10);
+    --red: #e58b90;
+    --red-dim: rgba(229, 139, 144, 0.10);
+    --amber: #e0b060;
+    --amber-dim: rgba(224, 176, 96, 0.10);
+    --sage: #b3d178;
+    --sage-dim: rgba(179, 209, 120, 0.10);
+    --teal: #67c8de;
+    --teal-dim: rgba(103, 200, 222, 0.10);
+    --plum: #dc93b4;
+    --plum-dim: rgba(220, 147, 180, 0.10);
+  }
+
+  /* ============ THEME TOGGLE ============ */
+  .theme-toggle {
+    position: fixed; top: 16px; right: 16px; z-index: 300;
+    width: 36px; height: 36px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-dim); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; transition: background 0.15s, color 0.15s;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+  }
+  .theme-toggle:hover { background: var(--surface2); color: var(--text); }
+
+  /* ============ BASE ============ */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background-color: var(--bg);
+    background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+    background-size: 24px 24px;
+    color: var(--text);
+    font-family: var(--font-body);
+    padding: 40px;
+    min-height: 100vh;
+    overflow-wrap: break-word;
+  }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .section, .flow-arrow {
+    animation: fadeUp 0.4s ease-out both;
+    animation-delay: calc(var(--i, 0) * 0.05s);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+
+  h1 {
+    font-size: 36px;
+    font-weight: 700;
+    letter-spacing: -0.8px;
+    margin-bottom: 6px;
+    color: var(--text-bright);
+    text-wrap: balance;
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 14px;
+    margin-bottom: 36px;
+    font-family: var(--font-mono);
+  }
+
+  /* ============ LAYOUT + TOC ============ */
+  .wrap {
+    max-width: 1400px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 190px 1fr;
+    gap: 0 40px;
+  }
+  .main { min-width: 0; }
+
+  .toc {
+    position: sticky;
+    top: 24px;
+    align-self: start;
+    padding: 14px 0;
+    grid-row: 1 / -1;
+    max-height: calc(100dvh - 48px);
+    overflow-y: auto;
+  }
+  .toc::-webkit-scrollbar { width: 3px; }
+  .toc::-webkit-scrollbar-thumb { background: var(--surface-elevated); border-radius: 2px; }
+  .toc-title {
+    font-family: var(--font-mono);
+    font-size: 9px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 2px;
+    color: var(--text-dim);
+    padding: 0 0 10px; margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .toc a {
+    display: block;
+    font-size: 12px;
+    color: var(--text-dim);
+    text-decoration: none;
+    padding: 4px 8px;
+    border-radius: 5px;
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+    line-height: 1.4;
+    margin-bottom: 1px;
+  }
+  .toc a:hover { color: var(--text); background: var(--surface2); }
+  .toc a.active { color: var(--text); border-left-color: var(--accent); }
+
+  .diagram { display: grid; grid-template-columns: 1fr; gap: 20px; }
+
+  /* ============ SECTION CARD ============ */
+  .section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    scroll-margin-top: 16px;
+  }
+  .section--hero {
+    background: var(--surface-elevated);
+    border-color: color-mix(in srgb, var(--border) 50%, var(--accent) 50%);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.07);
+    padding: 26px 30px;
+  }
+  .section--recessed {
+    background: var(--surface2);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04);
+  }
+
+  .section-label {
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1.5px;
+    margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .section-label .dot {
+    width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    background: currentColor;
+  }
+  .section-label .file-ref {
+    margin-left: auto;
+    font-weight: 400;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--text-dim);
+    font-size: 10px;
+  }
+
+  .section--accent .section-label { color: var(--accent); }
+  .section--teal .section-label { color: var(--teal); }
+  .section--sage .section-label { color: var(--sage); }
+  .section--amber .section-label { color: var(--amber); }
+  .section--green .section-label { color: var(--green); }
+  .section--plum .section-label { color: var(--plum); }
+
+  .section p.desc-line {
+    font-size: 14px;
+    line-height: 1.65;
+    color: var(--text-dim);
+    margin-bottom: 12px;
+  }
+  .section p.desc-line strong { color: var(--text); font-weight: 600; }
+
+  /* ============ INNER GRID ============ */
+  .inner-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 12px;
+  }
+  .inner-grid > * { min-width: 0; }
+  .inner-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .inner-card .title { font-weight: 600; font-size: 13.5px; margin-bottom: 4px; color: var(--text-bright); }
+  .inner-card .desc { color: var(--text-dim); font-size: 12.5px; line-height: 1.55; }
+  .inner-card code, .desc-line code, .callout code, .node-list code, .step-detail code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    background: var(--accent-dim);
+    color: var(--accent);
+    padding: 1px 5px;
+    border-radius: 3px;
+  }
+
+  /* ============ FLOW ARROW ============ */
+  .flow-arrow {
+    display: flex; justify-content: center; align-items: center; gap: 8px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    padding: 2px 0;
+  }
+  .flow-arrow svg {
+    width: 20px; height: 20px; fill: none;
+    stroke: var(--border-bright);
+    stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+  }
+
+  /* ============ PIPELINE ============ */
+  .pipeline {
+    display: flex; gap: 0; align-items: stretch;
+    overflow-x: auto; padding-bottom: 4px;
+  }
+  .pipeline-step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    min-width: 128px;
+    flex: 1 1 0;
+    text-align: center;
+  }
+  .pipeline-step .step-num {
+    font-family: var(--font-mono);
+    font-size: 10px; font-weight: 600; margin-bottom: 4px;
+    color: var(--accent);
+  }
+  .pipeline-step .step-name { font-size: 12.5px; font-weight: 600; margin-bottom: 3px; color: var(--text-bright); }
+  .pipeline-step .step-detail { font-size: 10.5px; color: var(--text-dim); line-height: 1.45; }
+  .pipeline-arrow {
+    display: flex; align-items: center; padding: 0 3px;
+    color: var(--border-bright); font-size: 16px; flex-shrink: 0;
+  }
+  .pipeline-step--teal .step-num { color: var(--teal); }
+  .pipeline-step--sage .step-num { color: var(--sage); }
+  .pipeline-step--amber .step-num { color: var(--amber); }
+  .pipeline-step--green .step-num { color: var(--green); }
+  .pipeline-step--plum .step-num { color: var(--plum); }
+  .pipeline-step--red { border-color: color-mix(in srgb, var(--border) 40%, var(--red) 60%); }
+  .pipeline-step--red .step-num { color: var(--red); }
+
+  /* ============ LISTS ============ */
+  .node-list { list-style: none; font-size: 13px; line-height: 1.8; }
+  .node-list li { padding-left: 14px; position: relative; }
+  .node-list li::before {
+    content: '›';
+    color: var(--text-dim); font-weight: 600;
+    position: absolute; left: 0;
+  }
+
+  /* ============ CALLOUT ============ */
+  .callout {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--amber);
+    border-radius: 0 8px 8px 0;
+    padding: 13px 18px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-dim);
+    margin-top: 12px;
+  }
+  .callout strong { color: var(--text); font-weight: 600; }
+  .callout--accent { border-left-color: var(--accent); }
+  .callout--green { border-left-color: var(--green); }
+
+  /* ============ BADGES ============ */
+  .status {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono);
+    font-size: 11.5px; font-weight: 500;
+    padding: 2px 9px; border-radius: 6px; white-space: nowrap;
+  }
+  .status--ok { background: var(--green-dim); color: var(--green); }
+  .status--warn { background: var(--amber-dim); color: var(--amber); }
+  .status--err { background: var(--red-dim); color: var(--red); }
+  .status--info { background: var(--accent-dim); color: var(--accent); }
+
+  /* ============ MODE TABLE ============ */
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-top: 12px;
+  }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .data-table { width: 100%; border-collapse: collapse; font-size: 13.5px; line-height: 1.5; }
+  .data-table th {
+    background: var(--surface-elevated);
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 1px;
+    color: var(--text-dim);
+    text-align: left; padding: 10px 14px;
+    border-bottom: 2px solid var(--border-bright);
+    white-space: nowrap;
+  }
+  .data-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  .data-table tbody tr:last-child td { border-bottom: none; }
+  .data-table td.wide { min-width: 220px; }
+
+  /* ============ THREE COLUMN ============ */
+  .three-col {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 16px;
+  }
+  .three-col > * { min-width: 0; }
+
+  /* ============ RESPONSIVE ============ */
+  @media (max-width: 1000px) {
+    .wrap { grid-template-columns: 1fr; }
+    body { padding: 20px; padding-top: 0; }
+    .toc {
+      position: sticky; top: 0; z-index: 200;
+      max-height: none;
+      display: flex; gap: 4px; align-items: center;
+      overflow-x: auto; -webkit-overflow-scrolling: touch;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      margin: 0 -20px;
+      grid-row: auto;
+    }
+    .toc::-webkit-scrollbar { display: none; }
+    .toc-title { display: none; }
+    .toc a {
+      white-space: nowrap; flex-shrink: 0;
+      border-left: none; border-bottom: 2px solid transparent;
+      border-radius: 4px 4px 0 0;
+      padding: 6px 10px; font-size: 11px;
+    }
+    .toc a.active { border-left: none; border-bottom-color: var(--accent); background: var(--surface); }
+    .main { padding-top: 20px; }
+    .section { scroll-margin-top: 52px; }
+    .pipeline { flex-wrap: wrap; gap: 6px; }
+    .pipeline-arrow { display: none; }
+    .pipeline-step { flex: 1 1 40%; }
+  }
+</style>
+</head>
+<body>
+<button class="theme-toggle" id="themeToggle" title="Đổi giao diện sáng/tối" aria-label="Đổi giao diện sáng/tối"></button>
+<script>
+(function() {
+  var t = document.getElementById('themeToggle');
+  var s = localStorage.getItem('theme');
+  var i = s || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  if (s) document.documentElement.setAttribute('data-theme', i);
+  t.textContent = i === 'dark' ? '\u2600' : '\u263E';
+  t.addEventListener('click', function() {
+    var c = document.documentElement.getAttribute('data-theme')
+      || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    var n = c === 'light' ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', n);
+    localStorage.setItem('theme', n);
+    t.textContent = n === 'dark' ? '\u2600' : '\u263E';
+  });
+})();
+</script>
+
+<div class="wrap">
+
+<nav class="toc" id="toc">
+  <div class="toc-title">Mục lục</div>
+  <a href="#s1">1. Upload tài liệu</a>
+  <a href="#s2">2. Convert → Markdown</a>
+  <a href="#s3">3. Index: chunk + FTS</a>
+  <a href="#s4">4. Embedding → Qdrant</a>
+  <a href="#s5">5. Hỏi đáp (Q&amp;A)</a>
+  <a href="#s6">6. Hạ tầng &amp; chế độ trả lời</a>
+</nav>
+
+<div class="main">
+
+<h1>Luồng xử lý: Upload tài liệu → Hỏi đáp</h1>
+<p class="subtitle">markhand web — fileconv-server · cập nhật 17/08/2026</p>
+
+<div class="diagram">
+
+  <!-- ============ 1. UPLOAD ============ -->
+  <div class="section section--hero section--accent" id="s1" style="--i:0">
+    <div class="section-label"><span class="dot"></span> Bước 1 — Upload tài liệu <span class="file-ref">web/uploadTransport.ts · routes/documents.rs</span></div>
+    <p class="desc-line">Người dùng kéo thả file vào trang Thư viện. Web gửi <strong>multipart POST</strong> <code>/api/v1/documents</code> kèm Bearer token. Upload <strong>phiên bản mới</strong> của tài liệu cũ = gửi kèm <code>documentId</code> — server nối vào lineage phiên bản thay vì tạo tài liệu mới.</p>
+    <div class="inner-grid">
+      <div class="inner-card">
+        <div class="title">Kiểm tra an ninh</div>
+        <div class="desc">Đối chiếu <strong>magic bytes</strong> với định dạng khai báo (vì vậy file .txt trần bị từ chối — phải là docx/pdf/xlsx…). RBAC + RLS theo tổ chức.</div>
+      </div>
+      <div class="inner-card">
+        <div class="title">Ghi bền vững</div>
+        <div class="desc">Lưu file gốc vào storage, tạo bản ghi document + version, rồi <strong>enqueue job trong cùng transaction</strong> — không bao giờ có file mà mất job.</div>
+      </div>
+      <div class="inner-card">
+        <div class="title">Theo dõi tiến độ</div>
+        <div class="desc">Web mở SSE <code>/jobs/{id}/events</code> xem trạng thái job chuyển đổi theo thời gian thực.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-arrow" style="--i:1">
+    <svg viewBox="0 0 20 20"><path d="M10 4 L10 16 M6 12 L10 16 L14 12"/></svg>
+    job Convert được worker nhận (lease)
+  </div>
+
+  <!-- ============ 2. CONVERT ============ -->
+  <div class="section section--teal" id="s2" style="--i:2">
+    <div class="section-label"><span class="dot"></span> Bước 2 — Convert: file gốc → Markdown <span class="file-ref">workers/convert.rs · fileconv-core · services/ocr_normalize.rs</span></div>
+    <p class="desc-line">Worker gọi bộ chuyển đổi <strong>fileconv</strong> (code dự án tự chủ) qua <strong>subprocess cách ly</strong>: Linux dùng sandbox Landlock, Windows/dev chạy trực tiếp. Định tuyến theo đuôi file:</p>
+    <div class="pipeline">
+      <div class="pipeline-step pipeline-step--teal">
+        <div class="step-num">PDF</div>
+        <div class="step-name">pdf-inspector</div>
+        <div class="step-detail">Heading theo cỡ chữ, bảng, đa cột + cờ <code>needs_ocr</code></div>
+      </div>
+      <div class="pipeline-arrow">·</div>
+      <div class="pipeline-step pipeline-step--amber">
+        <div class="step-num">Trang scan</div>
+        <div class="step-name">OCR vision-LLM</div>
+        <div class="step-detail">Render PDFium 300 DPI → gửi OpenRouter (cần <code>FILECONV_OCR_API_KEY</code>)</div>
+      </div>
+      <div class="pipeline-arrow">·</div>
+      <div class="pipeline-step pipeline-step--teal">
+        <div class="step-num">DOCX / XLSX</div>
+        <div class="step-name">docx-rust / calamine</div>
+        <div class="step-detail">Run-level text, heading theo style; mọi sheet, merge → HTML table</div>
+      </div>
+      <div class="pipeline-arrow">·</div>
+      <div class="pipeline-step pipeline-step--sage">
+        <div class="step-num">Audio</div>
+        <div class="step-name">Whisper</div>
+        <div class="step-detail">PhoWhisper ưu tiên tiếng Việt, cache model LRU</div>
+      </div>
+    </div>
+    <div class="callout callout--accent">
+      <strong>Chuẩn hoá sau chuyển đổi</strong> (<code>ocr_normalize.rs</code>, chạy TRƯỚC khi lưu artifact): map unicode hyphen/khoảng trắng lạ về ASCII, sửa ký tự OCR sai, nối dòng gãy, nâng heading văn bản pháp lý (Điều/Chương/Mục). Toàn bộ output chuẩn hoá <strong>NFC</strong> — quan trọng với tài liệu tiếng Việt.
+    </div>
+  </div>
+
+  <div class="flow-arrow" style="--i:3">
+    <svg viewBox="0 0 20 20"><path d="M10 4 L10 16 M6 12 L10 16 L14 12"/></svg>
+    markdown artifact đã lưu → job Index
+  </div>
+
+  <!-- ============ 3. INDEX ============ -->
+  <div class="section section--sage" id="s3" style="--i:4">
+    <div class="section-label"><span class="dot"></span> Bước 3 — Index: chia chunk + tìm kiếm từ khóa <span class="file-ref">workers/index.rs</span></div>
+    <div class="inner-grid">
+      <div class="inner-card">
+        <div class="title">Chia chunk theo heading</div>
+        <div class="desc">Markdown được cắt thành các chunk RAG theo cấu trúc heading, <strong>giữ đường dẫn tiêu đề cha</strong> (vd: "Chương II › Điều 5") để trích dẫn có ngữ cảnh.</div>
+      </div>
+      <div class="inner-card">
+        <div class="title">Postgres FTS</div>
+        <div class="desc">Mỗi chunk ghi vào Postgres kèm chỉ mục full-text. <span class="status status--ok">Từ đây tìm được bằng từ khóa</span></div>
+      </div>
+      <div class="inner-card">
+        <div class="title">Nối tiếp</div>
+        <div class="desc">Index xong enqueue một job <code>EmbeddingBatch</code> — chunk là bất biến, embedding làm sau không chặn tìm kiếm từ khóa.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="flow-arrow" style="--i:5">
+    <svg viewBox="0 0 20 20"><path d="M10 4 L10 16 M6 12 L10 16 L14 12"/></svg>
+    job EmbeddingBatch
+  </div>
+
+  <!-- ============ 4. EMBEDDING ============ -->
+  <div class="section section--amber" id="s4" style="--i:6">
+    <div class="section-label"><span class="dot"></span> Bước 4 — Embedding: tìm kiếm theo nghĩa <span class="file-ref">workers/embedding.rs · storage/qdrant.rs</span></div>
+    <p class="desc-line">Worker gom chunk theo <strong>batch có giới hạn</strong>, gọi embedding provider đã duyệt, rồi <strong>upsert vector vào Qdrant</strong> (point id sinh từ org + collection + chunk — chạy lại không tạo trùng). <span class="status status--ok">Từ đây tìm kiếm theo nghĩa hoạt động</span></p>
+    <p class="desc-line">Provider lỗi/chậm chỉ làm chậm nhánh vector — tài liệu vẫn hỏi đáp được bằng từ khóa trong lúc chờ.</p>
+  </div>
+
+  <div class="flow-arrow" style="--i:7">
+    <svg viewBox="0 0 20 20"><path d="M10 4 L10 16 M6 12 L10 16 L14 12"/></svg>
+    tài liệu sẵn sàng — người dùng đặt câu hỏi
+  </div>
+
+  <!-- ============ 5. Q&A ============ -->
+  <div class="section section--hero section--plum" id="s5" style="--i:8">
+    <div class="section-label"><span class="dot"></span> Bước 5 — Hỏi đáp <span class="file-ref">services/qa/ask_stream.rs · retrieval/mod.rs · grounding.rs</span></div>
+    <p class="desc-line">Web gửi <strong>POST</strong> <code>/api/v1/ask/stream</code> mở phiên SSE bền vững (đứt mạng resume được theo Last-Event-ID; token được web refresh chủ động trước khi hỏi để không hết hạn giữa chừng).</p>
+    <div class="pipeline">
+      <div class="pipeline-step pipeline-step--teal">
+        <div class="step-num">5.1</div>
+        <div class="step-name">Truy hồi hybrid</div>
+        <div class="step-detail">Embedding câu hỏi (quá 5s → chỉ FTS) + FTS song song</div>
+      </div>
+      <div class="pipeline-arrow">→</div>
+      <div class="pipeline-step pipeline-step--teal">
+        <div class="step-num">5.2</div>
+        <div class="step-name">Merge + rerank</div>
+        <div class="step-detail">Trộn 2 nhánh, đa dạng theo tài liệu (anchor-aware, chừa chỗ cho tài liệu chéo)</div>
+      </div>
+      <div class="pipeline-arrow">→</div>
+      <div class="pipeline-step pipeline-step--sage">
+        <div class="step-num">5.3</div>
+        <div class="step-name">Prompt có nguồn</div>
+        <div class="step-detail">Đoạn nguồn đánh số <code>[CITE-xxxx]</code> + luật "chỉ trả lời từ nguồn"</div>
+      </div>
+      <div class="pipeline-arrow">→</div>
+      <div class="pipeline-step pipeline-step--amber">
+        <div class="step-num">5.4</div>
+        <div class="step-name">Gọi chat LLM</div>
+        <div class="step-detail">OpenRouter, timeout <code>MARKHAND_CHAT_TIMEOUT_SECS</code>, retry 429/5xx</div>
+      </div>
+      <div class="pipeline-arrow">→</div>
+      <div class="pipeline-step pipeline-step--red">
+        <div class="step-num">5.5</div>
+        <div class="step-name">Kiểm chứng</div>
+        <div class="step-detail">Validate citation + claim từng câu; cắt câu không kiểm chứng được</div>
+      </div>
+      <div class="pipeline-arrow">→</div>
+      <div class="pipeline-step pipeline-step--green">
+        <div class="step-num">5.6</div>
+        <div class="step-name">Stream về web</div>
+        <div class="step-detail">Sự kiện bền vững trong DB → SSE token, footnote trích dẫn, cảnh báo tiếng Việt</div>
+      </div>
+    </div>
+    <div class="callout">
+      <strong>Chế độ phiên bản:</strong> câu hỏi có thể chạy ở chế độ <em>hiện hành</em> (current), <em>tại thời điểm</em> (as-of), <em>so sánh 2 phiên bản</em> (compare) hoặc <em>lịch sử thay đổi</em> (history) — bộ kiểm chứng biết phân biệt trích dẫn phiên bản cũ/mới, bắt lỗi gán giá trị bản mới cho bản cũ.
+    </div>
+    <div class="callout callout--green">
+      <strong>Kiểm chứng từng câu</strong> (mức từ vựng, chạy local): citation phải tồn tại và đúng nguồn; số liệu / ngày tháng / đơn vị / mã hiệu văn bản trong câu phải khớp đoạn nguồn; phát hiện phủ định ngược. Câu vi phạm bị loại; phần còn lại phải qua lại toàn bộ kiểm tra. Bộ kiểm chứng suy diễn (structured entailment) <strong>chưa có</strong> → mọi câu trả lời LLM đều dán nhãn "chưa xác minh đầy đủ" (dev-gate), hoặc hệ thống rơi về trích xuất thuần.
+    </div>
+  </div>
+
+  <div class="flow-arrow" style="--i:9">
+    <svg viewBox="0 0 20 20"><path d="M10 4 L10 16 M6 12 L10 16 L14 12"/></svg>
+    hạ tầng phía dưới
+  </div>
+
+  <!-- ============ 6. INFRA + MODES ============ -->
+  <div class="section section--recessed" id="s6" style="--i:10">
+    <div class="section-label" style="color:var(--text-dim)"><span class="dot"></span> Hạ tầng &amp; các chế độ trả lời</div>
+    <div class="three-col">
+      <div>
+        <ul class="node-list">
+          <li><strong>Postgres</strong> — tài liệu, chunk, FTS, sự kiện SSE bền vững, RLS đa tổ chức</li>
+          <li><strong>Qdrant</strong> — vector embedding cho tìm kiếm theo nghĩa</li>
+          <li><strong>Storage</strong> — file gốc + markdown artifact</li>
+        </ul>
+      </div>
+      <div>
+        <ul class="node-list">
+          <li><strong>OpenRouter</strong> — 3 vai trò tách biệt: OCR vision (convert), embedding (index/hỏi), chat (trả lời)</li>
+          <li><strong>Worker nền</strong> — Convert, Index, EmbeddingBatch, Reconcile, Delete (lease + heartbeat)</li>
+        </ul>
+      </div>
+      <div>
+        <ul class="node-list">
+          <li><span class="status status--ok">trích xuất</span> đoạn nguồn nguyên văn — mặc định an toàn</li>
+          <li><span class="status status--warn">llm chưa xác minh</span> qua kiểm tra trích dẫn, dev-gate bật</li>
+          <li><span class="status status--err">fallback</span> LLM lỗi/không đạt kiểm chứng → về trích xuất</li>
+        </ul>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr><th>Tình huống</th><th class="wide">Điều gì xảy ra</th><th>Người dùng thấy</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>LLM trả lời đúng nguồn</td>
+              <td class="wide">Qua hết kiểm tra citation + claim; entailment chưa có nên không nhận nhãn "đã xác minh"</td>
+              <td><span class="status status--warn">llm chưa xác minh</span> + cảnh báo cố định</td>
+            </tr>
+            <tr>
+              <td>LLM viết 1 câu không bám nguồn</td>
+              <td class="wide">Câu đó bị cắt, phần còn lại kiểm tra lại toàn bộ rồi mới trả về</td>
+              <td>Cảnh báo "Đã loại N câu không kiểm chứng được…"</td>
+            </tr>
+            <tr>
+              <td>OpenRouter chậm/lỗi</td>
+              <td class="wide">Hết timeout (mặc định 30s, dev đặt 120s) hoặc lỗi liên tiếp sau retry</td>
+              <td><span class="status status--err">fallback</span> đoạn nguồn liên quan + cảnh báo</td>
+            </tr>
+            <tr>
+              <td>Embedding chậm khi hỏi</td>
+              <td class="wide">Quá 5 giây → bỏ nhánh vector, chỉ dùng tìm kiếm từ khóa</td>
+              <td>Câu trả lời bình thường + cảnh báo "tìm theo nghĩa chưa kịp"</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /diagram -->
+</div><!-- /main -->
+</div><!-- /wrap -->
+
+<script>
+(function() {
+  const toc = document.getElementById('toc');
+  const links = toc.querySelectorAll('a');
+  const sections = [];
+  links.forEach(link => {
+    const id = link.getAttribute('href').slice(1);
+    const el = document.getElementById(id);
+    if (el) sections.push({ id, el, link });
+  });
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const match = sections.find(s => s.el === entry.target);
+        if (match) {
+          match.link.classList.add('active');
+          if (window.innerWidth <= 1000) {
+            match.link.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+          }
+        }
+      }
+    });
+  }, { rootMargin: '-10% 0px -80% 0px' });
+  sections.forEach(s => observer.observe(s.el));
+  links.forEach(link => {
+    link.addEventListener('click', e => {
+      e.preventDefault();
+      const id = link.getAttribute('href').slice(1);
+      const el = document.getElementById(id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        history.replaceState(null, '', '#' + id);
+      }
+    });
+  });
+})();
+</script>
+
+</body>
+</html>

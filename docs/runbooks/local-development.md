@@ -16,8 +16,8 @@ là đường self-host khi có GPU; lần đầu chậm vì tải model Hugging
 | Dev stack (PG/Qdrant/MinIO/AITeamVN embed) | ✅ |
 | `fileconv-server` — health live/ready | ✅ |
 | Auth, upload quarantine, jobs (API) | ✅ (cần bật auth nếu gọi route bảo vệ) |
-| `fileconv-worker` convert (Linux/WSL) | ✅ sandbox thật; Windows native fail-closed |
-| Index/embedding worker | ✅ (AITeamVN CPU @ `:8088`) |
+| `fileconv-worker` convert | ✅ Windows/Linux — subprocess trực tiếp (dev); Linux/Docker POC vẫn có sandbox cách ly |
+| Index/embedding worker | ✅ cùng host với API (Windows/Linux) |
 | Upload → convert → index qua HTTP | ✅ accepted upload tạo job `convert` durable trong cùng transaction (saga); cần convert + index + embedding worker chạy riêng để pipeline hoàn tất |
 | Search (`/api/v1/search`), Ask (`/api/v1/ask`, `/ask/stream`), web SPA | ✅ có trên `master`; câu trả lời sinh bởi LLM (ngoài extractive fallback mặc định) và production qualification vẫn phụ thuộc runtime/evidence đã cấu hình |
 
@@ -29,21 +29,27 @@ Desktop Tauri (`pnpm --dir app tauri dev`) và CLI `fileconv` vẫn chạy độ
 - Docker Engine + Compose v2
 - Rust 1.88 (rustfmt/clippy), GNU Make, Bash, curl, Python 3
 - Node 20+ + pnpm 10.33.3 (chỉ khi chạy `web/` hoặc desktop)
-- **Convert worker:** Linux hoặc WSL2 (namespace/cgroup sandbox)
-- **Windows native:** build/run API + stack OK; convert worker fail-closed — dùng WSL2 cho worker
+- **Convert worker:** chạy cùng host với API (Windows hoặc Linux). Dev mặc định subprocess trực tiếp (không sandbox). Linux POC/Docker production vẫn sandbox trừ khi `MARKHAND_CONVERTER_DISABLE_SANDBOX=1`.
 
-### Windows / WSL2
+### Windows / Linux cùng host
 
-| Việc | Windows (PowerShell) | WSL2 (Ubuntu bash) |
+| Việc | Windows (PowerShell) | Linux / macOS |
 |---|---|---|
-| Docker stack | `make dev-up` hoặc `docker compose -f deploy/dev/compose.yml up -d` | Giống |
-| Load `.env` | Không có `source` — dùng WSL hoặc set từng biến | `set -a && source deploy/dev/.env && set +a` |
+| Docker stack | `docker compose -f deploy/dev/compose.yml up -d` | `make dev-up` |
+| Load `.env` | Git Bash `source deploy/dev/.env` hoặc set biến thủ công | `set -a && source deploy/dev/.env && set +a` |
 | `fileconv-server` | `cargo run -p fileconv-server` | Giống |
-| Workers (convert/index/embedding) | ❌ convert sandbox | ✅ khuyến nghị |
-| curl verify | `curl.exe` hoặc WSL | `curl` |
+| Workers (convert/index/embedding) | ✅ cùng host | ✅ |
+| `fileconv` cho convert | `cargo build -p fileconv-cli` + argv `.exe` | `cargo build --release -p fileconv-cli` |
 
-Khuyến nghị: clone repo trong WSL (`\\wsl$\...`) và chạy stack + workers trong WSL; hoặc
-chỉ test API/health trên Windows native.
+Ví dụ `MARKHAND_CONVERTER_ARGV_JSON` trên Windows (đường dẫn tương đối OK):
+
+```json
+["./target/debug/fileconv.exe","one","{input}","--ocr-defer-dir","."]
+```
+
+Tắt sandbox cách ly trên Linux dev (tuỳ chọn, giống Windows): `MARKHAND_CONVERTER_DISABLE_SANDBOX=1`.
+
+Full stack trong Docker (API + workers): `deploy/scripts/poc-up.sh` — xem [`deploy/README.md`](../../deploy/README.md).
 
 ## Quick start — health check (~5 phút)
 
@@ -121,6 +127,11 @@ lấy từ [`deploy/dev/.env`](../../deploy/dev/.env) (copy từ `.env.example`)
 | `minio` | pinned MinIO | `9000` (API), `9001` (console) | Object storage quarantine + artifacts |
 | `minio-init` | `minio/mc` | — | One-shot: tạo bucket `markhand-quarantine`, `markhand-documents`, `markhand-artifacts` |
 | `otel` | OTel Collector | `4317` (gRPC), `13133` (health) | Telemetry dev (optional cho API) |
+
+> **Windows:** port `54329` có thể rơi vào dải Hyper-V excluded port range
+> (`netsh interface ipv4 show excludedportrange protocol=tcp`) — container lên
+> nhưng host không connect được. Đổi `MARKHAND_POSTGRES_PORT` trong `.env`
+> (ví dụ `55432`) và cập nhật `MARKHAND_DATABASE_URL`/`MARKHAND_WORKER_DATABASE_URL` tương ứng.
 | **`embedding-cpu`** | `Dockerfile.embedding-cpu` | **`8088`** | **AITeamVN CPU** — profile `aiteamvn`, 1024-d L2 |
 | `mock-embedding` | `python:3.12-alpine` | `8088` | Profile **`mock`** — stub 8-dim (CI) |
 
@@ -263,7 +274,7 @@ cargo build --release -p fileconv-server
 cargo build --release -p fileconv-cli    # cho convert worker
 ```
 
-### Convert worker (Linux / WSL)
+### Convert worker (Windows / Linux)
 
 ```bash
 export MARKHAND_WORKER_ID=dev-convert-1
@@ -298,14 +309,14 @@ embedding.
 
 ## E2E checklist
 
-### A. Smoke HTTP (mọi OS + WSL)
+### A. Smoke HTTP (mọi OS)
 
 1. `make dev-init && make dev-up && make dev-health`
 2. `bootstrap-server-role.sh` → `cargo run -p fileconv-server` (migrations) → `deploy/scripts/seed-dev-all.sh --skip-init`
 3. `make dev-print-defaults`
 4. Restart server → `curl` health, login, upload (mục Verify)
 
-### B. Pipeline workers (Linux/WSL)
+### B. Pipeline workers (cùng host hoặc Docker POC)
 
 1. Hoàn thành A + `curl http://127.0.0.1:8088/health` (embedding-cpu ready)
 2. Terminal riêng cho từng worker — convert, index (`MARKHAND_WORKER_KIND=index`), embedding
@@ -404,7 +415,8 @@ Phase 0 / cutover gate.
 | Embedding 503 / loading | Model đang tải — đợi hoặc `download-aiteamvn-embedding.sh` |
 | `SignatureMismatch` | Chạy `print-index-signature.py`, cập nhật `MARKHAND_INDEX_SIGNATURE` |
 | `CloudRuntimeNotAllowed` | Dùng `local-neural`/`vllm-local` hoặc egress opt-in `MARKHAND_ALLOW_CLOUD_EMBEDDINGS=true` (mọi profile — ADR 0016) |
-| Convert worker sandbox unavailable (Windows) | WSL2/Linux |
+| Convert worker không tìm thấy `fileconv` | Build CLI: `cargo build -p fileconv-cli`; kiểm tra `MARKHAND_CONVERTER_ARGV_JSON` |
+| Muốn sandbox cách ly trên Linux dev | Bỏ `MARKHAND_CONVERTER_DISABLE_SANDBOX` (mặc định sandbox trên Linux) |
 | Login 401 sau seed | Chạy `seed-dev-password.sh` sau khi server đã migrate |
 | `whisper-rs` build fail | cmake/clang/libstdc++; xem contributor-setup |
 

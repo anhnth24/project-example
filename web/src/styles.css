@@ -73,13 +73,13 @@
   --space-6: 26.4px;
   --space-8: 35.2px;
 
-  --radius-sm: 8px;
-  --radius-md: 16px;
-  --radius-lg: 28px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
 
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #2e2b25 14%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2e2b25 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2e2b25 22%, transparent);
+  --shadow-sm: 0 1px 1px color-mix(in srgb, #2e2b25 8%, transparent);
+  --shadow-md: 0 2px 6px color-mix(in srgb, #2e2b25 10%, transparent);
+  --shadow-lg: 0 4px 16px color-mix(in srgb, #2e2b25 12%, transparent);
 
   color: var(--color-text);
   background: var(--color-bg);
@@ -187,7 +187,7 @@ figcaption {
 
 button {
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   background: var(--color-accent-700);
   color: var(--color-bg);
   cursor: pointer;
@@ -339,13 +339,13 @@ button:disabled {
    page's horizontal gutters and its overall reading width. Left-aligned (no
    `margin: auto`): after the rail, content hugs the left edge and the
    whitespace falls on the right, so a data table gets the full width it needs
-   instead of being stranded in a narrow centered column. The max-width still
-   caps it on ultra-wide displays so lines never run edge-to-edge. */
+   instead of being stranded in a narrow centered column. No max-width cap:
+   the workspace uses the whole viewport; readable line length is enforced
+   per-element (prose keeps its own measure via `p`/`.lede` caps). */
 .app-main {
   box-sizing: border-box;
   flex: 1 1 auto;
-  max-width: 84rem;
-  padding: var(--space-4) clamp(1.25rem, 5vw, 4rem) var(--space-8);
+  padding: var(--space-4) clamp(1.25rem, 3vw, 2.5rem) var(--space-8);
   width: 100%;
 }
 
@@ -500,13 +500,13 @@ h2 {
 .connection-card {
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-md);
+  box-shadow: none;
   display: grid;
   gap: 1.25rem;
   grid-template-columns: 1fr auto;
   margin-top: 3.5rem;
-  padding: clamp(1.25rem, 4vw, 2rem);
+  padding: clamp(1rem, 3vw, 1.5rem);
 }
 
 .card-label {
@@ -547,14 +547,14 @@ code {
   padding-left: 1.25rem;
 }
 
-/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet. The
-   measure is generous enough for prose plus a comfortable form/card column;
-   table-heavy pages (admin members) opt out to the full `.app-main` width. */
+/* Route pages (pages/*.tsx) rendered by App's hand-rolled RouteOutlet.
+   Full-width: pages fill the whole `.app-main` area instead of a centered
+   62rem column that left up to a third of wide screens empty. Long-form
+   prose stays readable via the element-level `p`/`.lede` measure caps. */
 .page {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
-  max-width: 62rem;
 }
 
 .page h1 {
@@ -609,7 +609,7 @@ code {
   caret-color: var(--color-accent);
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .auth-form input:hover {
@@ -674,8 +674,12 @@ code {
   color: var(--color-text);
   background: transparent;
   border: 1px solid transparent;
-  padding: var(--space-2) calc(var(--space-3) * 1.2);
-  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  transition:
+    background 120ms ease-out,
+    border-color 120ms ease-out,
+    color 120ms ease-out;
 }
 
 .btn svg {
@@ -707,6 +711,7 @@ code {
 }
 
 .btn-secondary {
+  background: var(--color-neutral-100);
   border-color: var(--color-divider);
 }
 
@@ -800,7 +805,7 @@ code {
   caret-color: var(--color-accent);
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
 }
 
 .input:hover {
@@ -861,7 +866,7 @@ textarea.input {
   display: inline-flex;
   overflow: hidden;
   border: 1px solid var(--color-divider);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
 }
 
 .seg-opt {
@@ -899,6 +904,7 @@ textarea.input {
   flex-direction: column;
   gap: var(--space-2);
   padding: var(--space-3);
+  border: 1px solid var(--color-divider);
   border-radius: var(--radius-md);
   background: var(--color-surface);
 }
@@ -958,8 +964,8 @@ textarea.input {
   /* A status/role label is a single token — never let a narrow table cell
      wrap it into a two-line sliver. The cell scrolls/widens instead. */
   white-space: nowrap;
-  padding: 4px 11px;
-  border-radius: calc(var(--radius-md) * 0.75);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
 }
 
 .tag-accent {
@@ -1045,6 +1051,12 @@ textarea.input {
   background: color-mix(in srgb, var(--color-text) 4%, transparent);
 }
 
+.card:has(.table),
+.graph-table-view {
+  -webkit-overflow-scrolling: touch;
+  overflow-x: auto;
+}
+
 /* Member identity cell (components/admin/MembersTable.tsx): a round monogram
    avatar (derived from displayName, never the user id) plus the member's
    name (bold) and email (muted) stacked underneath, with a "Bạn" tag next to
@@ -1111,9 +1123,10 @@ textarea.input {
   flex-direction: column;
   gap: var(--space-3);
   padding: var(--space-4);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
   background: var(--color-surface);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-md);
   max-height: calc(100% - 2.5rem);
   max-width: calc(100% - 2rem);
   overflow: hidden;
@@ -1159,21 +1172,21 @@ textarea.input {
   flex: 1;
 }
 
-/* — rounded frame: everything softens, small controls go pill — */
+/* — frames stay flat: hairline radius on surfaces and controls, no pills — */
 .card,
 .dialog {
-  border-radius: calc(var(--radius-lg) * 1.15);
+  border-radius: var(--radius-md);
 }
 
 .btn,
 .tag,
 .seg,
 .input {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
 }
 
 .input {
-  padding-inline: 14px;
+  padding-inline: 10px;
 }
 
 /* ══════════════════════════════════════════════════════════════════════
@@ -1187,7 +1200,7 @@ textarea.input {
 .icon-badge {
   align-items: center;
   background: var(--color-accent-700);
-  border: 2px solid var(--color-bg);
+  border: 1px solid var(--color-bg);
   border-radius: 999px;
   color: var(--color-bg);
   display: inline-flex;
@@ -1213,7 +1226,7 @@ textarea.input {
   align-items: center;
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   color: var(--color-text);
   cursor: pointer;
   display: flex;
@@ -1269,10 +1282,9 @@ textarea.input {
 .ui-select-menu {
   animation: select-pop 150ms ease-out;
   background: var(--color-surface);
-  border-radius: var(--radius-lg);
-  box-shadow:
-    inset 0 0 0 1px var(--color-divider),
-    var(--shadow-lg);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
   overflow-x: hidden;
   overflow-y: auto;
   padding: var(--space-1);
@@ -1447,7 +1459,8 @@ textarea.input {
 .notice {
   align-items: center;
   background: var(--color-neutral-200);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
   color: var(--color-text);
   display: flex;
   font-size: 13px;
@@ -1481,8 +1494,8 @@ textarea.input {
 .upload-dropzone {
   align-items: center;
   background: var(--color-neutral-100);
-  border: 2px dashed color-mix(in srgb, var(--color-text) 22%, transparent);
-  border-radius: var(--radius-lg);
+  border: 1px dashed color-mix(in srgb, var(--color-text) 22%, transparent);
+  border-radius: var(--radius-md);
   cursor: pointer;
   display: flex;
   flex-direction: column;
@@ -1519,7 +1532,7 @@ textarea.input {
 .upload-dropzone-icon {
   align-items: center;
   background: var(--color-accent-200);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   color: var(--color-accent-800);
   display: inline-flex;
   height: 2.6rem;
@@ -1544,7 +1557,8 @@ textarea.input {
 .upload-item {
   align-items: flex-start;
   background: var(--color-surface);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
   display: flex;
   gap: var(--space-3);
   padding: var(--space-3);
@@ -1784,7 +1798,7 @@ textarea.input {
    looks identical whether the rail is collapsed (badge only) or expanded
    (badge + wordmark). The SVG carries its own rounded corners and dark fill. */
 .rail-brand-mark {
-  border-radius: 11px;
+  border-radius: var(--radius-sm);
   display: block;
   flex: 0 0 auto;
   height: 44px;
@@ -1806,7 +1820,7 @@ textarea.input {
   align-items: center;
   align-self: center;
   background: transparent;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: color-mix(in srgb, var(--color-text) 68%, transparent);
   display: inline-flex;
   flex: 0 0 auto;
@@ -1877,7 +1891,7 @@ textarea.input {
 }
 
 .rail-link {
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: color-mix(in srgb, var(--color-text) 68%, transparent);
   text-decoration: none;
 }
@@ -2132,7 +2146,7 @@ textarea.input {
   aspect-ratio: 4 / 3;
   background: var(--color-surface);
   border: 1px solid var(--color-divider);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
 }
 
 .graph-edge {
@@ -2183,7 +2197,7 @@ textarea.input {
   text-align: left;
   padding: var(--space-2);
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: transparent;
   /* The global `button` rule paints cream-on-accent; on this transparent
      list row that inherited cream text is invisible on the cream ground. */
@@ -2209,7 +2223,7 @@ textarea.input {
 
 .graph-sidebar {
   border: 1px solid var(--color-divider);
-  border-radius: 12px;
+  border-radius: var(--radius-md);
   padding: var(--space-3);
 }
 
@@ -2278,4 +2292,432 @@ textarea.input {
   text-decoration: underline;
   cursor: pointer;
   font: inherit;
+}
+
+/* ── Responsive shell / pages ───────────────────────────────────────────
+   Existing breakpoints (820 auth, 900 graph, 700 nav, 600 topbar/rail)
+   stay in place. These add tablet (~768) and phone (~480) coverage for
+   the app shell, page measure, forms, and tables. */
+
+@media (max-width: 768px) {
+  .topbar {
+    min-height: 3.75rem;
+    padding: 0 1rem;
+  }
+
+  .app-main {
+    padding: var(--space-3) 1rem var(--space-6);
+  }
+
+  .shell-statusline {
+    padding-inline: 1rem;
+  }
+
+  .page {
+    gap: 1rem;
+    max-width: 100%;
+  }
+
+  .page h1 {
+    font-size: clamp(1.6rem, 7vw, 2.25rem);
+    margin-bottom: 0.75rem;
+  }
+
+  .connection-card {
+    grid-template-columns: 1fr;
+    margin-top: 2rem;
+    padding: var(--space-3);
+  }
+
+  .connection-card button {
+    width: 100%;
+  }
+
+  .page .card {
+    min-width: 0;
+  }
+
+  .table,
+  .graph-table-view table {
+    min-width: 36rem;
+  }
+
+  .dialog-actions {
+    flex-wrap: wrap;
+  }
+
+  .graph-toolbar {
+    align-items: stretch;
+  }
+
+  /* Library / search / admin pages set two-column grids inline (no class). */
+  .page [style*='grid-template-columns'],
+  .card [style*='grid-template-columns'] {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .topbar {
+    gap: var(--space-1);
+    padding: 0 0.75rem;
+  }
+
+  .app-main {
+    padding: var(--space-2) 0.75rem var(--space-4);
+  }
+
+  .shell-statusline {
+    padding-inline: 0.75rem;
+    padding-top: var(--space-2);
+  }
+
+  .page {
+    gap: 0.75rem;
+  }
+
+  h1 {
+    font-size: clamp(1.75rem, 10vw, 2.5rem);
+  }
+
+  .lede {
+    font-size: 1rem;
+  }
+
+  .auth-panel {
+    padding: 1.25rem 1rem;
+  }
+
+  .auth-form,
+  .auth-form .btn,
+  .auth-form button,
+  .input,
+  .ui-select,
+  .ui-combobox,
+  .field {
+    max-width: 100%;
+    width: 100%;
+  }
+
+  form.card > .btn:not(.btn-icon):not(.btn-sm),
+  form.card > div > .btn:not(.btn-icon):not(.btn-sm):not(.btn-ghost) {
+    width: 100%;
+  }
+
+  form.card > div {
+    flex-wrap: wrap;
+  }
+
+  .dialog {
+    max-width: calc(100% - 1rem);
+    padding: var(--space-3);
+  }
+
+  .dialog-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .dialog-actions .btn {
+    width: 100%;
+  }
+
+  .notice {
+    flex-wrap: wrap;
+  }
+
+  .upload-dropzone {
+    padding: var(--space-4) var(--space-3);
+  }
+
+  .upload-item {
+    flex-wrap: wrap;
+  }
+
+  .graph-canvas {
+    aspect-ratio: 1 / 1;
+  }
+}
+
+/* =====================================================================
+   Chat UI — Hỏi đáp log, bubbles, composer, history sidebar.
+   Appended for the chat modernization pass; do not merge into rules above.
+   ===================================================================== */
+
+.qa-workspace {
+  display: flex;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.qa-workspace-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.chat-log {
+  max-height: 60vh;
+  min-height: 16rem;
+  overflow-y: auto;
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-neutral-100);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-log-inner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.chat-turn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.chat-turn-question {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chat-bubble {
+  margin: 0;
+}
+
+.chat-bubble-user {
+  max-width: 85%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-100);
+  color: var(--color-text);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.chat-turn-answer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: 85%;
+}
+
+.chat-bubble-assistant {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  border: 1px solid var(--color-divider);
+}
+
+.chat-turn-extra,
+.chat-turn > .chat-footnotes,
+.chat-turn > .chat-turn-meta {
+  max-width: 85%;
+}
+
+.chat-answer {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.chat-answer p {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.chat-footnotes {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--color-divider);
+}
+
+.chat-footnotes-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+}
+
+.chat-footnote-item {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.chat-footnote-item:last-child {
+  border-bottom: 0;
+}
+
+.chat-footnote-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.chat-footnote-source {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  max-width: min(42ch, 100%);
+}
+
+.chat-footnote-quote {
+  margin: var(--space-2) 0 0;
+  font-style: italic;
+}
+
+.chat-citation-card {
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-divider);
+}
+
+.chat-citation-card:last-child {
+  border-bottom: 0;
+}
+
+.chat-turn-meta {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-composer-advanced {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.chat-composer-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.chat-composer-field {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+}
+
+.chat-composer-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+.chat-history-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 16rem;
+  max-width: 20rem;
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-history-sidebar-collapsed {
+  padding: var(--space-2);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.chat-history-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.chat-session-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+  /* Long histories scroll inside the sidebar instead of stretching the whole
+     page: cap the list, not the sidebar, so header/new-conversation/load-more
+     stay visible. */
+  max-height: min(55vh, 34rem);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-session-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--color-divider);
+  border-radius: var(--radius-sm);
+  background: var(--color-neutral-100);
+}
+
+.chat-session-item.is-active {
+  border-color: var(--color-accent-700);
+  background: var(--color-accent-100);
+}
+
+@media (max-width: 768px) {
+  .qa-workspace {
+    flex-direction: column;
+  }
+
+  .chat-history-sidebar,
+  .chat-history-sidebar-collapsed,
+  .chat-panel,
+  .qa-workspace-main {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 480px) {
+  .chat-bubble-user,
+  .chat-turn-answer,
+  .chat-turn-extra,
+  .chat-turn > .chat-footnotes,
+  .chat-turn > .chat-turn-meta {
+    max-width: 100%;
+  }
+
+  .chat-composer-row {
+    flex-wrap: wrap;
+  }
+
+  .chat-composer-field,
+  .chat-composer-actions {
+    flex: 1 1 100%;
+  }
 }

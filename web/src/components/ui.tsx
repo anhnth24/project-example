@@ -324,6 +324,7 @@ export function Combobox({
     <div ref={rootRef} className="ui-combobox">
       <input
         ref={inputRef}
+        className="input"
         value={value}
         placeholder={placeholder}
         role="combobox"
@@ -432,7 +433,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        style={{ width }}
+        style={{ width, maxWidth: '100%' }}
       >
         <header className="dialog-header">
           <div>

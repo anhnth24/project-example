@@ -157,7 +157,10 @@ impl VisionOcrRuntime {
     /// ~150s, 5 trang ~70s, 1 trang ~50s) + biên an toàn: `60s + 15s × trang`,
     /// chặn trên bởi `MARKHAND_OCR_TIMEOUT_SECS`.
     pub fn batch_timeout(&self, pages: usize) -> Duration {
-        Duration::from_secs(60 + 15 * pages as u64).min(self.timeout_cap)
+        // Base 120s (thay vì 60s): OpenRouter lúc tải cao cần >90s cho MỘT
+        // trang dày chữ (đo 2026-08-16, 3 job dead-letter chỉ vì trần 75s);
+        // cap MARKHAND_OCR_TIMEOUT_SECS vẫn thắng công thức.
+        Duration::from_secs(120 + 30 * pages as u64).min(self.timeout_cap)
     }
 
     /// OCR một ảnh JPEG (artifact từ sandbox). Trả Markdown đã strip fence.
@@ -387,9 +390,9 @@ mod tests {
             300,
         )
         .expect("runtime");
-        assert_eq!(runtime.batch_timeout(1), Duration::from_secs(75));
-        assert_eq!(runtime.batch_timeout(5), Duration::from_secs(135));
-        assert_eq!(runtime.batch_timeout(10), Duration::from_secs(210));
+        assert_eq!(runtime.batch_timeout(1), Duration::from_secs(150));
+        assert_eq!(runtime.batch_timeout(5), Duration::from_secs(270));
+        assert_eq!(runtime.batch_timeout(10), Duration::from_secs(300));
         // Cap từ MARKHAND_OCR_TIMEOUT_SECS thắng công thức.
         let capped = VisionOcrRuntime::new(
             "https://openrouter.ai/api".into(),

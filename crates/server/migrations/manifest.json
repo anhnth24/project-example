@@ -36,6 +36,7 @@
     "0033_expand_acl_version_triggers.sql": "c4a51ae6e5a3676d9493d0174e0f5d41758d0b137ae3d94f7ce4c4a8573592a3",
     "0034_expand_qa_chat_history.sql": "383f7347cf1e09145a4dbf38df101949f571981dfb90b5287f5fa3c21c60ffc1",
     "0035_expand_worker_role.sql": "0daa913d8dca0b6c6013f0aa3f854a924eb6b6832ffe93d6908016901a520c5b",
-    "0036_expand_acl_groups_invariants.sql": "5b0a3b478712d31da39dbee9677ba349d03f1f05dadc6b4c6f72250a19656b1c"
+    "0036_expand_acl_groups_invariants.sql": "5b0a3b478712d31da39dbee9677ba349d03f1f05dadc6b4c6f72250a19656b1c",
+    "0037_expand_chunks_split_file_tokens_tsv.sql": "bd69bc2367104c52c9f1e7e8ef86c59c8ba4ab5e4269a690744c4e52a980d887"
   }
 }

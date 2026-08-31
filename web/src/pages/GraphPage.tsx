@@ -145,7 +145,7 @@ export function GraphPage({
   return (
     <section
       className="page graph-page"
-      style={{ maxWidth: 'none' }}
+      style={{ maxWidth: 'none', minWidth: 0 }}
       aria-labelledby="graph-heading"
     >
       <p className="eyebrow">Đồ thị</p>

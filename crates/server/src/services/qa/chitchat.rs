@@ -44,8 +44,11 @@ pub fn router_messages(question: &str) -> GroundedMessages {
 
 const ROUTER_SYSTEM_PROMPT: &str = "Bạn là bộ phân loại một nhãn. \
 Chỉ trả lời đúng một từ: KNOWLEDGE hoặc ASSISTANT (không giải thích thêm). \
-KNOWLEDGE = câu hỏi về nội dung tài liệu / chính sách / quy trình / dữ liệu trong kho tri thức tổ chức, cần tra cứu và trích dẫn nguồn. \
-ASSISTANT = chào hỏi, cảm ơn, hỏi về trợ lý, trò chuyện chung, hoặc chủ đề không liên quan tài liệu nội bộ.";
+ASSISTANT = CHỈ khi câu rõ ràng là xã giao: chào hỏi, cảm ơn, tạm biệt, hỏi về bản thân trợ lý, \
+hoặc tán gẫu không có nội dung tra cứu (thời tiết, thể thao, kể chuyện). \
+KNOWLEDGE = mọi câu hỏi có nội dung thông tin — khái niệm kỹ thuật/khoa học, tài liệu, chính sách, \
+quy trình, số liệu, định nghĩa… — vì kho tri thức tổ chức có thể chứa tài liệu về chủ đề đó; \
+khi phân vân chọn KNOWLEDGE (nếu kho không có, hệ thống sẽ tự trả lời 'không đủ dữ liệu').";
 
 pub fn parse_router_label(raw: &str) -> Option<AskRoute> {
     let token = raw

@@ -180,7 +180,11 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
   const loadingProjects = projectsResult.status === 'loading' && projectsData === undefined;
 
   return (
-    <section className="page" style={{ maxWidth: 'none' }} aria-labelledby="admin-projects-heading">
+    <section
+      className="page"
+      style={{ maxWidth: 'none', minWidth: 0 }}
+      aria-labelledby="admin-projects-heading"
+    >
       <p className="eyebrow">Quản trị</p>
       <h1 id="admin-projects-heading">Dự án</h1>
       <p className="lede">
@@ -217,10 +221,7 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
         </Notice>
       )}
 
-      <div
-        className="card"
-        style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
-      >
+      <div className="card" style={{ gap: 'var(--space-3)' }}>
         <h2 className="card-title">Tạo dự án mới</h2>
         <form
           onSubmit={createProject}
@@ -229,9 +230,11 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
             gap: 'var(--space-2)',
             alignItems: 'flex-end',
             flexWrap: 'wrap',
+            minWidth: 0,
+            maxWidth: '100%',
           }}
         >
-          <div className="field" style={{ flex: '1 1 240px' }}>
+          <div className="field" style={{ flex: '1 1 16rem', minWidth: 0, maxWidth: '100%' }}>
             <label htmlFor="new-project-name">Tên dự án</label>
             <input
               id="new-project-name"
@@ -255,10 +258,7 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
         )}
       </div>
 
-      <div
-        className="card"
-        style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
-      >
+      <div className="card" style={{ gap: 'var(--space-3)', minWidth: 0 }}>
         <h2 className="card-title">Danh sách dự án</h2>
         {loadingProjects && <p className="text-muted">Đang tải danh sách dự án…</p>}
         {!loadingProjects && projects.length === 0 && (
@@ -282,7 +282,13 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
                     <td>
                       {isEditing ? (
                         <div
-                          style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}
+                          style={{
+                            display: 'flex',
+                            gap: 'var(--space-2)',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            minWidth: 0,
+                          }}
                         >
                           <input
                             className="input"
@@ -291,6 +297,7 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
                             value={editValue}
                             onChange={(event) => setEditValue(event.target.value)}
                             autoFocus
+                            style={{ flex: '1 1 12rem', minWidth: 0 }}
                           />
                           <button
                             type="button"
@@ -311,7 +318,13 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
                         </div>
                       ) : (
                         <div
-                          style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}
+                          style={{
+                            display: 'flex',
+                            gap: 'var(--space-2)',
+                            alignItems: 'center',
+                            flexWrap: 'wrap',
+                            minWidth: 0,
+                          }}
                         >
                           <span>{project.name}</span>
                           <button
@@ -363,10 +376,7 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
         )}
       </div>
 
-      <div
-        className="card"
-        style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
-      >
+      <div className="card" style={{ gap: 'var(--space-3)', minWidth: 0 }}>
         <h2 className="card-title">{UNASSIGNED_LABEL}</h2>
         {unassignedCollections.length === 0 ? (
           <p className="text-muted">Mọi bộ sưu tập đều đã thuộc một dự án.</p>
@@ -380,9 +390,11 @@ export function AdminProjectsPage({ client = apiClient }: { client?: ApiClient }
                   gap: 'var(--space-2)',
                   alignItems: 'center',
                   flexWrap: 'wrap',
+                  minWidth: 0,
+                  maxWidth: '100%',
                 }}
               >
-                <span style={{ minWidth: '12rem' }}>{collection.name}</span>
+                <span style={{ flex: '1 1 12rem', minWidth: 0 }}>{collection.name}</span>
                 <SelectControl
                   value=""
                   options={projectOptions}

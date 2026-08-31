@@ -18,6 +18,10 @@ queries chunk text through PostgreSQL `to_tsvector('simple', …)` /
 - Index side: trigger `chunks_set_tsv()` builds `NEW.tsv` from
   `markhand_accent_fold(heading_path || ' ' || body)`
   (`crates/server/migrations/0016_expand_chunks_accent_fold_tsv.sql:21-34`).
+  Migration `0037_expand_chunks_split_file_tokens_tsv.sql` later extended the
+  trigger to a union of two foldings (original + slash-replaced) so `file`-type
+  tokens like "1502/CV-CNTT" also match by sub-token; this does not change the
+  segmentation analysis below — tokens are still syllable-level.
 - Query side: `fts_search` accent-folds the query with
   `fileconv_core::intelligence::normalize_search_text` before
   `plainto_tsquery('simple', $N)` (`crates/server/src/db/search.rs:199-213`,

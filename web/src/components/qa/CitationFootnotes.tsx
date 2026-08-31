@@ -1,6 +1,6 @@
 // Part C of the owner's Q&A redesign spec: "Citations dạng footnote cuối câu
 // trả lời" — a numbered "Nguồn trích dẫn" block at the end of a turn, one
-// item per citation (`[n] <tên/nguồn> — trang X`), replacing the old flat
+// item per cited document (`[n] <tên> — Trang 1–3, 7`), grouping every pin
 // list of `CitationCard`s. Reuses `CitationCard.tsx`'s deep-link logic
 // (`hasDeepLink`/`locationLabel`) rather than re-deriving it — this is a
 // restructuring of that same card into a footnote-shaped item, not a parallel
@@ -23,7 +23,7 @@ import { useState } from 'react';
 import { buildLibraryDocPath } from '../../lib/router';
 import { RouteLink } from '../RouteLink';
 import { footnoteAnchorId } from './AnswerText';
-import { hasDeepLink, locationLabel, type CitationPin } from './CitationCard';
+import { hasDeepLink, groupedLocationLabel, type CitationPin } from './CitationCard';
 import { buildCitationFootnotes, distinctDocumentCount } from './citationFootnoteModel';
 
 const UNKNOWN_COLLECTION_LABEL = 'Bộ sưu tập không xác định';
@@ -31,36 +31,31 @@ const UNKNOWN_COLLECTION_LABEL = 'Bộ sưu tập không xác định';
 function FootnoteItem({
   n,
   citation,
+  citations,
   sourceLabel,
   location,
   scopeId,
 }: {
   n: number;
   citation: CitationPin;
+  citations: readonly CitationPin[];
   sourceLabel: string;
   location: string | null;
   scopeId: string;
 }) {
   const [quoteOpen, setQuoteOpen] = useState(false);
   const deepLinkable = hasDeepLink(citation);
+  const quotes = citations
+    .map((pin) => pin.quote?.trim())
+    .filter((quote): quote is string => Boolean(quote));
+  const uniqueQuotes = [...new Set(quotes)];
   return (
-    <li
-      id={footnoteAnchorId(scopeId, n)}
-      style={{
-        padding: 'var(--space-2) 0',
-        borderBottom: '1px solid var(--border-subtle, rgba(0,0,0,0.08))',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          gap: 'var(--space-2)',
-          alignItems: 'baseline',
-          flexWrap: 'wrap',
-        }}
-      >
+    <li id={footnoteAnchorId(scopeId, n)} className="chat-footnote-item">
+      <div className="chat-footnote-row">
         <strong>[{n}]</strong>
-        <span>{sourceLabel}</span>
+        <span title={sourceLabel} className="chat-footnote-source">
+          {sourceLabel}
+        </span>
         {location && <span className="text-muted">— {location}</span>}
         {citation.isCurrent === false && (
           <span className="tag tag-neutral" title="Trích dẫn từ phiên bản không phải bản mới nhất">
@@ -75,25 +70,31 @@ function FootnoteItem({
             Xem trước
           </RouteLink>
         )}
-        {citation.quote && (
+        {uniqueQuotes.length > 0 && (
           <button
             type="button"
             className="btn btn-secondary btn-sm"
             aria-expanded={quoteOpen}
             onClick={() => setQuoteOpen((open) => !open)}
           >
-            {quoteOpen ? 'Ẩn đoạn trích' : 'Hiện đoạn trích'}
+            {quoteOpen
+              ? 'Ẩn đoạn trích'
+              : uniqueQuotes.length > 1
+                ? `Hiện ${uniqueQuotes.length} đoạn trích`
+                : 'Hiện đoạn trích'}
           </button>
         )}
       </div>
-      {quoteOpen && citation.quote && (
-        <blockquote
-          style={{ margin: 'var(--space-2) 0 0', fontStyle: 'italic' }}
-          data-testid="qa-footnote-quote"
-        >
-          “{citation.quote}”
-        </blockquote>
-      )}
+      {quoteOpen &&
+        uniqueQuotes.map((quote, index) => (
+          <blockquote
+            key={`${n}-${index}`}
+            className="chat-footnote-quote"
+            data-testid="qa-footnote-quote"
+          >
+            “{quote}”
+          </blockquote>
+        ))}
     </li>
   );
 }
@@ -113,7 +114,7 @@ export function CitationFootnotes({
   const documentCount = distinctDocumentCount(citations);
 
   return (
-    <div aria-labelledby={`${scopeId}-sources-heading`}>
+    <div className="chat-footnotes" aria-labelledby={`${scopeId}-sources-heading`}>
       <p className="eyebrow" id={`${scopeId}-sources-heading`} style={{ margin: 0 }}>
         Nguồn trích dẫn
       </p>
@@ -122,26 +123,19 @@ export function CitationFootnotes({
           Tổng hợp từ {documentCount} tài liệu.
         </p>
       )}
-      <ol
-        style={{
-          listStyle: 'none',
-          margin: 'var(--space-2) 0 0',
-          padding: 0,
-          display: 'grid',
-          gap: 0,
-        }}
-      >
-        {footnotes.map(({ n, citation }) => {
+      <ol className="chat-footnotes-list">
+        {footnotes.map(({ n, citation, citations: group }) => {
           const collectionName = citation.collectionId
             ? (collectionNameById.get(citation.collectionId) ?? UNKNOWN_COLLECTION_LABEL)
             : UNKNOWN_COLLECTION_LABEL;
           const sourceLabel = citation.documentTitle ?? collectionName;
-          const location = locationLabel(citation);
+          const location = groupedLocationLabel(group);
           return (
             <FootnoteItem
               key={citation.citeId + n}
               n={n}
               citation={citation}
+              citations={group}
               sourceLabel={sourceLabel}
               location={location}
               scopeId={scopeId}

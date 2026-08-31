@@ -22,7 +22,7 @@ export function TurnWarningBlocks({ warnings }: { warnings: readonly string[] })
   if (!summary && !discardedLlmDraft && technicalDetails.length === 0) return null;
 
   return (
-    <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
+    <div className="chat-turn-meta">
       {summary && <Notice tone="warning">{summary}</Notice>}
 
       {discardedLlmDraft && (

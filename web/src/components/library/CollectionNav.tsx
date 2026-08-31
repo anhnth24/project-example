@@ -54,7 +54,13 @@ export function CollectionNav({
   return (
     <nav
       aria-label="Điều hướng bộ sưu tập"
-      style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 'var(--space-3)',
+        minWidth: 0,
+        maxWidth: '100%',
+      }}
     >
       {groups.map((group) => (
         <div

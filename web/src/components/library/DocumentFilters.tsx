@@ -33,9 +33,16 @@ export function DocumentFilters({
   const searchId = useId();
   return (
     <div
-      style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap', alignItems: 'flex-end' }}
+      style={{
+        display: 'flex',
+        gap: 'var(--space-3)',
+        flexWrap: 'wrap',
+        alignItems: 'flex-end',
+        minWidth: 0,
+        maxWidth: '100%',
+      }}
     >
-      <div className="field">
+      <div className="field" style={{ flex: '1 1 16rem', minWidth: 0, maxWidth: '100%' }}>
         <label htmlFor={searchId}>Tìm tài liệu</label>
         <input
           id={searchId}

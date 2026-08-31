@@ -76,7 +76,7 @@ pub fn validate_answer_citations(
         ) {
             let values_a = extract_claim_values(&pin_a.quote);
             let values_b = extract_claim_values(&pin_b.quote);
-            for sentence in answer.split(['.', '!', '?', '\n']) {
+            for sentence in split_sentences(answer) {
                 let sentence = sentence.trim();
                 if sentence.is_empty() || !citation_labels(sentence).contains(&pin_a.cite_id) {
                     continue;
@@ -119,6 +119,23 @@ pub fn validate_answer_citations(
     }
 }
 
+/// `Some(labels)` khi mảnh chỉ gồm token citation + ngoặc/khoảng trắng
+/// (ví dụ ` [CITE-0004]`), tức citation lạc sang mảnh sau vì dấu chấm câu.
+fn citation_only_segment(segment: &str) -> Option<Vec<String>> {
+    let labels: Vec<String> = citation_labels(segment).into_iter().collect();
+    if labels.is_empty() {
+        return None;
+    }
+    let mut leftover = segment.to_string();
+    for label in &labels {
+        leftover = leftover.replace(label.as_str(), "");
+    }
+    leftover
+        .chars()
+        .all(|c| c.is_whitespace() || matches!(c, '[' | ']' | '(' | ')' | ','))
+        .then_some(labels)
+}
+
 fn citation_labels(answer: &str) -> HashSet<String> {
     answer
         .split(|character: char| {
@@ -127,6 +144,34 @@ fn citation_labels(answer: &str) -> HashSet<String> {
         .filter(|part| part.starts_with("CITE-"))
         .map(str::to_string)
         .collect()
+}
+
+/// Tách câu nhưng KHÔNG cắt tại dấu chấm thập phân ("0.1%", "3.5"): splitter
+/// naive từng biến "lỗi dưới 0.1% [CITE-x]" thành claim cụt "lỗi dưới 0" mất
+/// citation → discard oan cả draft (eval 2026-08-16, câu ResNet).
+fn split_sentences(answer: &str) -> Vec<String> {
+    let chars: Vec<char> = answer.chars().collect();
+    let mut sentences = Vec::new();
+    let mut current = String::new();
+    for (index, &c) in chars.iter().enumerate() {
+        match c {
+            '!' | '?' | '\n' => sentences.push(std::mem::take(&mut current)),
+            '.' => {
+                let prev_digit = index > 0 && chars[index - 1].is_ascii_digit();
+                let next_digit = chars
+                    .get(index + 1)
+                    .is_some_and(|next| next.is_ascii_digit());
+                if prev_digit && next_digit {
+                    current.push(c);
+                } else {
+                    sentences.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(c),
+        }
+    }
+    sentences.push(current);
+    sentences
 }
 
 fn claim_level_grounding(
@@ -138,24 +183,28 @@ fn claim_level_grounding(
     let pin_by_id: std::collections::HashMap<&str, &CitationPin> =
         pins.iter().map(|pin| (pin.cite_id.as_str(), pin)).collect();
 
-    for sentence in answer.split(['.', '!', '?', '\n']) {
-        let sentence = sentence.trim();
+    let segments: Vec<String> = split_sentences(answer);
+    for (index, raw_segment) in segments.iter().enumerate() {
+        let sentence = raw_segment.trim();
         if sentence.is_empty() {
             continue;
         }
-        let cites_in_sentence: Vec<&str> = citation_labels(sentence)
-            .into_iter()
-            .map(|s| {
-                // leak into static-ish by finding in sentence
-                pins.iter()
-                    .map(|p| p.cite_id.as_str())
-                    .find(|id| *id == s)
-                    .unwrap_or("CITE-????")
-            })
-            .collect();
-        // Recompute cites directly from sentence tokens for borrow safety.
-        let cites: Vec<String> = citation_labels(sentence).into_iter().collect();
-        let _ = cites_in_sentence;
+        let mut cites: Vec<String> = citation_labels(sentence).into_iter().collect();
+        // Prompt yêu cầu "[CITE-xxxx]" cuối câu; model thường đặt token SAU dấu
+        // chấm ("… năm 2025. [CITE-0004]") nên splitter đẩy citation sang mảnh
+        // kế tiếp. Mảnh kế chỉ-chứa-citation thuộc về câu hiện tại.
+        if cites.is_empty() {
+            // Bỏ qua mảnh rỗng do "…"/"..." sinh ra giữa câu và token citation.
+            for next in segments[index + 1..].iter().take(3) {
+                if next.trim().is_empty() {
+                    continue;
+                }
+                if let Some(borrowed) = citation_only_segment(next) {
+                    cites = borrowed;
+                }
+                break;
+            }
+        }
 
         let factual = is_factual_sentence(sentence);
         if !factual {
@@ -173,12 +222,22 @@ fn claim_level_grounding(
                 warnings.push(format!("Claim cites unknown {cite}; unverifiable."));
                 continue;
             };
-            if !passage_supports_sentence(sentence, pin.quote.as_str()) {
+            // Quote chỉ là CỬA SỔ ~240 ký tự của chunk; heading + tiêu đề tài
+            // liệu cũng là ngữ cảnh người dùng thấy được ở citation đó. Câu tóm
+            // tắt cả chunk hay bị anchor rơi ngoài cửa sổ quote → discard oan
+            // (eval 2026-08-16: BERT/ResNet dao động theo vị trí quote).
+            let passage_context = format!(
+                "{} {} {}",
+                pin.document_title.as_deref().unwrap_or(""),
+                pin.heading,
+                pin.quote
+            );
+            if !passage_supports_sentence(sentence, &passage_context) {
                 warnings.push(format!(
                     "Claim not supported by passage/span of {cite}; unverifiable."
                 ));
             }
-            if negation_contradicts(sentence, pin.quote.as_str()) {
+            if negation_contradicts(sentence, &passage_context) {
                 warnings.push(format!(
                     "Claim negation/contradiction vs {cite}; unverifiable."
                 ));
@@ -191,7 +250,13 @@ fn claim_level_grounding(
         // Misplaced citation: cite appears but its passage is about a different subject token set.
         if cites.len() == 1 {
             if let Some(pin) = pin_by_id.get(cites[0].as_str()) {
-                if qualitative_subject_mismatch(sentence, pin.quote.as_str()) {
+                let passage_context = format!(
+                    "{} {} {}",
+                    pin.document_title.as_deref().unwrap_or(""),
+                    pin.heading,
+                    pin.quote
+                );
+                if qualitative_subject_mismatch(sentence, &passage_context) {
                     warnings.push(format!(
                         "Misplaced citation {}; passage subject mismatch.",
                         cites[0]
@@ -207,7 +272,40 @@ fn claim_level_grounding(
     warnings
 }
 
+/// Dòng heading cấu trúc ngắn ("Điều 1", "Chương II", "Phụ lục VII") mà prompt
+/// yêu cầu xuống dòng riêng — không phải factual claim, không cần citation.
+fn is_structural_heading_line(sentence: &str) -> bool {
+    let trimmed = sentence.trim().trim_start_matches('#').trim();
+    if trimmed.chars().count() > 20 {
+        return false;
+    }
+    let lowered = trimmed.to_lowercase();
+    lowered.starts_with("điều ") || lowered.starts_with("chương ") || lowered.starts_with("phụ lục")
+}
+
+/// Dòng tiêu đề văn bản ALL-CAPS ("THÔNG TƯ", "THÔNG TƯ SỐ 16/2025/TT-BCT…")
+/// mà prompt yêu cầu xuống dòng riêng — là nhãn cấu trúc, không phải claim.
+fn is_all_caps_title_line(sentence: &str) -> bool {
+    let trimmed = sentence.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > 160 {
+        return false;
+    }
+    let mut has_letter = false;
+    for c in trimmed.chars() {
+        if c.is_alphabetic() {
+            has_letter = true;
+            if c.is_lowercase() {
+                return false;
+            }
+        }
+    }
+    has_letter
+}
+
 fn is_factual_sentence(sentence: &str) -> bool {
+    if is_structural_heading_line(sentence) || is_all_caps_title_line(sentence) {
+        return false;
+    }
     let lowered = sentence.to_lowercase();
     if citation_labels(sentence).is_empty() && !extract_claim_values(sentence).is_empty() {
         return true;
@@ -221,10 +319,69 @@ fn is_factual_sentence(sentence: &str) -> bool {
 }
 
 fn answer_has_qualitative_assertion(answer: &str) -> bool {
-    answer.split(['.', '!', '?', '\n']).any(|s| {
+    split_sentences(answer).iter().any(|s| {
         let s = s.trim();
         !s.is_empty() && is_factual_sentence(s)
     })
+}
+
+/// Câu tiếng Việt cite passage tiếng Anh (corpus paper/OCR ngoại văn):
+/// so khớp từ vựng thuần không dùng được — chỉ token kỹ thuật ASCII là cầu nối.
+/// Dùng MẬT ĐỘ dấu (không phải có/không): quote tiếng Anh vẫn có thể dính vài
+/// ký tự Việt (marker OCR "[không rõ: …]", heading dịch) — một từ Việt lạc
+/// trong 240 ký tự Anh không được phép tắt nhánh cross-lingual (eval
+/// 2026-08-16: BERT/word2vec bị discard oan vì vậy).
+fn is_cross_lingual(sentence: &str, passage: &str) -> bool {
+    vietnamese_diacritic_ratio(sentence) > 0.08 && vietnamese_diacritic_ratio(passage) < 0.03
+}
+
+fn vietnamese_diacritic_ratio(text: &str) -> f32 {
+    let mut letters = 0usize;
+    let mut marked = 0usize;
+    for c in text.chars() {
+        if c.is_alphabetic() {
+            letters += 1;
+            if is_vietnamese_diacritic(c) {
+                marked += 1;
+            }
+        }
+    }
+    if letters == 0 {
+        return 0.0;
+    }
+    marked as f32 / letters as f32
+}
+
+/// Bảng chữ có dấu tiếng Việt liệt kê TƯỜNG MINH (kèm dạng hoa). KHÔNG dùng
+/// range kiểu `'à'..='ạ'`: khoảng codepoint U+00E0..U+1EA1 nuốt cả Latin-1 và
+/// Latin Extended (ë, ñ, ā, ø…) nên text Pháp/Đức/pinyin bị đếm nhầm là tiếng
+/// Việt và các nhánh liệt kê phía sau thành unreachable (warning rustc).
+const VIETNAMESE_MARKED: &str = concat!(
+    "àáảãạăằắẳẵặâầấẩẫậ",
+    "èéẻẽẹêềếểễệ",
+    "ìíỉĩị",
+    "òóỏõọôồốổỗộơờớởỡợ",
+    "ùúủũụưừứửữự",
+    "ỳýỷỹỵđ",
+    "ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬ",
+    "ÈÉẺẼẸÊỀẾỂỄỆ",
+    "ÌÍỈĨỊ",
+    "ÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢ",
+    "ÙÚỦŨỤƯỪỨỬỮỰ",
+    "ỲÝỶỸỴĐ",
+);
+
+fn is_vietnamese_diacritic(c: char) -> bool {
+    !c.is_ascii() && VIETNAMESE_MARKED.contains(c)
+}
+
+/// Token ASCII ≥4 ký tự trong câu Việt gần như chắc chắn là thuật ngữ/tên riêng
+/// ngoại văn (ResNet, shortcut, mapreduce…) — dùng làm mỏ neo cross-lingual.
+fn ascii_anchor_tokens(text: &str) -> HashSet<String> {
+    significant_tokens(text)
+        .into_iter()
+        .filter(|token| token.len() >= 4 && token.is_ascii())
+        .collect()
 }
 
 fn passage_supports_sentence(sentence: &str, passage: &str) -> bool {
@@ -233,6 +390,16 @@ fn passage_supports_sentence(sentence: &str, passage: &str) -> bool {
         return values
             .iter()
             .all(|value| passage_contains_value(passage, value));
+    }
+    if is_cross_lingual(sentence, passage) {
+        // Chỉ mỏ neo ASCII mới so được với passage ngoại văn. Không có mỏ neo
+        // (câu dịch hoàn toàn) → bất khả kiểm bằng từ vựng, không kết luận sai.
+        let anchors = ascii_anchor_tokens(sentence);
+        if anchors.is_empty() {
+            return true;
+        }
+        let passage_tokens = significant_tokens(passage);
+        return anchors.iter().any(|token| passage_tokens.contains(token));
     }
     // Qualitative: require a contentful token overlap (≥1 significant token).
     let sentence_tokens = significant_tokens(sentence);
@@ -246,11 +413,26 @@ fn passage_supports_sentence(sentence: &str, passage: &str) -> bool {
 }
 
 fn negation_contradicts(sentence: &str, passage: &str) -> bool {
+    // Cross-lingual: "không" trong câu Việt ("mà không cần…") không đối chiếu
+    // được với phủ định tiếng Anh (cannot/without/never) — bỏ check thay vì
+    // discard nhầm draft đúng (eval 2026-08-16: 2 câu ResNet bị loại oan).
+    if is_cross_lingual(sentence, passage) {
+        return false;
+    }
     let s = sentence.to_lowercase();
     let p = passage.to_lowercase();
     let sentence_neg = s.contains(" không ") || s.contains("not ");
-    let passage_neg = p.contains(" không ") || p.contains("not ");
-    sentence_neg != passage_neg
+    let passage_neg = p.contains(" không ")
+        || p.contains("not ")
+        || p.contains("cannot")
+        || p.contains("never ")
+        || p.contains("without ")
+        || p.contains("n't ");
+    // Một chiều có chủ đích: passage pháp lý dài gần như luôn chứa "không" ở
+    // một mệnh đề nào đó, nên "passage phủ định mà câu khẳng định" cho false
+    // positive hàng loạt. Chỉ chặn khi CÂU phủ định điều passage không phủ định.
+    sentence_neg
+        && !passage_neg
         && significant_tokens(sentence)
             .iter()
             .any(|token| significant_tokens(passage).contains(token))
@@ -273,12 +455,59 @@ fn date_or_unit_mismatch(sentence: &str, passage: &str) -> bool {
 }
 
 fn qualitative_subject_mismatch(sentence: &str, passage: &str) -> bool {
+    if is_cross_lingual(sentence, passage) {
+        // Chỉ kết luận lệch chủ đề khi câu có ≥2 mỏ neo ASCII mà passage không
+        // chứa mỏ neo nào; câu dịch hết sang tiếng Việt là bất khả kiểm.
+        let anchors = ascii_anchor_tokens(sentence);
+        if anchors.len() < 2 {
+            return false;
+        }
+        let p_tokens = significant_tokens(passage);
+        return anchors.iter().all(|token| !p_tokens.contains(token));
+    }
     let s_tokens = significant_tokens(sentence);
     let p_tokens = significant_tokens(passage);
     if s_tokens.len() < 2 || p_tokens.is_empty() {
         return false;
     }
     s_tokens.iter().all(|token| !p_tokens.contains(token))
+}
+
+/// P0.2 (đề xuất trước, validate sau): pin có token-overlap cao nhất với câu
+/// chưa cite. Chỉ là ĐỀ XUẤT — caller bắt buộc chạy nguyên bộ validation
+/// (`validate_answer_citations` + claim-check + negation) trước khi giữ câu.
+/// Ngưỡng đề xuất (≥2 token trùng và ≥35% token của câu) chỉ để tránh gắn
+/// bừa pin không liên quan; chốt chặn thật vẫn là validation fail-closed.
+pub(crate) fn propose_citation_for_sentence<'p>(
+    sentence: &str,
+    pins: &'p [CitationPin],
+) -> Option<&'p str> {
+    let sentence_tokens = significant_tokens(sentence);
+    if sentence_tokens.len() < 2 {
+        return None;
+    }
+    let mut best: Option<(&str, usize)> = None;
+    for pin in pins {
+        let context = format!(
+            "{} {} {}",
+            pin.document_title.as_deref().unwrap_or(""),
+            pin.heading,
+            pin.quote
+        );
+        let passage_tokens = significant_tokens(&context);
+        let overlap = sentence_tokens
+            .iter()
+            .filter(|token| passage_tokens.contains(*token))
+            .count();
+        if overlap > best.map_or(0, |(_, count)| count) {
+            best = Some((pin.cite_id.as_str(), overlap));
+        }
+    }
+    let (cite_id, overlap) = best?;
+    if overlap < 2 || overlap * 100 < sentence_tokens.len() * 35 {
+        return None;
+    }
+    Some(cite_id)
 }
 
 fn significant_tokens(text: &str) -> HashSet<String> {
@@ -290,13 +519,27 @@ fn significant_tokens(text: &str) -> HashSet<String> {
 }
 
 fn extract_units(text: &str) -> HashSet<String> {
-    const UNITS: &[&str] = &["triệu", "tỷ", "kg", "km", "%", "usd", "vnd", "đồng"];
+    const UNITS: &[&str] = &["triệu", "tỷ", "kg", "km", "usd", "vnd", "đồng"];
     let lowered = text.to_lowercase();
-    UNITS
-        .iter()
-        .filter(|unit| lowered.contains(*unit))
-        .map(|unit| (*unit).to_string())
-        .collect()
+    // Đơn vị chỉ tính khi đứng NGAY SAU một con số ("2 tỷ", "150 triệu đồng"):
+    // "tỷ lệ" (ratio) / "triệu chứng" (symptom) từng khớp nhầm substring và
+    // discard draft đúng. "%" dính liền số ("50%") nên giữ contains.
+    let tokens: Vec<&str> = lowered
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | ':' | ')' | '('))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let mut units: HashSet<String> = HashSet::new();
+    if lowered.contains('%') {
+        units.insert("%".into());
+    }
+    for window in tokens.windows(2) {
+        let prev_has_digit = window[0].chars().any(|c| c.is_ascii_digit());
+        let word = window[1].trim_matches(|c: char| !c.is_alphanumeric());
+        if prev_has_digit && UNITS.contains(&word) {
+            units.insert(word.to_string());
+        }
+    }
+    units
 }
 
 fn extract_dates(text: &str) -> HashSet<String> {

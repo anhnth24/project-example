@@ -8,6 +8,7 @@
 import type { components } from '../../api/generated/contract';
 import { AnswerText } from './AnswerText';
 import { CitationFootnotes } from './CitationFootnotes';
+import { citationsUsedInAnswer } from './citationFootnoteModel';
 import { TurnModeBadge, TurnWarningBlocks } from './TurnAnswerMeta';
 
 type ChatTurn = components['schemas']['ChatTurn'];
@@ -20,23 +21,26 @@ export function HistoricalTurnBubble({
   collectionNameById: ReadonlyMap<string, string>;
 }) {
   const scopeId = `history-${turn.id}`;
+  const visibleCitations = citationsUsedInAnswer(turn.answer, turn.citations);
   return (
-    <div className="chat-turn" style={{ display: 'grid', gap: 'var(--space-3)' }}>
-      <p style={{ margin: 0 }}>
-        <span className="tag tag-outline">Bạn</span>{' '}
-        <span style={{ fontWeight: 600 }}>{turn.question}</span>
-      </p>
-
-      <div style={{ display: 'grid', gap: 'var(--space-2)' }}>
-        <p style={{ margin: 0 }}>
-          <span className="tag tag-outline">Trợ lý</span>
+    <div className="chat-turn">
+      <div className="chat-turn-question">
+        <p className="chat-bubble chat-bubble-user">
+          <span className="visually-hidden">Bạn </span>
+          {turn.question}
         </p>
-        <TurnModeBadge answerMode={turn.answerMode} />
-        <AnswerText text={turn.answer} citations={turn.citations} scopeId={scopeId} />
+      </div>
+
+      <div className="chat-turn-answer">
+        <p className="visually-hidden">Trợ lý</p>
+        <div className="chat-bubble chat-bubble-assistant">
+          <TurnModeBadge answerMode={turn.answerMode} />
+          <AnswerText text={turn.answer} citations={visibleCitations} scopeId={scopeId} />
+        </div>
       </div>
 
       <CitationFootnotes
-        citations={turn.citations}
+        citations={visibleCitations}
         collectionNameById={collectionNameById}
         scopeId={scopeId}
       />

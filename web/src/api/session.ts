@@ -73,13 +73,23 @@ export interface SessionManager extends TokenProvider {
 export interface SessionManagerOptions {
   /**
    * Milliseconds subtracted from the server's `expiresIn` before we consider
-   * the access token due for renewal, so `getAccessToken` refreshes slightly
-   * ahead of actual server-side expiry instead of racing it. Default 10s.
+   * the access token due for renewal, so `getAccessToken` refreshes ahead of
+   * actual server-side expiry instead of racing it. Default 240s.
+   *
+   * The margin is deliberately large: long-running requests bind the token's
+   * claims for their whole duration. `POST /ask/stream` spawns a server-side
+   * producer that re-checks `claims.exp` on every event append
+   * (ask_stream.rs), and an LLM answer can take 1–2+ minutes
+   * (MARKHAND_CHAT_TIMEOUT_SECS); if the token expires mid-answer the session
+   * is durably closed as `token_expired` and a client refresh cannot resume
+   * it. Uploads hold their token similarly. With a 15-minute access TTL
+   * (config.rs DEFAULT_ACCESS_TOKEN_TTL_SECS = 900), a 4-minute skew
+   * guarantees every token we hand out still covers the longest such request.
    */
   expirySkewMs?: number;
 }
 
-const DEFAULT_EXPIRY_SKEW_MS = 10_000;
+const DEFAULT_EXPIRY_SKEW_MS = 240_000;
 
 export function createSessionManager(
   refreshFn: RefreshFn,

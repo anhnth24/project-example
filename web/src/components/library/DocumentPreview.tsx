@@ -40,7 +40,11 @@ export function DocumentPreview({
 }) {
   if (!document) {
     return (
-      <aside className="card" aria-labelledby="library-preview-heading">
+      <aside
+        className="card"
+        style={{ minWidth: 0, maxWidth: '100%' }}
+        aria-labelledby="library-preview-heading"
+      >
         <p className="eyebrow">Xem trước</p>
         <h2 id="library-preview-heading">Chưa chọn tài liệu</h2>
         <p className="text-muted">Chọn một tài liệu ở danh sách bên trái để xem nội dung.</p>
@@ -49,11 +53,21 @@ export function DocumentPreview({
   }
 
   return (
-    <aside className="card" aria-labelledby="library-preview-heading">
+    <aside
+      className="card"
+      style={{ minWidth: 0, maxWidth: '100%' }}
+      aria-labelledby="library-preview-heading"
+    >
       <p className="eyebrow">Xem trước</p>
       <h2 id="library-preview-heading">{document.title}</h2>
       <div
-        style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}
+        style={{
+          display: 'flex',
+          gap: 'var(--space-2)',
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          minWidth: 0,
+        }}
       >
         <DocumentStateBadge state={document.state} />
         <span className="text-muted">Cập nhật {formatDateTime(document.updatedAt)}</span>

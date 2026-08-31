@@ -18,7 +18,7 @@ export function AdminUsagePage({ client = apiClient }: { client?: ApiClient } = 
   const items = usageResult.data?.items ?? [];
 
   return (
-    <section className="page" aria-labelledby="admin-usage-heading">
+    <section className="page" style={{ minWidth: 0 }} aria-labelledby="admin-usage-heading">
       <p className="eyebrow">Quản trị</p>
       <h1 id="admin-usage-heading">Sử dụng và hạn mức</h1>
       <p className="lede">

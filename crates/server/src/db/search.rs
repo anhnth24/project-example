@@ -3,7 +3,7 @@
 //! PostgreSQL is the authority for chunk text, document state, ACL, and version
 //! visibility. Vector payloads supply candidate identities only.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use tokio_postgres::{Row, Transaction};
@@ -186,7 +186,9 @@ pub fn normalized_fts_query_for_retrieval(query: &str) -> String {
 }
 
 fn normalize_fts_query(query: &str) -> String {
-    const QUESTION_STOP_WORDS: &[&str] = &["bao", "nhieu", "la", "gi", "nao"];
+    const QUESTION_STOP_WORDS: &[&str] = &[
+        "bao", "nhieu", "la", "gi", "nao", "noi", "ve", "dung", "duoc", "ra", "sao", "nhu", "the",
+    ];
     let normalized = fileconv_core::intelligence::normalize_search_text(query);
     let tokens: Vec<&str> = normalized
         .split(|character: char| !character.is_alphanumeric())
@@ -431,6 +433,174 @@ pub async fn fts_search(
                     &acl_read_access_param(),
                     &PERMISSION_QA_HISTORY,
                     &folded_raw,
+                ],
+            )
+            .await?
+        }
+    };
+    let matched: Vec<FtsCandidate> = rows
+        .iter()
+        .map(map_fts_candidate)
+        .collect::<Result<_, _>>()?;
+    if matched.is_empty() {
+        return Ok(matched);
+    }
+    let version_ids: Vec<Uuid> = matched
+        .iter()
+        .map(|hit| hit.version_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let opening = fts_opening_chunks(
+        txn,
+        ctx,
+        collection_ids,
+        visibility,
+        &version_ids,
+        FTS_OPENING_ORDINAL_LIMIT,
+    )
+    .await?;
+    Ok(merge_fts_opening_chunks(matched, opening))
+}
+
+/// First N ordinals of a matched version (cover page + opening articles).
+/// FTS AND-queries on a circular number often hit only the cover; the substance
+/// lives in later ordinals that never repeat that number.
+pub const FTS_OPENING_ORDINAL_LIMIT: i32 = 5;
+const FTS_OPENING_RANK_SCALE: f32 = 0.35;
+
+pub fn merge_fts_opening_chunks(
+    matched: Vec<FtsCandidate>,
+    opening: Vec<FtsCandidate>,
+) -> Vec<FtsCandidate> {
+    if matched.is_empty() {
+        return matched;
+    }
+    let mut best_rank: HashMap<Uuid, f32> = HashMap::new();
+    for hit in &matched {
+        best_rank
+            .entry(hit.version_id)
+            .and_modify(|rank| *rank = rank.max(hit.rank))
+            .or_insert(hit.rank);
+    }
+    let mut seen: HashSet<String> = matched
+        .iter()
+        .map(|hit| hit.chunk_identity_sha256.clone())
+        .collect();
+    let mut out = matched;
+    for mut hit in opening {
+        if !seen.insert(hit.chunk_identity_sha256.clone()) {
+            continue;
+        }
+        let base = best_rank.get(&hit.version_id).copied().unwrap_or(0.0);
+        hit.rank = base * FTS_OPENING_RANK_SCALE;
+        out.push(hit);
+    }
+    out
+}
+
+async fn fts_opening_chunks(
+    txn: &Transaction<'_>,
+    ctx: &OrgContext,
+    collection_ids: &[Uuid],
+    visibility: &VersionVisibility,
+    version_ids: &[Uuid],
+    ordinal_limit: i32,
+) -> Result<Vec<FtsCandidate>, DbError> {
+    if collection_ids.is_empty() || version_ids.is_empty() || ordinal_limit <= 0 {
+        return Ok(Vec::new());
+    }
+    let versions = version_ids.to_vec();
+    let rows = match visibility {
+        VersionVisibility::Current => {
+            let acl =
+                current_retrieval_acl_predicate("d.org_id", "d.collection_id", "$5", "$6", "$7");
+            let sql = format!(
+                "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
+                        d.collection_id, 0::real AS rank
+                 FROM chunks c
+                 JOIN documents d
+                   ON d.org_id = c.org_id AND d.id = c.document_id
+                 JOIN document_versions dv
+                   ON dv.org_id = c.org_id
+                  AND dv.document_id = c.document_id
+                  AND dv.id = c.version_id
+                 JOIN index_metadata im
+                   ON im.org_id = c.org_id AND im.id = c.index_metadata_id
+                 WHERE c.org_id = $1
+                   AND d.collection_id = ANY($2)
+                   AND c.version_id = ANY($3)
+                   AND c.ordinal < $4
+                   AND d.deleted_at IS NULL
+                   AND d.state = 'indexed'
+                   AND dv.publication_state = 'published'
+                   AND dv.is_current
+                   AND im.is_active
+                   AND im.state = 'active'
+                   AND {acl}
+                 ORDER BY c.ordinal, c.id"
+            );
+            txn.query(
+                &sql,
+                &[
+                    &ctx.org_id(),
+                    &collection_ids,
+                    &versions,
+                    &ordinal_limit,
+                    &ctx.user_id(),
+                    &visibility.required_permission(),
+                    &acl_read_access_param(),
+                ],
+            )
+            .await?
+        }
+        VersionVisibility::VersionIds(allowed) => {
+            if allowed.is_empty() {
+                return Ok(Vec::new());
+            }
+            let acl = historical_retrieval_acl_predicate(
+                "d.org_id",
+                "d.collection_id",
+                "$5",
+                "$6",
+                "$8",
+                "$7",
+            );
+            let sql = format!(
+                "SELECT c.id, c.chunk_identity_sha256, c.document_id, c.version_id,
+                        d.collection_id, 0::real AS rank
+                 FROM chunks c
+                 JOIN documents d
+                   ON d.org_id = c.org_id AND d.id = c.document_id
+                 JOIN document_versions dv
+                   ON dv.org_id = c.org_id
+                  AND dv.document_id = c.document_id
+                  AND dv.id = c.version_id
+                 JOIN index_metadata im
+                   ON im.org_id = c.org_id AND im.id = c.index_metadata_id
+                 WHERE c.org_id = $1
+                   AND d.collection_id = ANY($2)
+                   AND c.version_id = ANY($3)
+                   AND c.ordinal < $4
+                   AND d.deleted_at IS NULL
+                   AND d.state = 'indexed'
+                   AND dv.publication_state = 'published'
+                   AND im.is_active
+                   AND im.state = 'active'
+                   AND {acl}
+                 ORDER BY c.ordinal, c.id"
+            );
+            txn.query(
+                &sql,
+                &[
+                    &ctx.org_id(),
+                    &collection_ids,
+                    &versions,
+                    &ordinal_limit,
+                    &ctx.user_id(),
+                    &PERMISSION_QA_QUERY,
+                    &acl_read_access_param(),
+                    &PERMISSION_QA_HISTORY,
                 ],
             )
             .await?
@@ -833,6 +1003,29 @@ mod tests {
         let _ = Uuid::nil();
     }
 
+    fn fts_hit(id: &str, version: Uuid, rank: f32) -> FtsCandidate {
+        FtsCandidate {
+            chunk_id: Uuid::new_v4(),
+            chunk_identity_sha256: id.into(),
+            document_id: Uuid::new_v4(),
+            version_id: version,
+            collection_id: Uuid::new_v4(),
+            rank,
+        }
+    }
+
+    #[test]
+    fn opening_chunks_are_appended_below_the_matched_cover_rank() {
+        let version = Uuid::new_v4();
+        let cover = fts_hit("cover", version, 0.8);
+        let dieu1 = fts_hit("dieu-1", version, 0.0);
+        let merged = merge_fts_opening_chunks(vec![cover.clone()], vec![cover.clone(), dieu1]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].chunk_identity_sha256, "cover");
+        assert_eq!(merged[1].chunk_identity_sha256, "dieu-1");
+        assert!((merged[1].rank - 0.8 * 0.35).abs() < f32::EPSILON);
+    }
+
     #[test]
     fn only_active_generation_is_retrieval_visible() {
         assert!(index_generation_visible_for_retrieval(
@@ -872,7 +1065,7 @@ mod tests {
     fn fts_query_removes_vietnamese_question_scaffolding() {
         assert_eq!(
             normalize_fts_query("Kinh phí được phê duyệt là bao nhiêu?"),
-            "kinh phi duoc phe duyet"
+            "kinh phi phe duyet"
         );
         assert_eq!(
             normalize_fts_query("Bao nhiêu?"),
@@ -897,7 +1090,7 @@ mod tests {
             .split_whitespace()
             .count();
         assert!(stats.nonempty);
-        assert_eq!(normalized_token_count, 5);
+        assert_eq!(normalized_token_count, 4);
         assert_eq!(stats.token_count, normalized_token_count);
     }
 
@@ -946,12 +1139,12 @@ mod tests {
             .count()
             .saturating_sub(1); // exclude `fn historical_retrieval_acl_predicate(`
         assert_eq!(
-            current_calls, 4,
-            "expected current_retrieval_acl_predicate at fts/hydrate/conflict-current x2; got {current_calls}"
+            current_calls, 5,
+            "expected current_retrieval_acl_predicate at fts/opening/hydrate/conflict-current x2; got {current_calls}"
         );
         assert_eq!(
-            historical_calls, 4,
-            "expected historical_retrieval_acl_predicate at fts/hydrate/conflict-historical x2; got {historical_calls}"
+            historical_calls, 5,
+            "expected historical_retrieval_acl_predicate at fts/opening/hydrate/conflict-historical x2; got {historical_calls}"
         );
 
         assert!(

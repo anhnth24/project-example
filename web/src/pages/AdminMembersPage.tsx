@@ -86,7 +86,11 @@ export function AdminMembersPage({ client = apiClient }: { client?: ApiClient } 
   }
 
   return (
-    <section className="page" style={{ maxWidth: 'none' }} aria-labelledby="admin-members-heading">
+    <section
+      className="page"
+      style={{ maxWidth: 'none', minWidth: 0 }}
+      aria-labelledby="admin-members-heading"
+    >
       <p className="eyebrow">Quản trị</p>
       <h1 id="admin-members-heading">Thành viên và vai trò</h1>
       <p className="lede">
@@ -107,10 +111,7 @@ export function AdminMembersPage({ client = apiClient }: { client?: ApiClient } 
         </Notice>
       )}
 
-      <div
-        className="card"
-        style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
-      >
+      <div className="card" style={{ gap: 'var(--space-3)', minWidth: 0 }}>
         <h2 className="card-title">Thành viên</h2>
         <MembersTable
           members={members}
@@ -122,10 +123,7 @@ export function AdminMembersPage({ client = apiClient }: { client?: ApiClient } 
         />
       </div>
 
-      <div
-        className="card"
-        style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
-      >
+      <div className="card" style={{ gap: 'var(--space-3)', minWidth: 0 }}>
         <h2 className="card-title">Mời thành viên mới</h2>
         <InviteForm isOwnerActive={isOwnerActive} onCreated={refreshInvites} client={client} />
       </div>
@@ -143,10 +141,7 @@ export function AdminMembersPage({ client = apiClient }: { client?: ApiClient } 
         </Notice>
       )}
 
-      <div
-        className="card"
-        style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
-      >
+      <div className="card" style={{ gap: 'var(--space-3)', minWidth: 0 }}>
         <h2 className="card-title">Lời mời</h2>
         <InvitesTable
           invites={invites}

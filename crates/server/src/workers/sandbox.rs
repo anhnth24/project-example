@@ -1,7 +1,8 @@
-//! Generic isolated command runner for converter workers.
+//! Generic converter subprocess runner for converter workers.
 //!
-//! The heavy converter remains outside `fileconv-server`; this module only
-//! materializes a single input file and executes a configured argv template.
+//! Linux production/POC uses Landlock + namespaces when sandbox is enabled.
+//! Windows and dev hosts with `MARKHAND_CONVERTER_DISABLE_SANDBOX=1` run
+//! `fileconv` as a direct subprocess instead.
 
 #[cfg(unix)]
 mod imp {
@@ -212,9 +213,80 @@ mod imp {
         }
     }
 
+    /// Direct-mode (MARKHAND_CONVERTER_DISABLE_SANDBOX=1): chạy fileconv như
+    /// subprocess thường, không Landlock/namespace — cùng hành vi với bản
+    /// non-unix bên dưới.
+    fn run_without_isolation(
+        config: &SandboxConfig,
+        input: SandboxInput,
+        cancel: &SandboxCancel,
+    ) -> Result<SandboxOutput, SandboxError> {
+        let output = super::super::converter_subprocess::run_direct(
+            &super::super::converter_subprocess::DirectRunConfig {
+                argv_template: config.argv_template.clone(),
+                limits: config.limits.clone(),
+                require_absolute_executable: false,
+            },
+            super::super::converter_subprocess::DirectRunInput {
+                bytes: input.bytes,
+                canonical_extension: input.canonical_extension,
+            },
+            &cancel.cancelled,
+        )
+        .map_err(map_direct_error)?;
+        Ok(SandboxOutput {
+            exit: map_direct_exit(output.exit),
+            stdout: output.stdout,
+            stderr: output.stderr,
+            stdout_truncated: output.stdout_truncated,
+            stderr_truncated: output.stderr_truncated,
+            pid1_host_pid: None,
+            workspace_path: output.workspace_path,
+            ocr_artifacts: output
+                .ocr_artifacts
+                .into_iter()
+                .map(|artifact| OcrArtifact {
+                    name: artifact.name,
+                    bytes: artifact.bytes,
+                })
+                .collect(),
+        })
+    }
+
+    fn map_direct_error(error: super::super::converter_subprocess::DirectRunError) -> SandboxError {
+        match error {
+            super::super::converter_subprocess::DirectRunError::InvalidConfig(message) => {
+                SandboxError::InvalidConfig(message)
+            }
+            super::super::converter_subprocess::DirectRunError::Io(error) => {
+                SandboxError::Io(error)
+            }
+            super::super::converter_subprocess::DirectRunError::OcrArtifactsTooLarge => {
+                SandboxError::OcrArtifactsTooLarge
+            }
+        }
+    }
+
+    fn map_direct_exit(exit: super::super::converter_subprocess::DirectRunExit) -> SandboxExit {
+        match exit {
+            super::super::converter_subprocess::DirectRunExit::Success => SandboxExit::Success,
+            super::super::converter_subprocess::DirectRunExit::Exit(code) => {
+                SandboxExit::Exit(code)
+            }
+            super::super::converter_subprocess::DirectRunExit::Signaled(signal) => {
+                SandboxExit::Signaled(signal)
+            }
+            super::super::converter_subprocess::DirectRunExit::TimedOut => SandboxExit::TimedOut,
+            super::super::converter_subprocess::DirectRunExit::Cancelled => SandboxExit::Cancelled,
+        }
+    }
+
     /// Probe isolation support with a tiny command. Workers call this at startup and
     /// tests use it to skip only when the kernel truly lacks unprivileged isolation.
     pub fn preflight() -> Result<(), SandboxError> {
+        if super::super::converter_subprocess::direct_mode_enabled() {
+            return Ok(());
+        }
         let config = SandboxConfig {
             argv_template: vec!["/bin/true".into(), INPUT_PLACEHOLDER.into()],
             limits: ResourceLimits {
@@ -247,6 +319,9 @@ mod imp {
         input: SandboxInput,
         cancel: &SandboxCancel,
     ) -> Result<SandboxOutput, SandboxError> {
+        if super::super::converter_subprocess::direct_mode_enabled() {
+            return run_without_isolation(config, input, cancel);
+        }
         config.validate()?;
         let workspace = TempDir::new()?;
         let workspace_path = workspace.path().to_path_buf();
@@ -1167,19 +1242,16 @@ mod imp {
 #[cfg(unix)]
 pub use imp::*;
 
-// The production sandbox depends on Linux isolation primitives. A Windows
-// worker must fail closed rather than execute conversion commands without those
-// protections; this also permits the rest of the server crate to build and
-// report that isolation is unavailable.
+// Windows and other non-Unix hosts run the converter as a direct subprocess
+// (no Landlock/namespaces). Linux keeps the isolated sandbox unless
+// MARKHAND_CONVERTER_DISABLE_SANDBOX=1.
 #[cfg(not(unix))]
 mod imp {
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
     use super::super::limits::ResourceLimits;
-
-    const INPUT_PLACEHOLDER: &str = "{input}";
 
     #[derive(Debug, Clone)]
     pub struct SandboxConfig {
@@ -1189,26 +1261,14 @@ mod imp {
 
     impl SandboxConfig {
         pub fn validate(&self) -> Result<(), SandboxError> {
-            if self.argv_template.is_empty() {
-                return Err(SandboxError::InvalidConfig(
-                    "converter argv template must not be empty".into(),
-                ));
-            }
-            if !Path::new(&self.argv_template[0]).is_absolute() {
-                return Err(SandboxError::InvalidConfig(
-                    "converter executable must be an absolute path".into(),
-                ));
-            }
-            if !self
-                .argv_template
-                .iter()
-                .any(|arg| arg.contains(INPUT_PLACEHOLDER))
-            {
-                return Err(SandboxError::InvalidConfig(
-                    "converter argv template must contain {input}".into(),
-                ));
-            }
-            self.limits.validate().map_err(SandboxError::InvalidConfig)
+            super::super::converter_subprocess::validate_direct_config(
+                &super::super::converter_subprocess::DirectRunConfig {
+                    argv_template: self.argv_template.clone(),
+                    limits: self.limits.clone(),
+                    require_absolute_executable: false,
+                },
+            )
+            .map_err(map_direct_error)
         }
     }
 
@@ -1257,6 +1317,8 @@ mod imp {
         InvalidConfig(String),
         #[error("sandbox isolation is unavailable")]
         IsolationUnavailable,
+        #[error("sandbox io failed")]
+        Io(#[from] std::io::Error),
         #[error("deferred OCR artifacts exceed sandbox caps")]
         OcrArtifactsTooLarge,
     }
@@ -1274,19 +1336,87 @@ mod imp {
         pub fn is_cancelled(&self) -> bool {
             self.cancelled.load(Ordering::SeqCst)
         }
+
+        pub(super) fn cancel_flag(&self) -> &AtomicBool {
+            &self.cancelled
+        }
+    }
+
+    fn run_without_isolation(
+        config: &SandboxConfig,
+        input: SandboxInput,
+        cancel: &SandboxCancel,
+    ) -> Result<SandboxOutput, SandboxError> {
+        let output = super::super::converter_subprocess::run_direct(
+            &super::super::converter_subprocess::DirectRunConfig {
+                argv_template: config.argv_template.clone(),
+                limits: config.limits.clone(),
+                require_absolute_executable: false,
+            },
+            super::super::converter_subprocess::DirectRunInput {
+                bytes: input.bytes,
+                canonical_extension: input.canonical_extension,
+            },
+            cancel.cancel_flag(),
+        )
+        .map_err(map_direct_error)?;
+        Ok(SandboxOutput {
+            exit: map_direct_exit(output.exit),
+            stdout: output.stdout,
+            stderr: output.stderr,
+            stdout_truncated: output.stdout_truncated,
+            stderr_truncated: output.stderr_truncated,
+            pid1_host_pid: None,
+            workspace_path: output.workspace_path,
+            ocr_artifacts: output
+                .ocr_artifacts
+                .into_iter()
+                .map(|artifact| OcrArtifact {
+                    name: artifact.name,
+                    bytes: artifact.bytes,
+                })
+                .collect(),
+        })
+    }
+
+    fn map_direct_error(error: super::super::converter_subprocess::DirectRunError) -> SandboxError {
+        match error {
+            super::super::converter_subprocess::DirectRunError::InvalidConfig(message) => {
+                SandboxError::InvalidConfig(message)
+            }
+            super::super::converter_subprocess::DirectRunError::Io(error) => {
+                SandboxError::Io(error)
+            }
+            super::super::converter_subprocess::DirectRunError::OcrArtifactsTooLarge => {
+                SandboxError::OcrArtifactsTooLarge
+            }
+        }
+    }
+
+    fn map_direct_exit(exit: super::super::converter_subprocess::DirectRunExit) -> SandboxExit {
+        match exit {
+            super::super::converter_subprocess::DirectRunExit::Success => SandboxExit::Success,
+            super::super::converter_subprocess::DirectRunExit::Exit(code) => {
+                SandboxExit::Exit(code)
+            }
+            super::super::converter_subprocess::DirectRunExit::Signaled(signal) => {
+                SandboxExit::Signaled(signal)
+            }
+            super::super::converter_subprocess::DirectRunExit::TimedOut => SandboxExit::TimedOut,
+            super::super::converter_subprocess::DirectRunExit::Cancelled => SandboxExit::Cancelled,
+        }
     }
 
     pub fn preflight() -> Result<(), SandboxError> {
-        Err(SandboxError::IsolationUnavailable)
+        Ok(())
     }
 
     pub fn run(
         config: &SandboxConfig,
-        _input: SandboxInput,
-        _cancel: &SandboxCancel,
+        input: SandboxInput,
+        cancel: &SandboxCancel,
     ) -> Result<SandboxOutput, SandboxError> {
-        config.validate()?;
-        Err(SandboxError::IsolationUnavailable)
+        run_without_isolation(config, input, cancel)
     }
 }
 
