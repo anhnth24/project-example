@@ -371,4 +371,130 @@ Nội dung mục 2.
         assert_eq!(clamp_to_char_boundary(text, 1), 0);
         assert_eq!(clamp_to_char_boundary(text, 3), 3);
     }
+
+    #[test]
+    fn chunk_rag_trace_demo_heading_hierarchy_and_split() {
+        let para = "Điều khoản áp dụng cho mọi bên liên quan. ".repeat(40);
+        let md = format!(
+            "# Phần I\n\nGiới thiệu.\n\n## Mục 1\n\nNội dung mục 1.\n\n### Tiểu mục 1.1\n\nChi tiết.\n\n## Mục 2\n\n{para}\n\n{para}\n\n{para}\n"
+        );
+        let chunks = chunk_markdown(&md, 320);
+
+        assert!(chunks.len() >= 5, "got {}", chunks.len());
+        assert_eq!(chunks[0].heading, "Phần I");
+        assert_eq!(chunks[1].heading, "Phần I > Mục 1");
+        assert_eq!(chunks[2].heading, "Phần I > Mục 1 > Tiểu mục 1.1");
+        assert!(chunks.windows(2).all(|w| w[0].index + 1 == w[1].index));
+        assert!(
+            chunks
+                .iter()
+                .filter(|c| c.heading == "Phần I > Mục 2")
+                .count()
+                >= 2
+        );
+        let mut cursor = 0usize;
+        for c in &chunks {
+            let (start, end) = locate_chunk_text(&md, cursor, &c.text).expect("span");
+            assert!(md.is_char_boundary(start));
+            assert!(md.is_char_boundary(end));
+            assert_eq!(&md[start..end], c.text.as_str());
+            cursor = end;
+        }
+    }
+
+    #[test]
+    fn chunk_markdown_empty_heading_body_only() {
+        let md = "Không có heading — chỉ body.\n\nĐoạn hai.";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "");
+        assert!(chunks[0].text.contains("Không có heading"));
+    }
+
+    #[test]
+    fn crlf_body_is_lf_for_embedding() {
+        let md = "# Tiêu đề\r\n\r\nNội dung dòng một.\r\nDòng hai.\r\n";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "Tiêu đề");
+        assert_eq!(chunks[0].text, "Nội dung dòng một.\nDòng hai.");
+        let (s, e) = locate_chunk_text(md, 0, &chunks[0].text).unwrap();
+        assert!(md[s..e].contains("\r\n"));
+    }
+
+    #[test]
+    fn hash_without_space_is_not_heading() {
+        let md = "#KhôngSpace\n\nBody thật.";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].heading, "");
+        assert!(chunks[0].text.contains("#KhôngSpace"));
+    }
+
+    #[test]
+    fn vietnamese_hard_cut_is_utf8_safe() {
+        let glyph = "ệ";
+        let md = format!("# A\n\n{}", glyph.repeat(250));
+        // max_chars=100 bị sàn lên 200 — vẫn phải cắt và UTF-8-safe.
+        let chunks = chunk_markdown(&md, 100);
+        assert!(chunks.len() >= 2);
+        assert_eq!(
+            chunks[0].chars, 200,
+            "first hard-cut piece must be the 200 floor"
+        );
+        assert!(chunks.iter().all(|c| c.chars <= 200));
+        let mut cursor = 0usize;
+        let mut rejoined = String::new();
+        for c in &chunks {
+            assert!(!c.text.is_empty());
+            // ệ dài 3 byte: cắt giữa glyph sẽ làm lệch tỉ lệ byte/char.
+            assert!(
+                c.text.chars().all(|ch| ch == 'ệ'),
+                "piece {} lẫn ký tự lạ: {:?}",
+                c.index,
+                c.text
+            );
+            assert_eq!(c.text.len(), c.chars * glyph.len(), "piece {}", c.index);
+            let (start, end) = locate_chunk_text(&md, cursor, &c.text).expect("span");
+            assert_eq!(&md[start..end], c.text.as_str());
+            rejoined.push_str(&md[start..end]);
+            cursor = end;
+        }
+        // Ghép lại đúng đoạn nguồn: không glyph nào bị mất hay nhân đôi khi cắt.
+        assert_eq!(rejoined, glyph.repeat(250));
+    }
+
+    #[test]
+    fn empty_and_whitespace_only_returns_no_chunks() {
+        assert!(chunk_markdown("", 2000).is_empty());
+        assert!(chunk_markdown(" \n\t \r\n", 2000).is_empty());
+    }
+
+    #[test]
+    fn duplicate_bodies_anchor_in_order() {
+        let md = "# A\n\nx\n\n# B\n\nx\n";
+        let chunks = chunk_markdown(md, 2000);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].text, "x");
+        assert_eq!(chunks[1].text, "x");
+        let mut cursor = 0usize;
+        let (s0, e0) = locate_chunk_span(md, cursor, &chunks[0].text);
+        cursor = e0;
+        let (s1, e1) = locate_chunk_span(md, cursor, &chunks[1].text);
+        assert!(s1 >= e0, "second anchor must start after first");
+        assert_eq!(&md[s0..e0], "x");
+        assert_eq!(&md[s1..e1], "x");
+    }
+
+    #[test]
+    fn max_chars_below_floor_uses_200() {
+        let md = "# A\n\n".to_string() + &"y".repeat(250);
+        let chunks = chunk_markdown(&md, 50);
+        assert!(chunks.len() >= 2);
+        assert_eq!(
+            chunks[0].chars, 200,
+            "first hard-cut piece must be the 200 floor"
+        );
+        assert!(chunks.iter().all(|c| c.chars <= 200));
+    }
 }
