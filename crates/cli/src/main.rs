@@ -3,8 +3,13 @@
 //! Lệnh:
 //!   fileconv speed <corpus_dir> [report.md]   - đo tốc độ theo file & page
 //!   fileconv accuracy <manifest> [report.md]  - đo độ chính xác CER/WER vs ground truth
-//!   fileconv one <file>                       - convert 1 file, in markdown ra stdout
+//!   fileconv one <file> [--timeout 30s]       - convert 1 file, in markdown ra stdout
+//!   fileconv one-detailed <file> [--timeout 30s]
+//!                                              - convert 1 file, in JSON report (có soft warnings)
 //!   fileconv info                             - hiển thị định dạng file hỗ trợ, đường dẫn pdfium (có tồn tại không), và model whisper tìm thấy trong models/
+//!
+//! Timeout (optional): `--timeout 30s` hoặc env `FILECONV_CONVERT_TIMEOUT_SEC`
+//! (flag thắng env). Không set → không giới hạn wall-clock (hành vi cũ).
 //!
 //! Manifest accuracy: mỗi dòng "<đường_dẫn_file>\t<đường_dẫn_text_chuẩn>\t<nhãn_kịch_bản>".
 
@@ -21,7 +26,50 @@ use fileconv_core::intelligence::{CorpusDocument, HandoffOptions};
 use fileconv_core::{Converter, FormatKind};
 use walkdir::WalkDir;
 
+mod convert_timeout;
 mod metrics;
+
+/// Shared flags for `one` / `one-detailed`. `allow_no_pdf_ocr` enables `--no-pdf-ocr`
+/// (detailed report only). Unknown flags such as `--timeout` are ignored here.
+fn parse_one_options(rest: &[String], allow_no_pdf_ocr: bool) -> fileconv_core::ConverterOptions {
+    let mut opts = fileconv_core::ConverterOptions::default();
+    if rest.iter().any(|a| a == "--ocr-images") {
+        opts.pdf_ocr_images = true;
+    }
+    if allow_no_pdf_ocr && rest.iter().any(|a| a == "--no-pdf-ocr") {
+        opts.pdf_ocr = false;
+    }
+    if let Some(l) = rest
+        .iter()
+        .position(|a| a == "--lang")
+        .and_then(|i| rest.get(i + 1))
+    {
+        opts.ocr_langs = l.clone();
+    }
+    if let Some(p) = rest
+        .iter()
+        .position(|a| a == "--pages")
+        .and_then(|i| rest.get(i + 1))
+    {
+        opts.pdf_pages = Some(p.split(',').filter_map(|x| x.trim().parse().ok()).collect());
+    }
+    if let Some(s) = rest
+        .iter()
+        .position(|a| a == "--sheet")
+        .and_then(|i| rest.get(i + 1))
+    {
+        opts.xlsx_sheet = Some(s.clone());
+    }
+    if let Some(m) = rest
+        .iter()
+        .position(|a| a == "--max-chars")
+        .and_then(|i| rest.get(i + 1))
+        .and_then(|x| x.parse().ok())
+    {
+        opts.max_chars = Some(m);
+    }
+    opts
+}
 
 /// Registered top-level CLI commands (keep in sync with `main` match arms).
 fn registered_commands() -> &'static [&'static str] {
@@ -81,44 +129,18 @@ fn main() -> Result<()> {
         }
         "one" => {
             let f = args.get(2).context("thiếu file")?;
-            // Cờ phụ để test: --ocr-images (OCR ảnh nhúng trang trộn), --lang <vie+eng>.
+            // Cờ phụ để test: --ocr-images, --lang, --timeout 30s (hoặc env
+            // FILECONV_CONVERT_TIMEOUT_SEC), --ocr-defer-dir.
             let rest = &args[3..];
-            let mut opts = fileconv_core::ConverterOptions::default();
-            if rest.iter().any(|a| a == "--ocr-images") {
-                opts.pdf_ocr_images = true;
-            }
-            if let Some(l) = rest
-                .iter()
-                .position(|a| a == "--lang")
-                .and_then(|i| rest.get(i + 1))
-            {
-                opts.ocr_langs = l.clone();
-            }
-            if let Some(p) = rest
-                .iter()
-                .position(|a| a == "--pages")
-                .and_then(|i| rest.get(i + 1))
-            {
-                opts.pdf_pages = Some(p.split(',').filter_map(|x| x.trim().parse().ok()).collect());
-            }
-            if let Some(s) = rest
-                .iter()
-                .position(|a| a == "--sheet")
-                .and_then(|i| rest.get(i + 1))
-            {
-                opts.xlsx_sheet = Some(s.clone());
-            }
-            if let Some(m) = rest
-                .iter()
-                .position(|a| a == "--max-chars")
-                .and_then(|i| rest.get(i + 1))
-                .and_then(|x| x.parse().ok())
-            {
-                opts.max_chars = Some(m);
-            }
+            let timeout = convert_timeout::resolve_timeout_from_args(rest)?;
+            let opts = parse_one_options(rest, false);
             let ocr_config = ocr_run_config_from_args(rest);
             let conv = Converter::with_options_and_ocr_config(opts, ocr_config);
-            let r = conv.convert_path(Path::new(f))?;
+            let path = Path::new(f);
+            let r = match timeout {
+                Some(budget) => convert_timeout::convert_path_with_timeout(conv, path, budget)?,
+                None => conv.convert_path(path)?,
+            };
             println!("{}", r.markdown);
             Ok(())
         }
@@ -127,46 +149,18 @@ fn main() -> Result<()> {
             // Hard failures serialize `{message, kind}` DTOs (kind is a field, not text-only).
             let f = args.get(2).context("thiếu file")?;
             let rest = &args[3..];
-            let mut opts = fileconv_core::ConverterOptions::default();
-            if rest.iter().any(|a| a == "--ocr-images") {
-                opts.pdf_ocr_images = true;
-            }
-            if rest.iter().any(|a| a == "--no-pdf-ocr") {
-                opts.pdf_ocr = false;
-            }
-            if let Some(l) = rest
-                .iter()
-                .position(|a| a == "--lang")
-                .and_then(|i| rest.get(i + 1))
-            {
-                opts.ocr_langs = l.clone();
-            }
-            if let Some(p) = rest
-                .iter()
-                .position(|a| a == "--pages")
-                .and_then(|i| rest.get(i + 1))
-            {
-                opts.pdf_pages = Some(p.split(',').filter_map(|x| x.trim().parse().ok()).collect());
-            }
-            if let Some(s) = rest
-                .iter()
-                .position(|a| a == "--sheet")
-                .and_then(|i| rest.get(i + 1))
-            {
-                opts.xlsx_sheet = Some(s.clone());
-            }
-            if let Some(m) = rest
-                .iter()
-                .position(|a| a == "--max-chars")
-                .and_then(|i| rest.get(i + 1))
-                .and_then(|x| x.parse().ok())
-            {
-                opts.max_chars = Some(m);
-            }
+            let timeout = convert_timeout::resolve_timeout_from_args(rest)?;
+            let opts = parse_one_options(rest, true);
             let ocr_config = ocr_run_config_from_args(rest);
-            match Converter::with_options_and_ocr_config(opts, ocr_config)
-                .convert_path_detailed(Path::new(f))
-            {
+            let conv = Converter::with_options_and_ocr_config(opts, ocr_config);
+            let path = Path::new(f);
+            let result = match timeout {
+                Some(budget) => {
+                    convert_timeout::convert_path_detailed_with_timeout(conv, path, budget)
+                }
+                None => conv.convert_path_detailed(path),
+            };
+            match result {
                 Ok(report) => {
                     println!(
                         "{}",
