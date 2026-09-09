@@ -30,7 +30,7 @@ Hướng dẫn nhanh cho agent: [`CLAUDE.md`](CLAUDE.md).
 ## Cấu trúc
 
 ```
-crates/core/    # fileconv-core: LỎI convert — dùng chung bởi CLI + app + MCP
+crates/core/    # fileconv-core: LÕI convert — dùng chung bởi CLI + app + MCP + server
 crates/cli/     # fileconv: binary CLI + bench harness (đo tốc độ / CER/WER)
 crates/mcp/     # fileconv-mcp: MCP server cho Claude Code
 crates/knowledge/ # knowledge contracts dùng chung desktop/server
@@ -40,6 +40,35 @@ web/            # Markhand Web browser SPA (HTTP/SSE, không Tauri)
 deploy/         # local Compose và deployment scripts
 bench/          # script tải corpus + sinh dữ liệu VN + các REPORT*.md
 vendor/         # markitdown-rs — CHỈ tham khảo (MIT, đã exclude khỏi workspace)
+```
+
+### Sơ đồ kiến trúc & Luồng dữ liệu (Mermaid)
+
+```mermaid
+graph TD
+    %% Frontend / Clients
+    subgraph Clients / Trình biên dịch khách
+        App[Tauri Desktop App: app/] -->|gọi qua IPC| AppRust[Tauri Rust Backend: app/src-tauri/]
+        Web[Browser SPA: web/] -->|HTTP/SSE| Server[Markhand Web API/Worker: crates/server]
+        MCP[Claude Code MCP Server: crates/mcp] -->|Stdio IPC| Core
+        CLI[fileconv CLI Binary: crates/cli] -->|In-process| Core
+    end
+
+    %% Rust Backend & Core
+    subgraph Rust Core & Contracts
+        AppRust -->|Path Dependency| Core[fileconv-core: crates/core]
+        Server -->|Spawn Subprocess| CLI
+        Server -->|Path Dependency| Core
+        Server -->|Retrieval Contracts| Knowledge[fileconv-knowledge: crates/knowledge]
+        Core -->|Shared Structs| Knowledge
+    end
+
+    %% Native Runtimes
+    subgraph Native Runtimes / Cloud API
+        Core -->|pdf-inspector / PDFium / pdf-extract| PDF[PDF Converter]
+        Core -->|whisper-rs + symphonia| Audio[Audio Engine]
+        Core -->|OpenRouter / Custom endpoint| Vision[Vision-LLM OCR]
+    end
 ```
 
 ## Định dạng hỗ trợ
@@ -66,6 +95,21 @@ OCR ảnh/PDF scan cần key vision-LLM: `export FILECONV_OCR_API_KEY=...`
 (mặc định OpenRouter; endpoint self-host vLLM/Ollama vision dùng
 `FILECONV_OCR_BASE_URL` khi có GPU).
 
+### Toàn bộ Subcommand hỗ trợ (CLI)
+
+| Subcommand | Đối số & Cờ chính | Mục đích |
+|---|---|---|
+| `one` | `<file> [--ocr-images --lang vie+eng --pages 1,2,3 --sheet NAME --max-chars N]` | Convert 1 file → stdout (Markdown thuần) |
+| `one-detailed` | giống `one` (+ `--no-pdf-ocr`) | Convert → JSON `{markdown,title,format,outcome,warnings}` hoặc lỗi `{message,kind}` |
+| `speed` | `<dir> [report.md]` | Đo tốc độ (ms/file, ms/page, KB/s) |
+| `accuracy` | `<manifest.tsv> [report.md]` | Đo độ chính xác CER/WER tiếng Việt vs Ground-truth |
+| `audio` | `<models> <manifest.tsv> [report.md]` | Đo WER/RTF cho các model Whisper (phân tách bởi dấu phẩy) |
+| `handoff` | `<product> <output.zip> <sources...>` | Đóng gói handoff pack (BRD/PRD) từ nhiều file nguồn |
+| `pptx-preview` | `<file.pptx>` | Xuất JSON preview cho slide/shapes trong PPTX |
+| `info` | (không) | Xem các định dạng được hỗ trợ và trạng thái PDFium/Whisper |
+
+### Lệnh chạy mẫu
+
 ```bash
 # 1) Build
 cargo build --release
@@ -75,6 +119,9 @@ bash bench/download_pdfium.sh
 
 # 2) Convert 1 file → stdout
 ./target/release/fileconv one duong-dan/file.docx
+
+# 2b) Convert chi tiết xuất ra JSON
+./target/release/fileconv one-detailed duong-dan/file.docx
 
 # 3) Đo tốc độ
 bash bench/download_corpus.sh
@@ -88,6 +135,24 @@ python3 bench/make_vn_corpus.py && bash bench/make_vn_images.sh
 bash bench/download_models.sh && python3 bench/make_vn_audio.py
 ./target/release/fileconv audio models/ggml-base.bin bench/vn_audio/manifest.tsv bench/REPORT_AUDIO.md
 ```
+
+### Biến môi trường cấu hình (Environment Variables)
+
+- **Cấu hình OCR (`fileconv-core`):**
+  - `FILECONV_OCR_API_KEY`: API Key cho vision OCR (mặc định OpenRouter, fallback về `FILECONV_LLM_API_KEY`).
+  - `FILECONV_OCR_BASE_URL`: Endpoint API cho OCR (mặc định `https://openrouter.ai/api`).
+  - `FILECONV_OCR_MODEL`: Model vision sử dụng (mặc định `qwen/qwen3.7-flash`).
+  - `FILECONV_OCR_SYSTEM_PROMPT`: Tùy chỉnh prompt hướng dẫn cho model OCR.
+  - `FILECONV_OCR_TIMEOUT_SECS`: Thời gian timeout cho yêu cầu OCR (mặc định 180s).
+- **Cấu hình LLM (`fileconv-mcp` & Server):**
+  - `FILECONV_LLM_PROVIDER`: Nhà cung cấp LLM (`openai` \| `anthropic` \| `gemini` \| `openai-compatible`).
+  - `FILECONV_LLM_API_KEY`: API Key cho các tác vụ LLM bổ sung.
+  - `FILECONV_LLM_BASE_URL`: Base URL của provider LLM.
+  - `FILECONV_LLM_MODEL`: Model LLM chỉ định.
+- **Cấu hình Native Runtimes:**
+  - `FILECONV_PDFIUM_LIB`: Đường dẫn ghi đè thư mục chứa thư viện PDFium.
+  - `FILECONV_WHISPER_MODEL`: Đường dẫn trực tiếp đến file model whisper GGML `.bin`.
+  - `FILECONV_WHISPER_CACHE_CAPACITY`: Kích thước cache model Whisper trong LRU (mặc định là 2).
 
 ### Desktop app "Markhand"
 
