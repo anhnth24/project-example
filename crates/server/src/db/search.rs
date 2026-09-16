@@ -192,7 +192,10 @@ fn normalize_fts_query(query: &str) -> String {
     let normalized = fileconv_core::intelligence::normalize_search_text(query);
     let tokens: Vec<&str> = normalized
         .split(|character: char| !character.is_alphanumeric())
-        .filter(|token| token.chars().count() >= 2)
+        .filter(|token| {
+            token.chars().count() >= 2
+                || (!token.is_empty() && token.chars().all(|c| c.is_ascii_digit()))
+        })
         .collect();
     let meaningful: Vec<&str> = tokens
         .iter()
@@ -1072,6 +1075,14 @@ mod tests {
             "bao nhieu",
             "all-stop-word questions must retain a non-empty fallback"
         );
+    }
+
+    #[test]
+    fn fts_query_retains_single_digit_tokens_with_context() {
+        assert_eq!(normalize_fts_query("điều 7"), "dieu 7");
+        assert_eq!(normalize_fts_query("chương 5"), "chuong 5");
+        assert_eq!(normalize_fts_query("công văn số 8"), "cong van so 8");
+        assert_eq!(normalize_fts_query("điều a"), "dieu");
     }
 
     #[test]
