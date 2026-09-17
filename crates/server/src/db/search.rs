@@ -187,7 +187,8 @@ pub fn normalized_fts_query_for_retrieval(query: &str) -> String {
 
 fn normalize_fts_query(query: &str) -> String {
     const QUESTION_STOP_WORDS: &[&str] = &[
-        "bao", "nhieu", "la", "gi", "nao", "noi", "ve", "dung", "duoc", "ra", "sao", "nhu", "the",
+        "bao", "cac", "cho", "cua", "duoc", "gi", "khong", "la", "nao", "nhieu", "nhung", "theo",
+        "trong", "voi",
     ];
     let normalized = fileconv_core::intelligence::normalize_search_text(query);
     let tokens: Vec<&str> = normalized
