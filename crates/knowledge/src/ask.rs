@@ -50,6 +50,84 @@ const MAX_EXTRACTIVE_PASSAGES: usize = 2;
 /// Soft cap per passage so the body stays scannable; citations still point at the full pin.
 const MAX_EXTRACTIVE_SNIPPET_CHARS: usize = 220;
 
+fn is_abbreviation_token(token: &str) -> bool {
+    let lower = token.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "tp" | "ths"
+            | "ts"
+            | "pgs"
+            | "gs"
+            | "bs"
+            | "kts"
+            | "ks"
+            | "cn"
+            | "mr"
+            | "ms"
+            | "mrs"
+            | "dr"
+            | "prof"
+    )
+}
+
+fn split_sentences(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut last = 0;
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+
+    for i in 0..chars.len() {
+        let (idx, c) = chars[i];
+        if matches!(c, '.' | '!' | '?' | ';') {
+            if c == '.' {
+                let is_between_alnum = i > 0
+                    && chars[i - 1].1.is_alphanumeric()
+                    && chars
+                        .get(i + 1)
+                        .is_some_and(|&(_, nc)| nc.is_alphanumeric());
+                if is_between_alnum {
+                    continue;
+                }
+
+                let prev_text = &text[last..idx];
+                let word = prev_text
+                    .rsplit(|ch: char| {
+                        ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"' | '“' | '«')
+                    })
+                    .next()
+                    .unwrap_or("");
+
+                if is_abbreviation_token(word) {
+                    continue;
+                }
+
+                if word.eq_ignore_ascii_case("v.v") {
+                    let rest = &text[idx + c.len_utf8()..];
+                    let next_word = rest.split_whitespace().next().unwrap_or("");
+                    if next_word.chars().next().is_some_and(|ch| ch.is_lowercase()) {
+                        continue;
+                    }
+                }
+            }
+
+            let split_at = idx + c.len_utf8();
+            let segment = text[last..split_at].trim();
+            if !segment.is_empty() {
+                out.push(segment);
+            }
+            last = split_at;
+        }
+    }
+
+    if last < text.len() {
+        let remaining = text[last..].trim();
+        if !remaining.is_empty() {
+            out.push(remaining);
+        }
+    }
+
+    out
+}
+
 fn compact_extractive_snippet(snippet: &str, max_chars: usize) -> String {
     let normalized = insert_structure_breaks(&repair_ocr_spacing(snippet));
     let normalized = restore_legal_ocr(&trim_leading_ocr_fragment(&normalized));
@@ -63,11 +141,7 @@ fn compact_extractive_snippet(snippet: &str, max_chars: usize) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    let sentences: Vec<&str> = trimmed
-        .split_inclusive(['.', '!', '?', ';'])
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .collect();
+    let sentences: Vec<&str> = split_sentences(&trimmed);
     let mut out = String::new();
     for sentence in sentences.iter().take(2) {
         let candidate = if out.is_empty() {
@@ -426,10 +500,8 @@ fn sentences_from(text: &str) -> Vec<String> {
         if line.is_empty() {
             continue;
         }
-        let parts: Vec<String> = line
-            .split_inclusive(['.', '!', '?', ';'])
-            .map(str::trim)
-            .filter(|part| !part.is_empty())
+        let parts: Vec<String> = split_sentences(line)
+            .into_iter()
             .map(ToOwned::to_owned)
             .collect();
         if parts.is_empty() {
@@ -705,7 +777,7 @@ pub fn valid_citation_ids(hit_count: usize) -> HashSet<String> {
 mod tests {
     use super::{
         citation_ids_in_answer, extractive_answer, grounded_user_prompt, retrieval_context,
-        valid_citation_ids, GROUNDED_SYSTEM_PROMPT, MAX_EXTRACTIVE_SNIPPET_CHARS,
+        sentences_from, valid_citation_ids, GROUNDED_SYSTEM_PROMPT, MAX_EXTRACTIVE_SNIPPET_CHARS,
     };
     use crate::types::{HybridSearchHit, SourceAnchor};
 
@@ -979,5 +1051,24 @@ mod tests {
                 .collect()
         );
         assert!(citation_ids_in_answer("no cites here").is_empty());
+    }
+
+    #[test]
+    fn sentences_from_does_not_split_on_abbreviations_and_decimals() {
+        let text = "Công văn số 1502/CV-CNTT được ban hành tại TP.HCM ngày 27/08/2026, chi phí 3.5 triệu đồng, v.v.";
+        let sentences = sentences_from(text);
+        assert_eq!(
+            sentences,
+            vec!["Công văn số 1502/CV-CNTT được ban hành tại TP.HCM ngày 27/08/2026, chi phí 3.5 triệu đồng, v.v."]
+        );
+
+        let multi = "Công văn số 1502/CV-CNTT được ban hành tại TP.HCM ngày 27/08/2026, chi phí 3.5 triệu đồng, v.v. Đây là câu tiếp theo.";
+        assert_eq!(
+            sentences_from(multi),
+            vec![
+                "Công văn số 1502/CV-CNTT được ban hành tại TP.HCM ngày 27/08/2026, chi phí 3.5 triệu đồng, v.v.",
+                "Đây là câu tiếp theo."
+            ]
+        );
     }
 }
