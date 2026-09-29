@@ -1,0 +1,182 @@
+[
+  {
+    "id": "q01",
+    "category": "doc_number",
+    "query": "Quyết định số 88/QĐ-UBND ban hành quy chế đối soát dữ liệu",
+    "target_chunk_contains": "88/QĐ-UBND"
+  },
+  {
+    "id": "q02",
+    "category": "doc_number",
+    "query": "Công văn số 1502/CV-CNTT hướng dẫn nâng cấp hạ tầng máy chủ",
+    "target_chunk_contains": "1502/CV-CNTT"
+  },
+  {
+    "id": "q03",
+    "category": "doc_number",
+    "query": "Nghị quyết số 2026/NQ-CP ban hành chương trình phát triển kinh tế số",
+    "target_chunk_contains": "2026/NQ-CP"
+  },
+  {
+    "id": "q04",
+    "category": "doc_number",
+    "query": "Thông tư số 45/2026/TT-BTTTT quy chuẩn kỹ thuật bảo mật thông tin",
+    "target_chunk_contains": "45/2026/TT-BTTTT"
+  },
+  {
+    "id": "q05",
+    "category": "doc_number",
+    "query": "Nghị định số 12/2025/NĐ-CP quy định chi tiết thi hành Luật Viễn thông",
+    "target_chunk_contains": "12/2025/NĐ-CP"
+  },
+  {
+    "id": "q06",
+    "category": "doc_number",
+    "query": "Thông báo số 99/TB-VPCP kết luận phiên họp Ủy ban Quốc gia về chuyển đổi số",
+    "target_chunk_contains": "99/TB-VPCP"
+  },
+  {
+    "id": "q07",
+    "category": "doc_number",
+    "query": "Chỉ thị số 05/CT-TTg phòng chống mã độc bảo đảm an ninh mạng",
+    "target_chunk_contains": "05/CT-TTg"
+  },
+  {
+    "id": "q08",
+    "category": "doc_number",
+    "query": "Quyết định số 18/QĐ-BTC định mức tiêu chuẩn phân bổ dự toán kinh phí",
+    "target_chunk_contains": "18/QĐ-BTC"
+  },
+  {
+    "id": "q09",
+    "category": "date",
+    "query": "Hội đồng nghiệm thu bàn giao hệ thống trung tâm dữ liệu ngày 27/08/2026",
+    "target_chunk_contains": "27/08/2026"
+  },
+  {
+    "id": "q10",
+    "category": "date",
+    "query": "Thời hạn nghiệm thu giai đoạn một dự án phần mềm ngày 15/03/2025",
+    "target_chunk_contains": "15/03/2025"
+  },
+  {
+    "id": "q11",
+    "category": "date",
+    "query": "Hoàn thành triển khai nền tảng tích hợp chia sẻ dữ liệu ngày 01/01/2026",
+    "target_chunk_contains": "01/01/2026"
+  },
+  {
+    "id": "q12",
+    "category": "date",
+    "query": "Hạn cuối tiếp nhận hồ sơ quyết toán thanh lý hợp đồng ngày 30/04/2025",
+    "target_chunk_contains": "30/04/2025"
+  },
+  {
+    "id": "q13",
+    "category": "date",
+    "query": "Lễ công bố trao giải thưởng ngày 02/09/2026 tại Trung tâm Hội nghị Quốc gia",
+    "target_chunk_contains": "Sự kiện công bố giải thưởng công nghệ"
+  },
+  {
+    "id": "q14",
+    "category": "date",
+    "query": "Đoàn thanh tra kiểm toán tiến hành kiểm tra ngày 19/08/2026 tại các đơn vị thành viên",
+    "target_chunk_contains": "Lịch kiểm toán nội bộ định kỳ"
+  },
+  {
+    "id": "q15",
+    "category": "date",
+    "query": "Văn bản chính thức có hiệu lực thi hành kể từ ngày 10/10/2026",
+    "target_chunk_contains": "Hiệu lực thi hành văn bản quy phạm"
+  },
+  {
+    "id": "q16",
+    "category": "article_chapter",
+    "query": "Điều 01 Phạm vi điều chỉnh hoạt động quản lý vận hành",
+    "target_chunk_contains": "Điều 01: Phạm vi điều chỉnh"
+  },
+  {
+    "id": "q17",
+    "category": "article_chapter",
+    "query": "Điều 02 Giải thích từ ngữ thuật ngữ kỹ thuật chuyên ngành",
+    "target_chunk_contains": "Điều 02: Giải thích từ ngữ"
+  },
+  {
+    "id": "q18",
+    "category": "article_chapter",
+    "query": "Điều 10 Thẩm quyền phê duyệt ngân sách dự toán kinh phí",
+    "target_chunk_contains": "Điều 10: Thẩm quyền phê duyệt ngân sách"
+  },
+  {
+    "id": "q19",
+    "category": "article_chapter",
+    "query": "Điều 12 Trách nhiệm cơ quan thẩm định đánh giá tính khả thi",
+    "target_chunk_contains": "Điều 12: Trách nhiệm cơ quan thẩm định"
+  },
+  {
+    "id": "q20",
+    "category": "article_chapter",
+    "query": "Điều 15 Chế độ báo cáo định kỳ tình hình sử dụng ngân sách",
+    "target_chunk_contains": "Điều 15: Chế độ báo cáo định kỳ"
+  },
+  {
+    "id": "q21",
+    "category": "article_chapter",
+    "query": "Điều 18 Quyền và nghĩa vụ các bên tham gia hợp đồng kinh tế",
+    "target_chunk_contains": "Điều 18: Quyền và nghĩa vụ các bên"
+  },
+  {
+    "id": "q22",
+    "category": "article_chapter",
+    "query": "Điều 20 Thời hạn giải quyết khiếu nại của đối tác và khách hàng",
+    "target_chunk_contains": "Điều 20: Thời hạn giải quyết khiếu nại"
+  },
+  {
+    "id": "q23",
+    "category": "article_chapter",
+    "query": "Điều 24 Quy định xử lý kỷ luật vi phạm bồi thường thiệt hại",
+    "target_chunk_contains": "Điều 24: Quy định xử lý kỷ luật"
+  },
+  {
+    "id": "q24",
+    "category": "natural_query",
+    "query": "Quy trình đối soát dữ liệu giao dịch thanh toán điện tử",
+    "target_chunk_contains": "đối soát tự động hàng ngày giữa cổng thanh toán"
+  },
+  {
+    "id": "q25",
+    "category": "natural_query",
+    "query": "Tiêu chuẩn kỹ thuật mã hóa và lưu trữ an toàn cơ sở dữ liệu",
+    "target_chunk_contains": "Toàn bộ dữ liệu nhạy cảm của khách hàng phải được mã hóa"
+  },
+  {
+    "id": "q26",
+    "category": "natural_query",
+    "query": "Thủ tục đăng ký cấp thẻ kiểm soát ra vào tòa nhà",
+    "target_chunk_contains": "hoàn thành thủ tục đăng ký cấp thẻ kiểm soát ra vào"
+  },
+  {
+    "id": "q27",
+    "category": "natural_query",
+    "query": "Trách nhiệm bàn giao và bảo quản hiện trạng tài sản công sau thanh lý",
+    "target_chunk_contains": "bàn giao và bảo quản nguyên vẹn hiện trạng tài sản công"
+  },
+  {
+    "id": "q28",
+    "category": "natural_query",
+    "query": "Nghĩa vụ bảo vệ thông tin đời sống riêng tư và dữ liệu người dùng",
+    "target_chunk_contains": "thu thập, phát tán hoặc mua bán trái phép thông tin đời sống riêng tư"
+  },
+  {
+    "id": "q29",
+    "category": "natural_query",
+    "query": "Cơ chế phối hợp liên ngành phòng chống tấn công mạng",
+    "target_chunk_contains": "thiết lập đường dây nóng và kênh chia sẻ thông tin tình báo"
+  },
+  {
+    "id": "q30",
+    "category": "natural_query",
+    "query": "Nguyên tắc quản lý rủi ro và kiểm soát nội bộ doanh nghiệp",
+    "target_chunk_contains": "định kỳ rà soát ma trận rủi ro kinh doanh"
+  }
+]
