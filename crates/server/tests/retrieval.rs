@@ -1149,3 +1149,283 @@ async fn cross_org_fts_search_never_returns_other_org_documents() {
 
     ephemeral.drop().await;
 }
+
+/// Minimum Recall@5 threshold for the 30-question Vietnamese golden retrieval gate (Issue #438).
+pub const MIN_FTS_GOLDEN_RECALL_AT_5: f64 = 0.80;
+
+/// Minimum Mean Reciprocal Rank (MRR) threshold for the 30-question Vietnamese golden retrieval gate (Issue #438).
+pub const MIN_FTS_GOLDEN_MRR: f64 = 0.70;
+
+#[derive(Debug, serde::Deserialize, Clone)]
+struct GoldenQueryItem {
+    id: String,
+    category: String,
+    query: String,
+    target_chunk_contains: String,
+}
+
+/// [inter-v3-05] Issue #438: Bộ câu hỏi golden (30 câu) + cổng recall@k cho FTS tiếng Việt.
+///
+/// Phủ đủ 4 nhóm:
+/// 1. Số hiệu văn bản (8 câu, e.g. 1502/CV-CNTT, 88/QĐ-UBND)
+/// 2. Ngày tháng (7 câu, e.g. 27/08/2026, 15/03/2025)
+/// 3. Điều/chương (8 câu, e.g. Điều 01, Điều 10, Điều 12)
+/// 4. Câu hỏi tự nhiên không có số (7 câu, e.g. quy trình đối soát dữ liệu thanh toán)
+///
+/// Đo lường Recall@5 và MRR trên toàn bộ 30 câu với ngưỡng tối thiểu MIN_RECALL_AT_5 >= 0.80.
+#[tokio::test]
+#[ignore = "requires MARKHAND_TEST_DATABASE_URL"]
+async fn vietnamese_fts_golden_recall_at_5_gate() {
+    let Some(base_url) = test_database_url() else {
+        return;
+    };
+    let ephemeral = EphemeralDb::create(&base_url).await;
+    apply_migrations(&ephemeral.url)
+        .await
+        .expect("migrate ephemeral db");
+    let pool = create_pool(&ephemeral.url).expect("pool");
+
+    let doc_md = include_str!("../../../bench/fixtures/fts_golden_document.md");
+    let queries_json = include_str!("../../../bench/fixtures/fts_golden_queries.json");
+    let queries: Vec<GoldenQueryItem> =
+        serde_json::from_str(queries_json).expect("valid fts_golden_queries.json");
+    assert_eq!(
+        queries.len(),
+        30,
+        "dataset must contain exactly 30 questions"
+    );
+
+    let chunks = fileconv_core::chunk::chunk_markdown(doc_md, 2_000);
+    assert!(!chunks.is_empty(), "fixture document must produce chunks");
+
+    let org = Uuid::new_v4();
+    let user = Uuid::new_v4();
+    let collection = Uuid::new_v4();
+    let role = Uuid::new_v4();
+    let document = Uuid::new_v4();
+    let version = Uuid::new_v4();
+    let meta = Uuid::new_v4();
+    let sig = "0".repeat(64);
+
+    let ctx = OrgContext::try_new(org, user, [PERMISSION_QA_QUERY], [collection]).unwrap();
+
+    with_org_txn(&pool, &ctx, {
+        let ctx = ctx.clone();
+        let chunks = chunks.clone();
+        move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "INSERT INTO orgs (id, slug, name) VALUES ($1, $2, $3)",
+                    &[&ctx.org_id(), &format!("org-{}", ctx.org_id()), &"org"],
+                )
+                .await?;
+                let user_email = format!("{}@example.test", ctx.user_id());
+                txn.execute(
+                    "INSERT INTO users (id, email, display_name, password_hash)
+                     VALUES ($1, $2, 'golden-user', 'test-hash')",
+                    &[&ctx.user_id(), &user_email],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO org_memberships (org_id, user_id, role) VALUES ($1, $2, 'viewer')",
+                    &[&ctx.org_id(), &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO roles (id, org_id, code, name, is_system)
+                     VALUES ($1, $2, 'viewer', 'Viewer', true)",
+                    &[&role, &ctx.org_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO role_permissions (org_id, role_id, permission_id)
+                     SELECT $1, $2, id FROM permissions WHERE code = 'qa.query'",
+                    &[&ctx.org_id(), &role],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO collections (id, org_id, name, slug, owner_user_id, visibility)
+                     VALUES ($1, $2, 'Golden Collection', $3, $4, 'org')",
+                    &[&collection, &ctx.org_id(), &format!("c-{collection}"), &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO documents (id, org_id, collection_id, title, state, created_by_user_id)
+                     VALUES ($1, $2, $3, 'Văn bản Golden', 'indexed', $4)",
+                    &[&document, &ctx.org_id(), &collection, &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO document_versions (
+                        id, org_id, document_id, version_number, publication_state, is_current,
+                        content_sha256, original_object_key, effective_from, created_by_user_id
+                     ) VALUES ($1, $2, $3, 1, 'published', true, $4, 'golden.md', '2025-01-01Z', $5)",
+                    &[&version, &ctx.org_id(), &document, &"1".repeat(64), &ctx.user_id()],
+                )
+                .await?;
+                txn.execute(
+                    "UPDATE documents SET current_version_id = $1 WHERE id = $2",
+                    &[&version, &document],
+                )
+                .await?;
+                txn.execute(
+                    "INSERT INTO index_metadata (
+                        id, org_id, collection_id, index_signature_sha256, embedding_family,
+                        embedding_revision, dimensions, runtime_path, generation, is_active, state
+                     ) VALUES ($1, $2, $3, $4, 'f', 'r', 8, 'local-hash', 1, true, 'active')",
+                    &[&meta, &ctx.org_id(), &collection, &sig],
+                )
+                .await?;
+
+                for (idx, c) in chunks.iter().enumerate() {
+                    let chunk_id = Uuid::new_v4();
+                    let identity = format!("{idx:064x}");
+                    let heading_path: Vec<String> = c.heading.split(" > ").map(String::from).collect();
+                    txn.execute(
+                        "INSERT INTO chunks (
+                            id, org_id, document_id, version_id, ordinal, heading_path, body,
+                            chunk_identity_sha256, index_metadata_id, index_signature
+                         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                        &[
+                            &chunk_id,
+                            &ctx.org_id(),
+                            &document,
+                            &version,
+                            &(idx as i32),
+                            &heading_path,
+                            &c.text,
+                            &identity,
+                            &meta,
+                            &sig,
+                        ],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        }
+    })
+    .await
+    .expect("seed golden fixture");
+
+    let mut chunk_targets = Vec::new();
+    for q in &queries {
+        let target_idx = chunks
+            .iter()
+            .position(|c| {
+                c.heading.contains(&q.target_chunk_contains)
+                    || c.text.contains(&q.target_chunk_contains)
+            })
+            .unwrap_or_else(|| panic!("query {} target not found in chunks", q.id));
+        chunk_targets.push((q.clone(), target_idx));
+    }
+
+    let mut query_results = Vec::new();
+    let started = Instant::now();
+
+    for (q, target_idx) in &chunk_targets {
+        let hits = with_org_txn(&pool, &ctx, {
+            let ctx = ctx.clone();
+            let query = q.query.clone();
+            move |txn| {
+                Box::pin(async move {
+                    search::fts_search(
+                        txn,
+                        &ctx,
+                        &[collection],
+                        &query,
+                        &VersionVisibility::Current,
+                        10,
+                    )
+                    .await
+                })
+            }
+        })
+        .await
+        .expect("fts_search");
+
+        let target_identity = format!("{target_idx:064x}");
+        let rank = hits
+            .iter()
+            .position(|h| h.chunk_identity_sha256 == target_identity)
+            .map(|pos| pos + 1);
+
+        let recall_at_5 = if rank.is_some_and(|r| r <= 5) {
+            1.0
+        } else {
+            0.0
+        };
+        let rr = rank.map(|r| 1.0 / r as f64).unwrap_or(0.0);
+
+        query_results.push((q.clone(), *target_idx, rank, recall_at_5, rr));
+    }
+    let elapsed = started.elapsed();
+
+    let total = query_results.len();
+    let hits_at_5_count = query_results
+        .iter()
+        .filter(|(_, _, _, r5, _)| *r5 > 0.0)
+        .count();
+    let overall_recall_at_5 = hits_at_5_count as f64 / total as f64;
+    let overall_mrr = query_results
+        .iter()
+        .map(|(_, _, _, _, rr)| *rr)
+        .sum::<f64>()
+        / total as f64;
+
+    println!("\n========================================================");
+    println!(" BÁO CÁO ĐỘ CHÍNH XÁC TRUY HỒI FTS TIẾNG VIỆT (Issue #438)");
+    println!("========================================================");
+    println!("Tổng số câu hỏi: {total}");
+    println!("Thời gian thực hiện: {elapsed:?}");
+    println!("Recall@5 toàn bộ: {overall_recall_at_5:.4} ({hits_at_5_count}/{total})");
+    println!("MRR toàn bộ:      {overall_mrr:.4}");
+    println!(
+        "Ngưỡng cổng CI:   Recall@5 >= {MIN_FTS_GOLDEN_RECALL_AT_5:.2}, MRR >= {MIN_FTS_GOLDEN_MRR:.2}"
+    );
+    println!("--------------------------------------------------------");
+    println!("| ID | Nhóm | Thứ hạng | Recall@5 | RR | Truy vấn |");
+    println!("|---|---|---:|---:|---:|---|");
+    for (q, _, rank, r5, rr) in &query_results {
+        let rank_str = rank
+            .map(|r| r.to_string())
+            .unwrap_or_else(|| "miss".to_string());
+        let q_id = &q.id;
+        let q_cat = &q.category;
+        let q_query = &q.query;
+        println!("| {q_id} | {q_cat} | {rank_str} | {r5:.1} | {rr:.4} | {q_query} |");
+    }
+    println!("--------------------------------------------------------");
+    println!(" Trung bình theo nhóm câu hỏi");
+    println!("--------------------------------------------------------");
+    println!("| Nhóm | Số mẫu | Recall@5 | MRR |");
+    println!("|---|---:|---:|---:|");
+    let mut categories: std::collections::BTreeMap<String, (usize, usize, f64)> =
+        std::collections::BTreeMap::new();
+    for (q, _, _, r5, rr) in &query_results {
+        let entry = categories.entry(q.category.clone()).or_insert((0, 0, 0.0));
+        entry.0 += 1;
+        if *r5 > 0.0 {
+            entry.1 += 1;
+        }
+        entry.2 += *rr;
+    }
+    for (cat, (cnt, h5, mrr_sum)) in &categories {
+        let r5 = *h5 as f64 / *cnt as f64;
+        let mrr = *mrr_sum / *cnt as f64;
+        println!("| {cat} | {cnt} | {r5:.4} | {mrr:.4} |");
+    }
+
+    println!("========================================================\n");
+
+    ephemeral.drop().await;
+
+    assert!(
+        overall_recall_at_5 >= MIN_FTS_GOLDEN_RECALL_AT_5,
+        "Recall@5 ({overall_recall_at_5:.4}) fell below gate threshold ({MIN_FTS_GOLDEN_RECALL_AT_5:.4})"
+    );
+    assert!(
+        overall_mrr >= MIN_FTS_GOLDEN_MRR,
+        "MRR ({overall_mrr:.4}) fell below gate threshold ({MIN_FTS_GOLDEN_MRR:.4})"
+    );
+}
