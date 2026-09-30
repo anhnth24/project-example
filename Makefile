@@ -44,6 +44,8 @@ check-boundaries:
 check-migrations:
 	python3 scripts/check-migration-manifest.py --check
 	python3 scripts/check-migration-manifest.py --self-test
+	python3 scripts/lint-migrations.py --check
+	python3 scripts/lint-migrations.py --self-test
 
 check-fixtures:
 	python3 scripts/check-fixtures.py
