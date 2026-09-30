@@ -92,6 +92,44 @@ jobs:
       - name: Rust fmt, clippy, and tests
         run: bash scripts/run-rust-ci-fast.sh
 
+
+  migration-smoke-test:
+    needs: changes-and-static
+    if: >-
+      needs.changes-and-static.outputs.rust == 'true' &&
+      (
+        (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+        needs.changes-and-static.outputs.rust_crates == 'full' ||
+        needs.changes-and-static.outputs.rust_crates == 'workspace' ||
+        needs.changes-and-static.outputs.rust_crates == 'smoke' ||
+        contains(needs.changes-and-static.outputs.rust_crates, 'server')
+      )
+    runs-on: ubuntu-22.04
+    services:
+      postgres:
+        image: postgres:18.4-bookworm
+        env:
+          POSTGRES_USER: markhand
+          POSTGRES_PASSWORD: markhand_dev_only
+          POSTGRES_DB: markhand
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Run fast migration smoke test
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: markhand
+          PGPASSWORD: markhand_dev_only
+          PGDATABASE: markhand
+        run: bash scripts/smoke-test-migration.sh
+
   rust-integration:
     needs: changes-and-static
     # DB-backed acceptance tests in crates/server/tests/*.rs are `#[ignore]`
