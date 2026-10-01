@@ -31,6 +31,24 @@ if [[ "$ready" != "true" ]]; then
     exit 1
 fi
 
+# Bootstrap required roles if they don't exist (migrations 0025, 0027, 0035 reference them)
+echo "Ensuring required database roles exist..."
+PGDATABASE=postgres psql -v ON_ERROR_STOP=1 -c "
+DO \$\$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'markhand_migrator') THEN
+    CREATE ROLE markhand_migrator;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'markhand_app') THEN
+    CREATE ROLE markhand_app;
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'markhand_worker') THEN
+    CREATE ROLE markhand_worker;
+  END IF;
+END
+\$\$;
+"
+
 SMOKE_DB="markhand_smoke_test_$(date +%s)"
 echo "Creating temporary database ${SMOKE_DB}..."
 PGDATABASE=postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"${SMOKE_DB}\";"
