@@ -79,3 +79,42 @@ CI that runs it must provide `MARKHAND_TEST_DATABASE_URL`,
 ```bash
 cargo test -p fileconv-server --test index_worker -- --ignored
 ```
+
+### Fast migration smoke test (local & CI)
+
+`scripts/smoke-test-migration.sh` provides a fast (~2 seconds) smoke test that applies all embedded schema migrations in order and verifies that Row Level Security remains enforced (`relforcerowsecurity = true` on `pg_class`) for every table configured with `FORCE ROW LEVEL SECURITY`.
+
+This smoke test runs in CI using an ephemeral Postgres service container, bypassing the full compose stack required by `rust-integration`.
+
+#### Running locally with Docker
+
+If the local development Postgres service is already running (e.g. via `make dev-up` or `docker compose -f deploy/dev/compose.yml up -d postgres` on port 54329):
+
+```bash
+PGPORT=54329 bash scripts/smoke-test-migration.sh
+```
+
+#### Running locally without Docker (using an ephemeral or existing PostgreSQL cluster)
+
+On Debian/Ubuntu, you can create a lightweight temporary PostgreSQL cluster using `pg_createcluster`:
+
+```bash
+# 1. Create and start a temporary cluster on a custom port (e.g. 5433)
+pg_createcluster 18 smoke --start -p 5433
+
+# 2. Provision the markhand user with superuser privilege to create/drop ephemeral test databases
+sudo -u postgres psql -p 5433 -c "CREATE USER markhand WITH PASSWORD 'markhand_dev_only' SUPERUSER;"
+
+# 3. Run the fast migration smoke test
+PGPORT=5433 bash scripts/smoke-test-migration.sh
+
+# 4. Stop and delete the temporary cluster when finished
+pg_dropcluster 18 smoke --stop
+```
+
+Alternatively, against any pre-existing local PostgreSQL instance:
+
+```bash
+PGHOST=127.0.0.1 PGPORT=5432 PGUSER=postgres PGPASSWORD=yourpassword bash scripts/smoke-test-migration.sh
+```
+
