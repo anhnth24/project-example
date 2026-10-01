@@ -21,3 +21,7 @@ with composite FKs and `ON DELETE CASCADE` from memberships/groups/roles.
 ## Partition strategy (ADR 0008)
 
 No physical partitioning for Phase 1B POC; `org_id` first in tenant indexes.
+
+## Playbooks / Migration Guides
+
+- [Safe backfill on tables with `FORCE ROW LEVEL SECURITY`](../../../docs/runbooks/rls-backfill-playbook.md) — Hướng dẫn backfill dữ liệu an toàn, phòng tránh lỗi SQLSTATE 42501 từ `SET row_security = off` và bẫy silent 0-row update.

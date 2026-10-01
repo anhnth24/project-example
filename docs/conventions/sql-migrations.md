@@ -63,8 +63,7 @@ NNNN_<expand|backfill|cutover|contract>_<subject>.sql
 1. **Expand:** additive table/column/index nullable, compatibility trước.
 2. **Backfill:** resumable/checkpointed, bounded batch, metrics và retry. Trên bảng
    có `FORCE ROW LEVEL SECURITY`, `UPDATE` backfill bị policy chặn **im lặng (0 row)
-   kể cả với owner/migrator** — migration phải `SET LOCAL row_security = off` (owner
-   được phép) và verify số row affected sau backfill (xem migration `0037`).
+   kể cả với owner/migrator** — migration phải tạm gỡ `FORCE` trong transaction (`ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`), backfill và bật lại ngay (xem playbook tại [`docs/runbooks/rls-backfill-playbook.md`](../runbooks/rls-backfill-playbook.md) và migration `0037`). Tuyệt đối không dùng `SET row_security = off` vì Postgres sẽ raise lỗi `42501`.
 3. **Cutover:** application đọc/ghi dual path khi cần; evidence mixed-version.
 4. **Contract:** bỏ old path chỉ sau retention/rollback window.
 
