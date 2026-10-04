@@ -24,6 +24,7 @@ import { getStore, nextId } from './mocks/fixtures';
 import { mockTimestamp } from './mocks/ids';
 import { LibraryPage } from './pages/LibraryPage';
 import { LoginPage } from './pages/LoginPage';
+import { QaPage } from './pages/QaPage';
 import { RouterProvider } from './state/RouterProvider';
 import { ScopeProvider } from './state/ScopeProvider';
 
@@ -174,6 +175,30 @@ describe('accessibility (axe-core, no critical/serious violations)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Sẽ bị xóa\.pdf/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Xóa' }));
     await waitFor(() => expect(screen.getByRole('dialog')).toBeVisible());
+
+    await expectNoSeriousViolations(container);
+  });
+  it('the Q&A page with completed answer and citations', async () => {
+    const client = await loggedInClient();
+
+    const { container } = render(
+      <RouterProvider>
+        <ScopeProvider>
+          <QaPage client={client} />
+        </ScopeProvider>
+      </RouterProvider>,
+    );
+
+    fireEvent.change(screen.getByLabelText('Câu hỏi'), {
+      target: { value: 'Lộ trình quý 3 tập trung vào việc gì?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Hỏi' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('qa-answer')).toHaveTextContent(
+        'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+      );
+    });
 
     await expectNoSeriousViolations(container);
   });

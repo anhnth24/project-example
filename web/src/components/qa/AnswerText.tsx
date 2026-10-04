@@ -25,7 +25,10 @@ function renderSegments(
   return segments.map((segment, i) =>
     segment.kind === 'footnote' ? (
       <sup key={`${keyPrefix}-f-${i}`}>
-        <a href={`#${footnoteAnchorId(scopeId, segment.footnoteNumber!)}`}>
+        <a
+          href={`#${footnoteAnchorId(scopeId, segment.footnoteNumber!)}`}
+          aria-label={`Trích dẫn [${segment.footnoteNumber}]`}
+        >
           [{segment.footnoteNumber}]
         </a>
       </sup>
