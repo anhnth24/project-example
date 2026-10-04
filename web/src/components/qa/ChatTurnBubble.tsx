@@ -125,7 +125,12 @@ export function ChatTurnBubble({
         </p>
       </div>
 
-      <div className="chat-turn-answer" aria-live="polite" role="status">
+      <div
+        className="chat-turn-answer"
+        aria-live={isDone && !cancelled ? 'polite' : 'off'}
+        role={isDone && !cancelled ? 'status' : undefined}
+        aria-atomic={isDone && !cancelled ? true : undefined}
+      >
         <p className="visually-hidden">Trợ lý</p>
         <div className="chat-bubble chat-bubble-assistant">
           {isDone && !cancelled && <TurnModeBadge answerMode={display.answerMode} />}
@@ -136,6 +141,9 @@ export function ChatTurnBubble({
                 Đang tìm kiếm thông tin liên quan…
               </p>
             )}
+          {isDone && !cancelled && (
+            <span className="visually-hidden">Câu trả lời đã hoàn tất. </span>
+          )}
           {display.answer && (
             <AnswerText text={display.answer} citations={visibleCitations} scopeId={turnId} />
           )}

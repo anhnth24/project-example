@@ -2557,6 +2557,13 @@ textarea.input {
   border-bottom: 1px solid var(--color-divider);
 }
 
+.chat-footnote-item:target,
+.chat-footnote-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
 .chat-footnote-item:last-child {
   border-bottom: 0;
 }

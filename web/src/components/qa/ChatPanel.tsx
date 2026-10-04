@@ -158,18 +158,20 @@ export function ChatPanel({
     [client],
   );
   const projects = projectsResult.data?.items ?? [];
-  // Reports the effective projectIds to the parent exactly once per change
-  // (including the epoch-reset above) — same adjust-state-while-rendering
-  // idiom `SearchPanel.tsx`'s `onHitsChanged` reporting uses.
-  const [reportedProjectIds, setReportedProjectIds] = useState<string[] | undefined>(undefined);
-  if (
-    reportedProjectIds === undefined ||
-    reportedProjectIds.length !== projectIds.length ||
-    reportedProjectIds.some((id, i) => id !== projectIds[i])
-  ) {
-    setReportedProjectIds(projectIds);
-    onProjectIdsChange?.(projectIds);
-  }
+  // Reports the effective projectIds to the parent whenever it changes
+  // (including the epoch-reset above).
+  const reportedProjectIdsRef = useRef<string[] | undefined>(undefined);
+  useEffect(() => {
+    const prev = reportedProjectIdsRef.current;
+    if (
+      prev === undefined ||
+      prev.length !== projectIds.length ||
+      prev.some((id, i) => id !== projectIds[i])
+    ) {
+      reportedProjectIdsRef.current = projectIds;
+      onProjectIdsChange?.(projectIds);
+    }
+  }, [projectIds, onProjectIdsChange]);
 
   // The chat log's own live turns — reset whenever the org switches OR the
   // user explicitly opens a different conversation (`sessionSwitchToken`,

@@ -116,6 +116,45 @@ describe('QaPage', () => {
       fireEvent.click(expandButtons[0]);
       expect(screen.getAllByTestId('qa-footnote-quote').length).toBeGreaterThan(0);
     });
+    it('manages aria-live properly and allows full keyboard navigation through footnotes', async () => {
+      const client = await loggedInClient();
+      renderQa(client);
+
+      await askQuestion('Lộ trình quý 3 tập trung vào việc gì?');
+
+      await waitFor(() => {
+        expect(within(chatLog()).getByTestId('qa-answer')).toHaveTextContent(
+          'Lộ trình quý 3 tập trung vào tối ưu hiệu năng lập chỉ mục.',
+        );
+      });
+
+      const answerContainer = chatLog().querySelector('.chat-turn-answer');
+      expect(answerContainer).not.toBeNull();
+      expect(answerContainer).toHaveAttribute('aria-live', 'polite');
+      expect(answerContainer).toHaveAttribute('role', 'status');
+      expect(within(answerContainer!).getByText(/Câu trả lời đã hoàn tất/)).toBeInTheDocument();
+
+      // Footnote link has an accessible label and points to an anchor
+      const footnoteLink = screen.getByRole('link', { name: 'Trích dẫn [1]' });
+      expect(footnoteLink).toBeVisible();
+      const href = footnoteLink.getAttribute('href');
+      expect(href).toMatch(/^#[a-zA-Z0-9_-]+-cite-1$/);
+
+      // Target footnote has tabIndex={-1} for keyboard focus jump
+      const footnoteItem = document.querySelector(href!) as HTMLElement;
+      expect(footnoteItem).not.toBeNull();
+      expect(footnoteItem).toHaveAttribute('tabindex', '-1');
+
+      // Focus the footnote item (simulating anchor jump) and then navigate inside
+      footnoteItem.focus();
+      expect(document.activeElement).toBe(footnoteItem);
+
+      const expandButton = within(footnoteItem).getByRole('button', { name: /Hiện .*đoạn trích/ });
+      expandButton.focus();
+      expect(document.activeElement).toBe(expandButton);
+      fireEvent.click(expandButton);
+      expect(within(footnoteItem).getByTestId('qa-footnote-quote')).toBeVisible();
+    });
 
     it('citation_revoked mid-answer keeps the partial answer + notice visible, and IS saved to history (only a genuine error/cancel is skipped)', async () => {
       const client = await loggedInClient();

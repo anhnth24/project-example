@@ -6,7 +6,7 @@
 // a field this mock happens to add (`documentId`/`versionId`/`collectionId`)
 // is what makes the preview deep-link possible at all, but a real server's
 // `hits` could omit it, so every consumer below tolerates it being absent.
-import { useId, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { apiClient, type ApiClient } from '../../api/client';
 import type { components } from '../../api/generated/contract';
 import { useScopeSafeRequest } from '../../hooks/useScopeSafeRequest';
@@ -81,14 +81,14 @@ export function SearchPanel({
     setSubmitted(query);
   }
 
-  // Adjust-state-while-rendering (same idiom as `LibraryPage.tsx`'s retained
-  // list): report the newly-arrived hits to the parent once, the render this
-  // response first becomes visible, rather than from an extra effect.
-  const [reportedFor, setReportedFor] = useState<unknown>(undefined);
-  if (result.data && reportedFor !== result.data) {
-    setReportedFor(result.data);
-    onHitsChanged?.(hits);
-  }
+  // Report the newly-arrived hits to the parent once, when the response arrives.
+  const reportedForRef = useRef<unknown>(undefined);
+  useEffect(() => {
+    if (result.data && reportedForRef.current !== result.data) {
+      reportedForRef.current = result.data;
+      onHitsChanged?.(hits);
+    }
+  }, [result.data, hits, onHitsChanged]);
 
   return (
     <div className="card" aria-labelledby="qa-search-heading">

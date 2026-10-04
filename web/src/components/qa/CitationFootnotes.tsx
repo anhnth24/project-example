@@ -50,7 +50,7 @@ function FootnoteItem({
     .filter((quote): quote is string => Boolean(quote));
   const uniqueQuotes = [...new Set(quotes)];
   return (
-    <li id={footnoteAnchorId(scopeId, n)} className="chat-footnote-item">
+    <li id={footnoteAnchorId(scopeId, n)} className="chat-footnote-item" tabIndex={-1}>
       <div className="chat-footnote-row">
         <strong>[{n}]</strong>
         <span title={sourceLabel} className="chat-footnote-source">
