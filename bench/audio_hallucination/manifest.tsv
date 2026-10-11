@@ -1,0 +1,6 @@
+# audio	ground_truth	label
+01_pure_silence.wav	01_pure_silence.gt.txt	silence
+02_ambient_noise.wav	02_ambient_noise.gt.txt	ambient-noise
+03_instrumental_music.wav	03_instrumental_music.gt.txt	instrumental-music
+04_speech_with_pauses.wav	04_speech_with_pauses.gt.txt	speech-with-pauses
+

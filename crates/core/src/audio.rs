@@ -33,6 +33,19 @@ const WHISPER_MODEL_CANDIDATES: &[&str] = &[
 /// Default number of Ready Whisper contexts retained in the process cache.
 const DEFAULT_WHISPER_CACHE_CAPACITY: usize = 2;
 
+/// Default threshold for filtering out non-speech hallucination segments (Issue #448).
+/// Calibrated to 0.50 to provide a robust boundary against hallucination loops
+/// without discarding genuine Vietnamese speech.
+pub const DEFAULT_NO_SPEECH_THRESHOLD: f32 = 0.5;
+
+fn whisper_no_speech_threshold() -> f32 {
+    std::env::var("FILECONV_WHISPER_NO_SPEECH_THRESHOLD")
+        .ok()
+        .and_then(|s| s.parse::<f32>().ok())
+        .filter(|&t| t.is_finite() && (0.0..=1.0).contains(&t))
+        .unwrap_or(DEFAULT_NO_SPEECH_THRESHOLD)
+}
+
 fn discover_model_in_roots(roots: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
     for root in roots {
         for candidate in WHISPER_MODEL_CANDIDATES {
@@ -609,7 +622,7 @@ impl AudioEngine {
         Ok(Self {
             ctx,
             threads: 4,
-            no_speech_threshold: 0.6,
+            no_speech_threshold: whisper_no_speech_threshold(),
         })
     }
 
@@ -978,17 +991,72 @@ mod tests {
 
     #[test]
     fn no_speech_filter_rejects_probability_and_marker_hallucinations() {
-        assert!(!segment_is_speech("văn bản bị bịa", 0.8, 0.6));
-        assert!(!segment_is_speech("[Music]", 0.1, 0.6));
-        assert!(!segment_is_speech("[Mà đồ]", 0.1, 0.6));
-        assert!(!segment_is_speech("♪ nhạc ♪", 0.1, 0.6));
-        assert!(segment_is_speech("Xin chào Việt Nam", 0.1, 0.6));
+        assert!(!segment_is_speech(
+            "văn bản bị bịa",
+            0.8,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(!segment_is_speech(
+            "văn bản bị bịa",
+            0.51,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(!segment_is_speech(
+            "[Music]",
+            0.1,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(!segment_is_speech(
+            "[Mà đồ]",
+            0.1,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(!segment_is_speech(
+            "♪ nhạc ♪",
+            0.1,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(segment_is_speech(
+            "Xin chào Việt Nam",
+            0.1,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(segment_is_speech(
+            "Xin chào Việt Nam",
+            0.49,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
     }
 
     #[test]
     fn invalid_threshold_does_not_replace_safe_default() {
-        assert!(!segment_is_speech("text", 0.7, 0.6));
-        assert!(segment_is_speech("text", 0.59, 0.6));
+        assert!(!segment_is_speech("text", 0.6, DEFAULT_NO_SPEECH_THRESHOLD));
+        assert!(segment_is_speech("text", 0.49, DEFAULT_NO_SPEECH_THRESHOLD));
+    }
+
+    #[test]
+    fn whisper_no_speech_threshold_uses_calibrated_default_and_env_override() {
+        assert_eq!(DEFAULT_NO_SPEECH_THRESHOLD, 0.5);
+        assert!((0.0..=1.0).contains(&DEFAULT_NO_SPEECH_THRESHOLD));
+    }
+
+    #[test]
+    fn calibrated_no_speech_threshold_filters_segments_at_or_above_limit() {
+        assert!(segment_is_speech(
+            "Xin chào",
+            0.49,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(!segment_is_speech(
+            "ảo giác",
+            0.50,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
+        assert!(!segment_is_speech(
+            "ảo giác",
+            0.75,
+            DEFAULT_NO_SPEECH_THRESHOLD
+        ));
     }
 
     #[test]
